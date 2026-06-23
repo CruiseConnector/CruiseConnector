@@ -54,7 +54,8 @@ class TtsService {
       await _tts.setLanguage('de-DE');
       await _tts.setSpeechRate(0.50); // 0.5 = natürlich, motorradtauglich
       await _tts.setPitch(1.0);
-      await _tts.setVolume(0.95);
+      // 2026-06-23 (vucko Voice-Lautstärke): aus den Einstellungen statt fix 0.95.
+      await _tts.setVolume(VoiceSettingsService.instance.volume);
       await _tts.awaitSpeakCompletion(false); // don't block
       _initialized = true;
     } catch (e) {
@@ -132,5 +133,32 @@ class TtsService {
       _speechEpoch++;
       await _tts.stop();
     } catch (_) {}
+  }
+
+  /// 2026-06-23 (vucko Voice-Lautstärke): Lautstärke LIVE auf die Engine
+  /// anwenden (während der Nutzer den Slider zieht).
+  Future<void> applyVolume(double volume) async {
+    final v = volume.isFinite ? volume.clamp(0.0, 1.0).toDouble() : 0.95;
+    try {
+      await _initIfNeeded();
+      await _tts.setVolume(v);
+    } catch (e) {
+      debugPrint('[TtsService] applyVolume failed: $e');
+    }
+  }
+
+  /// 2026-06-23 (vucko Voice-Lautstärke): Test-Ansage für den Lautstärke-Dialog —
+  /// spricht UNABHÄNGIG vom Modus-Gate (der Nutzer stellt gerade erst ein) in der
+  /// übergebenen Lautstärke, bricht eine laufende Test-Ansage hart ab.
+  Future<void> speakPreview(String text, {required double volume}) async {
+    try {
+      await _initIfNeeded();
+      _speechEpoch++; // laufende (Test-)Ansage abbrechen
+      await _tts.stop();
+      await _tts.setVolume(volume.isFinite ? volume.clamp(0.0, 1.0) : 0.95);
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('[TtsService] speakPreview failed: $e');
+    }
   }
 }

@@ -66,6 +66,7 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/nav_distance_format.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
@@ -4840,31 +4841,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                         icon: icon,
                         label: 'Sprache',
                         overrideAccent: color,
-                        onTap: () async {
-                          await VoiceSettingsService.instance.cycleMode();
-                          HapticFeedback.selectionClick();
-                          final newMode = VoiceSettingsService.instance.mode;
-                          if (newMode == VoiceMode.off) {
-                            unawaited(TtsService.instance.stop());
-                          } else {
-                            unawaited(TtsService.instance.prepare());
-                          }
-                          if (!context.mounted) return;
-                          final newLabel = switch (newMode) {
-                            VoiceMode.off => 'Stumm',
-                            VoiceMode.important => 'Nur Wichtiges',
-                            VoiceMode.all => 'Alle Ansagen',
-                          };
-                          TopToast.show(
-                            context,
-                            message: 'Sprache: $newLabel',
-                            icon: switch (newMode) {
-                              VoiceMode.off => Icons.volume_off_rounded,
-                              VoiceMode.important => Icons.volume_down_rounded,
-                              VoiceMode.all => Icons.volume_up_rounded,
-                            },
-                          );
-                        },
+                        onTap: () => _handleVoiceModeCycle(context),
                       );
                     },
                   ),
@@ -9914,6 +9891,42 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  /// 2026-06-23 (vucko Voice-Lautstärke): Sprach-Modus zyklisch schalten
+  /// (off→important→all→off). Beim WIEDER-Einschalten nach komplettem Aus
+  /// (off→an) das Lautstärke-Sheet mit Test-Stimme zeigen statt nur des Toasts —
+  /// so kann der Nutzer die (bisher fixe, zu leise) Lautstärke einstellen.
+  Future<void> _handleVoiceModeCycle(BuildContext buttonContext) async {
+    final oldMode = VoiceSettingsService.instance.mode;
+    await VoiceSettingsService.instance.cycleMode();
+    HapticFeedback.selectionClick();
+    final newMode = VoiceSettingsService.instance.mode;
+    if (newMode == VoiceMode.off) {
+      unawaited(TtsService.instance.stop());
+    } else {
+      unawaited(TtsService.instance.prepare());
+    }
+    if (!mounted || !buttonContext.mounted) return;
+    if (oldMode == VoiceMode.off && newMode != VoiceMode.off) {
+      await showVoiceVolumeSheet(buttonContext);
+      return;
+    }
+    final newLabel = switch (newMode) {
+      VoiceMode.off => 'Stumm',
+      VoiceMode.important => 'Nur Wichtiges',
+      VoiceMode.all => 'Alle Ansagen',
+    };
+    if (!mounted || !buttonContext.mounted) return;
+    TopToast.show(
+      buttonContext,
+      message: 'Sprache: $newLabel',
+      icon: switch (newMode) {
+        VoiceMode.off => Icons.volume_off_rounded,
+        VoiceMode.important => Icons.volume_down_rounded,
+        VoiceMode.all => Icons.volume_up_rounded,
+      },
+    );
+  }
+
   Future<void> _startNavigationFlow() async {
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
@@ -12847,31 +12860,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                       heroTag: 'voice_toggle_fab',
                       icon: icon,
                       color: color,
-                      onPressed: () async {
-                        await VoiceSettingsService.instance.cycleMode();
-                        HapticFeedback.selectionClick();
-                        final newMode = VoiceSettingsService.instance.mode;
-                        if (newMode == VoiceMode.off) {
-                          unawaited(TtsService.instance.stop());
-                        } else {
-                          unawaited(TtsService.instance.prepare());
-                        }
-                        if (!context.mounted) return;
-                        final newLabel = switch (newMode) {
-                          VoiceMode.off => 'Stumm',
-                          VoiceMode.important => 'Nur Wichtiges',
-                          VoiceMode.all => 'Alle Ansagen',
-                        };
-                        TopToast.show(
-                          context,
-                          message: 'Sprache: $newLabel',
-                          icon: switch (newMode) {
-                            VoiceMode.off => Icons.volume_off_rounded,
-                            VoiceMode.important => Icons.volume_down_rounded,
-                            VoiceMode.all => Icons.volume_up_rounded,
-                          },
-                        );
-                      },
+                      onPressed: () => _handleVoiceModeCycle(context),
                     );
                   },
                 ),

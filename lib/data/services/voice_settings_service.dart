@@ -21,14 +21,22 @@ class VoiceSettingsService extends ChangeNotifier {
   static const _keyMode = 'voice_navigation_mode_v1';
   // Nur noch für die Migration alter Installationen gelesen (siehe load()).
   static const _keyEnabledLegacy = 'voice_navigation_enabled_v1';
+  // 2026-06-23 (vucko Voice-Lautstärke): persistierte Ansage-Lautstärke 0..1.
+  static const _keyVolume = 'voice_navigation_volume_v1';
 
   bool _loaded = false;
   VoiceMode _mode = VoiceMode.off;
+  // 2026-06-23: Standard 1.0 (laut) — vorher fix 0.95 und nicht einstellbar; der
+  // Nutzer empfand die Ansagen als zu leise. Jetzt per Slider regelbar.
+  double _volume = 1.0;
 
   /// Abgeleitet: Ansagen aktiv = Modus ist nicht „off". Kein separates Flag mehr.
   bool get isEnabled => _mode != VoiceMode.off;
   bool get isLoaded => _loaded;
   VoiceMode get mode => _mode;
+
+  /// Ansage-Lautstärke 0..1 (an FlutterTts.setVolume durchgereicht).
+  double get volume => _volume;
 
   /// Beim App-Start einmal aufrufen.
   Future<void> load() async {
@@ -43,8 +51,20 @@ class VoiceSettingsService extends ChangeNotifier {
     } else {
       _mode = VoiceMode.off;
     }
+    final vol = prefs.getDouble(_keyVolume);
+    if (vol != null && vol.isFinite) _volume = vol.clamp(0.0, 1.0);
     _loaded = true;
     notifyListeners();
+  }
+
+  /// Setzt die Ansage-Lautstärke (0..1), persistiert + benachrichtigt.
+  Future<void> setVolume(double v) async {
+    final clamped = v.isFinite ? v.clamp(0.0, 1.0).toDouble() : _volume;
+    if ((clamped - _volume).abs() < 0.001) return;
+    _volume = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyVolume, clamped);
   }
 
   Future<void> setMode(VoiceMode m) async {

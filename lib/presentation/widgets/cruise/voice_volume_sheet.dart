@@ -1,0 +1,225 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/tts_service.dart';
+import 'package:cruise_connect/data/services/voice_settings_service.dart';
+
+/// 2026-06-23 (vucko Voice-Lautstärke): Ästhetisches Bottom-Sheet zum Einstellen
+/// der Ansage-Lautstärke. Wird gezeigt, wenn der Nutzer die Sprachansagen nach
+/// komplettem Ausschalten WIEDER einschaltet. Bei jeder Änderung sagt eine
+/// Test-Stimme „Navigation aktiviert" in der neuen Lautstärke, damit man sie
+/// kalibrieren kann (vorher fix + zu leise). Schließt sich nicht von selbst,
+/// stört also nicht — der Nutzer tippt „Fertig".
+Future<void> showVoiceVolumeSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (_) => const _VoiceVolumeSheet(),
+  );
+}
+
+class _VoiceVolumeSheet extends StatefulWidget {
+  const _VoiceVolumeSheet();
+
+  @override
+  State<_VoiceVolumeSheet> createState() => _VoiceVolumeSheetState();
+}
+
+class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
+  late double _volume;
+  Timer? _previewDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _volume = VoiceSettingsService.instance.volume;
+    // Sofort eine Test-Ansage in der aktuellen Lautstärke, damit der Nutzer
+    // gleich hört, wie laut es ist.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _speakTest());
+  }
+
+  @override
+  void dispose() {
+    _previewDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _speakTest() {
+    unawaited(
+      TtsService.instance.speakPreview('Navigation aktiviert', volume: _volume),
+    );
+  }
+
+  void _onChanged(double v) {
+    setState(() => _volume = v);
+    // Live an die Engine geben (für den Fall, dass gerade eine Ansage läuft).
+    unawaited(TtsService.instance.applyVolume(v));
+  }
+
+  void _onChangeEnd(double v) {
+    unawaited(VoiceSettingsService.instance.setVolume(v));
+    // Kurz entprellt, damit beim Loslassen genau EINE Test-Ansage kommt.
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 120), _speakTest);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = AppAccentColors.accent;
+    final pct = (_volume * 100).round();
+    final icon = _volume <= 0.01
+        ? Icons.volume_mute_rounded
+        : _volume < 0.5
+        ? Icons.volume_down_rounded
+        : Icons.volume_up_rounded;
+    return SafeArea(
+      top: false,
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C2028),
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.45),
+              blurRadius: 28,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(icon, color: accent, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Sprachansagen an',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Lautstärke einstellen — du hörst jede Änderung',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: accent,
+                      inactiveTrackColor: Colors.white.withValues(alpha: 0.12),
+                      thumbColor: accent,
+                      overlayColor: accent.withValues(alpha: 0.18),
+                      trackHeight: 5,
+                    ),
+                    child: Slider(
+                      value: _volume,
+                      onChanged: _onChanged,
+                      onChangeEnd: _onChangeEnd,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    '$pct%',
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: _speakTest,
+                  icon: Icon(Icons.replay_rounded, color: accent, size: 18),
+                  label: Text(
+                    'Nochmal testen',
+                    style: TextStyle(color: accent, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: () {
+                    unawaited(
+                      VoiceSettingsService.instance.setVolume(_volume),
+                    );
+                    unawaited(TtsService.instance.stop());
+                    Navigator.of(context).pop();
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 26,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: const Text(
+                    'Fertig',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
