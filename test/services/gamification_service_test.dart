@@ -122,6 +122,44 @@ void main() {
       expect(row['xp_awarded'], 200);
     });
 
+    // X3 Gruppen-Rangliste: group_id + top_speed_kmh fließen NUR in den Insert,
+    // wenn sie gesetzt/plausibel sind — Single-Mode (kein Group, kein Tempo)
+    // bleibt byte-genau wie vorher (Regressionsschutz „nichts kaputt machen").
+    test('single-mode insert omits group_id and top_speed_kmh', () {
+      final row = GamificationService.buildDriveSessionInsert(
+        userId: 'user-1',
+        distanceKm: 10,
+        durationSeconds: 600,
+        completedAtEnd: true,
+      );
+      expect(row.containsKey('group_id'), isFalse);
+      expect(row.containsKey('top_speed_kmh'), isFalse);
+    });
+
+    test('group-mode insert tags group_id and rounds top_speed_kmh', () {
+      final row = GamificationService.buildDriveSessionInsert(
+        userId: 'user-1',
+        distanceKm: 10,
+        durationSeconds: 600,
+        completedAtEnd: true,
+        groupId: 'grp-7',
+        topSpeedKmh: 123.456,
+      );
+      expect(row['group_id'], 'grp-7');
+      expect(row['top_speed_kmh'], 123.5);
+    });
+
+    test('non-positive top speed is not written', () {
+      final row = GamificationService.buildDriveSessionInsert(
+        userId: 'user-1',
+        distanceKm: 10,
+        durationSeconds: 600,
+        completedAtEnd: true,
+        topSpeedKmh: 0,
+      );
+      expect(row.containsKey('top_speed_kmh'), isFalse);
+    });
+
     test('route progress XP is gated at 20 percent and proportional', () {
       RouteXpBreakdown breakdown(double progress, {bool completed = false}) {
         return GamificationService.calculateRouteXpBreakdownForProgress(

@@ -354,6 +354,8 @@ class GamificationService {
     String? routeFingerprint,
     String source = 'navigation',
     int? xpAwarded,
+    String? groupId,
+    double? topSpeedKmh,
   }) {
     final safeDistanceKm = math.max(0.0, distanceKm);
     return {
@@ -369,6 +371,12 @@ class GamificationService {
       if (routeFingerprint?.trim().isNotEmpty == true)
         'route_fingerprint': routeFingerprint!.trim(),
       'source': source,
+      // 2026-06-23 (vucko X3 Gruppen-Rangliste): Fahrt der Gruppe zuordnen +
+      // erreichte Top-Speed mitschreiben, damit die deterministische Rangliste
+      // (get_group_leaderboard) je Mitglied aggregieren kann.
+      if (groupId?.trim().isNotEmpty == true) 'group_id': groupId!.trim(),
+      if (topSpeedKmh != null && topSpeedKmh > 0)
+        'top_speed_kmh': double.parse(topSpeedKmh.toStringAsFixed(1)),
     };
   }
 
@@ -382,6 +390,8 @@ class GamificationService {
     String? routeFingerprint,
     String source = 'navigation',
     int? xpAwarded,
+    String? groupId,
+    double? topSpeedKmh,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
@@ -398,6 +408,8 @@ class GamificationService {
       routeFingerprint: routeFingerprint,
       source: source,
       xpAwarded: xpAwarded,
+      groupId: groupId,
+      topSpeedKmh: topSpeedKmh,
     );
 
     try {

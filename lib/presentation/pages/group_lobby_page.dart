@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
+import '../../data/services/group_leaderboard_service.dart';
 import '../../data/services/social_service.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
@@ -45,6 +46,11 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   Timer? _retryTimer;
 
   List<Map<String, dynamic>> _pendingRequests = [];
+
+  /// 2026-06-23 (vucko X3): Deterministische Gruppen-Rangliste (wer ist am
+  /// meisten gefahren / am schnellsten). Wird nach jeder Gruppen-Fahrt befüllt
+  /// und in der Lobby gezeigt — leer = Karte ausgeblendet (Pre-Ride-Lobby clean).
+  List<GroupLeaderboardEntry> _leaderboard = const [];
 
   /// Mitglieder, die ich blockiert habe oder die mich blockiert haben —
   /// werden in der Mitglieder-Liste ausgegraut dargestellt.
@@ -104,9 +110,11 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       final results = await Future.wait([
         CruiseGroupService.fetch(widget.groupId),
         SocialService.getBlockedAndBlockerIds(),
+        GroupLeaderboardService.fetch(widget.groupId),
       ]);
       final g = results[0] as CruiseGroup?;
       final blocked = results[1] as Set<String>;
+      final leaderboard = results[2] as List<GroupLeaderboardEntry>;
       if (!mounted) return;
       // Erfolg (auch g == null = Gruppe existiert wirklich nicht): kein
       // Netzfehler mehr, laufenden Retry stoppen.
@@ -115,6 +123,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
       setState(() {
         _group = g;
         _blockedIds = blocked;
+        _leaderboard = leaderboard;
         _loading = false;
         _hadNetworkError = false;
       });
@@ -536,6 +545,10 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             ],
           ),
         ),
+        if (_leaderboard.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _buildLeaderboardCard(),
+        ],
         if (_shouldShowInviteCode()) ...[
           const SizedBox(height: 16),
           _buildInviteCodeCard(),
@@ -572,6 +585,200 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         const SizedBox(height: 8),
         _buildRoleSelector(),
       ],
+    );
+  }
+
+  // ── Gruppen-Rangliste (X3) ──────────────────────────────────────────────────
+
+  /// Deterministische Rangliste-Karte: aggregierte Fahrleistung je Mitglied
+  /// (Server-sortiert nach Distanz -> Top-Speed -> user_id, daher sieht jeder
+  /// exakt dasselbe). Top-3 bekommen Gold/Silber/Bronze. Schnellste/r wird mit
+  /// einem Bolt-Akzent hervorgehoben, damit „wer ist am schnellsten" auf einen
+  /// Blick sichtbar ist.
+  Widget _buildLeaderboardCard() {
+    final entries = _leaderboard;
+    // Index des Schnellsten (für die Bolt-Hervorhebung) — stabil & deterministisch.
+    var fastestIdx = 0;
+    for (var i = 1; i < entries.length; i++) {
+      if (entries[i].maxTopSpeedKmh > entries[fastestIdx].maxTopSpeedKmh) {
+        fastestIdx = i;
+      }
+    }
+    final hasAnySpeed = entries[fastestIdx].maxTopSpeedKmh > 0;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.emoji_events, color: AppAccentColors.accent, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                'Gruppen-Rangliste',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Padding(
+            padding: EdgeInsets.only(left: 28),
+            child: Text(
+              'Eure gefahrene Strecke & Top-Speed',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 12),
+          for (var i = 0; i < entries.length; i++)
+            _buildLeaderboardRow(
+              entries[i],
+              rank: i + 1,
+              isFastest: hasAnySpeed && i == fastestIdx,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeaderboardRow(
+    GroupLeaderboardEntry e, {
+    required int rank,
+    required bool isFastest,
+  }) {
+    final isMe = e.userId == _myId;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        // Eigene Zeile dezent hervorheben, ohne die Rangliste zu verzerren.
+        color: isMe
+            ? AppAccentColors.accent.withValues(alpha: 0.10)
+            : const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(12),
+        border: isMe
+            ? Border.all(color: AppAccentColors.accent.withValues(alpha: 0.35))
+            : null,
+      ),
+      child: Row(
+        children: [
+          _rankBadge(rank),
+          const SizedBox(width: 12),
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: const Color(0xFF1C1F26),
+            foregroundImage: UserAvatar.avatarImageProvider(
+              context,
+              e.avatarUrl,
+              radius: 16,
+            ),
+            child: Text(
+              _memberInitial(e.username),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${_memberName(e.username)}${isMe ? ' (Du)' : ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (isFastest)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.bolt,
+                          color: Colors.lightBlueAccent,
+                          size: 13,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          'Schnellste/r',
+                          style: TextStyle(
+                            color: Colors.lightBlueAccent.shade100,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${e.totalDistanceKm.toStringAsFixed(1)} km',
+                style: TextStyle(
+                  color: AppAccentColors.accent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+              if (e.maxTopSpeedKmh > 0)
+                Text(
+                  '${e.maxTopSpeedKmh.round()} km/h Top',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Rang-Plakette: Gold/Silber/Bronze für Top-3, sonst dezente Nummer.
+  Widget _rankBadge(int rank) {
+    const gold = Color(0xFFFFD24A);
+    const silver = Color(0xFFC7CDD6);
+    const bronze = Color(0xFFCD7F4B);
+    final color = switch (rank) {
+      1 => gold,
+      2 => silver,
+      3 => bronze,
+      _ => Colors.white24,
+    };
+    final isPodium = rank <= 3;
+    return Container(
+      width: 26,
+      height: 26,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: isPodium ? color.withValues(alpha: 0.18) : Colors.transparent,
+        border: Border.all(color: color, width: isPodium ? 1.5 : 1),
+      ),
+      child: Text(
+        '$rank',
+        style: TextStyle(
+          color: isPodium ? color : Colors.white54,
+          fontWeight: FontWeight.bold,
+          fontSize: 13,
+        ),
+      ),
     );
   }
 

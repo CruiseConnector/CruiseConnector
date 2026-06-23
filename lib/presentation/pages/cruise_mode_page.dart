@@ -15871,6 +15871,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
       xpAwarded: xpBreakdown.totalXp,
+      // 2026-06-23 (vucko X3): Gruppen-Fahrt taggen + Top-Speed mitschreiben
+      // -> speist die deterministische Gruppen-Rangliste in der Lobby.
+      groupId: widget.groupId,
+      topSpeedKmh: _maxSpeedMps * 3.6,
     );
     _driveSessionRecordedForCompletion = true;
     await GamificationService.calculateAndSync();
