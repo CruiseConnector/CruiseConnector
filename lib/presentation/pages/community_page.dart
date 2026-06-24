@@ -17,6 +17,7 @@ import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/post_skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
@@ -420,7 +421,12 @@ class _CommunityPageState extends State<CommunityPage>
               },
             ),
       body: _loading
-          ? Center(child: CircularProgressIndicator(color: accent))
+          // 2026-06-24 (vucko Skeleton-Loading): statt Kreis-Spinner ein
+          // animiertes Skelett der Feed-Karten — wirkt sofort „da" statt leer.
+          ? const SingleChildScrollView(
+              physics: NeverScrollableScrollPhysics(),
+              child: PostSkeletonList(count: 5),
+            )
           : TabBarView(
               controller: _tabController,
               children: [

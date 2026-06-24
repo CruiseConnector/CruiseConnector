@@ -1,76 +1,65 @@
 import 'package:flutter/material.dart';
-import 'package:shimmer/shimmer.dart';
 
-/// Skeleton-Loader für einen Community-Post.
+import 'skeleton.dart';
+
+/// Skeleton-Loader für einen Community-Post (dunkles Theme).
 /// Wird angezeigt während die Posts vom Server geladen werden.
 ///
 /// Verwendung:
 /// ```dart
-/// if (isLoading) PostSkeleton() else ActualPostCard(...)
+/// if (isLoading) const PostSkeletonList() else ActualFeed(...)
 /// ```
 class PostSkeleton extends StatelessWidget {
   const PostSkeleton({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[800]!,
-      highlightColor: Colors.grey[600]!,
-      child: Card(
+    return SkeletonShimmer(
+      child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Avatar + Name Zeile
-              Row(
-                children: [
-                  const CircleAvatar(radius: 20, backgroundColor: Colors.white),
-                  const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _box(width: 120, height: 12),
-                      const SizedBox(height: 4),
-                      _box(width: 80, height: 10),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Text-Zeilen
-              _box(width: double.infinity, height: 12),
-              const SizedBox(height: 6),
-              _box(width: double.infinity, height: 12),
-              const SizedBox(height: 6),
-              _box(width: 200, height: 12),
-              const SizedBox(height: 12),
-              // Aktions-Zeile (Like, Kommentar, Teilen)
-              Row(
-                children: [
-                  _box(width: 60, height: 28),
-                  const SizedBox(width: 12),
-                  _box(width: 60, height: 28),
-                  const SizedBox(width: 12),
-                  _box(width: 60, height: 28),
-                ],
-              ),
-            ],
-          ),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
         ),
-      ),
-    );
-  }
-
-  /// Hilfs-Widget für einen grauen Platzhalter-Block.
-  Widget _box({required double width, required double height}) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(6),
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Avatar + Name
+            Row(
+              children: [
+                SkeletonCircle(size: 40),
+                SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SkeletonBox(width: 130, height: 12),
+                    SizedBox(height: 6),
+                    SkeletonBox(width: 80, height: 10),
+                  ],
+                ),
+              ],
+            ),
+            SizedBox(height: 14),
+            // Text-Zeilen
+            SkeletonBox(width: double.infinity, height: 12),
+            SizedBox(height: 7),
+            SkeletonBox(width: double.infinity, height: 12),
+            SizedBox(height: 7),
+            SkeletonBox(width: 200, height: 12),
+            SizedBox(height: 14),
+            // Aktions-Zeile (Like, Kommentar, Teilen)
+            Row(
+              children: [
+                SkeletonBox(width: 64, height: 26, radius: 13),
+                SizedBox(width: 12),
+                SkeletonBox(width: 64, height: 26, radius: 13),
+                SizedBox(width: 12),
+                SkeletonBox(width: 64, height: 26, radius: 13),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -85,6 +74,7 @@ class PostSkeletonList extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView.builder(
       itemCount: count,
+      padding: const EdgeInsets.only(top: 6),
       physics: const NeverScrollableScrollPhysics(),
       shrinkWrap: true,
       itemBuilder: (_, _) => const PostSkeleton(),

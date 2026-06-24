@@ -6,6 +6,7 @@ import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 
 const List<String> _weekdayLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const List<String> _monthLabelsShort = [
@@ -293,9 +294,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       backgroundColor: const Color(0xFF0B0E14),
       body: SafeArea(
         child: _loading
-            ? Center(
-                child: CircularProgressIndicator(color: AppAccentColors.accent),
-              )
+            // 2026-06-24 (vucko Skeleton-Loading): Skelett von Hero + Tabs statt
+            // Kreis-Spinner — die Struktur ist sofort sichtbar.
+            ? const _AnalyticsSkeleton()
             : RefreshIndicator(
                 onRefresh: _loadData,
                 color: AppAccentColors.accent,
@@ -414,6 +415,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                               ),
                               child: Text(
                                 'Level ${_level.level}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                softWrap: false,
                                 style: TextStyle(
                                   color: AppAccentColors.accent,
                                   fontSize: 11,
@@ -422,12 +426,19 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Text(
-                              '$progressPercent%',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
+                            // 2026-06-24 (vucko): Prozent darf nie über die Zeile
+                            // hinauslaufen → ellipsis + Flexible teilt mit dem Pill.
+                            Flexible(
+                              child: Text(
+                                '$progressPercent%',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                softWrap: false,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
                             ),
                           ],
@@ -1821,6 +1832,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               ),
               Text(
                 '${bucket.routes} ${bucket.routes == 1 ? 'Fahrt' : 'Fahrten'}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Color(0xFFA0AEC0),
                   fontSize: 11,
@@ -2311,6 +2324,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     ),
                     Text(
                       '$percentage%',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Color(0xFFFFD166),
                         fontSize: 13,
@@ -2619,5 +2634,126 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       'saved' => const Color(0xFFFFD166),
       _ => const Color(0xFFFFD166),
     };
+  }
+}
+
+/// 2026-06-24 (vucko Skeleton-Loading): Lade-Skelett der Analytics-Seite —
+/// spiegelt Header, Hero-Karte (Level-Ring + Stat-Grid + Streak) und die Tabs.
+class _AnalyticsSkeleton extends StatelessWidget {
+  const _AnalyticsSkeleton();
+
+  Widget _statTile() => Expanded(
+    child: Container(
+      height: 64,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF14171E),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Row(
+        children: [
+          SkeletonCircle(size: 30),
+          SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SkeletonBox(width: 50, height: 14),
+                SizedBox(height: 6),
+                SkeletonBox(width: 36, height: 10),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: SkeletonShimmer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            const SkeletonBox(width: 190, height: 32),
+            const SizedBox(height: 10),
+            const SkeletonBox(width: double.infinity, height: 14),
+            const SizedBox(height: 18),
+            // Hero-Karte
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1F26),
+                borderRadius: BorderRadius.circular(26),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      SkeletonCircle(size: 70),
+                      SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SkeletonBox(width: 110, height: 16),
+                            SizedBox(height: 10),
+                            SkeletonBox(width: 200, height: 24),
+                            SizedBox(height: 8),
+                            SkeletonBox(width: 150, height: 12),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  const SkeletonBox(
+                    width: double.infinity,
+                    height: 8,
+                    radius: 999,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [_statTile(), const SizedBox(width: 10), _statTile()],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [_statTile(), const SizedBox(width: 10), _statTile()],
+                  ),
+                  const SizedBox(height: 12),
+                  const SkeletonBox(
+                    width: double.infinity,
+                    height: 60,
+                    radius: 18,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            // Tab-Bar
+            const SkeletonBox(width: double.infinity, height: 44, radius: 14),
+            const SizedBox(height: 16),
+            // Tab-Inhalt
+            const Row(
+              children: [
+                Expanded(child: SkeletonBox(height: 80, radius: 16)),
+                SizedBox(width: 10),
+                Expanded(child: SkeletonBox(height: 80, radius: 16)),
+                SizedBox(width: 10),
+                Expanded(child: SkeletonBox(height: 80, radius: 16)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const SkeletonBox(width: double.infinity, height: 140, radius: 16),
+          ],
+        ),
+      ),
+    );
   }
 }

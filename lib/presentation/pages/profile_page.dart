@@ -27,6 +27,7 @@ import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dar
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/cruiser_dna_card.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -748,7 +749,9 @@ class _ProfilePageState extends State<ProfilePage>
           ];
         },
         body: _loading
-            ? Center(child: CircularProgressIndicator(color: accent))
+            // 2026-06-24 (vucko Skeleton-Loading): Skelett des Profil-Aufbaus
+            // statt Kreis-Spinner.
+            ? const _ProfileSkeleton()
             : TabBarView(
                 controller: _tabController,
                 children: [
@@ -2480,6 +2483,59 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
                   ),
           ),
       ],
+    );
+  }
+}
+
+/// 2026-06-24 (vucko Skeleton-Loading): Lade-Skelett der Profilseite — spiegelt
+/// Avatar + Name + Bio + Follow-Stats und darunter ein paar Post-Karten.
+class _ProfileSkeleton extends StatelessWidget {
+  const _ProfileSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SingleChildScrollView(
+      physics: NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(20, 18, 20, 0),
+      child: SkeletonShimmer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Avatar + Bearbeiten-Button
+            Row(
+              children: [
+                SkeletonCircle(size: 80),
+                Spacer(),
+                SkeletonBox(width: 120, height: 36, radius: 18),
+              ],
+            ),
+            SizedBox(height: 16),
+            // Name + Handle
+            SkeletonBox(width: 180, height: 20),
+            SizedBox(height: 8),
+            SkeletonBox(width: 110, height: 13),
+            SizedBox(height: 16),
+            // Bio
+            SkeletonBox(width: double.infinity, height: 12),
+            SizedBox(height: 7),
+            SkeletonBox(width: 220, height: 12),
+            SizedBox(height: 18),
+            // Follow-Stats
+            Row(
+              children: [
+                SkeletonBox(width: 70, height: 16),
+                SizedBox(width: 24),
+                SkeletonBox(width: 70, height: 16),
+              ],
+            ),
+            SizedBox(height: 22),
+            // Tab-Inhalt (Posts)
+            SkeletonBox(width: double.infinity, height: 120, radius: 16),
+            SizedBox(height: 12),
+            SkeletonBox(width: double.infinity, height: 120, radius: 16),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -22,6 +22,7 @@ import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
@@ -1704,14 +1705,47 @@ class _HomeContentPageState extends State<HomeContentPage>
                               ),
                               const SizedBox(height: 12),
                               _loading
-                                  ? Center(
-                                      child: SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: accent,
-                                        ),
+                                  // 2026-06-24 (vucko Skeleton-Loading): 2×2-
+                                  // Kachel-Skelett statt Kreis-Spinner.
+                                  ? const SkeletonShimmer(
+                                      child: Column(
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: SkeletonBox(
+                                                  height: 56,
+                                                  radius: 14,
+                                                ),
+                                              ),
+                                              SizedBox(width: 10),
+                                              Expanded(
+                                                child: SkeletonBox(
+                                                  height: 56,
+                                                  radius: 14,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: SkeletonBox(
+                                                  height: 56,
+                                                  radius: 14,
+                                                ),
+                                              ),
+                                              SizedBox(width: 10),
+                                              Expanded(
+                                                child: SkeletonBox(
+                                                  height: 56,
+                                                  radius: 14,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
                                       ),
                                     )
                                   : Column(
