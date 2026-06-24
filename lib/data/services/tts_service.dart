@@ -44,17 +44,36 @@ class TtsService {
         await _tts.setIosAudioCategory(
           IosTextToSpeechAudioCategory.playback,
           [
-            // 2026-06-24 (vucko Voice-zu-leise): NUR duckOthers, KEIN
-            // mixWithOthers mehr. mixWithOthers ließ die Navi-Stimme gleichrangig
-            // NEBEN der Musik laufen → bei lauter Musik kaum hörbar. Reines
-            // duckOthers senkt die Musik während der Ansage deutlich ab (wie
-            // Google/Apple Maps) → Stimme klar dominant. duckOthers SENKT nur ab
-            // (pausiert NICHT) und stellt die Musik danach wieder her.
+            // 2026-06-24 (vucko Voice-zu-leise): duckOthers senkt Musik/Medien
+            // während der Ansage stark ab (NICHT pausieren, danach wiederher-
+            // gestellt) — wie Google/Apple Maps. KEIN mixWithOthers (das ließ die
+            // Stimme gleichrangig neben der Musik laufen → bei lauter Musik kaum
+            // hörbar).
             IosTextToSpeechAudioCategoryOptions.duckOthers,
+            // 2026-06-25 (vucko Voice noch lauter durchsetzen): der von Apple für
+            // Turn-by-Turn-Navi empfohlene Begleiter zu duckOthers. Pausiert
+            // FREMDE Sprach-Audios (Podcast/Hörbuch) während der Ansage, damit die
+            // Navi-Stimme nicht gegen anderes Gerede anredet. Musik bleibt nur
+            // geduckt (nicht pausiert).
+            IosTextToSpeechAudioCategoryOptions
+                .interruptSpokenAudioAndMixWithOthers,
           ],
           IosTextToSpeechAudioMode.voicePrompt,
         );
         await _tts.setSharedInstance(true);
+      }
+      // 2026-06-25 (vucko Voice lauter/Ducking): Android hatte bisher KEINE
+      // Audio-Attribute → flutter_tts spielte als normales Medien-Audio, das
+      // laufende Musik kaum absenkt (genau das „zu leise"-Gefühl). Mit
+      // setAudioAttributesForNavigation läuft die Stimme als USAGE_ASSISTANCE_
+      // NAVIGATION_GUIDANCE → das System duckt Musik/Medien während der Ansage
+      // spürbar (wie Google Maps), die Navi-Stimme wird klar dominant.
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          await _tts.setAudioAttributesForNavigation();
+        } catch (e) {
+          debugPrint('[TtsService] navAudioAttributes failed: $e');
+        }
       }
       await _tts.setLanguage('de-DE');
       await _tts.setSpeechRate(0.50); // 0.5 = natürlich, motorradtauglich
