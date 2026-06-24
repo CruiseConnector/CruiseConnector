@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
@@ -52,9 +53,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       body: Consumer<NotificationService>(
         builder: (context, svc, _) {
           if (!svc.isLoaded) {
-            return const Center(
-              child: CircularProgressIndicator(strokeWidth: 2),
-            );
+            return const SkeletonList(count: 7);
           }
           if (svc.items.isEmpty) {
             return _EmptyState(accent: accent);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
@@ -248,9 +249,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Center(
-        child: CircularProgressIndicator(color: AppAccentColors.accent),
-      );
+      return const SkeletonList(count: 7);
     }
 
     return RefreshIndicator(

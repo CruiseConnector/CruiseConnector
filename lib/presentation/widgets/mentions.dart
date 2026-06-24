@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:flutter/services.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -257,28 +258,11 @@ class _MentionTextFieldState extends State<MentionTextField> {
               border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: _loading && _suggestions.isEmpty
-                ? SizedBox(
-                    height: 44,
-                    child: Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            height: 14,
-                            width: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: AppAccentColors.accent,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          const Text(
-                            'Follower laden…',
-                            style: TextStyle(color: Colors.grey, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
+                ? const SkeletonList(
+                    count: 3,
+                    avatarSize: 32,
+                    lines: 1,
+                    padding: EdgeInsets.symmetric(vertical: 4),
                   )
                 : _suggestions.isEmpty
                 ? const SizedBox(

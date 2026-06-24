@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -118,9 +119,7 @@ class _BlockedUsersPageState extends State<BlockedUsersPage> {
         elevation: 0,
       ),
       body: _loading
-          ? Center(
-              child: CircularProgressIndicator(color: AppAccentColors.accent),
-            )
+          ? const SkeletonList(count: 6, hasTrailing: true)
           : _blocked.isEmpty
           ? const Center(
               child: Padding(

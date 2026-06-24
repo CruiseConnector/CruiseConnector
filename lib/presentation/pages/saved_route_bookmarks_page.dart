@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/route_card_skeleton.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -64,9 +65,7 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
         ),
       ),
       body: isLoading
-          ? Center(
-              child: CircularProgressIndicator(color: AppAccentColors.accent),
-            )
+          ? const RouteCardSkeletonList(count: 3)
           : RefreshIndicator(
               color: AppAccentColors.accent,
               backgroundColor: const Color(0xFF1C1F26),

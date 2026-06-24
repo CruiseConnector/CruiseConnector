@@ -20,6 +20,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.da
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -409,7 +410,7 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
       body: _loading
-          ? Center(child: CircularProgressIndicator(color: accent))
+          ? const _SettingsSkeleton()
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -1077,6 +1078,53 @@ class _OfflineMapButton extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Skeleton für die Einstellungs-Seite: Abschnitts-Header + Karten mit
+/// Toggle-Zeilen (statt Kreis-Spinner während die Settings laden).
+class _SettingsSkeleton extends StatelessWidget {
+  const _SettingsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonShimmer(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        physics: const NeverScrollableScrollPhysics(),
+        children: [
+          for (var s = 0; s < 3; s++) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 8, 0, 10),
+              child: SkeletonBox(width: 130, height: 11),
+            ),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C1F26),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Column(
+                children: [
+                  for (var r = 0; r < 3; r++)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Row(
+                        children: [
+                          Expanded(child: SkeletonBox(height: 13)),
+                          SizedBox(width: 12),
+                          SkeletonBox(width: 44, height: 26, radius: 13),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 22),
+          ],
+        ],
       ),
     );
   }

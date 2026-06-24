@@ -83,3 +83,90 @@ class SkeletonCircle extends StatelessWidget {
     );
   }
 }
+
+/// Eine Listen-Zeile: runder Avatar + 1–2 Textzeilen (+ optionaler Trailing-
+/// Button). Baustein für Mitglieder-/Chat-/Benachrichtigungs-/Nutzer-Listen.
+class SkeletonListTile extends StatelessWidget {
+  const SkeletonListTile({
+    super.key,
+    this.avatarSize = 48,
+    this.lines = 2,
+    this.hasTrailing = false,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+  });
+
+  final double avatarSize;
+  final int lines;
+  final bool hasTrailing;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: padding,
+      child: Row(
+        children: [
+          SkeletonCircle(size: avatarSize),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SkeletonBox(width: 150, height: 13),
+                if (lines > 1) ...[
+                  const SizedBox(height: 8),
+                  const SkeletonBox(width: 92, height: 11),
+                ],
+              ],
+            ),
+          ),
+          if (hasTrailing) ...[
+            const SizedBox(width: 12),
+            const SkeletonBox(width: 66, height: 30, radius: 15),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Komplette Listen-Lade-Ansicht: N [SkeletonListTile] unter einem Shimmer.
+/// Direkt als `body:` einer Seite verwendbar (kein Scrollen — reiner Platzhalter).
+class SkeletonList extends StatelessWidget {
+  const SkeletonList({
+    super.key,
+    this.count = 6,
+    this.avatarSize = 48,
+    this.lines = 2,
+    this.hasTrailing = false,
+    this.padding = const EdgeInsets.symmetric(vertical: 8),
+  });
+
+  final int count;
+  final double avatarSize;
+  final int lines;
+  final bool hasTrailing;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonShimmer(
+      child: Padding(
+        padding: padding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(
+            count,
+            (_) => SkeletonListTile(
+              avatarSize: avatarSize,
+              lines: lines,
+              hasTrailing: hasTrailing,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

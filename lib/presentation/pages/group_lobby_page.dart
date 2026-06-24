@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -493,7 +494,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const _LobbySkeleton()
           : _group != null
           ? _buildBody()
           : _hadNetworkError
@@ -1573,6 +1574,114 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Skeleton der Lobby (statt Kreis-Spinner): Info-Karte, Gruppen-Code-Karte,
+/// Mitglieder-Header + Mitglieder-Kacheln, „Meine Rolle"-Umschalter.
+class _LobbySkeleton extends StatelessWidget {
+  const _LobbySkeleton();
+
+  static Widget _card(Widget child) => Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: child,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonShimmer(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        physics: const NeverScrollableScrollPhysics(),
+        children: [
+          // Info-Karte (Distanz + Privatsphäre)
+          _card(
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SkeletonBox(width: 120, height: 14),
+                SizedBox(height: 16),
+                Row(
+                  children: [
+                    SkeletonBox(width: 90, height: 14),
+                    SizedBox(width: 24),
+                    SkeletonBox(width: 70, height: 14),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Gruppen-Code-Karte
+          _card(
+            const Row(
+              children: [
+                SkeletonCircle(size: 28),
+                SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SkeletonBox(width: 90, height: 10),
+                      SizedBox(height: 8),
+                      SkeletonBox(width: 140, height: 16),
+                    ],
+                  ),
+                ),
+                SkeletonBox(width: 26, height: 26, radius: 6),
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          // Mitglieder-Header
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              SkeletonBox(width: 150, height: 20),
+              SkeletonCircle(size: 30),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Mitglieder-Kacheln
+          for (var i = 0; i < 3; i++) ...[
+            _card(
+              const Row(
+                children: [
+                  SkeletonCircle(size: 48),
+                  SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 120, height: 14),
+                        SizedBox(height: 8),
+                        SkeletonBox(width: 80, height: 11),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const SizedBox(height: 16),
+          // Meine Rolle
+          const SkeletonBox(width: 100, height: 13),
+          const SizedBox(height: 12),
+          const Row(
+            children: [
+              SkeletonBox(width: 130, height: 46, radius: 23),
+              SizedBox(width: 12),
+              SkeletonBox(width: 130, height: 46, radius: 23),
+            ],
+          ),
+        ],
       ),
     );
   }
