@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
@@ -274,6 +275,9 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.routeTotalMeters = 0.0,
     this.routeColor = const Color(0xFFFF4438),
     this.liveSmoothedPosition,
+    this.poiFeatures = const [],
+    this.poiImages = const {},
+    this.onPoiTapped,
   });
 
   final ll.LatLng initialCenter;
@@ -311,6 +315,16 @@ class CruiseMapLibreMap extends StatefulWidget {
   /// Projektion synchron abgefragt und ersetzt die Position aller Marker mit
   /// [CruiseMapMarker.followsLivePosition]. null = Feature aus (z. B. Web).
   final ll.LatLng? Function()? liveSmoothedPosition;
+
+  /// 2026-06-25 (vucko Marker-Swim, native): POIs + Baustellen als NATIVE
+  /// Symbol-Layer (GPU, im selben Frame wie die Karte gerendert) statt als
+  /// Flutter-Overlay → kein „Schwimmen" beim Pannen. [poiFeatures] = GeoJSON-
+  /// Point-Features, jedes mit top-level `id` (Tap-Matching) + Property `icon`
+  /// (Name eines via [poiImages] registrierten Bildes). [onPoiTapped] erhält
+  /// die getippte Feature-`id`.
+  final List<Map<String, dynamic>> poiFeatures;
+  final Map<String, Uint8List> poiImages;
+  final void Function(String id)? onPoiTapped;
 
   @override
   State<CruiseMapLibreMap> createState() => _CruiseMapLibreMapState();
@@ -377,6 +391,18 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   static const String _drivenSrcId = 'cruise-route-driven';
   static const String _drivenCasingLayerId = 'cruise-route-driven-casing';
   static const String _drivenFillLayerId = 'cruise-route-driven-fill';
+  // 2026-06-25 (vucko Marker-Swim, native): POI/Baustellen-Symbol-Layer. Eigene
+  // Quelle (FeatureCollection — NICHT bare Feature: iOS setGeoJsonSource erwartet
+  // eine Collection, sonst stille No-Op). Bilder via addImage registriert,
+  // idempotent über _poiImagesRegistered. Crash-Guards exakt wie _ensureLineLayer.
+  static const String _poiSrcId = 'cruise-poi-src';
+  static const String _poiLayerId = 'cruise-poi-layer';
+  bool _poiLayerReady = false;
+  bool _ensuringPoiLayer = false;
+  bool _ensurePoiPending = false;
+  final Set<String> _poiImagesRegistered = <String>{};
+  bool _poiTapRegistered = false;
+  String _lastPoiSig = '';
   // Gedämpftes Grau für „schon gefahren" — klar als erledigt lesbar, ohne mit der
   // roten Rest-Route zu konkurrieren.
   static const Color _drivenFillColor = Color(0xFF6E7178);
@@ -528,6 +554,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       _syncActiveRoute();
       _syncDrivenTrail();
       _applyRouteGradient();
+      // 2026-06-25 (vucko native POIs): Layer sicherstellen (Icon-Bilder können
+      // verzögert ankommen, da sie async gerastert werden) + bei Änderung pushen.
+      if (!_poiLayerReady ||
+          _poiImagesRegistered.length < widget.poiImages.length) {
+        _ensurePoiLayer();
+      }
+      _syncPois();
       _projectMarkers();
     }
   }
@@ -590,10 +623,17 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // Throw, keine Mutation vor dem ersten Frame).
     final bool wasReload = _firstFrameSynced;
     _lineLayerReady = false;
+    // 2026-06-25 (vucko native POIs): Style-Reload wischt Quellen/Layer UND die
+    // registrierten Bilder → POI-Layer als „neu" markieren und das Image-Set
+    // leeren, sonst blieben die Symbole nach einem Offline/Online-Style-Swap leer.
+    _poiLayerReady = false;
+    _poiImagesRegistered.clear();
     if (wasReload) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || !_appResumed || !_visible) return;
         await _ensureLineLayer();
+        if (!mounted) return;
+        await _ensurePoiLayer();
         if (!mounted) return;
         // 2026-06-09 (vucko Voll-Route-Sichtbar): die Quellen wurden beim Reload
         // neu (leer) angelegt → ALLE Signaturen invalidieren, sonst bliebe die
@@ -823,6 +863,147 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     }
   }
 
+  /// Legt die native POI/Baustellen-Symbol-Quelle + den Symbol-Layer einmalig an
+  /// und registriert die Icon-Bilder. Gleiches crash-sichere Muster wie
+  /// _ensureLineLayer: existenz-geprüft adden (kein Redundant-Throw → kein
+  /// SIGABRT), Re-Entrancy-Guard, ein Nachzieher.
+  Future<void> _ensurePoiLayer() async {
+    final map = _map;
+    if (map == null) return;
+    // WICHTIG: NICHT bei _poiLayerReady früh raus — die Icon-Bilder werden im
+    // echten App-Pfad ASYNC gerastert und kommen ERST NACH dem ersten Anlegen
+    // an. Die Bild-Registrierung muss daher bei JEDEM Aufruf laufen; nur das
+    // Anlegen von Quelle/Layer/Tap ist einmalig (über _poiLayerReady) geschützt.
+    if (_ensuringPoiLayer) {
+      _ensurePoiPending = true;
+      return;
+    }
+    _ensuringPoiLayer = true;
+    try {
+      // Icon-Bilder registrieren (addImage braucht geladenen Style; idempotent
+      // über _poiImagesRegistered — beim Style-Reload wird das Set geleert und
+      // hier neu aufgebaut, sonst wären die Symbole nach einem Reload leer).
+      var registeredNew = false;
+      for (final entry in widget.poiImages.entries) {
+        if (_poiImagesRegistered.contains(entry.key)) continue;
+        try {
+          await map.addImage(entry.key, entry.value);
+          _poiImagesRegistered.add(entry.key);
+          registeredNew = true;
+        } catch (_) {}
+        if (!mounted) return;
+      }
+      if (!_poiLayerReady) {
+        final sourceIds = await map.getSourceIds();
+        if (!mounted) return;
+        if (!sourceIds.contains(_poiSrcId)) {
+          await map.addSource(
+            _poiSrcId,
+            const mb.GeojsonSourceProperties(
+              data: <String, dynamic>{
+                'type': 'FeatureCollection',
+                'features': <dynamic>[],
+              },
+            ),
+          );
+          if (!mounted) return;
+        }
+        final layerIds = await map.getLayerIds();
+        if (!mounted) return;
+        if (!layerIds.contains(_poiLayerId)) {
+          await map.addSymbolLayer(
+            _poiSrcId,
+            _poiLayerId,
+            const mb.SymbolLayerProperties(
+              iconImage: <dynamic>['get', 'icon'],
+              // Das Plugin behandelt Bild-Pixel als DEVICE-Pixel (addImage hat
+              // keinen pixelRatio-Param). Icons werden mit ~3× Auflösung
+              // gerastert (cruise_mode_page) → bei iconSize 1.0 ergibt das auf
+              // einem 3×-Display die korrekte Logik-Größe (~34 pt) und scharf.
+              iconSize: 1.0,
+              iconAllowOverlap: true,
+              iconIgnorePlacement: true,
+              iconAnchor: 'center',
+            ),
+            enableInteraction: true,
+          );
+        }
+        // Tap genau EINMAL registrieren (die Callback-Liste hängt am Controller,
+        // nicht am Style → überlebt Style-Reloads, darf nicht doppelt rein).
+        if (!_poiTapRegistered) {
+          map.onFeatureTapped.add(_handlePoiTap);
+          _poiTapRegistered = true;
+        }
+        _poiLayerReady = true;
+      }
+      // Kamen frische Bilder dazu, nachdem die Features schon (ohne Bild) gepusht
+      // wurden, erzwingt der Re-Push das Neuzeichnen der Symbole.
+      if (registeredNew) {
+        _lastPoiSig = '';
+        unawaited(_syncPois());
+      }
+    } catch (_) {
+      _poiLayerReady = true;
+    } finally {
+      _ensuringPoiLayer = false;
+      final pending = _ensurePoiPending;
+      _ensurePoiPending = false;
+      if (pending && !_poiLayerReady) unawaited(_ensurePoiLayer());
+    }
+  }
+
+  void _handlePoiTap(
+    math.Point<double> point,
+    mb.LatLng coords,
+    String id,
+    String layerId,
+    mb.Annotation? annotation,
+  ) {
+    // Nur Taps auf UNSEREN POI-Layer durchreichen (die Callback-Liste ist global).
+    if (layerId == _poiLayerId && id.isNotEmpty) {
+      widget.onPoiTapped?.call(id);
+    }
+  }
+
+  /// Billige Signatur der POI-Features (id + icon) — pusht nur bei echter
+  /// Änderung (Route-Build / Viewport-Pan / „schließt bald"-Icon-Wechsel).
+  String _poiSignature() {
+    final b = StringBuffer()..write(widget.poiFeatures.length);
+    b.write('|');
+    for (final f in widget.poiFeatures) {
+      b.write(f['id']);
+      final props = f['properties'];
+      if (props is Map) b.write(props['icon']);
+      b.write(';');
+    }
+    return b.toString();
+  }
+
+  /// Aktualisiert die native POI-Quelle (kein Annotation-Churn, ein
+  /// setGeoJsonSource — der bewährte, crash-sichere Pfad wie bei den Linien).
+  Future<void> _syncPois() async {
+    final map = _map;
+    if (!_styleLoaded ||
+        !_visible ||
+        !_appResumed ||
+        !_firstFrameSynced ||
+        !_poiLayerReady ||
+        map == null) {
+      return;
+    }
+    final sig = _poiSignature();
+    if (sig == _lastPoiSig) return;
+    _lastPoiSig = sig;
+    try {
+      await map.setGeoJsonSource(_poiSrcId, {
+        'type': 'FeatureCollection',
+        'features': widget.poiFeatures,
+      });
+    } catch (_) {
+      _lastPoiSig = ''; // transienter Fehler → beim nächsten Tick neu versuchen
+    }
+  }
+
   /// Erster Sync nach dem ersten gerenderten Frame — danach laufen Updates
   /// regulär über didUpdateWidget / Sichtbarkeitswechsel.
   ///
@@ -899,11 +1080,14 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // NUR noch setGeoJsonSource aufgerufen — nie wieder remove/re-add.
     await _ensureLineLayer();
     if (!mounted) return;
+    await _ensurePoiLayer();
+    if (!mounted) return;
     if (_visible) {
       _syncLines();
       _syncActiveRoute();
       _syncDrivenTrail();
       _applyRouteGradient();
+      _syncPois();
       _projectMarkers();
     }
   }

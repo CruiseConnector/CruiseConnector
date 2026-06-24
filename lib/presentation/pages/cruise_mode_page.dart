@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 
 import 'dart:io' show Platform;
 
@@ -466,6 +467,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _poisLoading = false;
   List<RoutePoi> _routePois = const [];
   final Set<PoiType> _poiTypes = const {PoiType.fuel};
+  // 2026-06-25 (vucko Marker-Swim, native): vorgerasterte POI/Baustellen-Icons
+  // (Key → PNG-Bytes) für den nativen Symbol-Layer + Guard gegen Mehrfach-Raster.
+  final Map<String, Uint8List> _poiIconImages = {};
+  bool _poiIconRasterInFlight = false;
   // 2026-05-24 (vucko Task #45): Road-Hazard-Detection (OSM construction).
   // Aktuell als Toast-Warnung beim Route-Build genutzt; Liste wird für
   // zukünftige Map-Marker-Overlay-Iteration vorgehalten.
@@ -3639,8 +3644,19 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-11 (vucko Route-Lock): Kamera folgt derselben route-gesnappten
       // Render-Position wie der Puck (eine Quelle) — vorher zog die freie
       // Kalman-Prediction die Kamera seitlich neben die Linie.
+      // 2026-06-25 (vucko Stage 2c, Marker-Swim): Beim FREIEN Pannen im
+      // Stillstand KEINEN 150ms-Dead-Reckoning-Vorhalt anwenden. Sonst schiebt
+      // der Smoother die Render-Position pro Frame minimal vor → der Puck
+      // „kriecht" über den festgehaltenen Boden (zusätzlich zum unvermeidbaren
+      // 1-Frame-Overlay-Lag). Bei Bewegung ODER gesperrter Kamera bleibt der
+      // volle Vorhalt (flüssiges Gleiten / Kamera-Sync) unverändert.
+      final stationaryFreePan = !_isCameraLocked &&
+          _nativeSmoother.speed < 0.6 &&
+          (_userLocation?.speed ?? 0) < 0.8;
       final lockPos = _routeLockedRenderPosition(
-        DateTime.now().add(_nativeRenderPredictionLead),
+        stationaryFreePan
+            ? DateTime.now()
+            : DateTime.now().add(_nativeRenderPredictionLead),
       );
       // Linien-Schnitt mitziehen: ist der gerenderte Fortschritt dem letzten
       // Trim voraus, frisch nachtrimmen. Der sichtbare Linienkopf haengt am
@@ -6575,6 +6591,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                     ? _activeRouteFallbackPointsForNavigation()
                     : _routeLatLngs))
         : _fullRouteBackgroundLatLngs;
+    // 2026-06-25 (vucko native POIs): fehlende Icon-Bilder rastern (self-healing,
+    // intern geguarded → idempotent, kein Build-Overhead wenn alles bereit ist).
+    _ensurePoiIcons();
     return CruiseMapLibreMap(
       initialCenter: _stableInitialCenter!,
       initialZoom: _stableInitialZoom!,
@@ -6598,6 +6617,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       // ROUTE gesnappten Render-Position (eine Quelle mit Linien-Schnitt +
       // Kamera) — Puck faehrt sichtbar AUF der Linie, kein Auseinanderlaufen.
       liveSmoothedPosition: kIsWeb ? null : _readRouteLockedRenderPosition,
+      // 2026-06-25 (vucko Marker-Swim): POIs/Baustellen als NATIVE Symbole.
+      poiFeatures: _buildPoiFeatures(),
+      poiImages: _poiIconImages,
+      onPoiTapped: _onPoiSymbolTapped,
       onControllerReady: (c) {
         _mlController = c;
         if (!_mapReady) _onMapReady();
@@ -6802,34 +6825,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         ),
       );
     }
-    for (final poi in _routePois) {
-      markers.add(
-        CruiseMapMarker(
-          id: 'poi-${poi.latitude},${poi.longitude}',
-          position: LatLng(poi.latitude, poi.longitude),
-          width: 36,
-          height: 36,
-          child: GestureDetector(
-            onTap: () => _showPoiInfoCard(poi),
-            child: _buildPoiMarker(poi),
-          ),
-        ),
-      );
-    }
-    for (final c in _routeConstructions) {
-      markers.add(
-        CruiseMapMarker(
-          id: 'cons-${c.latitude},${c.longitude}',
-          position: LatLng(c.latitude, c.longitude),
-          width: 40,
-          height: 40,
-          child: GestureDetector(
-            onTap: () => ConstructionAlertSheet.show(context, c),
-            child: _buildConstructionMarker(c),
-          ),
-        ),
-      );
-    }
+    // 2026-06-25 (vucko Marker-Swim): POIs + Baustellen sind jetzt NATIVE
+    // Symbol-Layer (GPU, kein Overlay mehr → kein Schwimmen beim Pannen). Siehe
+    // poiFeatures/poiImages an der CruiseMapLibreMap + _buildPoiFeatures/
+    // _ensurePoiIcons/_onPoiSymbolTapped. (Flutter-Overlay nur noch für Puck,
+    // Wegpunkte, Start/Ziel, Gruppen-Peers.)
     if (_userPosition != null && _isRouteConfirmed) {
       // Bei gesperrter Navi-Kamera dreht die MapLibre-Karte bereits per
       // bearing=heading (Fahrtrichtung oben) → der Screen-Overlay-Puck zeigt
@@ -12728,6 +12728,222 @@ class _CruiseModePageState extends State<CruiseModePage>
       setState(() => _routePois = filtered);
     } catch (_) {
       /* silent */
+    }
+  }
+
+  // ── 2026-06-25 (vucko Marker-Swim): native POI/Baustellen-Symbole ──────────
+  // POIs + Baustellen werden als NATIVE MapLibre-Symbol-Layer gerendert (GPU,
+  // im selben Frame wie die Karte) statt als Flutter-Overlay → kein „Schwimmen"
+  // beim Pannen. Die Icons (farbiger Kreis + Ring + Glyph) werden EINMAL pro
+  // Variante in eine PNG gerastert und via addImage registriert.
+
+  static const String _constructionIconKey = 'cons';
+
+  String _poiIconKey(RoutePoi poi) {
+    final soon = OpeningHoursParser.parse(poi.openingHours).isClosingSoon;
+    return 'poi_${poi.type.name}${soon ? '_soon' : ''}';
+  }
+
+  Color _poiColorFor(PoiType type) => switch (type) {
+    PoiType.fuel => const Color(0xFFEF4444),
+    PoiType.restaurant => const Color(0xFFFB923C),
+    PoiType.cafe => const Color(0xFFA78BFA),
+    PoiType.fastFood => const Color(0xFFFBBF24),
+    PoiType.pub => const Color(0xFF22C55E),
+    PoiType.motorcycleRepair => const Color(0xFF2DD4BF),
+    PoiType.parking => const Color(0xFF60A5FA),
+    PoiType.toilets => const Color(0xFF9CA3AF),
+  };
+
+  IconData _poiIconDataFor(PoiType type) => switch (type) {
+    PoiType.fuel => Icons.local_gas_station_rounded,
+    PoiType.restaurant => Icons.restaurant_rounded,
+    PoiType.cafe => Icons.local_cafe_rounded,
+    PoiType.fastFood => Icons.fastfood_rounded,
+    PoiType.pub => Icons.sports_bar_rounded,
+    PoiType.motorcycleRepair => Icons.build_rounded,
+    PoiType.parking => Icons.local_parking_rounded,
+    PoiType.toilets => Icons.wc_rounded,
+  };
+
+  Set<String> _neededPoiIconKeys() {
+    final keys = <String>{};
+    for (final poi in _routePois) {
+      keys.add(_poiIconKey(poi));
+    }
+    if (_routeConstructions.isNotEmpty) keys.add(_constructionIconKey);
+    return keys;
+  }
+
+  /// Rastert fehlende Icon-Varianten (self-healing, intern geguarded). Wird aus
+  /// build() angestoßen → deckt ALLE POI-Lade-Pfade ab. setState nur, wenn neue
+  /// Bilder fertig sind (kein Build-Loop, da _poiIconImages danach gefüllt ist).
+  void _ensurePoiIcons() {
+    if (_poiIconRasterInFlight || kIsWeb) return;
+    final needed = _neededPoiIconKeys();
+    final missing = needed
+        .where((k) => !_poiIconImages.containsKey(k))
+        .toList();
+    if (missing.isEmpty) return;
+    _poiIconRasterInFlight = true;
+    () async {
+      final fresh = <String, Uint8List>{};
+      for (final key in missing) {
+        try {
+          fresh[key] = await _rasterizePoiIcon(key);
+        } catch (_) {}
+      }
+      if (!mounted) {
+        _poiIconRasterInFlight = false;
+        return;
+      }
+      _poiIconRasterInFlight = false;
+      if (fresh.isNotEmpty) {
+        setState(() => _poiIconImages.addAll(fresh));
+      }
+    }();
+  }
+
+  Future<Uint8List> _rasterizePoiIcon(String key) {
+    if (key == _constructionIconKey) {
+      return _rasterizeCircleIcon(
+        fill: Colors.white,
+        ring: const Color(0xFFFF9500),
+        ringWidth: 2.2,
+        icon: Icons.construction_rounded,
+        glyphColor: const Color(0xFFFF9500),
+        logicalDiameter: 38,
+        glyphSize: 18,
+      );
+    }
+    final soon = key.endsWith('_soon');
+    final typeName = key.substring(
+      'poi_'.length,
+      key.length - (soon ? '_soon'.length : 0),
+    );
+    final type = PoiType.values.firstWhere(
+      (t) => t.name == typeName,
+      orElse: () => PoiType.fuel,
+    );
+    return _rasterizeCircleIcon(
+      fill: _poiColorFor(type),
+      ring: soon ? const Color(0xFFFB923C) : Colors.white,
+      ringWidth: soon ? 2.8 : 2.2,
+      icon: _poiIconDataFor(type),
+      glyphColor: Colors.white,
+      logicalDiameter: 34,
+      glyphSize: 16,
+    );
+  }
+
+  /// Zeichnet einen farbigen Kreis + Ring + zentriertes Material-Glyph in eine
+  /// PNG (3× Auflösung → scharf; der Symbol-Layer skaliert mit iconSize 1/3).
+  Future<Uint8List> _rasterizeCircleIcon({
+    required Color fill,
+    required Color ring,
+    required double ringWidth,
+    required IconData icon,
+    required Color glyphColor,
+    required double logicalDiameter,
+    required double glyphSize,
+  }) async {
+    const double scale = 3.0;
+    final double px = logicalDiameter * scale;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final Offset center = Offset(px / 2, px / 2);
+    final double r = px / 2 - (ringWidth * scale);
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..color = fill
+        ..isAntiAlias = true,
+    );
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = ringWidth * scale
+        ..color = ring
+        ..isAntiAlias = true,
+    );
+    final tp = TextPainter(
+      textDirection: ui.TextDirection.ltr,
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          fontSize: glyphSize * scale,
+          color: glyphColor,
+          height: 1.0,
+        ),
+      ),
+    )..layout();
+    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+    final ui.Image img = await recorder.endRecording().toImage(
+      px.round(),
+      px.round(),
+    );
+    final bd = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    return bd!.buffer.asUint8List();
+  }
+
+  /// GeoJSON-Point-Features für POIs + Baustellen (top-level `id` = Tap-Matching,
+  /// Property `icon` = registriertes Bild). Nur Features mit bereits gerastertem
+  /// Icon → nie eine fehlende Bild-Referenz im Layer.
+  List<Map<String, dynamic>> _buildPoiFeatures() {
+    if (_routePois.isEmpty && _routeConstructions.isEmpty) return const [];
+    final features = <Map<String, dynamic>>[];
+    for (final poi in _routePois) {
+      final key = _poiIconKey(poi);
+      if (!_poiIconImages.containsKey(key)) continue;
+      features.add({
+        'type': 'Feature',
+        'id': 'poi-${poi.latitude},${poi.longitude}',
+        'properties': {'icon': key},
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [poi.longitude, poi.latitude],
+        },
+      });
+    }
+    if (_poiIconImages.containsKey(_constructionIconKey)) {
+      for (final c in _routeConstructions) {
+        features.add({
+          'type': 'Feature',
+          'id': 'cons-${c.latitude},${c.longitude}',
+          'properties': {'icon': _constructionIconKey},
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [c.longitude, c.latitude],
+          },
+        });
+      }
+    }
+    return features;
+  }
+
+  /// Tap auf ein natives POI/Baustellen-Symbol → passendes Sheet (id-Matching
+  /// wie die früheren Overlay-Marker-IDs).
+  void _onPoiSymbolTapped(String id) {
+    if (id.startsWith('poi-')) {
+      for (final poi in _routePois) {
+        if ('poi-${poi.latitude},${poi.longitude}' == id) {
+          _showPoiInfoCard(poi);
+          return;
+        }
+      }
+    } else if (id.startsWith('cons-')) {
+      for (final c in _routeConstructions) {
+        if ('cons-${c.latitude},${c.longitude}' == id) {
+          ConstructionAlertSheet.show(context, c);
+          return;
+        }
+      }
     }
   }
 
