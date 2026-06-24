@@ -7,6 +7,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class CommunityChatDetailPage extends StatefulWidget {
@@ -26,10 +29,14 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Map<String, dynamic>? _community;
   List<Map<String, dynamic>> _messages = [];
   List<Map<String, dynamic>> _members = [];
+  final Map<String, GlobalKey> _messageKeys = {};
   RealtimeChannel? _messagesChannel;
   RealtimeChannel? _membersChannel;
   bool _loading = true;
   bool _sending = false;
+  int _localMessageSeq = 0;
+  Map<String, dynamic>? _replyToMessage;
+  SavedRoute? _attachedRoute;
   Timer? _reloadDebounce;
 
   @override
@@ -72,7 +79,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _showError(e.toString());
+      _showError(e, fallback: 'Community konnte nicht geladen werden.');
     }
   }
 
@@ -103,17 +110,95 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Future<void> _send() async {
     if (_sending) return;
     final text = _messageCtrl.text.trim();
-    if (text.isEmpty) return;
-    setState(() => _sending = true);
-    try {
-      await CommunityChatService.sendMessage(widget.communityId, text);
+    final attachedRoute = _attachedRoute;
+    if (text.isEmpty && attachedRoute == null) return;
+
+    final replyTo = _replyToMessage;
+    final routeAttachment = attachedRoute == null
+        ? null
+        : _routeAttachmentFor(attachedRoute);
+    final replyToId = replyTo?['id']?.toString();
+    final persistedReplyToId =
+        replyToId == null || replyToId.startsWith('local-') ? null : replyToId;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    final body = text.isEmpty ? 'Route geteilt' : text;
+    final localId =
+        'local-${DateTime.now().microsecondsSinceEpoch}-${_localMessageSeq++}';
+    final optimistic = <String, dynamic>{
+      'id': localId,
+      'community_id': widget.communityId,
+      'user_id': uid,
+      'body': body,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'deleted_at': null,
+      if (persistedReplyToId != null) 'reply_to_message_id': persistedReplyToId,
+      if (routeAttachment != null) 'route_attachment': routeAttachment,
+      'profiles': _profileForUser(uid),
+      '_pending': true,
+    };
+
+    setState(() {
+      _sending = true;
+      _messages = [..._messages, optimistic];
       _messageCtrl.clear();
-      await _load();
+      _replyToMessage = null;
+      _attachedRoute = null;
+    });
+    _scrollToBottom();
+    try {
+      await CommunityChatService.sendMessage(
+        widget.communityId,
+        body,
+        replyToMessageId: persistedReplyToId,
+        routeAttachment: routeAttachment,
+      );
+      unawaited(_load());
     } catch (e) {
-      _showError(e.toString());
+      if (mounted) {
+        setState(() {
+          _messages = _messages
+              .where((message) => message['id'] != localId)
+              .toList();
+          _replyToMessage = replyTo;
+          _attachedRoute = attachedRoute;
+          _messageCtrl.text = text;
+        });
+      }
+      _showError(e, fallback: 'Nachricht konnte nicht gesendet werden.');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  Map<String, dynamic> _profileForUser(String userId) {
+    for (final member in _members) {
+      if (member['user_id'] == userId) {
+        final raw = member['profiles'];
+        if (raw is Map) return Map<String, dynamic>.from(raw);
+      }
+    }
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user?.id == userId) {
+      final meta = user?.userMetadata ?? const <String, dynamic>{};
+      return {
+        'id': userId,
+        'username': meta['username'] ?? meta['name'] ?? user?.email,
+        'email': user?.email,
+        'avatar_url': meta['avatar_url'],
+      };
+    }
+    return {'id': userId};
+  }
+
+  Map<String, dynamic> _routeAttachmentFor(SavedRoute route) {
+    return {
+      'route_id': route.id,
+      'title': route.name ?? route.style,
+      'style': route.style,
+      'distance_km': route.distanceKm,
+    };
   }
 
   void _scrollToBottom() {
@@ -127,18 +212,55 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     });
   }
 
-  void _showError(String message) {
+  String _friendlyError(Object error, String fallback) {
+    final raw = error.toString();
+    final lower = raw.toLowerCase();
+    final isBackendNoise =
+        lower.contains('postgrest') ||
+        lower.contains('supabase') ||
+        lower.contains('row-level') ||
+        lower.contains('rls') ||
+        lower.contains('policy') ||
+        lower.contains('permission') ||
+        lower.contains('schema cache') ||
+        lower.contains('violates') ||
+        lower.contains('duplicate key');
+    if (raw.trim().isEmpty || isBackendNoise) return fallback;
+    return raw.length > 110 ? fallback : raw;
+  }
+
+  void _showError(
+    Object error, {
+    String fallback = 'Aktion gerade nicht möglich.',
+  }) {
+    _showToast(_friendlyError(error, fallback), error: true);
+  }
+
+  void _showToast(String message, {bool error = false}) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: error
+            ? const Color(0xFF301B20)
+            : const Color(0xFF171B24),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1250),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
     );
   }
 
   Future<void> _copyInviteCode(String code) async {
     await Clipboard.setData(ClipboardData(text: code));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Invite-Code kopiert.')));
+    _showToast('Code kopiert.');
   }
 
   void _showMembersSheet() {
@@ -152,6 +274,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       builder: (_) => CommunityMembersSheet(
         communityId: widget.communityId,
         initialMembers: _members,
+        ownerOnlyMessages: _community?['owner_only_messages'] == true,
         onChanged: () => _load(scrollToBottom: false),
       ),
     );
@@ -167,6 +290,280 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   }
 
   bool get _amAdmin => _myRole == 'owner';
+  bool get _canWrite {
+    if (_community?['owner_only_messages'] != true) return true;
+    return CommunityChatService.canModerate(_myRole);
+  }
+
+  Map<String, dynamic>? _messageById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final message in _messages) {
+      if (message['id']?.toString() == id) return message;
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _routeAttachmentFrom(Map<String, dynamic> message) {
+    final raw = message['route_attachment'];
+    if (raw is! Map) return null;
+    final attachment = Map<String, dynamic>.from(raw);
+    final routeId = attachment['route_id']?.toString();
+    if (routeId == null || routeId.isEmpty) return null;
+    return attachment;
+  }
+
+  Future<void> _copyMessage(Map<String, dynamic> message) async {
+    final body = message['body']?.toString() ?? '';
+    final route = _routeAttachmentFrom(message);
+    final value = route == null
+        ? body
+        : [
+            if (body.isNotEmpty) body,
+            'Route: ${route['title'] ?? route['route_id']}',
+          ].join('\n');
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    _showToast('Nachricht kopiert.');
+  }
+
+  Future<void> _deleteMessage(Map<String, dynamic> message) async {
+    final id = message['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    if (id.startsWith('local-')) {
+      setState(() {
+        _messages = _messages.where((entry) => entry['id'] != id).toList();
+      });
+      return;
+    }
+    final previous = List<Map<String, dynamic>>.from(_messages);
+    setState(() {
+      _messages = _messages.where((entry) => entry['id'] != id).toList();
+    });
+    try {
+      await CommunityChatService.deleteMessage(id);
+      unawaited(_load(scrollToBottom: false));
+    } catch (e) {
+      if (mounted) setState(() => _messages = previous);
+      _showError(e, fallback: 'Nachricht konnte nicht gelöscht werden.');
+    }
+  }
+
+  void _showMessageActions(Map<String, dynamic> message) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final isMine = message['user_id'] == uid;
+    final canDelete = isMine || CommunityChatService.canModerate(_myRole);
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF151821),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.20),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _MessageActionTile(
+                  icon: Icons.reply_rounded,
+                  label: 'Antworten',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    setState(() => _replyToMessage = message);
+                  },
+                ),
+                _MessageActionTile(
+                  icon: Icons.copy_rounded,
+                  label: 'Kopieren',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    unawaited(_copyMessage(message));
+                  },
+                ),
+                if (canDelete)
+                  _MessageActionTile(
+                    icon: Icons.delete_outline_rounded,
+                    label: 'Löschen',
+                    destructive: true,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_deleteMessage(message));
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showRoutePicker() async {
+    final route = await showModalBottomSheet<SavedRoute>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF151821),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * 0.68,
+            child: FutureBuilder<List<SavedRoute>>(
+              future: SavedRoutesService.getSavedRouteLibrary(),
+              builder: (context, snapshot) {
+                final routes = snapshot.data ?? const <SavedRoute>[];
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.only(top: 10, bottom: 14),
+                        width: 42,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.20),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 18),
+                      child: Text(
+                        'Route anhängen',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (snapshot.connectionState == ConnectionState.waiting)
+                      Expanded(
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: AppAccentColors.accent,
+                          ),
+                        ),
+                      )
+                    else if (routes.isEmpty)
+                      const Expanded(
+                        child: Center(
+                          child: Text(
+                            'Noch keine gespeicherten Routen.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(18, 6, 18, 18),
+                          itemCount: routes.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final route = routes[index];
+                            return InkWell(
+                              onTap: () => Navigator.pop(sheetContext, route),
+                              borderRadius: BorderRadius.circular(14),
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F121A),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.07),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.route_rounded,
+                                      color: AppAccentColors.accent,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${route.styleEmoji} ${route.name ?? route.style}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w900,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '${route.formattedDistance} · ${route.formattedDuration}',
+                                            style: const TextStyle(
+                                              color: Colors.grey,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+    if (route == null || !mounted) return;
+    setState(() => _attachedRoute = route);
+  }
+
+  void _scrollToMessage(String? messageId) {
+    if (messageId == null || messageId.isEmpty) return;
+    final key = _messageKeys[messageId];
+    final ctx = key?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        alignment: 0.30,
+      );
+      return;
+    }
+    final index = _messages.indexWhere(
+      (message) => message['id']?.toString() == messageId,
+    );
+    if (index < 0 || !_scrollCtrl.hasClients) return;
+    _scrollCtrl.animateTo(
+      (index * 86.0).clamp(0.0, _scrollCtrl.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   Future<void> _confirmLeaveCommunity() async {
     final isAdmin = _amAdmin;
@@ -206,7 +603,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
-      _showError(e.toString());
+      _showError(e, fallback: 'Community konnte nicht verlassen werden.');
     }
   }
 
@@ -245,7 +642,30 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
-      _showError(e.toString());
+      _showError(e, fallback: 'Community konnte nicht gelöscht werden.');
+    }
+  }
+
+  Future<void> _toggleOwnerOnlyMessages() async {
+    final community = _community;
+    if (community == null) return;
+    final current = community['owner_only_messages'] == true;
+    final next = !current;
+    setState(() {
+      _community = {...community, 'owner_only_messages': next};
+    });
+    try {
+      await CommunityChatService.setOwnerOnlyMessages(
+        communityId: widget.communityId,
+        enabled: next,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _community = {...community, 'owner_only_messages': current};
+        });
+      }
+      _showError(e, fallback: 'Einstellung konnte nicht gespeichert werden.');
     }
   }
 
@@ -253,6 +673,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Widget build(BuildContext context) {
     final community = _community;
     final title = community?['name']?.toString() ?? 'Community';
+    final ownerOnlyMessages = community?['owner_only_messages'] == true;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -279,9 +700,36 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                 _confirmLeaveCommunity();
               } else if (value == 'delete') {
                 _confirmDeleteCommunity();
+              } else if (value == 'owner_only') {
+                _toggleOwnerOnlyMessages();
               }
             },
             itemBuilder: (_) => [
+              if (_amAdmin)
+                PopupMenuItem(
+                  value: 'owner_only',
+                  child: Row(
+                    children: [
+                      Icon(
+                        ownerOnlyMessages
+                            ? Icons.chat_bubble_outline
+                            : Icons.admin_panel_settings_outlined,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          ownerOnlyMessages
+                              ? 'Alle schreiben lassen'
+                              : 'Nur Owner schreibt',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_amAdmin) const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'leave',
                 child: Row(
@@ -338,6 +786,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     final memberCount = CommunityChatService.memberCount(community);
     final inviteCode = community['invite_code']?.toString();
     final canInvite = CommunityChatService.canInvite(community);
+    final ownerOnlyMessages = community['owner_only_messages'] == true;
 
     return Container(
       width: double.infinity,
@@ -351,24 +800,34 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildMetaPill(
-                icon: isPublic ? Icons.public : Icons.lock_outline,
-                label: isPublic ? 'Öffentlich' : 'Privat',
-                color: isPublic ? Colors.greenAccent : Colors.orangeAccent,
-              ),
-              _buildMetaPill(
-                icon: Icons.people_outline,
-                label: '$memberCount Mitglieder',
-                color: Colors.white70,
-                onTap: _showMembersSheet,
-              ),
-            ],
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                _buildMetaPill(
+                  icon: isPublic ? Icons.public : Icons.lock_outline,
+                  label: isPublic ? 'Öffentlich' : 'Privat',
+                  color: isPublic ? Colors.greenAccent : Colors.orangeAccent,
+                ),
+                const SizedBox(width: 8),
+                _buildMetaPill(
+                  icon: Icons.people_outline,
+                  trailingIcon: ownerOnlyMessages
+                      ? Icons.admin_panel_settings_outlined
+                      : null,
+                  label: '$memberCount Mitglieder',
+                  color: Colors.white70,
+                  trailingColor: ownerOnlyMessages ? Colors.orangeAccent : null,
+                  onTap: _showMembersSheet,
+                ),
+              ],
+            ),
           ),
-          if (canInvite && inviteCode != null && inviteCode.isNotEmpty) ...[
+          if (!isPublic &&
+              canInvite &&
+              inviteCode != null &&
+              inviteCode.isNotEmpty) ...[
             const SizedBox(height: 10),
             InkWell(
               onTap: () => _copyInviteCode(inviteCode),
@@ -414,13 +873,15 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     required IconData icon,
     required String label,
     required Color color,
+    IconData? trailingIcon,
+    Color? trailingColor,
     VoidCallback? onTap,
   }) {
     final pill = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Row(
@@ -433,16 +894,20 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
             style: TextStyle(
               color: color,
               fontSize: 11,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w800,
             ),
           ),
+          if (trailingIcon != null) ...[
+            const SizedBox(width: 6),
+            Icon(trailingIcon, color: trailingColor ?? color, size: 13),
+          ],
         ],
       ),
     );
     if (onTap == null) return pill;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(12),
       child: pill,
     );
   }
@@ -486,7 +951,12 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
       itemCount: _messages.length,
       itemBuilder: (context, index) {
-        return _buildMessageBubble(_messages[index]);
+        final message = _messages[index];
+        final id = message['id']?.toString();
+        final key = id == null
+            ? null
+            : _messageKeys.putIfAbsent(id, GlobalKey.new);
+        return KeyedSubtree(key: key, child: _buildMessageBubble(message));
       },
     );
   }
@@ -504,79 +974,135 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     );
     final body = message['body']?.toString() ?? '';
     final time = _formatMessageTime(message['created_at'] as String?);
+    final isPending = message['_pending'] == true;
+    final replyToId = message['reply_to_message_id']?.toString();
+    final repliedMessage = _messageById(replyToId);
+    final routeAttachment = _routeAttachmentFrom(message);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        mainAxisAlignment: isMine
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMine) ...[
-            UserAvatar.fromProfile(profile, fallbackName: name, radius: 16),
-            const SizedBox(width: 8),
-          ],
-          Flexible(
-            flex: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              decoration: BoxDecoration(
-                color: isMine
-                    ? AppAccentColors.accent
-                    : const Color(0xFF1C1F26),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(14),
-                  topRight: const Radius.circular(14),
-                  bottomLeft: Radius.circular(isMine ? 14 : 4),
-                  bottomRight: Radius.circular(isMine ? 4 : 14),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: () => _showMessageActions(message),
+        child: Row(
+          mainAxisAlignment: isMine
+              ? MainAxisAlignment.end
+              : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (!isMine) ...[
+              UserAvatar.fromProfile(profile, fallbackName: name, radius: 16),
+              const SizedBox(width: 8),
+            ],
+            Flexible(
+              flex: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
                 ),
-                border: isMine
-                    ? null
-                    : Border.all(color: Colors.white.withValues(alpha: 0.05)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!isMine)
+                decoration: BoxDecoration(
+                  color: isMine
+                      ? AppAccentColors.accent
+                      : const Color(0xFF1C1F26),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(14),
+                    topRight: const Radius.circular(14),
+                    bottomLeft: Radius.circular(isMine ? 14 : 4),
+                    bottomRight: Radius.circular(isMine ? 4 : 14),
+                  ),
+                  border: isMine
+                      ? null
+                      : Border.all(color: Colors.white.withValues(alpha: 0.05)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!isMine)
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppAccentColors.accent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    if (!isMine) const SizedBox(height: 3),
+                    if (replyToId != null && replyToId.isNotEmpty) ...[
+                      InkWell(
+                        onTap: () => _scrollToMessage(replyToId),
+                        borderRadius: BorderRadius.circular(9),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border(
+                              left: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.72),
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                          child: Text(
+                            repliedMessage?['body']?.toString() ??
+                                'Antwort anzeigen',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.78),
+                              fontSize: 11.5,
+                              height: 1.25,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 7),
+                    ],
                     Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppAccentColors.accent,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
+                      body,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        height: 1.35,
                       ),
                     ),
-                  if (!isMine) const SizedBox(height: 3),
-                  Text(
-                    body,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      height: 1.35,
+                    if (routeAttachment != null) ...[
+                      const SizedBox(height: 8),
+                      RouteAttachmentCard(
+                        routeId: routeAttachment['route_id'].toString(),
+                        compact: true,
+                        showRideButton: true,
+                      ),
+                    ],
+                    const SizedBox(height: 4),
+                    Text(
+                      isPending ? '$time · sendet...' : time,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.62),
+                        fontSize: 10.5,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    time,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.62),
-                      fontSize: 10.5,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-          if (isMine) const SizedBox(width: 48),
-        ],
+            if (isMine) const SizedBox(width: 48),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildComposer() {
+    final canWrite = _canWrite;
     return SafeArea(
       top: false,
       child: Container(
@@ -587,55 +1113,128 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
             top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
           ),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _messageCtrl,
-                maxLength: AppInputLimits.communityMessageMaxLength,
-                minLines: 1,
-                maxLines: 4,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: 'Nachricht schreiben',
-                  hintStyle: const TextStyle(color: Colors.grey),
-                  counterText: '',
-                  filled: true,
-                  fillColor: const Color(0xFF0B0E14),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 11,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(18),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
+            if (_replyToMessage != null) ...[
+              _ComposerPreview(
+                icon: Icons.reply_rounded,
+                title: 'Antwort',
+                text: _replyToMessage?['body']?.toString() ?? 'Nachricht',
+                onClear: () => setState(() => _replyToMessage = null),
               ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 44,
-              height: 44,
-              child: IconButton.filled(
-                onPressed: _sending ? null : _send,
-                style: IconButton.styleFrom(
-                  backgroundColor: AppAccentColors.accent,
-                  disabledBackgroundColor: Colors.grey[800],
+              const SizedBox(height: 8),
+            ],
+            if (_attachedRoute != null) ...[
+              _ComposerPreview(
+                icon: Icons.route_rounded,
+                title: 'Route angehängt',
+                text:
+                    '${_attachedRoute!.styleEmoji} ${_attachedRoute!.name ?? _attachedRoute!.style}',
+                onClear: () => setState(() => _attachedRoute = null),
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (!canWrite)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0B0E14),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
                 ),
-                icon: _sending
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.admin_panel_settings_outlined,
+                      color: AppAccentColors.accent.withValues(alpha: 0.78),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Nur Admins können hier schreiben.',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontWeight: FontWeight.w800,
                         ),
-                      )
-                    : const Icon(Icons.send, color: Colors.white, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: IconButton(
+                      tooltip: 'Route anhängen',
+                      onPressed: _showRoutePicker,
+                      icon: Icon(
+                        Icons.add_link_rounded,
+                        color: AppAccentColors.accent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: TextField(
+                      controller: _messageCtrl,
+                      maxLength: AppInputLimits.communityMessageMaxLength,
+                      minLines: 1,
+                      maxLines: 4,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        hintText: 'Nachricht schreiben',
+                        hintStyle: const TextStyle(color: Colors.grey),
+                        counterText: '',
+                        filled: true,
+                        fillColor: const Color(0xFF0B0E14),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 11,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: IconButton.filled(
+                      onPressed: _sending ? null : _send,
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppAccentColors.accent,
+                        disabledBackgroundColor: Colors.grey[800],
+                      ),
+                      icon: _sending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.send,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                    ),
+                  ),
+                ],
               ),
-            ),
           ],
         ),
       ),
@@ -651,16 +1250,105 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   }
 }
 
+class _ComposerPreview extends StatelessWidget {
+  const _ComposerPreview({
+    required this.icon,
+    required this.title,
+    required this.text,
+    required this.onClear,
+  });
+
+  final IconData icon;
+  final String title;
+  final String text;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: AppAccentColors.accent, size: 18),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: onClear,
+            icon: const Icon(Icons.close_rounded, color: Colors.white70),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MessageActionTile extends StatelessWidget {
+  const _MessageActionTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? Colors.redAccent : Colors.white;
+    return ListTile(
+      onTap: onTap,
+      leading: Icon(icon, color: color),
+      title: Text(
+        label,
+        style: TextStyle(color: color, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
 class CommunityMembersSheet extends StatefulWidget {
   const CommunityMembersSheet({
     required this.communityId,
     required this.initialMembers,
+    required this.ownerOnlyMessages,
     required this.onChanged,
     super.key,
   });
 
   final String communityId;
   final List<Map<String, dynamic>> initialMembers;
+  final bool ownerOnlyMessages;
   final Future<void> Function() onChanged;
 
   @override
@@ -707,7 +1395,7 @@ class _CommunityMembersSheetState extends State<CommunityMembersSheet> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _showError(e.toString());
+      _showError(e);
     }
   }
 
@@ -722,7 +1410,7 @@ class _CommunityMembersSheetState extends State<CommunityMembersSheet> {
       await _loadMembers();
       await widget.onChanged();
     } catch (e) {
-      _showError(e.toString());
+      _showError(e);
     } finally {
       if (mounted) setState(() => _busyUserId = null);
     }
@@ -738,16 +1426,47 @@ class _CommunityMembersSheetState extends State<CommunityMembersSheet> {
       await _loadMembers();
       await widget.onChanged();
     } catch (e) {
-      _showError(e.toString());
+      _showError(e);
     } finally {
       if (mounted) setState(() => _busyUserId = null);
     }
   }
 
-  void _showError(String message) {
+  String _friendlyError(Object error) {
+    final raw = error.toString();
+    final lower = raw.toLowerCase();
+    final isBackendNoise =
+        lower.contains('postgrest') ||
+        lower.contains('supabase') ||
+        lower.contains('row-level') ||
+        lower.contains('rls') ||
+        lower.contains('policy') ||
+        lower.contains('permission') ||
+        lower.contains('schema cache') ||
+        lower.contains('violates');
+    if (raw.trim().isEmpty || isBackendNoise || raw.length > 110) {
+      return 'Aktion gerade nicht möglich.';
+    }
+    return raw;
+  }
+
+  void _showError(Object error) {
     if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+      SnackBar(
+        content: Text(
+          _friendlyError(error),
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: const Color(0xFF301B20),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1350),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
     );
   }
 
@@ -787,6 +1506,46 @@ class _CommunityMembersSheetState extends State<CommunityMembersSheet> {
                 ],
               ),
             ),
+            if (widget.ownerOnlyMessages)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.orangeAccent.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.orangeAccent.withValues(alpha: 0.22),
+                    ),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(
+                        Icons.admin_panel_settings_outlined,
+                        color: Colors.orangeAccent,
+                        size: 17,
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Nur Admins können in diesem Chat schreiben.',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.orangeAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             Expanded(
               child: _loading
                   ? Center(

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
@@ -253,6 +254,12 @@ class _SettingsPageState extends State<SettingsPage> {
         setState(() => _deletingAccount = false);
       }
     }
+  }
+
+  Future<void> _replayAppTutorial() async {
+    await AppTutorialService.requestReplay();
+    if (!mounted) return;
+    Navigator.pop(context);
   }
 
   Future<bool?> _showDeleteAccountTypeDialog() async {
@@ -623,6 +630,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
+                  _buildNavTile(
+                    'Tutorial nochmal anschauen',
+                    Icons.school_outlined,
+                    subtitle: 'Home, Community, Cruise, Analytics und Profil',
+                    onTap: _replayAppTutorial,
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
                   ListTile(
                     enabled: !_deletingAccount,
                     leading: _deletingAccount

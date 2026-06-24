@@ -87,7 +87,7 @@ class UserAvatar extends StatelessWidget {
       url,
       width: radius * 2,
       height: radius * 2,
-      maxCacheSize: 512,
+      maxCacheSize: 1024,
     );
   }
 

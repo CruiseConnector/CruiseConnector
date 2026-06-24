@@ -32,7 +32,7 @@ class SocialService {
 
   static const String _profileSelect =
       'id, username, email, created_at, level, total_km, total_routes, '
-      'badges, bio_title, bio, avatar_url, banner_url, link, is_private, '
+      'badges, badge_showcase, bio_title, bio, avatar_url, banner_url, link, is_private, '
       'username_changed_at, '
       'car_brand, car_name, car_country_code, car_top_speed, car_engine_size, '
       'car_displacement, car_cylinders, car_horsepower, car_year, '
@@ -1471,7 +1471,7 @@ class SocialService {
       await _db.from('group_members').upsert({
         'group_id': groupId,
         'user_id': uid,
-        'ride_role': 'passenger',
+        'ride_role': 'driver',
       }, onConflict: 'group_id,user_id');
     } on PostgrestException catch (e) {
       if (isDuplicateGroupMemberError(e)) {
@@ -1633,7 +1633,17 @@ class SocialService {
         'join_group_with_code',
         params: {'p_code': code},
       );
-      return result as String;
+      final groupId = result as String;
+      try {
+        await _db
+            .from('group_members')
+            .update({'ride_role': 'driver'})
+            .eq('group_id', groupId)
+            .eq('user_id', _userId!);
+      } catch (e) {
+        debugPrint('[SocialService] ride_role nach Code-Join fallback: $e');
+      }
+      return groupId;
     } on PostgrestException catch (e) {
       throw SocialServiceException(e.message);
     }
@@ -1782,7 +1792,8 @@ class SocialService {
     } on PostgrestException catch (e) {
       if ((e.code == 'PGRST204' || e.code == '42703') &&
           (e.message.contains('car_country_code') ||
-              e.message.contains('bio_title'))) {
+              e.message.contains('bio_title') ||
+              e.message.contains('badge_showcase'))) {
         final profile = await _db
             .from('profiles')
             .select(_legacyProfileSelect)
@@ -1885,6 +1896,113 @@ class SocialService {
         rethrow;
       }
     }
+  }
+
+  static Future<void> updateBadgeShowcase(List<Object?> badgeEntries) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final used = <String>{};
+    final usedSpots = <int>{};
+    final cleaned = <Object>[];
+    for (var i = 0; i < badgeEntries.take(5).length; i++) {
+      final raw = badgeEntries[i];
+      final id = raw is Map
+          ? raw['id']?.toString().trim() ?? ''
+          : raw?.toString().trim() ?? '';
+      if (id.isEmpty || !used.add(id)) {
+        cleaned.add(<String, dynamic>{});
+      } else {
+        var spot = _badgeShowcaseSpot(raw is Map ? raw['spot'] : null, i);
+        if (!usedSpots.add(spot)) {
+          spot = _firstFreeBadgeShowcaseSpot(usedSpots);
+          usedSpots.add(spot);
+        }
+        cleaned.add({
+          'id': id,
+          'spot': spot,
+          'x': _badgeShowcaseSpotX(spot),
+          'y': _badgeShowcaseSpotY(spot),
+          'scale': _badgeShowcaseSpotScale(spot),
+        });
+      }
+    }
+    while (cleaned.length < 5) {
+      cleaned.add(<String, dynamic>{});
+    }
+    await _db
+        .from('profiles')
+        .update({'badge_showcase': cleaned})
+        .eq('id', uid);
+  }
+
+  static int _badgeShowcaseSpot(Object? value, int slot) {
+    final parsed = value is int
+        ? value
+        : value is num
+        ? value.round()
+        : value is String
+        ? int.tryParse(value)
+        : null;
+    if (parsed != null && parsed >= 0 && parsed < 10) return parsed;
+    return switch (slot) {
+      0 => 0,
+      1 => 1,
+      2 => 2,
+      3 => 6,
+      _ => 8,
+    };
+  }
+
+  static int _firstFreeBadgeShowcaseSpot(Set<int> usedSpots) {
+    for (var spot = 0; spot < 10; spot++) {
+      if (!usedSpots.contains(spot)) return spot;
+    }
+    return 0;
+  }
+
+  static double _badgeShowcaseSpotX(int spot) {
+    return switch (spot) {
+      0 => 0.36,
+      1 => 0.50,
+      2 => 0.64,
+      3 => 0.80,
+      4 => 0.93,
+      5 => 0.36,
+      6 => 0.48,
+      7 => 0.92,
+      8 => 0.76,
+      _ => 0.93,
+    };
+  }
+
+  static double _badgeShowcaseSpotY(int spot) {
+    return switch (spot) {
+      0 => 0.14,
+      1 => 0.10,
+      2 => 0.15,
+      3 => 0.13,
+      4 => 0.22,
+      5 => 0.36,
+      6 => 0.50,
+      7 => 0.42,
+      8 => 0.78,
+      _ => 0.78,
+    };
+  }
+
+  static double _badgeShowcaseSpotScale(int spot) {
+    return switch (spot) {
+      0 => 0.72,
+      1 => 0.70,
+      2 => 0.72,
+      3 => 0.70,
+      4 => 0.66,
+      5 => 0.66,
+      6 => 0.64,
+      7 => 0.64,
+      8 => 0.66,
+      _ => 0.64,
+    };
   }
 
   /// Username ändern. Wirft `StateError`, wenn der Cooldown noch läuft.
@@ -2238,6 +2356,7 @@ class SocialService {
       'total_km': profile?['total_km'] ?? 0,
       'total_routes': profile?['total_routes'] ?? 0,
       'badges': profile?['badges'] ?? [],
+      'badge_showcase': profile?['badge_showcase'] ?? [],
       'is_private': profile?['is_private'] ?? false,
       'car_brand': profile?['car_brand'],
       'car_name': profile?['car_name'],

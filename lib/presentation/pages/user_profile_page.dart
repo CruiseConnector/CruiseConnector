@@ -8,6 +8,7 @@ import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
@@ -558,6 +559,12 @@ class _UserProfilePageState extends State<UserProfilePage>
                 bottom: 8,
                 child: _buildProfileAvatar(name: name, avatarUrl: avatarUrl),
               ),
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: ProfileBadgeShowcase(profile: stats, baseSize: 38),
+                ),
+              ),
               if (!_isOwnProfile)
                 Positioned(
                   right: 16,
@@ -699,15 +706,26 @@ class _UserProfilePageState extends State<UserProfilePage>
     final canOpenAvatar =
         !_isOwnProfile && cleanAvatarUrl != null && cleanAvatarUrl.isNotEmpty;
     final heroTag = 'user-profile-avatar-${widget.userId}';
-    final avatar = Container(
-      padding: const EdgeInsets.all(4),
-      decoration: const BoxDecoration(
-        color: Color(0xFF0B0E14),
-        shape: BoxShape.circle,
-      ),
-      child: Hero(
-        tag: heroTag,
-        child: UserAvatar(name: name, avatarUrl: avatarUrl, radius: 50),
+    final avatar = SizedBox(
+      width: 108,
+      height: 108,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: const BoxDecoration(
+                color: Color(0xFF0B0E14),
+                shape: BoxShape.circle,
+              ),
+              child: Hero(
+                tag: heroTag,
+                child: UserAvatar(name: name, avatarUrl: avatarUrl, radius: 50),
+              ),
+            ),
+          ),
+        ],
       ),
     );
     if (!canOpenAvatar) return avatar;

@@ -35,27 +35,27 @@ void main() {
 
   // Großes Standalone-Symbol (240px) — so prüft man Form/Stil mit dem Auge.
   Widget big(RouteManeuver m) => MaterialApp(
-        home: Scaffold(
-          backgroundColor: const Color(0xFF0D0D0F),
-          body: Center(child: RoundaboutSymbol(maneuver: m, size: 240)),
-        ),
-      );
+    home: Scaffold(
+      backgroundColor: const Color(0xFF0D0D0F),
+      body: Center(child: RoundaboutSymbol(maneuver: m, size: 240)),
+    ),
+  );
 
   // Banner wie in der Navi-Ansicht (50px Symbol in der Karte).
   Widget banner(RouteManeuver m) => MaterialApp(
-        home: Scaffold(
-          backgroundColor: const Color(0xFF0D0D0F),
-          body: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: CruiseManeuverIndicator(
-                maneuver: m,
-                distanceToManeuverMeters: 220,
-              ),
-            ),
+    home: Scaffold(
+      backgroundColor: const Color(0xFF0D0D0F),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: CruiseManeuverIndicator(
+            maneuver: m,
+            distanceToManeuverMeters: 220,
           ),
         ),
-      );
+      ),
+    ),
+  );
 
   const cardinal = [0.0, 90.0, 180.0, 270.0];
 
@@ -73,8 +73,7 @@ void main() {
     'mini_gerade': ra(entry: 180, exit: 0, arms: cardinal, islandScale: 0.5),
     // Viele Arme
     'fuenf_armig': ra(entry: 180, exit: 108, arms: [180, 252, 324, 36, 108]),
-    'sechs_armig':
-        ra(entry: 180, exit: 300, arms: [0, 60, 120, 180, 240, 300]),
+    'sechs_armig': ra(entry: 180, exit: 300, arms: [0, 60, 120, 180, 240, 300]),
     // Asymmetrisch / krumm
     'asym_spitz': ra(entry: 165, exit: 35, arms: [165, 35, 295, 245]),
     'asym_enge_gabel': ra(entry: 180, exit: 145, arms: [180, 145, 60, 290]),
@@ -82,15 +81,23 @@ void main() {
     'einfahrt_links': ra(entry: 270, exit: 0, arms: cardinal),
     'einfahrt_oben': ra(entry: 0, exit: 90, arms: cardinal),
     // Größe & Arm-Länge
-    'grosser_kreisel':
-        ra(entry: 180, exit: 90, arms: cardinal, islandScale: 1.45),
+    'grosser_kreisel': ra(
+      entry: 180,
+      exit: 90,
+      arms: cardinal,
+      islandScale: 1.45,
+    ),
     // Spezial: Ankunft direkt am Kreisel
-    'ankunft_am_kreisel':
-        ra(entry: 180, exit: 90, arms: cardinal, arrival: true),
+    'ankunft_am_kreisel': ra(
+      entry: 180,
+      exit: 90,
+      arms: cardinal,
+      arrival: true,
+    ),
     // Fallback: keine OSM-Topologie → sauberer Kreisel, aber der Ausfahrts-Pfeil
     // bleibt am ECHTEN Winkel (95°) statt auf 90° zu rasten (2026-06-19, Apple-
     // Ansatz: der Pfeil muss exakt zur gefahrenen Ausfahrt passen).
-    'fallback_synth_echter_winkel': RouteManeuver(
+    'fallback_synth_echter_winkel': const RouteManeuver(
       latitude: 47.4,
       longitude: 9.7,
       routeIndex: 5,

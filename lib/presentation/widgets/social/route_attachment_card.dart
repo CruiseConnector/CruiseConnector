@@ -26,6 +26,8 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
   SavedRoute? _route;
   bool _loading = true;
   bool _opening = false;
+  bool _saving = false;
+  bool _saved = false;
 
   @override
   void initState() {
@@ -40,6 +42,8 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
       _route = null;
       _loading = true;
       _opening = false;
+      _saving = false;
+      _saved = false;
       _loadRoute();
     }
   }
@@ -47,9 +51,13 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
   Future<void> _loadRoute() async {
     try {
       final route = await SavedRoutesService.getRouteById(widget.routeId);
+      final saved = route == null
+          ? false
+          : await SavedRoutesService.isRouteSavedByUser(route.id);
       if (!mounted) return;
       setState(() {
         _route = route;
+        _saved = saved;
         _loading = false;
       });
     } catch (_) {
@@ -66,6 +74,44 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
     } finally {
       if (mounted) setState(() => _opening = false);
     }
+  }
+
+  Future<void> _saveRoute() async {
+    final route = _route;
+    if (_saving || route == null || _saved) return;
+    setState(() => _saving = true);
+    try {
+      await SavedRoutesService.saveExistingRoute(route);
+      if (!mounted) return;
+      setState(() => _saved = true);
+      _showSnack('Route gespeichert.');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack('Route konnte nicht gespeichert werden.', error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _showSnack(String message, {bool error = false}) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: error
+            ? const Color(0xFF301B20)
+            : const Color(0xFF171B24),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 1250),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
   }
 
   @override
@@ -204,35 +250,81 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                 ),
                 if (widget.showRideButton) ...[
                   const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: _startRide,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isCompact ? 12 : 16,
-                        vertical: isCompact ? 8 : 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppAccentColors.accent,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: _opening
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Text(
-                              'Fahren',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: isCompact ? 12 : 13,
-                                fontWeight: FontWeight.bold,
-                              ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GestureDetector(
+                        onTap: _saveRoute,
+                        child: Container(
+                          width: isCompact ? 34 : 38,
+                          height: isCompact ? 34 : 38,
+                          decoration: BoxDecoration(
+                            color: _saved
+                                ? AppAccentColors.accent.withValues(alpha: 0.18)
+                                : Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(11),
+                            border: Border.all(
+                              color: _saved
+                                  ? AppAccentColors.accent.withValues(
+                                      alpha: 0.34,
+                                    )
+                                  : Colors.white.withValues(alpha: 0.10),
                             ),
-                    ),
+                          ),
+                          child: _saving
+                              ? const Center(
+                                  child: SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : Icon(
+                                  _saved
+                                      ? Icons.bookmark_added_rounded
+                                      : Icons.bookmark_add_outlined,
+                                  color: _saved
+                                      ? AppAccentColors.accent
+                                      : Colors.white70,
+                                  size: isCompact ? 18 : 20,
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      GestureDetector(
+                        onTap: _startRide,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: isCompact ? 10 : 16,
+                            vertical: isCompact ? 7 : 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppAccentColors.accent,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: _opening
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  'Fahren',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: isCompact ? 11 : 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ],

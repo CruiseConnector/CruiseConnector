@@ -21,10 +21,20 @@ class CommunityChatService {
 
   static const String _communitySelect =
       'id, owner_id, name, description, is_public, invite_code, created_at, '
+      'updated_at, owner_only_messages, community_members(user_id, role), '
+      'profiles:owner_id(id, username, email, avatar_url)';
+
+  static const String _legacyCommunitySelect =
+      'id, owner_id, name, description, is_public, invite_code, created_at, '
       'updated_at, community_members(user_id, role), '
       'profiles:owner_id(id, username, email, avatar_url)';
 
   static const String _messageSelect =
+      'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
+      'reply_to_message_id, route_attachment, '
+      'profiles:user_id(id, username, email, avatar_url)';
+
+  static const String _legacyMessageSelect =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'profiles:user_id(id, username, email, avatar_url)';
 
@@ -37,10 +47,22 @@ class CommunityChatService {
       RegExp(r'[^A-Z0-9]'),
       '',
     );
+    if (cleaned.startsWith('CCC') && cleaned.length == 9) {
+      final body = cleaned.substring(3);
+      if (!RegExp(r'^[A-Z2-9]{6}$').hasMatch(body)) return null;
+      return 'CCC-$body';
+    }
     if (!cleaned.startsWith('CM') || cleaned.length != 8) return null;
     final body = cleaned.substring(2);
     if (!RegExp(r'^[A-Z2-9]{6}$').hasMatch(body)) return null;
     return 'CM-$body';
+  }
+
+  static bool _isMissingColumn(PostgrestException e) {
+    final message = e.message.toLowerCase();
+    return e.code == '42703' ||
+        message.contains('column') && message.contains('does not exist') ||
+        message.contains('could not find') && message.contains('column');
   }
 
   static Map<String, dynamic>? ownerProfile(Map<String, dynamic> community) {
@@ -129,23 +151,44 @@ class CommunityChatService {
     };
     if (ids.isEmpty) return [];
 
-    final rows = await _db
-        .from('communities')
-        .select(_communitySelect)
-        .inFilter('id', ids.toList())
-        .order('created_at', ascending: false);
-    return List<Map<String, dynamic>>.from(rows as List);
+    try {
+      final rows = await _db
+          .from('communities')
+          .select(_communitySelect)
+          .inFilter('id', ids.toList())
+          .order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(rows as List);
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumn(e)) rethrow;
+      final rows = await _db
+          .from('communities')
+          .select(_legacyCommunitySelect)
+          .inFilter('id', ids.toList())
+          .order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(rows as List);
+    }
   }
 
   static Future<List<Map<String, dynamic>>> getDiscoverCommunities() async {
     final uid = _userId;
     final blocked = await SocialService.getBlockedAndBlockerIds();
-    final rows = await _db
-        .from('communities')
-        .select(_communitySelect)
-        .eq('is_public', true)
-        .order('created_at', ascending: false)
-        .limit(60);
+    dynamic rows;
+    try {
+      rows = await _db
+          .from('communities')
+          .select(_communitySelect)
+          .eq('is_public', true)
+          .order('created_at', ascending: false)
+          .limit(60);
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumn(e)) rethrow;
+      rows = await _db
+          .from('communities')
+          .select(_legacyCommunitySelect)
+          .eq('is_public', true)
+          .order('created_at', ascending: false)
+          .limit(60);
+    }
     final list = List<Map<String, dynamic>>.from(rows as List);
 
     return list
@@ -163,6 +206,7 @@ class CommunityChatService {
     required String name,
     String? description,
     required bool isPublic,
+    bool ownerOnlyMessages = false,
   }) async {
     final uid = _userId;
     if (uid == null) {
@@ -185,19 +229,32 @@ class CommunityChatService {
     }
 
     try {
-      final row = await _db
-          .from('communities')
-          .insert({
-            'owner_id': uid,
-            'name': cleanName,
-            'description': cleanDescription == null || cleanDescription.isEmpty
-                ? null
-                : cleanDescription,
-            'is_public': isPublic,
-          })
-          .select('id')
-          .single();
-      return (row as Map)['id'] as String;
+      final payload = {
+        'owner_id': uid,
+        'name': cleanName,
+        'description': cleanDescription == null || cleanDescription.isEmpty
+            ? null
+            : cleanDescription,
+        'is_public': isPublic,
+        'owner_only_messages': ownerOnlyMessages,
+      };
+      Map row;
+      try {
+        row = await _db
+            .from('communities')
+            .insert(payload)
+            .select('id')
+            .single();
+      } on PostgrestException catch (e) {
+        if (!_isMissingColumn(e)) rethrow;
+        payload.remove('owner_only_messages');
+        row = await _db
+            .from('communities')
+            .insert(payload)
+            .select('id')
+            .single();
+      }
+      return row['id'] as String;
     } on PostgrestException catch (e) {
       throw CommunityChatServiceException(e.message);
     }
@@ -263,11 +320,21 @@ class CommunityChatService {
   }
 
   static Future<Map<String, dynamic>> fetchCommunity(String communityId) async {
-    final row = await _db
-        .from('communities')
-        .select(_communitySelect)
-        .eq('id', communityId)
-        .maybeSingle();
+    dynamic row;
+    try {
+      row = await _db
+          .from('communities')
+          .select(_communitySelect)
+          .eq('id', communityId)
+          .maybeSingle();
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumn(e)) rethrow;
+      row = await _db
+          .from('communities')
+          .select(_legacyCommunitySelect)
+          .eq('id', communityId)
+          .maybeSingle();
+    }
     if (row == null) {
       throw const CommunityChatServiceException(
         'Community wurde nicht gefunden.',
@@ -279,13 +346,25 @@ class CommunityChatService {
   static Future<List<Map<String, dynamic>>> fetchMessages(
     String communityId,
   ) async {
-    final rows = await _db
-        .from('community_messages')
-        .select(_messageSelect)
-        .eq('community_id', communityId)
-        .isFilter('deleted_at', null)
-        .order('created_at', ascending: true)
-        .limit(150);
+    dynamic rows;
+    try {
+      rows = await _db
+          .from('community_messages')
+          .select(_messageSelect)
+          .eq('community_id', communityId)
+          .isFilter('deleted_at', null)
+          .order('created_at', ascending: true)
+          .limit(150);
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumn(e)) rethrow;
+      rows = await _db
+          .from('community_messages')
+          .select(_legacyMessageSelect)
+          .eq('community_id', communityId)
+          .isFilter('deleted_at', null)
+          .order('created_at', ascending: true)
+          .limit(150);
+    }
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
@@ -371,7 +450,26 @@ class CommunityChatService {
     }
   }
 
-  static Future<void> sendMessage(String communityId, String body) async {
+  static Future<void> setOwnerOnlyMessages({
+    required String communityId,
+    required bool enabled,
+  }) async {
+    try {
+      await _db
+          .from('communities')
+          .update({'owner_only_messages': enabled})
+          .eq('id', communityId);
+    } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(e.message);
+    }
+  }
+
+  static Future<void> sendMessage(
+    String communityId,
+    String body, {
+    String? replyToMessageId,
+    Map<String, dynamic>? routeAttachment,
+  }) async {
     final uid = _userId;
     if (uid == null) {
       throw const CommunityChatServiceException('Bitte melde dich an.');
@@ -383,11 +481,33 @@ class CommunityChatService {
     }
 
     try {
-      await _db.from('community_messages').insert({
+      final payload = <String, dynamic>{
         'community_id': communityId,
         'user_id': uid,
         'body': cleanBody,
-      });
+        if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
+        if (routeAttachment != null) 'route_attachment': routeAttachment,
+      };
+      try {
+        await _db.from('community_messages').insert(payload);
+      } on PostgrestException catch (e) {
+        if (!_isMissingColumn(e)) rethrow;
+        payload
+          ..remove('reply_to_message_id')
+          ..remove('route_attachment');
+        await _db.from('community_messages').insert(payload);
+      }
+    } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(e.message);
+    }
+  }
+
+  static Future<void> deleteMessage(String messageId) async {
+    try {
+      await _db
+          .from('community_messages')
+          .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', messageId);
     } on PostgrestException catch (e) {
       throw CommunityChatServiceException(e.message);
     }

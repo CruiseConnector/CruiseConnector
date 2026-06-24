@@ -11,7 +11,9 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
+import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
+import 'package:cruise_connect/presentation/widgets/app_tutorial_overlay.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
@@ -19,7 +21,7 @@ import 'package:cruise_connect/presentation/pages/analytics_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
-import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/notification_permission_notice_sheet.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -36,6 +38,7 @@ class _HomePageState extends State<HomePage> {
   // damit die Zielseite ihre Daten automatisch neu lädt.
   int _refreshCounter = 0;
   bool _firstRunGuidanceStarted = false;
+  int? _tutorialCommunityTab;
 
   // Web-only: Lazy-Loading — Tabs werden erst beim ersten Besuch erstellt.
   // Auf Native bleibt IndexedStack unverändert (schnell genug).
@@ -47,7 +50,7 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     CruiseModePage.pendingGroupView.addListener(_onPendingGroupView);
-    _requestLocationPermission();
+    AppTutorialService.replayRequests.addListener(_onTutorialReplayRequested);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _communityProvider = context.read<CommunityProvider>();
@@ -69,6 +72,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  void _onTutorialReplayRequested() {
+    if (!mounted || kIsWeb) return;
+    unawaited(_showTutorialFromSettings());
+  }
+
+  Future<void> _showTutorialFromSettings() async {
+    await Future<void>.delayed(const Duration(milliseconds: 320));
+    if (!mounted) return;
+    await showAppTutorialOverlay(
+      context,
+      onTabChange: _onNavItemTapped,
+      onCommunitySectionChange: _onTutorialCommunitySectionChange,
+    );
+  }
+
   Future<void> _runFirstLoginGuidance() async {
     if (_firstRunGuidanceStarted || kIsWeb) return;
     _firstRunGuidanceStarted = true;
@@ -76,11 +94,26 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     await MapStyleService.instance.loadAutoDownloadSettings();
     if (!mounted) return;
-    await showMapDownloadPreferenceSheet(context);
-    if (!mounted) return;
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
     await showLocationAlwaysNoticeSheet(context);
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    final wantsNotifications = await showNotificationPermissionNoticeSheet(
+      context,
+    );
+    if (wantsNotifications) {
+      await PushNotificationService.instance.initForUser();
+    }
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    await showAppTutorialOverlay(
+      context,
+      onTabChange: _onNavItemTapped,
+      onCommunitySectionChange: _onTutorialCommunitySectionChange,
+    );
   }
 
   Future<void> _prewarmOfflineMapRegion() async {
@@ -206,29 +239,11 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _requestLocationPermission() async {
-    try {
-      // Auf Web: Browser zeigt eigenen Dialog bei getCurrentPosition()
-      // Trotzdem requestPermission aufrufen damit der Dialog sofort kommt
-      if (kIsWeb) {
-        await Geolocator.requestPermission();
-        return;
-      }
-
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-    } catch (e) {
-      debugPrint('[HomePage] Location permission request failed: $e');
-    }
-  }
-
   @override
   void dispose() {
+    AppTutorialService.replayRequests.removeListener(
+      _onTutorialReplayRequested,
+    );
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     CruiseModePage.pendingGroupView.removeListener(_onPendingGroupView);
@@ -252,10 +267,6 @@ class _HomePageState extends State<HomePage> {
     };
     await svc.loadInitial();
     await svc.startRealtime();
-    // 2026-05-31 (vucko): Echte Handy-Push aktivieren — Permission anfragen +
-    // FCM-Device-Token in Supabase registrieren. Läuft erst hier (nach Login),
-    // damit das Token dem eingeloggten User zugeordnet wird. No-op auf Web.
-    unawaited(PushNotificationService.instance.initForUser());
   }
 
   IconData _iconForType(String type) => switch (type) {
@@ -314,6 +325,10 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _onTutorialCommunitySectionChange(int index) {
+    setState(() => _tutorialCommunityTab = index);
+  }
+
   /// Fullscreen-Modus darf nur greifen wenn der User tatsächlich auf der
   /// Cruise-Tab (Index 2) ist. Verhindert dass ein verwaister Notifier-Zustand
   /// (z. B. nach App-Resume aus dem Hintergrund mit aktiver Route) die
@@ -345,7 +360,10 @@ class _HomePageState extends State<HomePage> {
           onTabChange: _onNavItemTapped,
           refreshKey: _selectedIndex == 0 ? _refreshCounter : 0,
         ),
-        CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+        CommunityPage(
+          refreshKey: _selectedIndex == 1 ? _refreshCounter : 0,
+          tutorialTabIndex: _tutorialCommunityTab,
+        ),
         // 2026-06-05 (vucko): Cruise-Tab LAZY bauen (erst bei Besuch). Die
         // MapLibre-Karte ist eine native Platform-View — wird sie im IndexedStack
         // OFFSTAGE (Tab nicht sichtbar) gebaut, initialisiert die View mit
@@ -371,7 +389,10 @@ class _HomePageState extends State<HomePage> {
         onTabChange: _onNavItemTapped,
         refreshKey: _selectedIndex == 0 ? _refreshCounter : 0,
       ),
-      CommunityPage(refreshKey: _selectedIndex == 1 ? _refreshCounter : 0),
+      CommunityPage(
+        refreshKey: _selectedIndex == 1 ? _refreshCounter : 0,
+        tutorialTabIndex: _tutorialCommunityTab,
+      ),
       const CruiseModePage(),
       AnalyticsPage(refreshKey: _selectedIndex == 3 ? _refreshCounter : 0),
       ProfilePage(refreshKey: _selectedIndex == 4 ? _refreshCounter : 0),

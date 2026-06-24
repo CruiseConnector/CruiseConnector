@@ -1206,7 +1206,7 @@ class _HomeContentPageState extends State<HomeContentPage>
       final permission = await geo.Geolocator.checkPermission();
       if (permission != geo.LocationPermission.always &&
           permission != geo.LocationPermission.whileInUse) {
-        await geo.Geolocator.requestPermission();
+        return (lat: 47.5031, lng: 9.7471);
       }
     } catch (_) {}
     // lastKnownPosition ist instant (gecached) — meistens genau genug
@@ -2430,9 +2430,16 @@ class _HomeContentPageState extends State<HomeContentPage>
     }
 
     final target = _dashboardItems[targetIndex];
+    final targetCanMerge = _canMergeDashboardItems(target, source);
+
+    if (targetCanMerge &&
+        (preview.intent == _DashboardDropIntent.before ||
+            preview.intent == _DashboardDropIntent.merge)) {
+      return _normalDashboardEntries();
+    }
 
     if (preview.intent == _DashboardDropIntent.merge) {
-      if (!_canMergeDashboardItems(target, source)) {
+      if (!targetCanMerge) {
         return _normalDashboardEntries();
       }
       final mergedIds = <_HomeWidgetId>[
@@ -3133,7 +3140,9 @@ class _HomeContentPageState extends State<HomeContentPage>
       },
       builder: (context, candidates, rejected) {
         final active =
-            candidates.isNotEmpty || _activeDropTargetKey == item.key;
+            candidates.isNotEmpty ||
+            _activeDropTargetKey == item.key ||
+            _dropPreview?.targetKey == item.key;
         final previewPayload = _dropPreview?.targetKey == item.key
             ? _dropPreview?.payload
             : null;
@@ -3203,6 +3212,7 @@ class _HomeContentPageState extends State<HomeContentPage>
 
     return LongPressDraggable<_HomeWidgetDragPayload>(
       data: _HomeWidgetDragPayload.existing(item.key),
+      dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: _buildDragFeedback(_dashboardItemTitle(item), Icons.widgets),
       childWhenDragging: Opacity(opacity: 0.38, child: target),
       onDragStarted: () {
@@ -3306,42 +3316,48 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildDragFeedback(String title, IconData icon) {
     return Material(
       color: Colors.transparent,
-      child: Transform.rotate(
-        angle: -0.035,
+      child: Transform.translate(
+        offset: const Offset(-95, -44),
         child: Container(
-          width: 190,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF202530),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: AppAccentColors.accent.withValues(alpha: 0.38),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.36),
-                blurRadius: 28,
-                offset: const Offset(0, 16),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Icon(icon, color: AppAccentColors.accent, size: 22),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 2,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    height: 1.1,
-                  ),
+          constraints: const BoxConstraints(maxWidth: 190),
+          child: Transform.rotate(
+            angle: -0.035,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF202530),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: AppAccentColors.accent.withValues(alpha: 0.38),
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.36),
+                    blurRadius: 28,
+                    offset: const Offset(0, 16),
+                  ),
+                ],
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: AppAccentColors.accent, size: 22),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -3741,6 +3757,7 @@ class _HomeContentPageState extends State<HomeContentPage>
       key: ValueKey('folder_content_${item.key}_${id.name}'),
       child: LongPressDraggable<_HomeWidgetDragPayload>(
         data: payload,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
         feedback: _buildDragFeedback(_metaFor(id).title, _metaFor(id).icon),
         childWhenDragging: Opacity(opacity: 0.36, child: content),
         onDragStarted: () {

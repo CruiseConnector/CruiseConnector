@@ -9,6 +9,10 @@ class SafetyNoticeService {
   static const String groupSafetyAcceptedKey =
       'group_safety_notice_v1_accepted';
   static const String locationAlwaysSeenKey = 'location_always_notice_v1_seen';
+  static const String notificationNoticeSeenKey =
+      'notification_permission_notice_v1_seen';
+  static const String notificationNoticeAcceptedKey =
+      'notification_permission_notice_v1_accepted';
 
   static Future<bool> hasAcceptedGroupSafety() async {
     final prefs = await SharedPreferences.getInstance();
@@ -28,5 +32,23 @@ class SafetyNoticeService {
   static Future<void> markLocationAlwaysNoticeSeen() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(locationAlwaysSeenKey, true);
+  }
+
+  static Future<bool> hasSeenNotificationPermissionNotice() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(notificationNoticeSeenKey) ?? false;
+  }
+
+  static Future<bool> hasAcceptedNotificationPermissionNotice() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(notificationNoticeAcceptedKey) ?? false;
+  }
+
+  static Future<void> markNotificationPermissionNotice({
+    required bool accepted,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(notificationNoticeSeenKey, true);
+    await prefs.setBool(notificationNoticeAcceptedKey, accepted);
   }
 }
