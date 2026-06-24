@@ -223,9 +223,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (Sperrbildschirm/Dynamic-Island ohne sichtbare In-App-Zahl). Im Vordergrund
     // exakt senden, damit Dynamic Island und In-App-Banner dieselbe Zahl zeigen.
     _appInForeground = state == AppLifecycleState.resumed;
-    if (state != AppLifecycleState.resumed) return;
+    if (state != AppLifecycleState.resumed || !mounted || _disposed) return;
+
+    // 2026-06-24 (vucko Geräte-Video): Nach Hintergrund (Lock/Anruf/App-Switch/
+    // Vollbild-Werbung) blieb die Navi-Kamera im Free-Cam hängen — Puck UND
+    // Mitfahrer scrollten aus dem Bild („Standort weg / man sieht sich nicht
+    // mehr"), die Re-Center-Taste war ausgegraut und rastete nie wieder ein.
+    // Beim Zurückkommen die zentrierte Navi-Kamera wieder einrasten (Single +
+    // Gruppe), wie Google/Apple Maps.
+    if (_isRouteConfirmed && !_isOverviewActive) {
+      if (!_isCameraLocked) {
+        _safeSetState(() => _isCameraLocked = true);
+      }
+      unawaited(_recenterMap());
+    }
+
     final groupId = widget.groupId;
-    if (groupId == null || !mounted || _disposed) return;
+    if (groupId == null) return;
     final meId = Supabase.instance.client.auth.currentUser?.id;
     _lastGroupRealtimeEventAt = DateTime.now();
     _startGroupMembersRealtime(groupId, meId);
