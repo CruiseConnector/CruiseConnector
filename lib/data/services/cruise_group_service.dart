@@ -302,6 +302,11 @@ class CruiseGroupService {
     required int tMs,
     double? speed,
     double? heading,
+    // 2026-06-24 (vucko Peer-Status): transiente Mitfahrer-Zustände, damit die
+    // anderen sehen WARUM jemand steht — pausiert vs. GPS-schwach. „Kein Internet"
+    // wird empfängerseitig aus der Frische abgeleitet (keine Broadcasts mehr).
+    bool paused = false,
+    bool gpsWeak = false,
   }) async {
     try {
       await channel.sendBroadcastMessage(
@@ -313,6 +318,8 @@ class CruiseGroupService {
           't': tMs,
           if (speed != null && speed.isFinite) 'speed': speed,
           if (heading != null && heading.isFinite) 'heading': heading,
+          if (paused) 'paused': true,
+          if (gpsWeak) 'gps_weak': true,
         },
       );
     } catch (_) {}

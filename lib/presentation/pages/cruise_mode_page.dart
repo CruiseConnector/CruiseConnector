@@ -1541,7 +1541,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// im Stand/Tankstelle) + hält während des Stalls den Kamera-Ticker am Leben,
   /// damit der per-Frame-Glide (oben) Puck + Linie weitergleiten lässt.
   void _checkGpsStall() {
-    if (!mounted || _disposed || !_isRouteConfirmed) {
+    // 2026-06-24 (vucko Y3): Pausiert ist KEIN GPS-Problem — der Stream ruht
+    // bewusst. Sonst zeigte das eigene Gerät fälschlich „GPS schwach", obwohl der
+    // Fahrer nur pausiert hat.
+    if (!mounted || _disposed || !_isRouteConfirmed || _isPaused) {
       if (_gpsWeak) {
         _gpsWeak = false;
         _safeSetState(() {});
@@ -3019,6 +3022,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       currentLng: lng,
       lastUpdatedAt: DateTime.fromMillisecondsSinceEpoch(tMs, isUtc: true),
     );
+    // 2026-06-24 (vucko Y3): transienten Status des Peers merken (pausiert /
+    // GPS-schwach) für die Marker-Kennzeichnung.
+    _peerStatus[uid] = (
+      paused: m['paused'] == true,
+      gpsWeak: m['gps_weak'] == true,
+    );
     _setPeerFix(uid, lng: lng, lat: lat, tMs: tMs, velDegPerSec: vel);
     _safeSetState(() {});
   }
@@ -3097,41 +3106,101 @@ class _CruiseModePageState extends State<CruiseModePage>
   Widget _buildGroupMemberMarker(GroupMember m) {
     final isDriver = m.rideRole == RideRole.driver;
     final isFresh = m.hasFreshLocation(maxAge: _groupMemberFreshLocationAge);
+    final status = _peerStatus[m.userId];
+    final isPaused = isFresh && status?.paused == true;
+    final isGpsWeak = isFresh && status?.gpsWeak == true;
     final liveColor = isDriver
         ? AppAccentColors.accent
         : const Color(0xFF4FC3F7);
     final color = isFresh ? liveColor : const Color(0xFF8A8F98);
+
+    // 2026-06-24 (vucko Y3): Status-Badge — klar erkennbar WARUM ein Mitfahrer
+    // steht/anders ist. Priorität: keine Verbindung (Standort alt) > pausiert >
+    // GPS-schwach. Pausiert bleibt VOLL sichtbar (Heartbeat hält frisch), nur
+    // echtes Veralten dimmt + zeigt das WLAN-aus-Symbol.
+    IconData? badgeIcon;
+    Color badgeColor = const Color(0xFF8A8F98);
+    if (!isFresh) {
+      badgeIcon = Icons.wifi_off_rounded;
+      badgeColor = const Color(0xFFFF6B61);
+    } else if (isPaused) {
+      badgeIcon = Icons.pause_rounded;
+      badgeColor = const Color(0xFFFFB02E);
+    } else if (isGpsWeak) {
+      badgeIcon = Icons.gps_off_rounded;
+      badgeColor = const Color(0xFFFFB02E);
+    }
+
+    final avatar = Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        shape: BoxShape.circle,
+        // Pausiert → ruhiger orangener Ring statt des Live-Farbrings.
+        border: Border.all(
+          color: isPaused ? const Color(0xFFFFB02E) : color,
+          width: isFresh ? 3 : 2,
+        ),
+        boxShadow: [
+          if (isFresh && !isPaused)
+            BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8),
+        ],
+      ),
+      child: CircleAvatar(
+        radius: 18,
+        backgroundColor: color,
+        foregroundImage: UserAvatar.avatarImageProvider(
+          context,
+          m.avatarUrl,
+          radius: 18,
+        ),
+        child: Icon(
+          isDriver ? Icons.directions_car : Icons.person,
+          color: Colors.white,
+          size: 16,
+        ),
+      ),
+    );
+
     return Opacity(
-      opacity: isFresh ? 1.0 : 0.48,
-      child: Container(
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0B0E14),
-          shape: BoxShape.circle,
-          border: Border.all(color: color, width: isFresh ? 3 : 2),
-          boxShadow: [
-            if (isFresh)
-              BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8),
-          ],
-        ),
-        child: CircleAvatar(
-          backgroundColor: color,
-          foregroundImage: UserAvatar.avatarImageProvider(
-            context,
-            m.avatarUrl,
-            radius: 20,
-          ),
-          child: Icon(
-            isDriver ? Icons.directions_car : Icons.person,
-            color: Colors.white,
-            size: 17,
-          ),
-        ),
+      opacity: isFresh ? 1.0 : 0.5,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          avatar,
+          if (badgeIcon != null)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.all(2.5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0B0E14),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: badgeColor, width: 1.6),
+                ),
+                child: Icon(badgeIcon, color: badgeColor, size: 11),
+              ),
+            ),
+        ],
       ),
     );
   }
 
   bool _hasGroupMemberLocation(GroupMember m) => m.hasLocation;
+
+  // 2026-06-24 (vucko Peer-Status, Y3): transienter Zustand der Mitfahrer
+  // (pausiert / GPS-schwach), aus den grp_pos-Broadcasts. „Kein Internet" wird
+  // aus der Frische des Markers abgeleitet (keine eigene Flag nötig).
+  final Map<String, ({bool paused, bool gpsWeak})> _peerStatus = {};
+
+  // Eigener Pausen-Zustand: beim Pausieren broadcasten wir weiter einen
+  // „paused"-Heartbeat mit eingefrorener Position, damit die anderen uns als
+  // PAUSIERT (nicht als offline) sehen — der Standort bleibt sichtbar stehen.
+  bool _isPaused = false;
+  Timer? _pauseHeartbeat;
+  static const Duration _pauseHeartbeatInterval = Duration(seconds: 3);
 
   bool _positionUploadInFlight = false;
 
@@ -3178,8 +3247,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         tMs: DateTime.now().toUtc().millisecondsSinceEpoch,
         speed: speed.isFinite && speed > 0 ? speed : null,
         heading: _userHeading.isFinite ? _userHeading : null,
+        // 2026-06-24 (vucko Y3): eigenen Status mitschicken, damit die Mitfahrer
+        // sehen WARUM man steht (pausiert vs. GPS-schwach).
+        paused: _isPaused,
+        gpsWeak: _gpsWeak,
       ),
     );
+  }
+
+  /// 2026-06-24 (vucko Y3): Pausen-Zustand setzen + sofort broadcasten. Beim
+  /// Pausieren läuft ein leichter Heartbeat weiter (eingefrorene Position +
+  /// paused=true), damit die anderen den Marker als PAUSIERT sehen — und nicht
+  /// als offline (sonst sähe es aus wie „kein Internet").
+  void _setGroupPaused(bool paused) {
+    if (widget.groupId == null || _isPaused == paused) {
+      _isPaused = paused;
+      return;
+    }
+    _isPaused = paused;
+    final pos = _userPosition;
+    if (pos != null) _broadcastMyPosition(pos);
+    _pauseHeartbeat?.cancel();
+    if (paused) {
+      _pauseHeartbeat = Timer.periodic(_pauseHeartbeatInterval, (_) {
+        if (!mounted || _disposed || !_isPaused) return;
+        final p = _userPosition;
+        if (p != null) _broadcastMyPosition(p);
+      });
+    }
   }
 
   void _onPendingRoute() {
@@ -3348,6 +3443,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersBackfillTimer?.cancel();
     _groupMembersReconnectTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
+    _pauseHeartbeat?.cancel();
     _viewportPoiDebounce?.cancel();
     _groupRouteCh?.unsubscribe();
     _groupMembersCh?.unsubscribe();
@@ -6181,12 +6277,18 @@ class _CruiseModePageState extends State<CruiseModePage>
                 const SizedBox(height: 4),
                 DriveControlPanel(
                   onStart: () async {
+                    _setGroupPaused(false);
                     await _startNavigationFlow();
                   },
                   onPause: () {
+                    // 2026-06-24 (vucko Y3): Pause an die Gruppe melden, damit die
+                    // anderen den Marker als „pausiert" sehen (Heartbeat hält ihn
+                    // sichtbar, statt ihn offline aussehen zu lassen).
+                    _setGroupPaused(true);
                     _stopNavigationTracking();
                   },
                   onStop: () {
+                    _setGroupPaused(false);
                     _stopNavigationTracking();
                     _stopSimulation(restartLiveTracking: false);
                     _onRouteEarlyStopped();
@@ -6651,8 +6753,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           CruiseMapMarker(
             id: 'grp-${entry.key}',
             position: _peerRenderPoint(entry.key, m),
-            width: 40,
-            height: 40,
+            width: 48,
+            height: 48,
             child: _buildGroupMemberMarker(m),
           ),
         );
@@ -6950,8 +7052,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                 .map(
                   (m) => Marker(
                     point: _peerRenderPoint(m.userId, m),
-                    width: 40,
-                    height: 40,
+                    width: 48,
+                    height: 48,
                     child: _buildGroupMemberMarker(m),
                   ),
                 )
