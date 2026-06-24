@@ -10560,6 +10560,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         message:
             'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
         icon: Icons.route_rounded,
+        // 2026-06-24 (vucko Video): bei aktiver Navigation UNTER das Manöver-
+        // Banner, damit es z.B. eine Kreisverkehr-Ansage nicht verdeckt.
+        topOffset: _isRouteConfirmed ? 96.0 : 0.0,
       );
     }
   }
