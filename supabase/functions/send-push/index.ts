@@ -218,6 +218,34 @@ function renderPush(
   }
 }
 
+// Notification-Typ -> Einstellungs-Kategorie (Spiegel von
+// NotificationSettingsService._categoryForType im Client). null = immer senden
+// (z. B. trip_reminder). Fehlt der Schlüssel in den Prefs / Spalte leer =
+// aktiviert (Opt-out-Modell: alles an, bis der Nutzer abschaltet).
+function categoryForType(type: string): string | null {
+  switch (type) {
+    case 'follow':
+      return 'follows';
+    case 'like':
+      return 'likes';
+    case 'repost':
+      return 'reposts';
+    case 'comment':
+      return 'comments';
+    case 'friend_request':
+      return 'friend_requests';
+    case 'group_invite':
+    case 'group_joined':
+    case 'group_public_created':
+    case 'group_ride_started':
+      return 'group_invites';
+    case 'weather_recommendation':
+      return 'daily_weather';
+    default:
+      return null;
+  }
+}
+
 function json(obj: unknown, status: number): Response {
   return new Response(JSON.stringify(obj), {
     status,
@@ -267,6 +295,26 @@ serve(async (req) => {
     if (!FCM_SERVICE_ACCOUNT) {
       console.warn('[send-push] FCM_SERVICE_ACCOUNT not set — push skipped');
       return json({ skipped: 'no_service_account' }, 200);
+    }
+
+    // 2b. Opt-out prüfen: hat der Empfänger diese Kategorie abgeschaltet?
+    //     profiles.notification_preferences (jsonb) — fehlt der Schlüssel oder
+    //     ist die Spalte leer, gilt „aktiviert". Die In-App-Notification-Zeile
+    //     bleibt erhalten; nur der OS-Push wird unterdrückt.
+    const prefCategory = categoryForType(record.type);
+    if (prefCategory) {
+      const { data: prefRow } = await supa
+        .from('profiles')
+        .select('notification_preferences')
+        .eq('id', record.user_id)
+        .maybeSingle();
+      const prefs = (prefRow?.notification_preferences ?? {}) as Record<
+        string,
+        unknown
+      >;
+      if (prefs[prefCategory] === false) {
+        return json({ skipped: 'user_disabled', type: record.type }, 200);
+      }
     }
 
     // 3. Device-Tokens des Empfängers.

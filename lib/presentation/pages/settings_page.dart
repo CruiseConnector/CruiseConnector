@@ -579,6 +579,12 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
+                            'Reposts deiner Posts',
+                            s.reposts,
+                            (v) => s.setReposts(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
                             'Kommentare',
                             s.comments,
                             (v) => s.setComments(v),
@@ -597,7 +603,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
-                            'Wetter-Tipp morgens (wenn schön)',
+                            'Strecken- & Wetter-Empfehlungen',
                             s.dailyWeather,
                             (v) => s.setDailyWeather(v),
                           ),

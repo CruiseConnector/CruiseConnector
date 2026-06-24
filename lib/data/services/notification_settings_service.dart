@@ -1,90 +1,191 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Persistent gespeicherte Notification-Präferenzen.
-/// Lokales Filtering im Flutter — DB-Triggers feuern weiter, aber
-/// die Toast/Realtime-Anzeige respektiert diese Settings.
+/// Opt-out-Präferenzen für Push-Benachrichtigungen.
 ///
-/// Zukunft: bei OS-Push-Migration via Edge-Function diese Settings
-/// auch server-side prüfen (z.B. via user_notification_prefs Tabelle).
+/// Prinzip: Beim ersten „Erlauben" sind ALLE sinnvollen Typen an (Default true /
+/// fehlender Schlüssel = aktiviert). Der Nutzer schaltet in den Einstellungen
+/// nur ab, was ihm zu viel ist.
+///
+/// WICHTIG (2026-06-24): Diese Settings werden jetzt zusätzlich server-seitig in
+/// `profiles.notification_preferences` (jsonb) gespiegelt, weil die Edge-Function
+/// `send-push` sie VOR dem Versand prüft. SharedPreferences bleibt nur lokaler
+/// Cache (schneller Erststart, offline). DB ist die Source-of-Truth; bei Login /
+/// Auth-Wechsel wird vom Server nachgezogen → geräteübergreifend konsistent.
+///
+/// Schlüsselnamen sind IDENTISCH zu den jsonb-Keys + zur Kategorie-Logik in
+/// send-push (categoryForType), damit Client und Server dieselbe Sprache sprechen.
 class NotificationSettingsService extends ChangeNotifier {
   NotificationSettingsService._();
   static final NotificationSettingsService instance =
       NotificationSettingsService._();
 
-  static const _keyFollows = 'notif_follows_v1';
-  static const _keyLikes = 'notif_likes_v1';
-  static const _keyComments = 'notif_comments_v1';
-  static const _keyFriendRequests = 'notif_friend_requests_v1';
-  static const _keyGroupInvites = 'notif_group_invites_v1';
-  static const _keyDailyWeather = 'notif_daily_weather_v1';
+  static const _keyFollows = 'follows';
+  static const _keyLikes = 'likes';
+  static const _keyReposts = 'reposts';
+  static const _keyComments = 'comments';
+  static const _keyFriendRequests = 'friend_requests';
+  static const _keyGroupInvites = 'group_invites';
+  static const _keyDailyWeather = 'daily_weather';
+
+  /// Prefix für den lokalen SharedPreferences-Cache.
+  static const _spPrefix = 'notif_pref_';
 
   bool _loaded = false;
-  bool _follows = true;
-  bool _likes = true;
-  bool _comments = true;
-  bool _friendRequests = true;
-  bool _groupInvites = true;
-  bool _dailyWeather = true;
+  bool _authWired = false;
+
+  // Alle Kategorien standardmäßig AN.
+  final Map<String, bool> _prefs = <String, bool>{
+    _keyFollows: true,
+    _keyLikes: true,
+    _keyReposts: true,
+    _keyComments: true,
+    _keyFriendRequests: true,
+    _keyGroupInvites: true,
+    _keyDailyWeather: true,
+  };
 
   bool get isLoaded => _loaded;
-  bool get follows => _follows;
-  bool get likes => _likes;
-  bool get comments => _comments;
-  bool get friendRequests => _friendRequests;
-  bool get groupInvites => _groupInvites;
-  bool get dailyWeather => _dailyWeather;
+  bool get follows => _prefs[_keyFollows]!;
+  bool get likes => _prefs[_keyLikes]!;
+  bool get reposts => _prefs[_keyReposts]!;
+  bool get comments => _prefs[_keyComments]!;
+  bool get friendRequests => _prefs[_keyFriendRequests]!;
+  bool get groupInvites => _prefs[_keyGroupInvites]!;
+  bool get dailyWeather => _prefs[_keyDailyWeather]!;
 
-  bool isTypeEnabled(String type) {
+  /// Notification-Typ -> Einstellungs-Kategorie. Spiegel von send-push.
+  /// Unbekannter Typ (z. B. trip_reminder) = immer an.
+  static String? _categoryForType(String type) {
     switch (type) {
       case 'follow':
-        return _follows;
+        return _keyFollows;
       case 'like':
-        return _likes;
+        return _keyLikes;
+      case 'repost':
+        return _keyReposts;
       case 'comment':
-        return _comments;
+        return _keyComments;
       case 'friend_request':
-        return _friendRequests;
+        return _keyFriendRequests;
       case 'group_invite':
       case 'group_joined':
       case 'group_public_created':
       case 'group_ride_started':
-        return _groupInvites;
+        return _keyGroupInvites;
       case 'weather_recommendation':
-        return _dailyWeather;
+        return _keyDailyWeather;
       default:
-        return true;
+        return null;
     }
   }
 
-  Future<void> load() async {
-    if (_loaded) return;
-    final p = await SharedPreferences.getInstance();
-    _follows = p.getBool(_keyFollows) ?? true;
-    _likes = p.getBool(_keyLikes) ?? true;
-    _comments = p.getBool(_keyComments) ?? true;
-    _friendRequests = p.getBool(_keyFriendRequests) ?? true;
-    _groupInvites = p.getBool(_keyGroupInvites) ?? true;
-    _dailyWeather = p.getBool(_keyDailyWeather) ?? true;
-    _loaded = true;
-    notifyListeners();
+  /// Für das In-App-Filtering (Toast/Realtime). Unbekannt = an.
+  bool isTypeEnabled(String type) {
+    final key = _categoryForType(type);
+    if (key == null) return true;
+    return _prefs[key] ?? true;
   }
 
-  Future<void> setFollows(bool v) => _set(_keyFollows, v, (n) => _follows = n);
-  Future<void> setLikes(bool v) => _set(_keyLikes, v, (n) => _likes = n);
-  Future<void> setComments(bool v) =>
-      _set(_keyComments, v, (n) => _comments = n);
-  Future<void> setFriendRequests(bool v) =>
-      _set(_keyFriendRequests, v, (n) => _friendRequests = n);
-  Future<void> setGroupInvites(bool v) =>
-      _set(_keyGroupInvites, v, (n) => _groupInvites = n);
-  Future<void> setDailyWeather(bool v) =>
-      _set(_keyDailyWeather, v, (n) => _dailyWeather = n);
+  Future<void> load() async {
+    if (!_loaded) {
+      // 1) Lokaler Cache — sofort verfügbar, offline-fest.
+      final p = await SharedPreferences.getInstance();
+      for (final key in _prefs.keys.toList()) {
+        final v = p.getBool('$_spPrefix$key');
+        if (v != null) _prefs[key] = v;
+      }
+      _loaded = true;
+      notifyListeners();
+    }
+    _wireAuthListener();
+    // 2) Server-Wahrheit nachladen (falls schon eingeloggt).
+    unawaited(_syncFromServer());
+  }
 
-  Future<void> _set(String key, bool v, void Function(bool) apply) async {
-    apply(v);
+  /// Auth-Wechsel (Login, Session-Restore) -> Prefs vom Server ziehen, damit sie
+  /// geräteübergreifend gelten. Idempotent.
+  void _wireAuthListener() {
+    if (_authWired) return;
+    _authWired = true;
+    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      switch (data.event) {
+        case AuthChangeEvent.signedIn:
+        case AuthChangeEvent.initialSession:
+        case AuthChangeEvent.userUpdated:
+          unawaited(_syncFromServer());
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  /// Manuell vom Server aktualisieren (z. B. beim Öffnen der Einstellungen).
+  Future<void> refreshFromServer() => _syncFromServer();
+
+  Future<void> _syncFromServer() async {
+    final supa = Supabase.instance.client;
+    final uid = supa.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      final row = await supa
+          .from('profiles')
+          .select('notification_preferences')
+          .eq('id', uid)
+          .maybeSingle();
+      final raw = row?['notification_preferences'];
+      if (raw is Map) {
+        final p = await SharedPreferences.getInstance();
+        var changed = false;
+        for (final key in _prefs.keys.toList()) {
+          final v = raw[key];
+          if (v is bool && v != _prefs[key]) {
+            _prefs[key] = v;
+            await p.setBool('$_spPrefix$key', v);
+            changed = true;
+          }
+        }
+        if (changed) notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[NotifPrefs] server sync failed: $e');
+    }
+  }
+
+  Future<void> setFollows(bool v) => _set(_keyFollows, v);
+  Future<void> setLikes(bool v) => _set(_keyLikes, v);
+  Future<void> setReposts(bool v) => _set(_keyReposts, v);
+  Future<void> setComments(bool v) => _set(_keyComments, v);
+  Future<void> setFriendRequests(bool v) => _set(_keyFriendRequests, v);
+  Future<void> setGroupInvites(bool v) => _set(_keyGroupInvites, v);
+  Future<void> setDailyWeather(bool v) => _set(_keyDailyWeather, v);
+
+  Future<void> _set(String key, bool v) async {
+    if (_prefs[key] == v) return;
+    _prefs[key] = v;
     notifyListeners();
+    // Lokal cachen (sofort).
     final p = await SharedPreferences.getInstance();
-    await p.setBool(key, v);
+    await p.setBool('$_spPrefix$key', v);
+    // + Server (damit send-push die Einstellung respektiert).
+    await _pushToServer();
+  }
+
+  /// Die komplette Map nach profiles.notification_preferences schreiben.
+  Future<void> _pushToServer() async {
+    final supa = Supabase.instance.client;
+    final uid = supa.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      await supa.from('profiles').update(
+        {'notification_preferences': Map<String, bool>.from(_prefs)},
+      ).eq('id', uid);
+    } catch (e) {
+      debugPrint('[NotifPrefs] server write failed: $e');
+    }
   }
 }
