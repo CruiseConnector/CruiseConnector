@@ -81,6 +81,7 @@ import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/group_member.dart';
+import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute, this.groupId});
@@ -4456,7 +4457,12 @@ class _CruiseModePageState extends State<CruiseModePage>
 
             // Config-Overlay ODER Navigation-Overlay
             // RepaintBoundary trennt UI-Overlays vom Karten-Repaint (Web-Performance).
-            if (!_isRouteConfirmed)
+            // 2026-06-24 (vucko Gruppen-Verlassen-Video): Route-Setup/Übersicht
+            // NUR im Solo-Modus. Im Gruppenmodus gibt es KEIN Routen-Erstellen —
+            // ein Mitglied navigiert die geteilte Gruppenroute oder geht zurück
+            // in die Lobby. So landet niemand im Gruppenmodus auf der Setup-
+            // Ansicht (und kann auch nicht alleine eine Route bauen).
+            if (!_isRouteConfirmed && widget.groupId == null)
               RepaintBoundary(
                 // 2026-05-28 (vucko): Weicher Übergang beim Auf-/Zuklappen statt
                 // hartem setState-Wechsel. Collapsed- und Expanded-Tree haben
@@ -4488,24 +4494,21 @@ class _CruiseModePageState extends State<CruiseModePage>
                   child: _buildConfigOverlay(),
                 ),
               ),
+            // Gruppe + (noch) keine bestätigte Route = Lade-/Übergangszustand
+            // (Route der Gruppe wird gerade geladen, ODER man verlässt gerade).
+            // Niemals Route-Setup — nur ein Lade-Hinweis + garantierter Zurück-
+            // zur-Lobby-Button.
+            if (!_isRouteConfirmed && widget.groupId != null)
+              _buildGroupRouteLoadingOverlay(),
             if (_isRouteConfirmed)
               RepaintBoundary(child: _buildNavigationOverlay()),
             // 2026-05-28 (vucko Task #79): Komplette FAB-Spalte auch ohne
             // Route — verschwindet animiert wenn Setup-Sheet hochgezogen ist.
-            if (!_isRouteConfirmed) _buildFabColumn(hasRoute: false),
+            // Nur Solo: im Gruppenmodus gibt es kein Route-Setup.
+            if (!_isRouteConfirmed && widget.groupId == null)
+              _buildFabColumn(hasRoute: false),
             if (_shouldShowRoundTripSearchStatus)
               _buildRoundTripSearchStatusOverlay(),
-
-            // Exit-Button wenn wir als Gruppen-Session gestartet wurden
-            // (sonst ist man in der Fullscreen-Navigation gefangen).
-            if (widget.groupId != null &&
-                !_isRouteConfirmed &&
-                Navigator.canPop(context))
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 12,
-                left: 12,
-                child: _buildExitButton(),
-              ),
           ],
         ),
       ),
@@ -4820,12 +4823,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
           if (leave == true && mounted) {
             if (widget.groupId != null) {
-              // 2026-06-23 (vucko Gruppe-verlassen-Video): NICHT roh poppen —
-              // das umging Post-Screen + Suppress-Flag, die Lobby zog einen
-              // sofort per Realtime („is_active") wieder in die Navigation →
-              // man landete im Route-Setup, immer noch im Gruppenmodus. Über den
-              // richtigen Flow: Post-Screen → Suppress → zurück in die Lobby.
-              _onRouteEarlyStopped();
+              // 2026-06-24 (vucko Gruppe-verlassen-Video): GARANTIERT zurück in
+              // die Lobby. Dieser Button erscheint im Gruppen-Lade-/Übergangs-
+              // zustand (keine bestätigte Route) — der Post-Screen wurde, falls
+              // es einen gab, schon im aktiven Verlassen-Flow gezeigt. Direkt der
+              // robuste Lobby-Pfad, NIE über den (durch _completionSheetShown
+              // blockierbaren) Sheet-Pfad → kein Dead-End mehr.
+              unawaited(_returnToGroupLobbyFromActiveRoute());
             } else {
               Navigator.of(context).pop();
             }
@@ -4836,6 +4840,61 @@ class _CruiseModePageState extends State<CruiseModePage>
           child: Icon(Icons.arrow_back, color: Colors.white, size: 22),
         ),
       ),
+    );
+  }
+
+  /// 2026-06-24 (vucko Gruppen-Verlassen-Video): Im Gruppenmodus OHNE bestätigte
+  /// Route gibt es KEIN Route-Setup. Stattdessen ein dezenter Lade-/Übergangs-
+  /// Hinweis (die Gruppenroute lädt gerade ODER man verlässt gerade) plus ein
+  /// garantierter Zurück-zur-Lobby-Button — so strandet niemand auf einer
+  /// Setup-Ansicht und kann auch keine eigene Route bauen.
+  Widget _buildGroupRouteLoadingOverlay() {
+    final topInset = MediaQuery.of(context).padding.top;
+    return Stack(
+      children: [
+        Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1F26).withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 26,
+                  height: 26,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    valueColor: AlwaysStoppedAnimation(AppAccentColors.accent),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Gruppenroute wird geladen …',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Du fährst die Route der Gruppe',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (Navigator.canPop(context))
+          Positioned(top: topInset + 12, left: 12, child: _buildExitButton()),
+      ],
     );
   }
 
@@ -9939,24 +9998,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
     final groupId = widget.groupId;
-    if (groupId != null) {
-      // 2026-06-20 (vucko Gruppen-Rejoin): Bewusstes Verlassen → die Lobby darf
-      // mich NICHT automatisch in die laufende Fahrt zurückziehen. Rejoin nur
-      // über den expliziten „Zur laufenden Route"-Button.
-      CruiseModePage.suppressedAutoEnterGroupIds.add(groupId);
+    if (groupId == null) {
+      await Navigator.of(context).maybePop();
+      return;
     }
-    final popped = await Navigator.of(context).maybePop();
-    if (!popped && mounted && !_disposed) {
-      if (groupId != null) {
-        CruiseModePage.pendingGroupView.value = groupId;
-      }
-      TopToast.show(
-        context,
-        message: 'Zur Gruppenfahrt gewechselt',
-        icon: Icons.groups_rounded,
-        duration: const Duration(milliseconds: 2600),
-      );
-    }
+    // 2026-06-20 (vucko Gruppen-Rejoin): Bewusstes Verlassen → die Lobby darf
+    // mich NICHT automatisch in die laufende Fahrt zurückziehen. Rejoin nur
+    // über den expliziten „Zur laufenden Route"-Button.
+    CruiseModePage.suppressedAutoEnterGroupIds.add(groupId);
+    // 2026-06-24 (vucko Gruppen-Verlassen-Video): GARANTIERT in die Lobby —
+    // deterministisch und ohne Seiteneffekte. Früher: maybePop(); das poppte am
+    // Gerät manchmal NICHT (PopScope-canPop / ungewöhnlicher Stack) → man strandete
+    // auf der leeren Route-Setup-Ansicht im Gruppenmodus und kam per Button nicht
+    // mehr raus. Jetzt: die Cruise-Page (und eine evtl. darunterliegende Lobby)
+    // werden entfernt und durch eine FRISCHE Lobby ersetzt. Kein PopScope-Trigger
+    // (kein Geister-„verlassen?"-Dialog), keine Doppel-Lobby, kein Dead-End.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => GroupLobbyPage(groupId: groupId),
+      ),
+      (route) => route.isFirst,
+    );
   }
 
   Future<void> _confirmCancelActiveTripFromMap() async {
