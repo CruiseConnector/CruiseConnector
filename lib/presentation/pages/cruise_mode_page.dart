@@ -541,6 +541,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const Duration _gpsWeakThreshold = Duration(seconds: 5);
   static const Duration _gpsStallGlideThreshold = Duration(milliseconds: 1800);
 
+  // 2026-06-24 (vucko Y4): dezenter „kein Internet"-Hinweis während der Fahrt
+  // (Single + Gruppe). Interface-down (Flugmodus/kein Empfang) → Pille; stört
+  // Banner/Buttons nicht (eigene Safe-Zone darunter). Karte ist offline gecacht,
+  // die Fahrt läuft weiter — der Hinweis ist nur Info.
+  StreamSubscription<List<ConnectivityResult>>? _connSub;
+  bool _offline = false;
+
   // 2026-06-17 (vucko Geräte-Video: Standort-Teleport + grundloses Reroute):
   // GPS-Ausreißer-Gate. Letzter als plausibel akzeptierter ROH-Fix + Zähler der
   // am Stück verworfenen Ausreißer. Ein physikalisch unmöglicher Sprung
@@ -1569,6 +1576,43 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (cur != null) {
         _animateCameraTo(cur.latitude, cur.longitude, _camToHeading);
       }
+    }
+  }
+
+  /// 2026-06-24 (vucko Y4): „Kein Internet"-Hinweis während der Fahrt. Lauscht
+  /// auf Interface-Wechsel (Flugmodus/kein Empfang). Karte ist offline gecacht —
+  /// die Fahrt läuft weiter, der Hinweis ist nur Info und verdeckt nichts.
+  void _startConnectivityWatch() {
+    _connSub?.cancel();
+    _connSub = Connectivity().onConnectivityChanged.listen((results) {
+      if (!mounted || _disposed) return;
+      final offline =
+          results.isEmpty || results.every((r) => r == ConnectivityResult.none);
+      if (offline != _offline) {
+        _offline = offline;
+        _safeSetState(() {});
+      }
+    });
+    // Initialer Stand (best-effort, nicht blockierend).
+    unawaited(
+      Connectivity().checkConnectivity().then((results) {
+        if (!mounted || _disposed) return;
+        final offline = results.isEmpty ||
+            results.every((r) => r == ConnectivityResult.none);
+        if (offline != _offline) {
+          _offline = offline;
+          _safeSetState(() {});
+        }
+      }).catchError((_) {}),
+    );
+  }
+
+  void _stopConnectivityWatch() {
+    _connSub?.cancel();
+    _connSub = null;
+    if (_offline) {
+      _offline = false;
+      _safeSetState(() {});
     }
   }
 
@@ -3444,6 +3488,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _groupMembersReconnectTimer?.cancel();
     _groupMembersFreshnessTimer?.cancel();
     _pauseHeartbeat?.cancel();
+    _connSub?.cancel();
     _viewportPoiDebounce?.cancel();
     _groupRouteCh?.unsubscribe();
     _groupMembersCh?.unsubscribe();
@@ -6162,6 +6207,41 @@ class _CruiseModePageState extends State<CruiseModePage>
         DateTime.now().difference(since) >= const Duration(milliseconds: 1200);
   }
 
+  /// 2026-06-24 (vucko Y4): einheitliche dezente Status-Pille (GPS/Internet).
+  Widget _buildStatusPill(IconData icon, String text) {
+    const amber = Color(0xFFFFB74D);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2028).withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: amber.withValues(alpha: 0.5)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 14,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: amber, size: 17),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildNavigationOverlay() {
     final topInset = MediaQuery.of(context).padding.top;
     final visibleManeuver = _activeVisibleManeuver();
@@ -6176,53 +6256,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         // zuletzt fuhr + der GPS-Stream eingefroren ist (Tunnel/Wald), nie im
         // Stand. Mittig, klein, animiert ein/aus; liegt weder über dem Banner
         // (oben) noch über den unteren Buttons.
+        // 2026-06-24 (vucko Y4): Status-Pillen (GPS-schwach + kein Internet),
+        // gestapelt, dezent UNTER dem Banner und ÜBER den unteren Buttons — sie
+        // verdecken nichts und sind nur Info. Conditional → kein reservierter
+        // Leerraum, AnimatedSize blendet sie sanft ein/aus.
         Positioned(
           top: topInset + 8 + (visibleManeuver != null ? 102 : 60),
           left: 0,
           right: 0,
           child: IgnorePointer(
-            child: AnimatedOpacity(
-              opacity: _gpsWeak ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 250),
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1C2028).withValues(alpha: 0.94),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0xFFFFB74D).withValues(alpha: 0.5),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        blurRadius: 14,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
+            child: Center(
+              child: AnimatedSize(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_gpsWeak)
+                      _buildStatusPill(
                         Icons.satellite_alt_rounded,
-                        color: Color(0xFFFFB74D),
-                        size: 17,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
                         'GPS-Signal schwach',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
-                        ),
                       ),
-                    ],
-                  ),
+                    if (_gpsWeak && _offline) const SizedBox(height: 8),
+                    if (_offline)
+                      _buildStatusPill(
+                        Icons.wifi_off_rounded,
+                        'Keine Internetverbindung',
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -11629,6 +11690,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       const Duration(seconds: 1),
       (_) => _checkGpsStall(),
     );
+    _startConnectivityWatch();
 
     // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
     final startsNewDriveSession = _navigationStartTime == null;
@@ -11737,6 +11799,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _gpsStallWatchdog?.cancel();
     _gpsStallWatchdog = null;
     _gpsWeak = false;
+    _stopConnectivityWatch();
     unawaited(_navigationSocketService.close());
     _endNavigationLiveActivity();
     _startIdlePositionStream(); // Idle-Stream wieder starten
