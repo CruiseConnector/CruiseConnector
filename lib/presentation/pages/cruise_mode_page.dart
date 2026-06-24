@@ -5598,6 +5598,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     // Ausgeklappter Zustand: vollständiges Config-Panel
+    // 2026-06-24 (vucko): Der schwebende Top-Mode-Header (Standard/Trip-Modus +
+    // Stop-Zähler) lag GENAU über dem „Runterwischen zum Schließen"-Greiftab →
+    // das Panel ließ sich kaum runterziehen. Wenn der Header sichtbar ist, wird
+    // der transparente Oberstreifen höher, damit der Greiftab klar UNTER dem
+    // Header sitzt (keine Überdeckung mehr).
+    final showExpandedModeHeader = _isWaypointPlanning &&
+        !_showRouteInfoBanner &&
+        _routeSearchNoticeTitle == null;
     return Stack(
       key: const ValueKey('config_expanded'),
       children: [
@@ -5655,7 +5663,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                     // bleibt sichtbar + der „Einklappen"-Griff. Das Setup füllt
                     // den Rest, und der Such-Button scrollt am Ende mit (unten)
                     // — so ist sofort klar, dass man scrollen kann.
-                    height: MediaQuery.of(context).padding.top + 64,
+                    // 2026-06-24 (vucko): + Platz für den Top-Mode-Header, damit
+                    // der Greiftab darunter (statt darunter VERdeckt) sitzt.
+                    height: MediaQuery.of(context).padding.top +
+                        (showExpandedModeHeader ? 116 : 64),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
@@ -5846,11 +5857,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Scroll-Fluss über den Setup gesetzt (siehe unten in der Column).
         // Schwebend bleibt es nur im eingeklappten Zustand (über der Karte).
         // Top-Mode-Header auch im ausgeklappten Zustand — aber nicht
-        // wenn Error-Banner aktiv (sonst Doppel-Header oben)
-        if (_isWaypointPlanning &&
-            !_showRouteInfoBanner &&
-            _routeSearchNoticeTitle == null)
-          _buildWaypointModeHeader(),
+        // wenn Error-Banner aktiv (sonst Doppel-Header oben). Der Greiftab
+        // oben bekommt dafür extra Höhe (showExpandedModeHeader), sodass der
+        // Header ihn NICHT mehr überdeckt.
+        if (showExpandedModeHeader) _buildWaypointModeHeader(),
         // 2026-05-28 (vucko Startup-V Issue 1): „Mehr unten"-Hinweis. Solange
         // noch Inhalt nach unten scrollbar ist, ein weicher Fade + pulsierender
         // Chevron am unteren Rand — wie bei Apple/Google Maps. Verschwindet

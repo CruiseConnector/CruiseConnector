@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:maplibre_gl/maplibre_gl.dart' as mb;
 import 'package:visibility_detector/visibility_detector.dart';
@@ -316,7 +317,7 @@ class CruiseMapLibreMap extends StatefulWidget {
 }
 
 class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   mb.MapLibreMapController? _map;
   CruiseMapLibreController? _ctrl;
   String? _style;
@@ -488,6 +489,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // in-flight Kamera-/View-Call rennt mehr mit dem Plattform-View-Teardown
     // (SIGABRT-Schutz).
     _ctrl?.markDisposed();
+    _panReprojectTicker?.dispose();
     _markerScreen.dispose();
     super.dispose();
   }
@@ -907,6 +909,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   }
 
   void _onCameraIdle() {
+    // Kamera ruht → Per-Frame-Reprojektion beenden (die exakte Projektion unten
+    // reicht, bis die nächste Geste startet).
+    _stopPanReproject();
     // Erstes Idle nach Style-Load = Renderer hat einen Frame → ab jetzt erst
     // Quell-/View-Calls. Vorher würde setGeoJsonSource/convert nativ werfen.
     if (!_firstFrameSynced) {
@@ -1206,6 +1211,35 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     } catch (_) {}
   }
 
+  // 2026-06-24 (vucko Marker-Swim-Fix): Solange die Kamera bewegt wird (Finger-
+  // Pan/Fling/Zoom/Rotate), reprojiziert dieser Ticker die Overlay-Marker JEDEN
+  // Display-Frame statt nur bei onCameraMove. Native onCameraMove-Events feuern
+  // beim schnellen Fling GRÖBER als die Display-Rate → die Marker ruckten in
+  // Stufen hinter den nativ flüssig laufenden Tiles her („schwimmen"). Mit dem
+  // Ticker laufen Puck + POIs 1:1 mit der Karte. Läuft NUR zwischen erstem
+  // onCameraMove und onCameraIdle (kein Dauer-Tick → keine Akku-Last im Stand).
+  Ticker? _panReprojectTicker;
+
+  void _startPanReproject() {
+    final t = _panReprojectTicker ??= createTicker(_onPanReprojectTick);
+    if (!t.isActive) t.start();
+  }
+
+  void _stopPanReproject() {
+    final t = _panReprojectTicker;
+    if (t != null && t.isActive) t.stop();
+  }
+
+  void _onPanReprojectTick(Duration _) {
+    // Self-heal: Backgrounding/unsichtbar während der Geste → Ticker stoppen
+    // (startet beim nächsten onCameraMove neu), falls onCameraIdle ausbleibt.
+    if (!_appResumed || !_visible || !_styleLoaded) {
+      _stopPanReproject();
+      return;
+    }
+    _projectMarkers();
+  }
+
   void _onCameraMove(mb.CameraPosition _) {
     // Gate: nur sichtbar + resumed + nach Style-Load Controller-Aufrufe (siehe
     // _projectMarkers) — sonst MapLibre-Abort.
@@ -1218,6 +1252,9 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // Finger-Gesten werden jetzt über den Pointer-Listener in build() erkannt
     // (programmatische Kamera-Moves erzeugen KEINE Pointer-Events → eindeutig).
     _projectMarkers();
+    // Ab jetzt jeden Frame nachführen, bis die Kamera ruht (onCameraIdle) —
+    // sonst „schwimmen" die Marker bei schnellem Pannen.
+    _startPanReproject();
   }
 
   @override
