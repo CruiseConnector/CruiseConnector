@@ -106,7 +106,22 @@ class PushNotificationService {
 
   Future<void> _requestPermission() async {
     try {
-      await FirebaseMessaging.instance.requestPermission();
+      final settings = await FirebaseMessaging.instance.requestPermission();
+      debugPrint('[Push] FCM auth status: ${settings.authorizationStatus}');
+
+      // Android 13+ (API 33): POST_NOTIFICATIONS ist eine LAUFZEIT-Permission.
+      // FirebaseMessaging.requestPermission() löst den System-Dialog je nach
+      // Plugin-Version NICHT zuverlässig aus — wird er nie gewährt, unterdrückt
+      // das OS ALLE Notifications still (genau das Android-Symptom: Token da,
+      // Server schickt, aber nichts erscheint). Darum hier explizit über den
+      // Local-Notifications-Kanal anfragen.
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final androidImpl = _local.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+        final granted = await androidImpl?.requestNotificationsPermission();
+        debugPrint('[Push] Android POST_NOTIFICATIONS granted: $granted');
+      }
+
       // Foreground zeigen WIR selbst (lokale Notification + In-App-Toast),
       // damit es auf iOS nicht doppelt erscheint.
       await FirebaseMessaging.instance
