@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -176,24 +177,63 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    setState(() => _loading = true);
-    try {
-      final gamificationFuture = GamificationService.calculateAndSync();
-      final driveSessionsFuture = GamificationService.getDriveSessions();
-      final leaderboardsFuture = _loadLeaderboards();
+  // 2026-06-24 (vucko): Session-Cache der Analytics-Daten. Beim erneuten Öffnen
+  // der Seite werden die letzten Daten SOFORT gezeigt (kein Skelett, kein voller
+  // Reload); nur wenn der Cache älter als _cacheStaleAfter ist, wird im
+  // Hintergrund still aktualisiert. So lädt die Seite gefühlt sofort und hämmert
+  // nicht bei jedem Tab-Wechsel das Netz.
+  static _AnalyticsCache? _cache;
+  static const Duration _cacheStaleAfter = Duration(seconds: 45);
 
+  Future<void> _loadData() async {
+    final cache = _cache;
+    if (cache != null) {
+      // Sofort aus dem Cache rendern — kein Skelett, kein Reload-Flackern.
+      _applyResults(cache.gam, cache.sessions, cache.leaderboards);
+      final age = DateTime.now().difference(cache.at);
+      if (age < _cacheStaleAfter) return; // frisch genug → gar kein Netz
+      unawaited(_fetchAndApply(silent: true)); // still im Hintergrund frischen
+      return;
+    }
+    // Erster Aufruf (kein Cache) → Skelett zeigen + laden.
+    setState(() => _loading = true);
+    await _fetchAndApply(silent: false);
+  }
+
+  /// Holt die 3 Datenquellen, aktualisiert den Cache und wendet sie an. [silent]
+  /// = ohne Skelett (Hintergrund-Refresh / Pull-to-Refresh).
+  Future<void> _fetchAndApply({required bool silent}) async {
+    try {
       final results = await Future.wait<Object>([
-        gamificationFuture,
-        driveSessionsFuture,
-        leaderboardsFuture,
+        GamificationService.calculateAndSync(),
+        GamificationService.getDriveSessions(),
+        _loadLeaderboards(),
       ]);
       final gamResult = results[0] as GamificationResult;
       final driveSessions = results[1] as List<UserDriveSession>;
       final leaderboards =
           results[2] as Map<_LeaderboardPeriod, List<_LeaderboardEntry>>;
       driveSessions.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _cache = _AnalyticsCache(
+        gam: gamResult,
+        sessions: driveSessions,
+        leaderboards: leaderboards,
+        at: DateTime.now(),
+      );
+      _applyResults(gamResult, driveSessions, leaderboards);
+    } catch (e) {
+      debugPrint('[Analytics] Daten laden fehlgeschlagen: $e');
+      if (mounted && !silent) setState(() => _loading = false);
+    }
+  }
 
+  void _applyResults(
+    GamificationResult gamResult,
+    List<UserDriveSession> driveSessions,
+    Map<_LeaderboardPeriod, List<_LeaderboardEntry>> leaderboards,
+  ) {
+    if (!mounted) return;
+    {
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
       final weekStart = todayStart.subtract(
@@ -330,9 +370,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _loading = false;
         });
       }
-    } catch (e) {
-      debugPrint('[Analytics] Daten laden fehlgeschlagen: $e');
-      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -470,7 +507,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             // Kreis-Spinner — die Struktur ist sofort sichtbar.
             ? const _AnalyticsSkeleton()
             : RefreshIndicator(
-                onRefresh: _loadData,
+                onRefresh: () => _fetchAndApply(silent: true),
                 color: AppAccentColors.accent,
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -3153,4 +3190,21 @@ class _AnalyticsSkeleton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 2026-06-24 (vucko): In-Memory-Cache der Analytics-Daten für die App-Session.
+/// Lässt die Seite beim erneuten Öffnen sofort die letzten Daten zeigen, statt
+/// jedes Mal Skelett + voller Netz-Reload.
+class _AnalyticsCache {
+  _AnalyticsCache({
+    required this.gam,
+    required this.sessions,
+    required this.leaderboards,
+    required this.at,
+  });
+
+  final GamificationResult gam;
+  final List<UserDriveSession> sessions;
+  final Map<_LeaderboardPeriod, List<_LeaderboardEntry>> leaderboards;
+  final DateTime at;
 }
