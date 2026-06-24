@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -2547,7 +2548,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         icon: Icons.route_rounded,
         accentColor: AppAccentColors.accent,
         child: const Text(
-          'Hier erscheinen nur Fahrten aus den letzten 7 Tagen.',
+          'Deine letzten Fahrten erscheinen hier, sobald du losgefahren bist.',
           style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
         ),
       );
@@ -2571,11 +2572,11 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   }
 
   List<UserDriveSession> _recentRouteHistory() {
-    final cutoff = DateTime.now().subtract(const Duration(days: 7));
-    return _driveSessions
-        .where((session) => session.createdAt.toLocal().isAfter(cutoff))
-        .take(10)
-        .toList();
+    // 2026-06-25 (vucko): IMMER nur die letzten 5 Fahrten zeigen (vorher: bis zu
+    // 10 aus den letzten 7 Tagen). Alles darüber fällt raus → sauberer Überblick.
+    final sorted = [..._driveSessions]
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return sorted.take(5).toList();
   }
 
   Widget _buildRoutesOverviewStrip(List<UserDriveSession> sessions) {
@@ -2789,7 +2790,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   }
 
   Widget _buildRouteSummaryRow(UserDriveSession session) {
-    return Container(
+    final Widget card = Container(
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -2899,6 +2900,17 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             ],
           ),
         ],
+      ),
+    );
+    // 2026-06-25 (vucko): Zeile ist jetzt klickbar → Strava-artige Detailansicht.
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => RideDetailPage(session: session)),
+        ),
+        child: card,
       ),
     );
   }

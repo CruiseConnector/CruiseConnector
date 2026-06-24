@@ -12,6 +12,7 @@ class UserDriveSession {
     this.routeType,
     this.routeFingerprint,
     this.source,
+    this.topSpeedKmh,
   });
 
   final String id;
@@ -26,6 +27,9 @@ class UserDriveSession {
   final String? routeFingerprint;
   final String? source;
   final DateTime createdAt;
+  // 2026-06-25 (vucko): Top-Speed der Fahrt (DB-Spalte top_speed_kmh, seit X3).
+  // Für die Fahrt-Detailansicht. Kann null sein (alte Fahrten ohne Messung).
+  final double? topSpeedKmh;
 
   factory UserDriveSession.fromJson(Map<String, dynamic> json) {
     return UserDriveSession(
@@ -41,6 +45,7 @@ class UserDriveSession {
       routeFingerprint: json['route_fingerprint'] as String?,
       source: json['source'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
+      topSpeedKmh: (json['top_speed_kmh'] as num?)?.toDouble(),
     );
   }
 
