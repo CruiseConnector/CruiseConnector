@@ -44,8 +44,13 @@ class TtsService {
         await _tts.setIosAudioCategory(
           IosTextToSpeechAudioCategory.playback,
           [
+            // 2026-06-24 (vucko Voice-zu-leise): NUR duckOthers, KEIN
+            // mixWithOthers mehr. mixWithOthers ließ die Navi-Stimme gleichrangig
+            // NEBEN der Musik laufen → bei lauter Musik kaum hörbar. Reines
+            // duckOthers senkt die Musik während der Ansage deutlich ab (wie
+            // Google/Apple Maps) → Stimme klar dominant. duckOthers SENKT nur ab
+            // (pausiert NICHT) und stellt die Musik danach wieder her.
             IosTextToSpeechAudioCategoryOptions.duckOthers,
-            IosTextToSpeechAudioCategoryOptions.mixWithOthers,
           ],
           IosTextToSpeechAudioMode.voicePrompt,
         );

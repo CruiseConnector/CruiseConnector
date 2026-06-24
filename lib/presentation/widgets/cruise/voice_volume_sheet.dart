@@ -20,6 +20,10 @@ Future<void> showVoiceVolumeSheet(BuildContext context) {
   );
 }
 
+/// Untergrenze des Reglers — selbst „leise" bleibt klar hörbar (der Nutzer fand
+/// die Ansagen zu leise; ganz runter bis 0 wäre nutzlos).
+const double _kMinVolume = 0.4;
+
 class _VoiceVolumeSheet extends StatefulWidget {
   const _VoiceVolumeSheet();
 
@@ -34,7 +38,7 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
   @override
   void initState() {
     super.initState();
-    _volume = VoiceSettingsService.instance.volume;
+    _volume = VoiceSettingsService.instance.volume.clamp(_kMinVolume, 1.0);
     // Sofort eine Test-Ansage in der aktuellen Lautstärke, damit der Nutzer
     // gleich hört, wie laut es ist.
     WidgetsBinding.instance.addPostFrameCallback((_) => _speakTest());
@@ -58,11 +62,54 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
     unawaited(TtsService.instance.applyVolume(v));
   }
 
+  /// Schnellwahl (Leise / Mittel / Laut) — setzt + persistiert + spricht eine
+  /// Test-Ansage, damit der Unterschied der Stufen sofort hörbar ist.
+  void _setPreset(double v) {
+    setState(() => _volume = v);
+    unawaited(VoiceSettingsService.instance.setVolume(v));
+    unawaited(TtsService.instance.applyVolume(v));
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 60), _speakTest);
+  }
+
   void _onChangeEnd(double v) {
     unawaited(VoiceSettingsService.instance.setVolume(v));
     // Kurz entprellt, damit beim Loslassen genau EINE Test-Ansage kommt.
     _previewDebounce?.cancel();
     _previewDebounce = Timer(const Duration(milliseconds: 120), _speakTest);
+  }
+
+  Widget _presetChip(String label, double value, Color accent) {
+    final selected = (_volume - value).abs() < 0.03;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => _setPreset(value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected
+                ? accent.withValues(alpha: 0.18)
+                : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? accent
+                  : Colors.white.withValues(alpha: 0.10),
+              width: selected ? 1.4 : 1,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? accent : Colors.white.withValues(alpha: 0.7),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -158,7 +205,14 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
                       trackHeight: 5,
                     ),
                     child: Slider(
-                      value: _volume,
+                      value: _volume.clamp(_kMinVolume, 1.0),
+                      // 2026-06-24 (vucko Voice-zu-leise): Boden bei 0.4, damit
+                      // selbst „leise" noch klar hörbar ist; volle Stufe = 1.0
+                      // (Maximum). Stufen (divisions) machen den Unterschied
+                      // zwischen leise/mittel/laut deutlich fühlbar.
+                      min: _kMinVolume,
+                      max: 1.0,
+                      divisions: 6,
                       onChanged: _onChanged,
                       onChangeEnd: _onChangeEnd,
                     ),
@@ -177,6 +231,17 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
                     ),
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            // Klare Schnellstufen — der Nutzer hört sofort den Unterschied.
+            Row(
+              children: [
+                _presetChip('Leise', 0.55, accent),
+                const SizedBox(width: 8),
+                _presetChip('Mittel', 0.78, accent),
+                const SizedBox(width: 8),
+                _presetChip('Laut', 1.0, accent),
               ],
             ),
             const SizedBox(height: 6),
