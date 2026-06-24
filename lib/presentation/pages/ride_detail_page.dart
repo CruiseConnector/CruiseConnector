@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
+import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 
 /// Strava-artige Detailansicht einer abgeschlossenen Fahrt.
 ///
@@ -61,6 +62,29 @@ class RideDetailPage extends StatelessWidget {
           'Fahrt',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.ios_share_rounded, color: Colors.white),
+            tooltip: 'Teilen',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => RouteSharePage(
+                  data: RouteShareData(
+                    title: _styleLabel,
+                    subtitle: _formatDate(session.createdAt),
+                    segments: const [],
+                    distanceLabel: _formatDistance(session.distanceKm),
+                    durationLabel: _formatDuration(session.durationSeconds),
+                    topSpeedLabel:
+                        session.topSpeedKmh != null && session.topSpeedKmh! > 0
+                            ? '${session.topSpeedKmh!.toStringAsFixed(0)} km/h'
+                            : null,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),

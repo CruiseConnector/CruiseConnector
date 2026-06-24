@@ -3,14 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
-import 'package:cruise_connect/data/services/route_share_export_service.dart';
+import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -1726,32 +1725,27 @@ class _ProfilePageState extends State<ProfilePage>
     ).then((_) => _loadData());
   }
 
-  Future<void> _shareRouteExternally(SavedRoute route) async {
-    try {
-      final pngBytes = await RouteShareExportService.buildTransparentRoutePng(
-        route: route,
-        accent: context.read<AppAccentProvider>().color,
-      );
-      final file = XFile.fromData(
-        pngBytes,
-        mimeType: 'image/png',
-        name: 'cruiseconnect-route.png',
-      );
-      await Share.shareXFiles(
-        [file],
-        text:
-            '${route.name ?? route.displayStyleLabel} · ${route.formattedDistance}',
-        subject: 'Cruise Connector Route',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Route konnte nicht als Bild geteilt werden.'),
-          backgroundColor: Color(0xFF1C1F26),
+  // 2026-06-25 (vucko): „Extern teilen" öffnet jetzt den Strava-artigen Share-
+  // Composer (Foto/Selfie-Hintergrund + transparente Eckdaten-Karte + Formate
+  // Story/Quadrat/Sticker) statt direkt eine PNG zu teilen.
+  void _shareRouteExternally(SavedRoute route) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RouteSharePage(
+          data: RouteShareData(
+            title: route.name?.trim().isNotEmpty == true
+                ? route.name!.trim()
+                : '${route.displayStyleLabel} Route',
+            subtitle: route.displayStyleLabel,
+            segments: RouteShareData.segmentsFromGeometry(route.geometry),
+            distanceLabel: route.formattedDistance,
+            durationLabel: route.formattedDuration,
+            styleLabel: route.displayStyleLabel,
+          ),
         ),
-      );
-    }
+      ),
+    );
   }
 
   Widget _buildBurgerMenu() {
