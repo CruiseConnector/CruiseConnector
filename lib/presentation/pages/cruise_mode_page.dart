@@ -819,6 +819,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   double _camToLng = 0.0;
   double _camToHeading = 0.0;
   double _lastCameraHeading = 0.0; // Für Bearing-Dead-Zone (< 5° ignorieren)
+  // 2026-06-24 (vucko): Ankunftsfenster — ab hier Kamera-Bearing einfrieren, weil
+  // die Routen-Tangente an den letzten Stützpunkten degeneriert (End-Spin/Flip).
+  static const double _arrivalCameraFreezeMeters = 180.0;
   // 2026-06-08 (vucko Butterweich): KONTINUIERLICHER Smooth-Follow. _camCur* ist
   // der pro Frame sanft Richtung _camTo* gezogene Kamera-Stand; pro Frame EIN
   // INSTANTES moveCamera (kein engine-Ease → kein Puls-Ruckeln der 5Hz-Animation).
@@ -3683,18 +3686,30 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Fallback auf das geglättete GPS-Heading nur, wenn keine Tangente da ist
         // (off-route / sehr kurze Restroute). Die Dead-Zone + der Tick-Lerp
         // glätten die Drehung weiterhin (kein Stand-Zappeln, kein Burst-Ruck).
-        double? targetHeading = _routeTangentCameraBearing(lockPos);
-        if (targetHeading == null && _nativeSmoother.hasValidHeading) {
-          targetHeading = _nativeSmoother
-              .predict(DateTime.now().add(_nativeRenderPredictionLead))
-              .heading;
-        }
-        if (targetHeading != null) {
-          final delta = _angleDiff(_camToHeading, targetHeading).abs();
-          // Mikro-Jitter (<0,6°) ignorieren — sonst zappelt die Karte im Stand.
-          if (delta >= 0.6) {
-            _camToHeading = targetHeading;
-            _lastCameraHeading = targetHeading;
+        // 2026-06-24 (vucko Geräte-Video „Kamera dreht/kippt am Ende"): In den
+        // letzten ~180 m vor der Ankunft wird die Routen-Tangente an den letzten
+        // Stützpunkten degeneriert → Bearing + Zoom oszillierten (Spin/180°-Flip
+        // beim Ankommen). Im Ankunftsfenster das Bearing auf den letzten guten
+        // Heading-up-Wert EINFRIEREN (Position folgt weiter, nur keine Drehung
+        // mehr aus dem kaputten Endsegment).
+        final remainingForCam = _remainingDistance;
+        final inArrivalWindow = remainingForCam != null &&
+            remainingForCam.isFinite &&
+            remainingForCam <= _arrivalCameraFreezeMeters;
+        if (!inArrivalWindow) {
+          double? targetHeading = _routeTangentCameraBearing(lockPos);
+          if (targetHeading == null && _nativeSmoother.hasValidHeading) {
+            targetHeading = _nativeSmoother
+                .predict(DateTime.now().add(_nativeRenderPredictionLead))
+                .heading;
+          }
+          if (targetHeading != null) {
+            final delta = _angleDiff(_camToHeading, targetHeading).abs();
+            // Mikro-Jitter (<0,6°) ignorieren — sonst zappelt die Karte im Stand.
+            if (delta >= 0.6) {
+              _camToHeading = targetHeading;
+              _lastCameraHeading = targetHeading;
+            }
           }
         }
       }
