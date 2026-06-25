@@ -16302,6 +16302,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpAwarded: xpBreakdown.totalXp,
           completedAtEnd: completed,
           groupId: widget.groupId,
+          // Foto direkt an die gespeicherte Route hängen → es überlebt die
+          // Bereinigung der „zuletzt gefahren"-Sessions (Top-5), weil eine
+          // GESPEICHERTE Route ihr Foto unabhängig behält.
+          photoUrl: photoUrl,
         );
         if (mounted) {
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());

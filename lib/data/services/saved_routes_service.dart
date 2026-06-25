@@ -272,6 +272,7 @@ class SavedRoutesService {
     int? xpAwarded,
     bool completedAtEnd = false,
     String? groupId,
+    String? photoUrl,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -296,6 +297,8 @@ class SavedRoutesService {
       'distance_actual': actualDistanceKm,
       'duration_seconds': result.durationSeconds?.round(),
       'geometry': result.geometry,
+      if (photoUrl != null && photoUrl.trim().isNotEmpty)
+        'photo_url': photoUrl.trim(),
       'driven_km': effectiveDrivenKm,
       'route_source':
           result.edgeMeta['route_source']?.toString() ??
@@ -662,6 +665,25 @@ class SavedRoutesService {
     } catch (e) {
       debugPrint('[SavedRoutes] renameRoute Fehler: $e');
       rethrow;
+    }
+  }
+
+  /// Setzt/entfernt (null) das Foto einer eigenen gespeicherten Route.
+  /// Returnt true bei Erfolg (mind. eine Zeile geändert).
+  static Future<bool> updateRoutePhoto(String id, String? photoUrl) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return false;
+    try {
+      final rows = await _db
+          .from('routes')
+          .update({'photo_url': photoUrl})
+          .eq('id', id)
+          .eq('user_id', userId)
+          .select('id');
+      return rows.isNotEmpty;
+    } catch (e) {
+      debugPrint('[SavedRoutes] updateRoutePhoto Fehler: $e');
+      return false;
     }
   }
 

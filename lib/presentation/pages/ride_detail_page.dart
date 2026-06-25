@@ -3,10 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/group_leaderboard_service.dart';
+import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
@@ -26,15 +28,20 @@ class RideDetailPage extends StatefulWidget {
     super.key,
     required this.session,
     this.allowPhoto = true,
+    this.savedRouteId,
   });
 
   /// Detailansicht für eine GESPEICHERTE Route (statt einer gefahrenen Session).
-  /// Baut eine Anzeige-Session aus der Route — ohne Foto (es gibt keine Drive-
-  /// Session-Zeile zum Anhängen), aber mit Karte + Eckdaten + ggf. Rangliste.
+  /// Baut eine Anzeige-Session aus der Route. Bei EIGENER Route darf ein Foto
+  /// hinzugefügt/geändert werden (persistiert an routes.photo_url); zusätzlich
+  /// zeigt sie das Foto der zugehörigen gefahrenen Fahrt (per Fingerprint).
   factory RideDetailPage.fromSavedRoute(SavedRoute route) {
     final coords = route.flatCoordinates;
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    final isOwn = route.userId != null && route.userId == currentUserId;
     return RideDetailPage(
-      allowPhoto: false,
+      allowPhoto: isOwn,
+      savedRouteId: isOwn ? route.id : null,
       session: UserDriveSession(
         id: route.id,
         userId: route.userId ?? '',
@@ -51,12 +58,18 @@ class RideDetailPage extends StatefulWidget {
         // Fingerprint mitführen → die gespeicherte Route kann das Foto der
         // zugehörigen GEFAHRENEN Fahrt nachladen (Single Source of Truth).
         routeFingerprint: route.routeFingerprint,
+        // Eigenes Foto der Route (falls direkt gesetzt).
+        photoUrl: route.photoUrl,
       ),
     );
   }
 
   final UserDriveSession session;
   final bool allowPhoto;
+
+  /// Wenn gesetzt: dies ist eine eigene GESPEICHERTE Route — Foto wird an
+  /// routes.photo_url persistiert (nicht an einer Drive-Session).
+  final String? savedRouteId;
 
   @override
   State<RideDetailPage> createState() => _RideDetailPageState();
@@ -185,7 +198,11 @@ class _RideDetailPageState extends State<RideDetailPage> {
         contentType: 'image/jpeg',
       );
       if (url != null) {
-        await GamificationService.updateDriveSessionPhoto(_s.id, url);
+        // Persistenz: eigene GESPEICHERTE Route → routes.photo_url, sonst die
+        // gefahrene Drive-Session. Beide RLS-gehärtet (.select bestätigt Treffer).
+        final ok = widget.savedRouteId != null
+            ? await SavedRoutesService.updateRoutePhoto(widget.savedRouteId!, url)
+            : await GamificationService.updateDriveSessionPhoto(_s.id, url);
         // Altes Foto entfernen, falls es unter einem ANDEREN Pfad lag (z.B. ein
         // Post-Route-Foto ride_<ts>.jpg) → kein verwaister Storage-Müll. Bei
         // gleichem Pfad hat der upsert die Datei bereits überschrieben.
@@ -205,7 +222,29 @@ class _RideDetailPageState extends State<RideDetailPage> {
             );
           }
         }
-        if (mounted) setState(() => _photoUrl = url);
+        if (mounted) {
+          setState(() => _photoUrl = url);
+          // Explizite Speichern-Bestätigung → der Nutzer sieht eindeutig, dass
+          // das Foto wirklich gesichert wurde (oder eben nicht).
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(ok ? 'Foto gespeichert ✓' : 'Foto-Speichern fehlgeschlagen'),
+              backgroundColor: const Color(0xFF1C1F26),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      } else if (mounted) {
+        // Upload selbst ist (nach 3 Versuchen) gescheitert → ehrlich melden,
+        // statt still nichts zu tun. So weiß der Nutzer, dass er es erneut
+        // versuchen muss (kein „verschwundenes" Foto).
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Foto-Upload fehlgeschlagen — bitte erneut versuchen.'),
+            backgroundColor: Color(0xFF1C1F26),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
     } catch (_) {
       if (mounted) {
@@ -225,7 +264,11 @@ class _RideDetailPageState extends State<RideDetailPage> {
     if (_photoBusy) return;
     setState(() => _photoBusy = true);
     final oldUrl = _photoUrl;
-    await GamificationService.updateDriveSessionPhoto(_s.id, null);
+    if (widget.savedRouteId != null) {
+      await SavedRoutesService.updateRoutePhoto(widget.savedRouteId!, null);
+    } else {
+      await GamificationService.updateDriveSessionPhoto(_s.id, null);
+    }
     // Auch die Bild-Datei aus dem Storage löschen → kein verwaister Müll.
     if (oldUrl != null) {
       await SocialService.deleteUserAsset(

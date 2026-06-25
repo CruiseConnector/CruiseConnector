@@ -30,6 +30,7 @@ class SavedRoute {
     this.ratingCount = 0,
     this.completionRate,
     this.completedAtEnd = false,
+    this.photoUrl,
   });
 
   final String id;
@@ -61,6 +62,7 @@ class SavedRoute {
   final int ratingCount;
   final double? completionRate;
   final bool completedAtEnd;
+  final String? photoUrl;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -97,6 +99,7 @@ class SavedRoute {
       ratingCount: (json['rating_count'] as num?)?.toInt() ?? 0,
       completionRate: (json['completion_rate'] as num?)?.toDouble(),
       completedAtEnd: json['completed_at_end'] == true,
+      photoUrl: json['photo_url'] as String?,
     );
   }
 
@@ -232,6 +235,7 @@ class SavedRoute {
       'rating_count': ratingCount,
       'completion_rate': completionRate,
       'completed_at_end': completedAtEnd,
+      'photo_url': photoUrl,
     };
   }
 

@@ -289,6 +289,19 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       setState(() => _isSaving = false);
       if (!result.success) return;
 
+      // 2026-06-25 (vucko #179): Foto gewählt, aber Upload nach 3 Versuchen
+      // gescheitert → ehrlich melden (Fahrt ist gespeichert, nur ohne Bild),
+      // statt das Foto stillschweigend „verschwinden" zu lassen.
+      if (_photoBytes != null && _uploadedPhotoUrl == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Fahrt gespeichert — Foto konnte nicht hochgeladen werden.'),
+            backgroundColor: Color(0xFF1C1F26),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+
       try {
         if (result.hasXpProgress) {
           await showXpLevelProgressPopup(

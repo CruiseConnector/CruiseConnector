@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
@@ -444,6 +446,9 @@ class GamificationService {
           .insert(row)
           .select()
           .single();
+      // Neue Fahrt ist jetzt #1 → ältere Foto-Sessions aus der Top-5 räumen
+      // (außer gespeicherte Routen). Fire-and-forget, blockt den Flow nicht.
+      unawaited(pruneRecentRidePhotos());
       return UserDriveSession.fromJson(data);
     } catch (e) {
       debugPrint(
@@ -504,6 +509,76 @@ class GamificationService {
     } catch (e) {
       debugPrint('[Gamification] photoUrlForRouteFingerprint fehlgeschlagen: $e');
       return null;
+    }
+  }
+
+  /// 2026-06-25 (vucko #178): Fotos „zuletzt gefahrener" Fahrten, die aus der
+  /// Top-[keep]-Liste herausfallen, wieder entfernen — ES SEI DENN, die Route
+  /// wurde GESPEICHERT (dann lebt das Foto an der gespeicherten Route weiter).
+  ///
+  /// „Gespeichert" = es existiert eine eigene Route mit gleichem
+  /// route_fingerprint ODER eine gespeicherte Route referenziert exakt dieselbe
+  /// Foto-URL (Foto wurde beim Speichern mitkopiert). Nur in diesem Fall bleibt
+  /// die Storage-Datei erhalten; sonst wird sie gelöscht (kein verwaister Müll).
+  ///
+  /// Läuft fire-and-forget nach dem Aufzeichnen einer neuen Fahrt — blockt also
+  /// nie den Abschluss-Flow und schluckt Fehler still.
+  static Future<void> pruneRecentRidePhotos({int keep = 5}) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return;
+    try {
+      // Alle eigenen Sessions MIT Foto, neueste zuerst.
+      final withPhoto = await _db
+          .from('user_drive_sessions')
+          .select('id, photo_url, route_fingerprint')
+          .eq('user_id', userId)
+          .not('photo_url', 'is', null)
+          .order('created_at', ascending: false);
+      final rows = (withPhoto as List).cast<Map<String, dynamic>>();
+      if (rows.length <= keep) return;
+
+      // Schutzschild: Fingerprints + Foto-URLs der eigenen GESPEICHERTEN Routen.
+      final savedRows = await _db
+          .from('routes')
+          .select('route_fingerprint, photo_url')
+          .eq('user_id', userId);
+      final savedFingerprints = <String>{};
+      final savedPhotoUrls = <String>{};
+      for (final r in (savedRows as List).cast<Map<String, dynamic>>()) {
+        final fp = (r['route_fingerprint'] as String?)?.trim();
+        if (fp != null && fp.isNotEmpty) savedFingerprints.add(fp);
+        final pu = (r['photo_url'] as String?)?.trim();
+        if (pu != null && pu.isNotEmpty) savedPhotoUrls.add(pu);
+      }
+
+      // Alles JENSEITS der Top-[keep]: Foto entfernen, wenn nicht geschützt.
+      for (final row in rows.skip(keep)) {
+        final id = row['id'] as String?;
+        final url = (row['photo_url'] as String?)?.trim();
+        final fp = (row['route_fingerprint'] as String?)?.trim();
+        if (id == null || url == null || url.isEmpty) continue;
+
+        final isSaved =
+            (fp != null && fp.isNotEmpty && savedFingerprints.contains(fp)) ||
+            savedPhotoUrls.contains(url);
+        if (isSaved) continue; // Foto bleibt — Route ist gespeichert.
+
+        // Foto-Spalte der Session leeren …
+        await _db
+            .from('user_drive_sessions')
+            .update({'photo_url': null})
+            .eq('id', id)
+            .eq('user_id', userId);
+        // … und die Datei löschen, sofern KEINE gespeicherte Route sie nutzt.
+        if (!savedPhotoUrls.contains(url)) {
+          await SocialService.deleteUserAsset(
+            bucket: 'ride-photos',
+            publicUrl: url,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[Gamification] pruneRecentRidePhotos fehlgeschlagen: $e');
     }
   }
 

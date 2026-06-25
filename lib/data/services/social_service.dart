@@ -2313,15 +2313,34 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return null;
     final path = '$uid/$fileName';
-    await _db.storage
-        .from(bucket)
-        .uploadBinary(
-          path,
-          bytes,
-          fileOptions: FileOptions(upsert: true, contentType: contentType),
-        );
-    final publicUrl = _db.storage.from(bucket).getPublicUrl(path);
-    return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+    // 2026-06-25 (vucko #179): Upload gegen transiente Netzfehler härten — bis
+    // zu 3 Versuche mit Timeout + kurzem Backoff. Vorher reichte EIN Fehlschlag
+    // und das Foto „verschwand" still (Fahrt wurde ohne Bild gespeichert). Gibt
+    // bei endgültigem Scheitern null zurück (statt zu werfen), damit der Aufrufer
+    // sauber „fehlgeschlagen" melden kann statt in einen generischen Catch zu laufen.
+    Object? lastError;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await _db.storage
+            .from(bucket)
+            .uploadBinary(
+              path,
+              bytes,
+              fileOptions: FileOptions(upsert: true, contentType: contentType),
+            )
+            .timeout(const Duration(seconds: 25));
+        final publicUrl = _db.storage.from(bucket).getPublicUrl(path);
+        return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+      } catch (e) {
+        lastError = e;
+        debugPrint('[Social] Upload-Versuch $attempt/3 fehlgeschlagen ($path): $e');
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+        }
+      }
+    }
+    debugPrint('[Social] Upload endgültig fehlgeschlagen ($path): $lastError');
+    return null;
   }
 
   /// Extrahiert den Storage-Pfad (`<uid>/<datei>`) aus einer Public-URL eines
