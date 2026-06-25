@@ -4,6 +4,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 
 /// Einheitliche Darstellung einer geteilten Route in Posts und Composer.
 class RouteAttachmentCard extends StatefulWidget {
@@ -219,7 +220,16 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Column(
+                  // 2026-06-25 (vucko Routen-Detail-Page): Tippen auf die Info
+                  // öffnet die ästhetische Detailseite (Karte + Eckdaten).
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => RideDetailPage.fromSavedRoute(route),
+                      ),
+                    ),
+                    child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -246,6 +256,7 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                       const SizedBox(height: 7),
                       _RouteTrustBadges(route: route, compact: isCompact),
                     ],
+                    ),
                   ),
                 ),
                 if (widget.showRideButton) ...[
