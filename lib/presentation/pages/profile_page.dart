@@ -1454,14 +1454,11 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildRouteCard(SavedRoute route) {
     return GestureDetector(
-      // 2026-06-25 (vucko Routen-Detail-Page): Tippen öffnet die ästhetische
-      // Detailseite (Karte + Eckdaten + ggf. Rangliste); langes Drücken die
-      // alten Optionen (Umbenennen/Teilen/Löschen).
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => RideDetailPage.fromSavedRoute(route),
-        ),
-      ),
+      // 2026-06-25 (vucko): EIN Tippen öffnet direkt das Options-Popup
+      // (Übersicht / extern als Bild teilen / als Post teilen / umbenennen /
+      // entfernen) — kein langes Drücken mehr nötig. „Übersicht" führt zur
+      // ästhetischen Detailseite. Langdruck zeigt dieselben Optionen.
+      onTap: () => _showRouteOptions(route),
       onLongPress: () => _showRouteOptions(route),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -1559,9 +1556,22 @@ class _ProfilePageState extends State<ProfilePage>
                   ),
                   const SizedBox(height: 20),
                   _buildOptionTile(
+                    Icons.map_outlined,
+                    'Übersicht',
+                    AppAccentColors.accent,
+                    () {
+                      Navigator.pop(ctx);
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => RideDetailPage.fromSavedRoute(route),
+                        ),
+                      );
+                    },
+                  ),
+                  _buildOptionTile(
                     Icons.play_circle_fill,
                     'Nochmal fahren',
-                    AppAccentColors.accent,
+                    const Color(0xFF34D399),
                     () {
                       Navigator.pop(ctx);
                       CruiseModePage.pendingRoute.value = route;

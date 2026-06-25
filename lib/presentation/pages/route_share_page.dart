@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -5,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -153,13 +155,28 @@ class _RouteSharePageState extends State<RouteSharePage> {
     if (ctx == null) return null;
     final boundary = ctx.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return null;
-    final image = await boundary.toImage(pixelRatio: 3.0);
+    final dpr = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 3.0).toDouble();
+    // Warten bis die Vorschau fertig gemalt ist (sonst leeres/halbes Bild →
+    // geteiltes Bild wäre leer / Capture schlägt fehl).
+    var paintTries = 0;
+    while (boundary.debugNeedsPaint && paintTries < 6) {
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      paintTries++;
+    }
+    final image = await boundary.toImage(pixelRatio: dpr);
     try {
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       return byteData?.buffer.asUint8List();
     } finally {
       image.dispose();
     }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: const Color(0xFF1C1F26)),
+    );
   }
 
   Future<void> _share() async {
@@ -172,28 +189,38 @@ class _RouteSharePageState extends State<RouteSharePage> {
         ? shareBox.localToGlobal(Offset.zero) & shareBox.size
         : null;
     try {
-      // Einen Frame warten, damit das Capture-Widget sicher gelayoutet ist.
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      // Beim Karten-Format sicherstellen, dass das Karten-Bild geladen ist,
+      // bevor wir die Vorschau abfotografieren.
+      if (_isMap && _mapBytes == null) await _ensureMapImage();
+      // Auf den nächsten vollständig gemalten Frame warten.
+      await WidgetsBinding.instance.endOfFrame;
       final png = await _capturePng();
-      if (png == null) return;
-      final file = XFile.fromData(
-        png,
-        mimeType: 'image/png',
-        name: _isSticker
-            ? 'cruise-route-sticker.png'
-            : 'cruise-route.png',
+      if (png == null || png.isEmpty) {
+        _toast('Bild konnte nicht erstellt werden. Bitte erneut versuchen.');
+        return;
+      }
+      // In eine ECHTE temporäre Datei schreiben (statt nur In-Memory) →
+      // maximal kompatibel mit Instagram, WhatsApp, Fotos & Co.
+      final tmpDir = await getTemporaryDirectory();
+      final baseName = _isSticker ? 'cruise-route-sticker' : 'cruise-route';
+      final outFile = File(
+        '${tmpDir.path}/${baseName}_${DateTime.now().millisecondsSinceEpoch}.png',
       );
+      await outFile.writeAsBytes(png, flush: true);
       final dist = widget.data.distanceLabel;
-      await Share.shareXFiles(
-        [file],
+      final result = await Share.shareXFiles(
+        [XFile(outFile.path, mimeType: 'image/png', name: '$baseName.png')],
         text: dist != null
             ? '${widget.data.title} · $dist — mit Cruise Connector'
             : '${widget.data.title} — mit Cruise Connector',
         subject: 'Cruise Connector Route',
         sharePositionOrigin: shareOrigin,
       );
-    } catch (_) {
-      // Teilen abgebrochen — kein Fehler-Toast nötig.
+      if (result.status == ShareResultStatus.unavailable) {
+        _toast('Teilen ist auf diesem Gerät nicht verfügbar.');
+      }
+    } catch (e) {
+      _toast('Teilen fehlgeschlagen. Bitte erneut versuchen.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
