@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
@@ -153,31 +151,15 @@ class _RideDetailPageState extends State<RideDetailPage> {
       ? _s.distanceKm / (_s.durationSeconds / 3600.0)
       : null;
 
-  // ── Kurven aus dem Track schätzen ──────────────────────────────────────────
-  double _bearing(List<double> a, List<double> b) {
-    final dLng = (b[0] - a[0]) * math.pi / 180;
-    final lat1 = a[1] * math.pi / 180, lat2 = b[1] * math.pi / 180;
-    final y = math.sin(dLng) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
-        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
-    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
-  }
-
+  // ── Kurven aus dem Track ────────────────────────────────────────────────────
+  // 2026-06-25 (vucko): EINE Quelle der Wahrheit — derselbe akkurate,
+  // dichte-unabhängige Zähler wie im Route-Banner (GamificationService).
+  // Vorher hatte die Detail-Übersicht ihren eigenen, abweichenden Zähler
+  // (Schwelle 32°, Index-Stride) → andere Kurvenzahl als beim Berechnen.
   int? get _curveCount {
     final t = _s.trackGeometry;
     if (t == null || t.length < 3) return null;
-    // leicht ausdünnen gegen GPS-Zappeln, dann scharfe Richtungswechsel zählen.
-    final stride = t.length > 140 ? (t.length / 140).ceil() : 1;
-    final pts = [for (var i = 0; i < t.length; i += stride) t[i]];
-    var curves = 0;
-    for (var i = 1; i < pts.length - 1; i++) {
-      final b1 = _bearing(pts[i - 1], pts[i]);
-      final b2 = _bearing(pts[i], pts[i + 1]);
-      var d = (b2 - b1).abs();
-      if (d > 180) d = 360 - d;
-      if (d >= 32) curves++;
-    }
-    return curves;
+    return GamificationService.countCurves(t);
   }
 
   // ── Foto ───────────────────────────────────────────────────────────────────

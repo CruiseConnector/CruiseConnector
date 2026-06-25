@@ -5,6 +5,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart'
     show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 // ignore: depend_on_referenced_packages
 import 'package:flutter_web_plugins/url_strategy.dart';
@@ -35,6 +36,16 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+
+      // 2026-06-25 (vucko): App NUR im Hochformat — Querformat verzerrt Karte,
+      // Navi-Banner und Startscreen. Greift auf iOS + Android (zusätzlich hart
+      // im AndroidManifest + Info.plist verankert, falls dieser Call zu spät
+      // käme). portraitDown erlaubt, damit „auf dem Kopf" kein schwarzer Rand
+      // bleibt, aber kein Landscape.
+      await SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
 
       // 2026-06-15 (vucko M5 „Die App darf NIEMALS crashen"): Globale Dart-
       // Fehler-Auffangnetze. runZonedGuarded fängt nur asynchrone Zonen-Fehler;
@@ -402,7 +413,13 @@ class _CruiseLaunchScreen extends StatelessWidget {
                   .toDouble();
         final scan = Curves.easeInOut.transform(math.min(t / 0.95, 1));
 
-        return Opacity(
+        return Material(
+          // 2026-06-25 (vucko): Splash-Overlay ist ein Stack-Geschwister von
+          // AuthPage und stand UNTER keinem Material → Texte bekamen den gelben
+          // Fallback-Doppelstrich („Routen werden vorbereitet" unterstrichen).
+          // Transparentes Material liefert den DefaultTextStyle → sauber.
+          type: MaterialType.transparency,
+          child: Opacity(
           opacity: opacity,
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -410,7 +427,9 @@ class _CruiseLaunchScreen extends StatelessWidget {
                 center: const Alignment(0.08, -0.28),
                 radius: 1.12,
                 colors: [
-                  accent.withValues(alpha: 0.30),
+                  // Opak getönt statt halbtransparent → das Dashboard scheint
+                  // NICHT mehr durch die Splash-Mitte (voll deckend bis Fade).
+                  Color.lerp(const Color(0xFF172232), accent, 0.32)!,
                   const Color(0xFF172232),
                   const Color(0xFF080D14),
                 ],
@@ -515,6 +534,7 @@ class _CruiseLaunchScreen extends StatelessWidget {
                 ),
               ],
             ),
+          ),
           ),
         );
       },

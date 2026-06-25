@@ -292,22 +292,123 @@ class GamificationService {
     return DateTime(date.year, date.month, date.day);
   }
 
-  /// Zählt echte Kurven anhand von Richtungswechseln > 30° in Koordinaten.
+  /// Zählt echte Kurven — dichte-unabhängig + akkurat.
+  ///
+  /// 2026-06-25 (vucko): Komplett neu. Der alte Zähler nahm „jeden 20. Punkt"
+  /// im INDEX-Raum — aber GraphHopper liefert stark schwankende Punktdichte
+  /// (viele Punkte in Kurven, wenige auf Geraden), also war 20 Punkte mal 50 m,
+  /// mal 2 km → Kurven wurden übersprungen oder doppelt gezählt, und die Zahl
+  /// hing an der Geometrie-Auflösung statt an der echten Straße. Dazu fehlte die
+  /// cos(lat)-Korrektur (Längengrade sind in DACH ~0,68× gestaucht).
+  ///
+  /// Neu: (1) auf festen ~20-m-Stützpunkt-Abstand resampeln → unabhängig von der
+  /// Roh-Punktdichte; (2) Kurven über kumulierte, vorzeichenbehaftete Richtungs-
+  /// änderung GRUPPIEREN — ein zusammenhängender Bogen = EINE Kurve, ein
+  /// Richtungswechsel (S-Kurve) oder eine längere Gerade trennt zwei Kurven.
   static int countCurves(List<List<double>> coords) {
     if (coords.length < 3) return 0;
+    final pts = _resampleByDistance(coords, 20.0);
+    if (pts.length < 3) return 0;
+
+    const enterDeg = 40.0; // Gesamt-Drehung eines Bogens, ab der er als Kurve zählt
+    const straightBreakM = 60.0; // so viel Geradeaus am Stück beendet einen Bogen
     int curves = 0;
-    const step = 20;
-    for (var i = step; i < coords.length - step; i += step) {
-      final prev = coords[i - step];
-      final curr = coords[i];
-      final next = coords[math.min(i + step, coords.length - 1)];
-      final bearing1 = math.atan2(curr[0] - prev[0], curr[1] - prev[1]);
-      final bearing2 = math.atan2(next[0] - curr[0], next[1] - curr[1]);
-      var angle = (bearing2 - bearing1).abs();
-      if (angle > math.pi) angle = 2 * math.pi - angle;
-      if (angle * 180 / math.pi > 30) curves++;
+    double runTurn = 0; // kumulierte Drehung des aktuellen Bogens
+    int runSign = 0; // aktuelle Drehrichtung (-1 / +1)
+    bool counted = false; // schon als Kurve gezählt?
+    double straightRun = 0; // Meter quasi-geradeaus am Stück
+
+    for (var i = 1; i < pts.length - 1; i++) {
+      final d = _signedTurnDeg(pts[i - 1], pts[i], pts[i + 1]);
+      if (d.abs() < 2.0) {
+        straightRun += 20.0;
+        if (straightRun >= straightBreakM) {
+          runTurn = 0;
+          runSign = 0;
+          counted = false;
+        }
+        continue;
+      }
+      straightRun = 0;
+      final s = d > 0 ? 1 : -1;
+      if (runSign != 0 && s != runSign) {
+        // Gegenrichtung → neuer Bogen (S-Kurve = zwei Kurven)
+        runTurn = 0;
+        counted = false;
+      }
+      runSign = s;
+      runTurn += d;
+      if (!counted && runTurn.abs() >= enterDeg) {
+        curves++;
+        counted = true;
+      }
     }
     return curves;
+  }
+
+  /// Resampelt eine [lng,lat]-Polylinie auf festen Stützpunkt-Abstand (Meter),
+  /// per linearer Interpolation. Macht alle nachgelagerten Geometrie-Maße
+  /// (Kurven!) unabhängig von der Roh-Punktdichte.
+  static List<List<double>> _resampleByDistance(
+    List<List<double>> coords,
+    double spacingM,
+  ) {
+    if (coords.length < 2) return List.of(coords);
+    final out = <List<double>>[coords.first];
+    double acc = 0;
+    for (var i = 1; i < coords.length; i++) {
+      final p0 = coords[i - 1];
+      final p1 = coords[i];
+      if (p0.length < 2 || p1.length < 2) continue;
+      final segLen = _distMeters(p0, p1);
+      if (segLen <= 0) continue;
+      double start = 0;
+      while (acc + (segLen - start) >= spacingM) {
+        final need = spacingM - acc;
+        final t = (start + need) / segLen;
+        out.add([p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t]);
+        start += need;
+        acc = 0;
+      }
+      acc += segLen - start;
+    }
+    final last = coords.last;
+    if (out.length < 2 || out.last[0] != last[0] || out.last[1] != last[1]) {
+      out.add(last);
+    }
+    return out;
+  }
+
+  /// Vorzeichenbehaftete Richtungsänderung bei b (Grad, +rechts/-links),
+  /// equirektangular korrigiert (Längengrade × cos(lat)).
+  static double _signedTurnDeg(
+    List<double> a,
+    List<double> b,
+    List<double> c,
+  ) {
+    var d = _bearingDeg(b, c) - _bearingDeg(a, b);
+    while (d > 180) {
+      d -= 360;
+    }
+    while (d < -180) {
+      d += 360;
+    }
+    return d;
+  }
+
+  static double _bearingDeg(List<double> a, List<double> b) {
+    final latRad = (a[1] + b[1]) * 0.5 * math.pi / 180.0;
+    final dx = (b[0] - a[0]) * math.cos(latRad);
+    final dy = b[1] - a[1];
+    return math.atan2(dx, dy) * 180.0 / math.pi;
+  }
+
+  static double _distMeters(List<double> a, List<double> b) {
+    const earth = 6371000.0;
+    final latRad = (a[1] + b[1]) * 0.5 * math.pi / 180.0;
+    final dx = (b[0] - a[0]) * math.pi / 180.0 * math.cos(latRad) * earth;
+    final dy = (b[1] - a[1]) * math.pi / 180.0 * earth;
+    return math.sqrt(dx * dx + dy * dy);
   }
 
   /// Async-Version: Zählt Kurven in einem separaten Isolate (Main-Thread bleibt frei).

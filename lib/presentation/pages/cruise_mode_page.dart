@@ -6241,20 +6241,36 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Widget _buildInfoItem(IconData icon, String value, String label) {
+    // 2026-06-25 (vucko): Wert IMMER einzeilig — egal ob „60", „1285" oder
+    // „116.8 km" / „2h 13min". Vorher brach der Wert in der schmalen Spalte um
+    // („116.8" / „km") → uneinheitliche Zeilenhöhen + komischer Umbruch. FittedBox
+    // skaliert breite Werte minimal herunter statt sie umzubrechen.
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, color: AppAccentColors.accent, size: 20),
         const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontWeight: FontWeight.bold,
+        SizedBox(
+          width: double.infinity,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              maxLines: 1,
+              softWrap: false,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ),
         Text(
           label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.5),
             fontSize: 10,

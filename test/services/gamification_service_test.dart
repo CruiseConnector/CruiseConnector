@@ -259,4 +259,59 @@ void main() {
       expect(totals.totalRoutes, 0);
     });
   });
+
+  group('countCurves (distanz-basiert, dichte-unabhängig)', () {
+    // ~47°N: Meter → Grad ([lng, lat]).
+    const mLat = 111000.0;
+    const mLng = 111000.0 * 0.6820; // × cos(47°)
+    List<double> at(double eastM, double northM) =>
+        [eastM / mLng, 47.0 + northM / mLat];
+
+    List<List<double>> straight(int n) =>
+        [for (var i = 0; i <= n; i++) at(600.0 * i / n, 0)];
+
+    // L-Form: 400 m Ost, dann 400 m Nord → genau EINE 90°-Kurve.
+    List<List<double>> lBend(int perLeg) => [
+          for (var i = 0; i <= perLeg; i++) at(400.0 * i / perLeg, 0),
+          for (var i = 1; i <= perLeg; i++) at(400.0, 400.0 * i / perLeg),
+        ];
+
+    // Z-/S-Form: Ost, Nord (links), Ost (rechts) → ZWEI Kurven.
+    List<List<double>> zBend(int perLeg) => [
+          for (var i = 0; i <= perLeg; i++) at(300.0 * i / perLeg, 0),
+          for (var i = 1; i <= perLeg; i++) at(300.0, 300.0 * i / perLeg),
+          for (var i = 1; i <= perLeg; i++)
+            at(300.0 + 300.0 * i / perLeg, 300.0),
+        ];
+
+    test('Gerade Strecke hat 0 Kurven', () {
+      expect(GamificationService.countCurves(straight(30)), 0);
+    });
+
+    test('Eine 90°-Biegung = 1 Kurve', () {
+      expect(GamificationService.countCurves(lBend(20)), 1);
+    });
+
+    test('S-/Z-Form (links + rechts) = 2 Kurven', () {
+      expect(GamificationService.countCurves(zBend(20)), 2);
+    });
+
+    test('Kurvenzahl ist UNABHÄNGIG von der Punktdichte', () {
+      // Identische Form, einmal grob, einmal fein abgetastet. GENAU das war der
+      // alte Bug (Index-Stride 20 → Ergebnis hing an der GraphHopper-Dichte).
+      expect(
+        GamificationService.countCurves(lBend(3)),
+        GamificationService.countCurves(lBend(60)),
+      );
+      expect(
+        GamificationService.countCurves(zBend(4)),
+        GamificationService.countCurves(zBend(80)),
+      );
+    });
+
+    test('Zu wenige Punkte → 0 (kein Crash)', () {
+      expect(GamificationService.countCurves(const []), 0);
+      expect(GamificationService.countCurves([at(0, 0)]), 0);
+    });
+  });
 }

@@ -5,12 +5,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/route_map_share_service.dart';
 
 /// Entkoppelte Daten für die Share-Karte — funktioniert von überall
@@ -73,12 +72,19 @@ class RouteShareData {
 
 enum _ShareFormat { map, story, square, sticker }
 
-/// 2026-06-25 (vucko): Strava-artiger Share-Composer. Man wählt ein Foto/Selfie
-/// als Hintergrund, die Eckdaten-Karte liegt als halbtransparente „Glass"-Karte
-/// darüber (man sieht das Gesicht durch + die Daten klar lesbar dank Scrim +
-/// Schatten — Lesbarkeit für den WORST-CASE-Hintergrund gebaut). Drei Formate:
-/// Story 9:16, Quadrat 1:1, und „Sticker" = nur die transparente Karte (PNG mit
-/// Alpha) zum Drüberlegen in der eigenen Story.
+/// Strava-artiger Share-Composer.
+///
+/// 2026-06-25 (vucko Rework): KEIN Foto/Selfie mehr IN der App dahinterlegen —
+/// das macht man in der Ziel-App (Instagram/Snapchat-Story). Vier saubere
+/// Formate:
+///  • Karte    – echte Karte mit Route als Hintergrund (1 Tap teilen)
+///  • Story 9:16 / Quadrat 1:1 – Eckdaten-Karte auf sauberem dunklem Hintergrund
+///    → ideal zum direkten Verschicken in WhatsApp & Co. (kein „kaputtes"
+///    Transparenz-Schwarz/Weiß).
+///  • Sticker  – nur die transparente Karte (PNG mit Alpha) → legt man in der
+///    Story-App über sein EIGENES Foto/Selfie.
+/// Jeder Teilen-Vorgang hängt einen Deeplink an den Text → der Empfänger landet
+/// per Tap in der App ([CruiseDeepLinks.shareUrl]).
 class RouteSharePage extends StatefulWidget {
   const RouteSharePage({super.key, required this.data});
 
@@ -91,7 +97,6 @@ class RouteSharePage extends StatefulWidget {
 class _RouteSharePageState extends State<RouteSharePage> {
   final GlobalKey _captureKey = GlobalKey();
 
-  Uint8List? _photo;
   _ShareFormat _format = _ShareFormat.story;
   bool _busy = false;
   // 2026-06-25 (vucko Share-Rework): echtes Karten-Bild (Esri-Tiles + Route),
@@ -135,20 +140,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
     }
   }
 
-  Future<void> _pick(ImageSource source) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      // Foto wählen + Ausschnitt/Zoom frei festlegen → der User steuert, was im
-      // geteilten Bild zu sehen ist (und in welchem Ausmaß).
-      final bytes = await pickAndCropRidePhoto(context, source: source);
-      if (bytes != null && mounted) setState(() => _photo = bytes);
-    } catch (_) {
-      // Galerie/Kamera abgebrochen oder kein Zugriff — still ignorieren.
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 
   Future<Uint8List?> _capturePng() async {
     final ctx = _captureKey.currentContext;
@@ -208,11 +199,15 @@ class _RouteSharePageState extends State<RouteSharePage> {
       );
       await outFile.writeAsBytes(png, flush: true);
       final dist = widget.data.distanceLabel;
+      // Deeplink an den Text hängen → tippt der Empfänger ihn an, öffnet sich
+      // die App (Android App-Link). Ein Bild kann selbst keinen Link tragen,
+      // daher reist er im Begleittext mit (Caption in WhatsApp/Instagram & Co.).
+      final headline = dist != null
+          ? '${widget.data.title} · $dist — mit Cruise Connector'
+          : '${widget.data.title} — mit Cruise Connector';
       final result = await Share.shareXFiles(
         [XFile(outFile.path, mimeType: 'image/png', name: '$baseName.png')],
-        text: dist != null
-            ? '${widget.data.title} · $dist — mit Cruise Connector'
-            : '${widget.data.title} — mit Cruise Connector',
+        text: '$headline\n${CruiseDeepLinks.shareUrl}',
         subject: 'Cruise Connector Route',
         sharePositionOrigin: shareOrigin,
       );
@@ -274,11 +269,11 @@ class _RouteSharePageState extends State<RouteSharePage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Hintergrund: Karte / Foto (cover) — beim Sticker transparent lassen.
+        // Hintergrund: echte Karte (Karte-Modus) oder sauberer dunkler Grund
+        // (Story/Quadrat). Beim Sticker bleibt es transparent.
         if (!_isSticker) _buildBackground(),
-        // Eckdaten-Glass-Karte: halbtransparent → Gesicht scheint durch, Text
-        // klar lesbar (Scrim + Schatten). Beim Sticker liegt nur diese Karte auf
-        // Transparenz → PNG mit Alpha zum Drüberlegen.
+        // Eckdaten-Karte: klar lesbar (Scrim + Schatten). Beim Sticker liegt nur
+        // diese Karte auf Transparenz → PNG mit Alpha zum Drüberlegen.
         Align(
           alignment: _isSticker ? Alignment.center : Alignment.bottomCenter,
           child: Padding(
@@ -322,7 +317,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
         ],
       );
     }
-    if (_photo != null) return Image.memory(_photo!, fit: BoxFit.cover);
     return gradient;
   }
 
@@ -351,39 +345,36 @@ class _RouteSharePageState extends State<RouteSharePage> {
             ],
           ),
           const SizedBox(height: 10),
-          // Foto-Aktionen — beim Sticker (transparent) UND bei der Karte (die
-          // echte Karte IST der Hintergrund) ausgeblendet.
-          if (!_isSticker && !_isMap)
-            Row(
+          // Kurzer Hinweis je Modus (statt In-App-Foto-Compositing).
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
               children: [
-                Expanded(
-                  child: _photoButton(
-                    'Selfie',
-                    Icons.camera_alt_rounded,
-                    () => _pick(ImageSource.camera),
-                  ),
+                Icon(
+                  _isSticker
+                      ? Icons.auto_awesome_mosaic_rounded
+                      : Icons.info_outline_rounded,
+                  size: 15,
+                  color: const Color(0xFF8B97A8),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 7),
                 Expanded(
-                  child: _photoButton(
-                    'Foto',
-                    Icons.photo_library_rounded,
-                    () => _pick(ImageSource.gallery),
-                  ),
-                ),
-                if (_photo != null) ...[
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _photoButton(
-                      'Entfernen',
-                      Icons.delete_outline_rounded,
-                      () => setState(() => _photo = null),
+                  child: Text(
+                    _isSticker
+                        ? 'Transparenter Sticker — leg ihn in der Story-App über dein eigenes Foto.'
+                        : _isMap
+                            ? 'Echte Karte mit deiner Route — direkt teilen.'
+                            : 'Sauberer Hintergrund — perfekt für WhatsApp & Chats. Eigenes Foto? Nimm „Sticker".',
+                    style: const TextStyle(
+                      color: Color(0xFF8B97A8),
+                      fontSize: 11.5,
+                      height: 1.25,
                     ),
                   ),
-                ],
+                ),
               ],
             ),
-          if (!_isSticker) const SizedBox(height: 10),
+          ),
           SizedBox(
             width: double.infinity,
             height: 54,
@@ -415,15 +406,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
               ),
             ),
           ),
-          if (_isSticker)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'Sticker = transparente Karte zum Drüberlegen auf dein eigenes Story-Foto.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 11.5),
-              ),
-            ),
         ],
       ),
     );
@@ -454,35 +436,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
     );
   }
 
-  Widget _photoButton(String label, IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: _busy ? null : onTap,
-      child: Container(
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1F26),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: Colors.white, size: 16),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 /// Öffentliche, wiederverwendbare Eckdaten-„Glass"-Karte: Scrim 0.42 +
