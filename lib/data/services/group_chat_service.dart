@@ -14,7 +14,7 @@ class GroupChatService {
   static String? get _userId => _db.auth.currentUser?.id;
 
   static const String _messageSelect =
-      'id, group_id, user_id, body, created_at, deleted_at, '
+      'id, group_id, user_id, body, created_at, deleted_at, client_tag, '
       'profiles:user_id(id, username, email, avatar_url)';
 
   static const int _bodyMaxLength = 2000;
@@ -43,20 +43,33 @@ class GroupChatService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  /// Schreibt eine Nachricht. Leerer Text wird ignoriert.
-  static Future<void> sendMessage(String groupId, String body) async {
+  /// Schreibt eine Nachricht und gibt die gespeicherte Zeile (inkl. Profil)
+  /// zurück. [clientTag] erlaubt dem Sender, seine optimistische Nachricht
+  /// eindeutig mit der bestätigten Zeile zu matchen (kein Doppel/Verlust).
+  /// Wirft bei Fehler (der aufrufende Outbox-Retry fängt das ab).
+  static Future<Map<String, dynamic>?> sendMessage(
+    String groupId,
+    String body, {
+    String? clientTag,
+  }) async {
     final uid = _userId;
-    if (uid == null) return;
+    if (uid == null) return null;
     final cleanBody = body.trim();
-    if (cleanBody.isEmpty) return;
+    if (cleanBody.isEmpty) return null;
     final trimmed = cleanBody.length > _bodyMaxLength
         ? cleanBody.substring(0, _bodyMaxLength)
         : cleanBody;
-    await _db.from('group_messages').insert({
-      'group_id': groupId,
-      'user_id': uid,
-      'body': trimmed,
-    });
+    final row = await _db
+        .from('group_messages')
+        .insert({
+          'group_id': groupId,
+          'user_id': uid,
+          'body': trimmed,
+          if (clientTag != null) 'client_tag': clientTag,
+        })
+        .select(_messageSelect)
+        .single();
+    return Map<String, dynamic>.from(row);
   }
 
   /// Soft-Delete der eigenen Nachricht.
