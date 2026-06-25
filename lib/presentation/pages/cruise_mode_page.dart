@@ -12659,18 +12659,34 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-09 (vucko Trip-Skip): besuchte Zwischenstopps abhaken.
     _markPassedWaypoints(position);
 
-    // Prüfe ob Route zu Ende ist
+    // Prüfe ob Route zu Ende ist.
+    // 2026-06-25 (vucko): Der Auto-Abschluss (Post-Route-Screen) darf NICHT mehr
+    // ausschließlich am Map-Matcher-Index hängen. Direkt am Ziel kann der Matcher
+    // den Index ein paar Punkte vor dem letzten Routenpunkt „stehen lassen"
+    // (kurzes Schluss-Segment / konservativer Match) → die Ankunft (≤Radius)
+    // wurde dann NIE als Abschluss erkannt = Sheet kam nicht (gemeldete
+    // Regression). Jetzt feuert der Abschluss, sobald man im Ankunftsradius ist
+    // UND entweder der Index am Ende ist ODER der Großteil der geplanten Strecke
+    // gefahren wurde. `_canCompleteNavigationAtCurrentPosition` (→
+    // shouldCompleteNavigation) bleibt der eigentliche Wächter: A→B nur ≤Radius,
+    // Rundkurs erst ab ≥95% gefahren → kein verfrühter Abschluss.
     final lastIndex = _fullRouteCoordinates.length - 1;
-    if (_currentRouteIndex >= lastIndex - 1) {
-      final distanceToTarget =
-          _updateDistanceToFinalTarget(position) ?? double.infinity;
-      if (distanceToTarget <= _arrivalRadiusMeters &&
-          _canCompleteNavigationAtCurrentPosition(position)) {
-        _stopNavigationTracking();
-        _stopSimulation(restartLiveTracking: false);
-        _onRouteCompleted();
-        return;
-      }
+    final distanceToTarget =
+        _updateDistanceToFinalTarget(position) ?? double.infinity;
+    final plannedForArrival =
+        _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+    final drivenMostOfRoute = plannedForArrival != null &&
+        plannedForArrival > 0 &&
+        _totalDistanceDriven >= plannedForArrival * 0.80;
+    final arrivedAtRouteEnd =
+        _currentRouteIndex >= lastIndex - 1 || drivenMostOfRoute;
+    if (arrivedAtRouteEnd &&
+        distanceToTarget <= _arrivalRadiusMeters &&
+        _canCompleteNavigationAtCurrentPosition(position)) {
+      _stopNavigationTracking();
+      _stopSimulation(restartLiveTracking: false);
+      _onRouteCompleted();
+      return;
     }
 
     final prevManeuver = _activeManeuverIndex;
