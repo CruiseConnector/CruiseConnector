@@ -9,6 +9,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -1453,7 +1454,15 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildRouteCard(SavedRoute route) {
     return GestureDetector(
-      onTap: () => _showRouteOptions(route),
+      // 2026-06-25 (vucko Routen-Detail-Page): Tippen öffnet die ästhetische
+      // Detailseite (Karte + Eckdaten + ggf. Rangliste); langes Drücken die
+      // alten Optionen (Umbenennen/Teilen/Löschen).
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => RideDetailPage.fromSavedRoute(route),
+        ),
+      ),
+      onLongPress: () => _showRouteOptions(route),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),

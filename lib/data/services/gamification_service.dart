@@ -356,6 +356,8 @@ class GamificationService {
     int? xpAwarded,
     String? groupId,
     double? topSpeedKmh,
+    List<List<double>>? trackGeometry,
+    String? photoUrl,
   }) {
     final safeDistanceKm = math.max(0.0, distanceKm);
     return {
@@ -377,7 +379,27 @@ class GamificationService {
       if (groupId?.trim().isNotEmpty == true) 'group_id': groupId!.trim(),
       if (topSpeedKmh != null && topSpeedKmh > 0)
         'top_speed_kmh': double.parse(topSpeedKmh.toStringAsFixed(1)),
+      // 2026-06-25 (vucko Routen-Detail-Page): gefahrenen Track (für akkurate
+      // Karten-Darstellung) + optionales Foto persistieren. Track auf ~400 Punkte
+      // gedünnt → kompakt genug für jsonb, akkurat genug für die Skizze/Karte.
+      if (trackGeometry != null && trackGeometry.length >= 2)
+        'track_geometry': _downsampleTrack(trackGeometry, 400),
+      if (photoUrl?.trim().isNotEmpty == true) 'photo_url': photoUrl!.trim(),
     };
+  }
+
+  static List<List<double>> _downsampleTrack(
+    List<List<double>> pts,
+    int maxPoints,
+  ) {
+    if (pts.length <= maxPoints) return pts;
+    final step = pts.length / maxPoints;
+    final out = <List<double>>[];
+    for (var i = 0; i < maxPoints; i++) {
+      out.add(pts[(i * step).floor()]);
+    }
+    out.add(pts.last);
+    return out;
   }
 
   static Future<UserDriveSession?> recordDriveSession({
@@ -392,6 +414,8 @@ class GamificationService {
     int? xpAwarded,
     String? groupId,
     double? topSpeedKmh,
+    List<List<double>>? trackGeometry,
+    String? photoUrl,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
@@ -410,6 +434,8 @@ class GamificationService {
       xpAwarded: xpAwarded,
       groupId: groupId,
       topSpeedKmh: topSpeedKmh,
+      trackGeometry: trackGeometry,
+      photoUrl: photoUrl,
     );
 
     try {
@@ -424,6 +450,27 @@ class GamificationService {
         '[Gamification] Drive-Session konnte nicht gespeichert werden: $e',
       );
       rethrow;
+    }
+  }
+
+  /// 2026-06-25 (vucko Routen-Detail-Page): Foto einer Fahrt nachträglich setzen
+  /// oder entfernen (null). Detailseite ruft das nach dem Upload auf.
+  static Future<bool> updateDriveSessionPhoto(
+    String sessionId,
+    String? photoUrl,
+  ) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return false;
+    try {
+      await _db
+          .from('user_drive_sessions')
+          .update({'photo_url': photoUrl})
+          .eq('id', sessionId)
+          .eq('user_id', userId);
+      return true;
+    } catch (e) {
+      debugPrint('[Gamification] Foto-Update fehlgeschlagen: $e');
+      return false;
     }
   }
 

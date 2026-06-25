@@ -102,6 +102,11 @@ class SavedRoute {
 
   bool get isRoundTrip => routeType == 'ROUND_TRIP';
 
+  /// 2026-06-25 (vucko Routen-Detail-Page): flache [lng,lat]-Koordinatenliste
+  /// der Route — für die Karten-Darstellung in der Detailseite.
+  List<List<double>> get flatCoordinates =>
+      _flattenGeometryCoordinates(geometry);
+
   bool get isDrivenSession => (drivenKm ?? 0) > 0;
 
   double get actualDistanceKm => drivenKm ?? distanceKm;

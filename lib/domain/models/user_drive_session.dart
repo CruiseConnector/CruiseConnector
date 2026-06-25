@@ -13,6 +13,9 @@ class UserDriveSession {
     this.routeFingerprint,
     this.source,
     this.topSpeedKmh,
+    this.groupId,
+    this.trackGeometry,
+    this.photoUrl,
   });
 
   final String id;
@@ -30,6 +33,30 @@ class UserDriveSession {
   // 2026-06-25 (vucko): Top-Speed der Fahrt (DB-Spalte top_speed_kmh, seit X3).
   // Für die Fahrt-Detailansicht. Kann null sein (alte Fahrten ohne Messung).
   final double? topSpeedKmh;
+  // 2026-06-25 (vucko Routen-Detail-Page): Gruppen-Fahrt? (group_id gesetzt) →
+  // die Detailseite zeigt dann Rangliste + Teilnehmer.
+  final String? groupId;
+  // 2026-06-25 (vucko Routen-Detail-Page): der GEFAHRENE Track als Liste von
+  // [lng, lat]-Punkten (Mapbox-Format) → akkurate Routen-Darstellung wie Strava.
+  // Null = alte Fahrt ohne aufgezeichneten Track.
+  final List<List<double>>? trackGeometry;
+  // 2026-06-25 (vucko Routen-Detail-Page): optionales Foto der Fahrt (Storage-URL).
+  final String? photoUrl;
+
+  bool get isGroupRide => groupId != null;
+
+  static List<List<double>>? _parseTrack(dynamic raw) {
+    if (raw is! List) return null;
+    final pts = <List<double>>[];
+    for (final item in raw) {
+      if (item is List && item.length >= 2) {
+        final a = item[0];
+        final b = item[1];
+        if (a is num && b is num) pts.add([a.toDouble(), b.toDouble()]);
+      }
+    }
+    return pts.length >= 2 ? pts : null;
+  }
 
   factory UserDriveSession.fromJson(Map<String, dynamic> json) {
     return UserDriveSession(
@@ -46,6 +73,9 @@ class UserDriveSession {
       source: json['source'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       topSpeedKmh: (json['top_speed_kmh'] as num?)?.toDouble(),
+      groupId: json['group_id'] as String?,
+      trackGeometry: _parseTrack(json['track_geometry']),
+      photoUrl: json['photo_url'] as String?,
     );
   }
 
@@ -61,6 +91,9 @@ class UserDriveSession {
       if (routeType != null) 'route_type': routeType,
       if (routeFingerprint != null) 'route_fingerprint': routeFingerprint,
       if (source != null) 'source': source,
+      if (groupId != null) 'group_id': groupId,
+      if (trackGeometry != null) 'track_geometry': trackGeometry,
+      if (photoUrl != null) 'photo_url': photoUrl,
     };
   }
 }

@@ -16373,6 +16373,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       // -> speist die deterministische Gruppen-Rangliste in der Lobby.
       groupId: widget.groupId,
       topSpeedKmh: _maxSpeedMps * 3.6,
+      // 2026-06-25 (vucko Routen-Detail-Page): den GEFAHRENEN Track mitspeichern
+      // → die Detailseite zeigt die echte gefahrene Strecke akkurat (wie Strava).
+      trackGeometry: _drivenTrackRecorder.snapshot().coordinates,
     );
     _driveSessionRecordedForCompletion = true;
     await GamificationService.calculateAndSync();
