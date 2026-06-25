@@ -1287,6 +1287,7 @@ class SocialService {
   /// Sortiert chronologisch nach `start_time` (nächstes Event zuerst).
   static Future<List<Map<String, dynamic>>> getMyGroups({
     bool publicOnly = true,
+    bool includeClosed = false,
   }) async {
     final uid = _userId;
     if (uid == null) return [];
@@ -1309,6 +1310,12 @@ class SocialService {
 
     final groups = await q;
     final list = List<Map<String, dynamic>>.from(groups);
+    // 2026-06-25 (vucko): Abgeschlossene Gruppen (closed_at gesetzt) gehören
+    // NUR in die Profil-Ansicht (mit „Abgeschlossen"-Banner) — nicht in die
+    // Community-/Discover-Listen. Profil ruft mit includeClosed:true auf.
+    if (!includeClosed) {
+      list.removeWhere((g) => g['closed_at'] != null);
+    }
     _sortByStartTime(list);
     return list;
   }
@@ -1316,7 +1323,7 @@ class SocialService {
   /// Alle Gruppen (public + private), in denen der User Mitglied oder Owner ist.
   /// Für die Profil-Ansicht.
   static Future<List<Map<String, dynamic>>> getMyAllGroups() async {
-    return getMyGroups(publicOnly: false);
+    return getMyGroups(publicOnly: false, includeClosed: true);
   }
 
   /// Private Gruppen des Users — für die Profil-Ansicht.
@@ -1357,6 +1364,7 @@ class SocialService {
         )
         .eq('is_public', true)
         .eq('is_active', false)
+        .isFilter('closed_at', null) // 2026-06-25 (vucko): abgeschlossene raus
         .limit(80);
 
     final list = List<Map<String, dynamic>>.from(groups);

@@ -2205,6 +2205,14 @@ class _ProfilePageState extends State<ProfilePage>
     final isPublic = group['is_public'] == true;
     final isOwner = group['created_by'] == uid;
     final isActive = group['is_active'] == true;
+    final closedAt = DateTime.tryParse(
+      group['closed_at'] as String? ?? '',
+    )?.toLocal();
+    final isClosed = closedAt != null;
+    final closedText = closedAt == null
+        ? null
+        : '${closedAt.day.toString().padLeft(2, '0')}.${closedAt.month.toString().padLeft(2, '0')}. '
+              '${closedAt.hour.toString().padLeft(2, '0')}:${closedAt.minute.toString().padLeft(2, '0')}';
     final members = (group['group_members'] as List?) ?? [];
     final count = members.length;
     final startTime = DateTime.tryParse(group['start_time'] as String? ?? '');
@@ -2223,7 +2231,9 @@ class _ProfilePageState extends State<ProfilePage>
           color: const Color(0xFF1C1F26),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isOwner
+            color: isClosed
+                ? const Color(0xFF34D399).withValues(alpha: 0.32)
+                : isOwner
                 ? AppAccentColors.accent.withValues(alpha: 0.5)
                 : isActive
                 ? AppAccentColors.accent.withValues(alpha: 0.75)
@@ -2234,6 +2244,56 @@ class _ProfilePageState extends State<ProfilePage>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (isClosed) ...[
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFF34D399).withValues(alpha: 0.20),
+                      const Color(0xFF34D399).withValues(alpha: 0.06),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(
+                    color: const Color(0xFF34D399).withValues(alpha: 0.40),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle_rounded,
+                      color: Color(0xFF34D399),
+                      size: 17,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Fahrt abgeschlossen',
+                      style: TextStyle(
+                        color: Color(0xFF34D399),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (closedText != null)
+                      Text(
+                        closedText,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.55),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
             Row(
               children: [
                 Expanded(
