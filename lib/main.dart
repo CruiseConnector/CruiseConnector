@@ -177,7 +177,7 @@ class _MyAppState extends State<MyApp> {
       debugPrint('[DeepLink] $uri');
     }
     if (_isAuthDeepLink(uri)) {
-      unawaited(_handleAuthDeepLinkFeedback());
+      unawaited(_handleAuthDeepLinkFeedback(uri));
       return;
     }
     final postId = _postIdFromDeepLink(uri);
@@ -219,8 +219,29 @@ class _MyAppState extends State<MyApp> {
         (uri.scheme == 'cruiseconnect' && uri.host == 'auth');
   }
 
-  Future<void> _handleAuthDeepLinkFeedback() async {
-    await Future.delayed(const Duration(milliseconds: 900));
+  Future<void> _handleAuthDeepLinkFeedback(Uri uri) async {
+    // 2026-06-25 (vucko): OAuth-Rückweg (Google-Browser-Flow auf Android) MUSS
+    // den Code/Token aus der Callback-URL EXPLIZIT gegen eine Session tauschen.
+    // Vorher verließ sich der Handler nur auf das implizite Auto-Handling von
+    // supabase_flutter — das konkurriert mit unserem eigenen app_links-Listener
+    // (beide hören auf uriLinkStream) und der externalApplication-Browser kann
+    // die App zwischendrin verdrängen. Folge: nach dem Google-Login kam die
+    // Session NIE an („Anmeldung geht nicht" auf Android). Der explizite
+    // getSessionFromUrl macht den Tausch deterministisch.
+    if (Supabase.instance.client.auth.currentSession == null &&
+        (uri.queryParameters.containsKey('code') ||
+            uri.fragment.contains('access_token'))) {
+      try {
+        await Supabase.instance.client.auth.getSessionFromUrl(uri);
+      } catch (e) {
+        // Wirft, wenn das SDK den Code bereits eingelöst hat (dann ist die
+        // Session ohnehin gesetzt) ODER bei echtem Fehler (Code ungültig/abgelaufen).
+        debugPrint('[Auth] getSessionFromUrl: $e');
+      }
+    } else {
+      // E-Mail-Bestätigung o.ä. ohne Code in der URL → SDK kurz arbeiten lassen.
+      await Future.delayed(const Duration(milliseconds: 600));
+    }
     final session = Supabase.instance.client.auth.currentSession;
     final nav = rootNavigatorKey.currentState;
     final context = rootNavigatorKey.currentContext;
