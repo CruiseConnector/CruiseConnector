@@ -18,7 +18,16 @@ class RoutePoiService {
   RoutePoiService._();
   static final RoutePoiService instance = RoutePoiService._();
 
-  static const _overpassUrl = 'https://overpass-api.de/api/interpreter';
+  // 2026-06-25 (vucko POI-Lade-Bug): Overpass-Endpoints in Reihenfolge. Primär
+  // die volle Planet-Instanz overpass-api.de; NUR bei Ausfall/Timeout fällt es
+  // auf den schnellen DACH-Mirror osm.ch zurück. KEIN Race zwischen den beiden —
+  // sonst könnte ein schneller Mirror mit weniger Daten gewinnen (= genau der
+  // „nicht jede Tankstelle"-Bug). Die Vollständigkeit kommt jetzt ohnehin aus
+  // der `around`-Query (kleines, schnelles Ergebnis), nicht aus dem Mirror.
+  static const _overpassEndpoints = <String>[
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.osm.ch/api/interpreter',
+  ];
   final Map<String, _PoiCacheEntry> _cache = {};
 
   /// Fetch POIs entlang einer Route.
@@ -37,7 +46,7 @@ class RoutePoiService {
     required List<List<double>> coordinates,
     Set<PoiType> types = const {PoiType.fuel},
     double bufferMeters = 350,
-    int maxResults = 120,
+    int maxResults = 200,
   }) async {
     if (coordinates.length < 2) return [];
     final cacheKey = _cacheKey(coordinates, types);
@@ -45,38 +54,34 @@ class RoutePoiService {
     if (cached != null && cached.isFresh) return cached.pois;
 
     try {
-      final sampledRoute = _sampleRoute(coordinates, targetSamples: 100);
-      final bbox = _boundingBox(sampledRoute, paddingDegrees: 0.022);
+      // 2026-06-25 (vucko POI-Lade-Bug): `around:<m>,<polyline>` statt Bounding-
+      // Box. Die alte bbox-Query holte ein riesiges Rechteck um die ganze Route
+      // (bei langen Routen voll mit OFF-Route-Treffern) und cappte dann bei 500
+      // → on-route-Tankstellen fielen weg. `around` filtert SERVERSEITIG exakt
+      // auf <m> um die Routen-Linie → vollständig UND kleinere Antwort (schneller).
+      final sampledRoute = _sampleRoute(coordinates, targetSamples: 150);
       final amenityFilter = types.map((t) => t.osmTag).join('|');
       final wantsFuel = types.contains(PoiType.fuel);
-      final bboxStr =
-          '${bbox.south},${bbox.west},${bbox.north},${bbox.east}';
-      // Erweiterte Query: nodes UND ways. Bei ways nimmt Overpass mit `center`
-      // den Mittelpunkt des Polygons → wir können das wie eine Node behandeln.
-      // Zusätzlich shop=fuel für Tankstellen ohne amenity-Tag.
+      final aroundCoords = sampledRoute
+          .map((c) => '${c[1]},${c[0]}')
+          .join(',');
+      final around = 'around:${bufferMeters.round()},$aroundCoords';
+      // nodes UND ways (bei ways liefert `out center` den Mittelpunkt) +
+      // shop=fuel für Tankstellen ohne amenity-Tag.
       final shopFuelClause = wantsFuel
-          ? '''
-  node["shop"="fuel"]($bboxStr);
-  way["shop"="fuel"]($bboxStr);'''
+          ? '\n  node["shop"="fuel"]($around);\n  way["shop"="fuel"]($around);'
           : '';
-      final query = '''
-[out:json][timeout:22];
+      final query =
+          '''
+[out:json][timeout:25];
 (
-  node["amenity"~"^($amenityFilter)\$"]($bboxStr);
-  way["amenity"~"^($amenityFilter)\$"]($bboxStr);$shopFuelClause
+  node["amenity"~"^($amenityFilter)\$"]($around);
+  way["amenity"~"^($amenityFilter)\$"]($around);$shopFuelClause
 );
-out center 500;
+out center 800;
 ''';
-      final response = await http
-          .post(
-            Uri.parse(_overpassUrl),
-            headers: const {
-              'User-Agent': 'CruiseConnect/1.0 (route-poi)',
-            },
-            body: {'data': query},
-          )
-          .timeout(const Duration(seconds: 22));
-      if (response.statusCode != 200) return [];
+      final response = await _runOverpassQuery(query);
+      if (response == null || response.statusCode != 200) return [];
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final elements = data['elements'] as List? ?? [];
       final all = <RoutePoi>[];
@@ -159,34 +164,83 @@ out center 500;
     return sampled;
   }
 
-  _Bbox _boundingBox(List<List<double>> coords,
-      {required double paddingDegrees}) {
-    var minLat = coords.first[1];
-    var maxLat = coords.first[1];
-    var minLng = coords.first[0];
-    var maxLng = coords.first[0];
-    for (final c in coords) {
-      if (c[1] < minLat) minLat = c[1];
-      if (c[1] > maxLat) maxLat = c[1];
-      if (c[0] < minLng) minLng = c[0];
-      if (c[0] > maxLng) maxLng = c[0];
+  /// 2026-06-25 (vucko POI-Lade-Bug): Distanz zu den ROUTEN-SEGMENTEN (Punkt-zu-
+  /// Strecke), nicht nur zu den Sample-PUNKTEN. Vorher fiel eine Tankstelle, die
+  /// genau zwischen zwei (bei langen Routen ~1 km auseinanderliegenden) Samples
+  /// lag, fälschlich als „zu weit" raus, obwohl sie direkt an der Straße steht.
+  double _minDistanceToRoute(
+    double lat,
+    double lng,
+    List<List<double>> routeCoords,
+  ) {
+    if (routeCoords.isEmpty) return double.infinity;
+    if (routeCoords.length == 1) {
+      return _haversine(lat, lng, routeCoords.first[1], routeCoords.first[0]);
     }
-    return _Bbox(
-      south: minLat - paddingDegrees,
-      west: minLng - paddingDegrees,
-      north: maxLat + paddingDegrees,
-      east: maxLng + paddingDegrees,
-    );
-  }
-
-  double _minDistanceToRoute(double lat, double lng,
-      List<List<double>> routeCoords) {
     double minDist = double.infinity;
-    for (final c in routeCoords) {
-      final d = _haversine(lat, lng, c[1], c[0]);
+    for (var i = 0; i < routeCoords.length - 1; i++) {
+      final d = _distancePointToSegment(
+        lat,
+        lng,
+        routeCoords[i][1],
+        routeCoords[i][0],
+        routeCoords[i + 1][1],
+        routeCoords[i + 1][0],
+      );
       if (d < minDist) minDist = d;
     }
     return minDist;
+  }
+
+  /// Senkrechte Distanz (Meter) von Punkt P zur Strecke A–B. Equirektangulär um
+  /// P projiziert (für <wenige km exakt genug), dann klassisches Punkt-zu-Segment.
+  double _distancePointToSegment(
+    double plat,
+    double plng,
+    double alat,
+    double alng,
+    double blat,
+    double blng,
+  ) {
+    const r = 6371000.0;
+    final latRef = plat * math.pi / 180;
+    double px(double lng) => lng * math.pi / 180 * math.cos(latRef) * r;
+    double py(double lat) => lat * math.pi / 180 * r;
+    final px0 = px(plng), py0 = py(plat);
+    final ax = px(alng), ay = py(alat);
+    final bx = px(blng), by = py(blat);
+    final dx = bx - ax, dy = by - ay;
+    final segLen2 = dx * dx + dy * dy;
+    if (segLen2 == 0) {
+      final ex = px0 - ax, ey = py0 - ay;
+      return math.sqrt(ex * ex + ey * ey);
+    }
+    var t = ((px0 - ax) * dx + (py0 - ay) * dy) / segLen2;
+    t = t.clamp(0.0, 1.0);
+    final cx = ax + t * dx, cy = ay + t * dy;
+    final ex = px0 - cx, ey = py0 - cy;
+    return math.sqrt(ex * ex + ey * ey);
+  }
+
+  /// Fragt die Overpass-Endpoints SEQUENZIELL: erst die volle Planet-Instanz,
+  /// nur bei Fehler/Timeout den Fallback. Die volle Datenquelle wird also immer
+  /// bevorzugt (Vollständigkeit), der Fallback gibt nur Resilienz bei Ausfall.
+  Future<http.Response?> _runOverpassQuery(String query) async {
+    for (final url in _overpassEndpoints) {
+      try {
+        final r = await http
+            .post(
+              Uri.parse(url),
+              headers: const {'User-Agent': 'CruiseConnect/1.0 (route-poi)'},
+              body: {'data': query},
+            )
+            .timeout(const Duration(seconds: 20));
+        if (r.statusCode == 200) return r;
+      } catch (_) {
+        // nächster Endpoint
+      }
+    }
+    return null;
   }
 
   double _haversine(double lat1, double lng1, double lat2, double lng2) {
@@ -216,16 +270,6 @@ class _PoiCacheEntry {
   final List<RoutePoi> pois;
   final DateTime at;
   bool get isFresh => DateTime.now().difference(at) < const Duration(minutes: 30);
-}
-
-class _Bbox {
-  _Bbox({
-    required this.south,
-    required this.west,
-    required this.north,
-    required this.east,
-  });
-  final double south, west, north, east;
 }
 
 enum PoiType {
