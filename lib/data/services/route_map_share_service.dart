@@ -113,12 +113,22 @@ class RouteMapShareService {
     }
     if (!anyTile) return null;
 
-    // 2026-06-25 (vucko): Dunkler Tint über die (mittelgrauen) Esri-Tiles →
-    // tieferes Schwarz passend zum App-Design (#0B0E14), nicht das helle Grau.
-    // srcOver bei ~0,45 deckt ab, ohne die Straßenstruktur zu verschlucken.
+    // 2026-06-25 (vucko): Esri „Dark Gray" ist nur MITTELGRAU — passt nicht zum
+    // tiefdunklen App-Design (#0B0E14). Zwei Schritte machen es echt dunkel,
+    // ohne die Straßenstruktur zu verschlucken:
+    //  1) MULTIPLY mit einem dunklen Blau-Grau → dunkelt alles proportional ab
+    //     (Mitteltöne stark, Straßen bleiben relativ heller = sichtbar).
+    //  2) srcOver-Tönung Richtung App-Hintergrund → vereinheitlicht den Look.
+    final fullRect = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
     canvas.drawRect(
-      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
-      Paint()..color = const Color(0xFF0B0E14).withValues(alpha: 0.46),
+      fullRect,
+      Paint()
+        ..color = const Color(0xFF2A2F3A)
+        ..blendMode = BlendMode.multiply,
+    );
+    canvas.drawRect(
+      fullRect,
+      Paint()..color = const Color(0xFF0B0E14).withValues(alpha: 0.34),
     );
 
     Offset proj(List<double> p) => Offset(
