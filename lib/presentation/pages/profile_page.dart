@@ -11,6 +11,7 @@ import 'package:cruise_connect/application/providers/route_bookmark_provider.dar
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -1748,6 +1749,10 @@ class _ProfilePageState extends State<ProfilePage>
   // Composer (Foto/Selfie-Hintergrund + transparente Eckdaten-Karte + Formate
   // Story/Quadrat/Sticker) statt direkt eine PNG zu teilen.
   void _shareRouteExternally(SavedRoute route) {
+    final coords = route.flatCoordinates;
+    final curves = coords.length >= 3
+        ? GamificationService.countCurves(coords)
+        : 0;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1759,8 +1764,10 @@ class _ProfilePageState extends State<ProfilePage>
             subtitle: route.displayStyleLabel,
             segments: RouteShareData.segmentsFromGeometry(route.geometry),
             distanceLabel: route.formattedDistance,
-            durationLabel: route.formattedDuration,
-            styleLabel: route.displayStyleLabel,
+            durationLabel: route.durationLabelOrEstimate,
+            // Kurven als Chip dazu; Stil steht schon als Untertitel → KEIN
+            // doppeltes Stil-Chip mehr (war „Kurvenjagd" zweimal).
+            curvesLabel: curves > 0 ? '$curves Kurven' : null,
           ),
         ),
       ),

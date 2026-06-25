@@ -253,6 +253,28 @@ class SavedRoute {
     return m == 0 ? '${h}h' : '${h}h ${m}m';
   }
 
+  /// 2026-06-25 (vucko): Fahrzeit fürs Teilen — NIE „--". Gibt die echte Dauer
+  /// zurück, sonst eine Schätzung aus Distanz ÷ stiltypischem Durchschnittstempo
+  /// (Kurvenjagd langsamer, Sport schneller). So steht auf der Share-Karte immer
+  /// eine sinnvolle Zeit.
+  String get durationLabelOrEstimate {
+    if (durationSeconds != null && durationSeconds! > 0) return formattedDuration;
+    if (distanceKm <= 0) return '--';
+    final kmh = switch (style.toLowerCase()) {
+      'kurvenjagd' => 46.0,
+      'sport mode' || 'sport' => 66.0,
+      'abendrunde' => 52.0,
+      'entdecker' => 56.0,
+      _ => 55.0,
+    };
+    final minutes = (distanceKm / kmh * 60).round();
+    if (minutes <= 0) return '--';
+    if (minutes < 60) return '$minutes min';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return m == 0 ? '${h}h' : '${h}h ${m}m';
+  }
+
   /// Icon-Name für den Fahrstil.
   String get styleEmoji {
     switch (style) {

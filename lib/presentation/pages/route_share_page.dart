@@ -11,7 +11,6 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
-import 'package:cruise_connect/data/services/instagram_share_service.dart';
 import 'package:cruise_connect/data/services/route_map_share_service.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 
@@ -302,38 +301,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
     }
   }
 
-  /// Direkt in Instagram Stories: übergibt die (im Sticker-Modus transparente)
-  /// Karte als Story-Sticker → Instagram öffnet die Story mit dem Sticker
-  /// obenauf, der Nutzer macht sein Selfie als Hintergrund und kann den Sticker
-  /// dort frei verschieben/skalieren. Klappt es nicht (Instagram fehlt), Fallback
-  /// auf das normale Teilen.
-  Future<void> _shareToInstagramStory() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      if (_isMap && _mapBytes == null) await _ensureMapImage();
-      await Future<void>.delayed(const Duration(milliseconds: 160));
-      final png = await _capturePng();
-      if (png == null || png.isEmpty) {
-        _toast('Bild konnte nicht erstellt werden. Bitte erneut versuchen.');
-        return;
-      }
-      final tmpDir = await getTemporaryDirectory();
-      final outFile = File(
-        '${tmpDir.path}/cruise-ig-story_${DateTime.now().millisecondsSinceEpoch}.png',
-      );
-      await outFile.writeAsBytes(png, flush: true);
-      final ok = await InstagramShareService.shareStorySticker(outFile.path);
-      if (!ok && mounted) {
-        // Instagram nicht verfügbar → normales Teilen als Fallback.
-        _toast('Instagram nicht gefunden — teile stattdessen unten mit „Teilen".');
-      }
-    } catch (e) {
-      _toast('Instagram-Teilen fehlgeschlagen.');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -616,34 +583,6 @@ class _RouteSharePageState extends State<RouteSharePage> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          // Direkt zu Instagram Stories (Sticker drüber, Selfie dahinter in IG).
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: OutlinedButton.icon(
-              onPressed: _busy ? null : _shareToInstagramStory,
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              icon: const Icon(
-                Icons.camera_alt_rounded,
-                color: Colors.white,
-                size: 18,
-              ),
-              label: const Text(
-                'Instagram Story',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -733,12 +672,13 @@ class RouteShareCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    bool ok(String? s) => s != null && s.trim().isNotEmpty && s.trim() != '--';
     final stats = <(IconData, String)>[
-      if (data.distanceLabel != null) (Icons.map_rounded, data.distanceLabel!),
-      if (data.durationLabel != null) (Icons.timer_rounded, data.durationLabel!),
-      if (data.topSpeedLabel != null) (Icons.speed_rounded, data.topSpeedLabel!),
-      if (data.styleLabel != null) (Icons.tune_rounded, data.styleLabel!),
-      if (data.curvesLabel != null) (Icons.moving_rounded, data.curvesLabel!),
+      if (ok(data.distanceLabel)) (Icons.map_rounded, data.distanceLabel!),
+      if (ok(data.durationLabel)) (Icons.timer_rounded, data.durationLabel!),
+      if (ok(data.topSpeedLabel)) (Icons.speed_rounded, data.topSpeedLabel!),
+      if (ok(data.styleLabel)) (Icons.tune_rounded, data.styleLabel!),
+      if (ok(data.curvesLabel)) (Icons.moving_rounded, data.curvesLabel!),
     ];
     return Container(
       decoration: BoxDecoration(
