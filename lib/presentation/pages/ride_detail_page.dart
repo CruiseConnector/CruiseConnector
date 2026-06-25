@@ -209,6 +209,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
           ]
         : const <List<Offset>>[];
     final top = _s.topSpeedKmh;
+    final curves = _curveCount;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => RouteSharePage(
@@ -221,6 +222,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
             topSpeedLabel:
                 top != null && top > 0 ? '${top.toStringAsFixed(0)} km/h' : null,
             styleLabel: _modusLabel,
+            curvesLabel: curves != null ? '$curves Kurven' : null,
           ),
         ),
       ),

@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/route_map_share_service.dart';
 
 /// Entkoppelte Daten für die Share-Karte — funktioniert von überall
 /// (gespeicherte Route, Fahrt-Detail, Post-Route). Segmente = Liste von
@@ -20,6 +21,7 @@ class RouteShareData {
     this.durationLabel,
     this.topSpeedLabel,
     this.styleLabel,
+    this.curvesLabel,
     this.subtitle,
   });
 
@@ -29,6 +31,7 @@ class RouteShareData {
   final String? durationLabel;
   final String? topSpeedLabel;
   final String? styleLabel;
+  final String? curvesLabel;
   final String? subtitle;
 
   /// Extrahiert die Linienzüge aus einer GeoJSON-Geometrie (LineString oder
@@ -65,7 +68,7 @@ class RouteShareData {
   }
 }
 
-enum _ShareFormat { story, square, sticker }
+enum _ShareFormat { map, story, square, sticker }
 
 /// 2026-06-25 (vucko): Strava-artiger Share-Composer. Man wählt ein Foto/Selfie
 /// als Hintergrund, die Eckdaten-Karte liegt als halbtransparente „Glass"-Karte
@@ -89,14 +92,46 @@ class _RouteSharePageState extends State<RouteSharePage> {
   Uint8List? _photo;
   _ShareFormat _format = _ShareFormat.story;
   bool _busy = false;
+  // 2026-06-25 (vucko Share-Rework): echtes Karten-Bild (Esri-Tiles + Route),
+  // async geladen, sobald auf das „Karte"-Format gewechselt wird.
+  Uint8List? _mapBytes;
+  bool _mapLoading = false;
 
   double get _aspect => switch (_format) {
         _ShareFormat.story => 9 / 16,
         _ShareFormat.square => 1,
         _ShareFormat.sticker => 9 / 16,
+        _ShareFormat.map => 9 / 16,
       };
 
   bool get _isSticker => _format == _ShareFormat.sticker;
+  bool get _isMap => _format == _ShareFormat.map;
+
+  void _selectFormat(_ShareFormat f) {
+    setState(() => _format = f);
+    if (f == _ShareFormat.map) _ensureMapImage();
+  }
+
+  Future<void> _ensureMapImage() async {
+    if (_mapBytes != null || _mapLoading) return;
+    final route = <List<double>>[
+      for (final s in widget.data.segments)
+        for (final p in s) [p.dx, p.dy],
+    ];
+    if (route.length < 2) return;
+    setState(() => _mapLoading = true);
+    try {
+      final bytes = await RouteMapShareService.buildRouteMapPng(
+        route: route,
+        accent: AppAccentColors.accent,
+      );
+      if (mounted) setState(() => _mapBytes = bytes);
+    } catch (_) {
+      // Tiles nicht erreichbar → Hintergrund bleibt der Gradient (Karte leer).
+    } finally {
+      if (mounted) setState(() => _mapLoading = false);
+    }
+  }
 
   Future<void> _pick(ImageSource source) async {
     if (_busy) return;
@@ -207,20 +242,8 @@ class _RouteSharePageState extends State<RouteSharePage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Hintergrund: Foto (cover) — beim Sticker transparent lassen.
-        if (!_isSticker)
-          if (_photo != null)
-            Image.memory(_photo!, fit: BoxFit.cover)
-          else
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFF1A2030), Color(0xFF0B0E14)],
-                ),
-              ),
-            ),
+        // Hintergrund: Karte / Foto (cover) — beim Sticker transparent lassen.
+        if (!_isSticker) _buildBackground(),
         // Eckdaten-Glass-Karte: halbtransparent → Gesicht scheint durch, Text
         // klar lesbar (Scrim + Schatten). Beim Sticker liegt nur diese Karte auf
         // Transparenz → PNG mit Alpha zum Drüberlegen.
@@ -233,6 +256,38 @@ class _RouteSharePageState extends State<RouteSharePage> {
         ),
       ],
     );
+  }
+
+  Widget _buildBackground() {
+    const gradient = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1A2030), Color(0xFF0B0E14)],
+        ),
+      ),
+    );
+    if (_isMap) {
+      if (_mapBytes != null) {
+        return Image.memory(_mapBytes!, fit: BoxFit.cover);
+      }
+      return const Stack(
+        fit: StackFit.expand,
+        children: [
+          gradient,
+          Center(
+            child: SizedBox(
+              width: 30,
+              height: 30,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+        ],
+      );
+    }
+    if (_photo != null) return Image.memory(_photo!, fit: BoxFit.cover);
+    return gradient;
   }
 
   Widget _buildControls(Color accent) {
@@ -250,16 +305,19 @@ class _RouteSharePageState extends State<RouteSharePage> {
           // Format-Wahl.
           Row(
             children: [
+              _formatChip('Karte', _ShareFormat.map, accent),
+              const SizedBox(width: 7),
               _formatChip('Story', _ShareFormat.story, accent),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               _formatChip('Quadrat', _ShareFormat.square, accent),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               _formatChip('Sticker', _ShareFormat.sticker, accent),
             ],
           ),
           const SizedBox(height: 10),
-          // Foto-Aktionen (beim Sticker ausgeblendet — der ist ja transparent).
-          if (!_isSticker)
+          // Foto-Aktionen — beim Sticker (transparent) UND bei der Karte (die
+          // echte Karte IST der Hintergrund) ausgeblendet.
+          if (!_isSticker && !_isMap)
             Row(
               children: [
                 Expanded(
@@ -339,7 +397,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
     final selected = _format == format;
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _format = format),
+        onTap: () => _selectFormat(format),
         child: Container(
           height: 38,
           alignment: Alignment.center,
@@ -407,6 +465,8 @@ class RouteShareCard extends StatelessWidget {
       if (data.distanceLabel != null) (Icons.map_rounded, data.distanceLabel!),
       if (data.durationLabel != null) (Icons.timer_rounded, data.durationLabel!),
       if (data.topSpeedLabel != null) (Icons.speed_rounded, data.topSpeedLabel!),
+      if (data.styleLabel != null) (Icons.tune_rounded, data.styleLabel!),
+      if (data.curvesLabel != null) (Icons.moving_rounded, data.curvesLabel!),
     ];
     return Container(
       decoration: BoxDecoration(
