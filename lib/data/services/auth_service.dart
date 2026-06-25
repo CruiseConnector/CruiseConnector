@@ -16,6 +16,7 @@ class AuthService {
   static SupabaseClient get _db => Supabase.instance.client;
 
   static const String authCallbackUrl = 'cruiseconnect://auth/callback';
+  static const List<String> _googleSupabaseScopes = <String>[];
 
   static Future<String>? _googleInitFuture;
 
@@ -111,10 +112,8 @@ class AuthService {
     try {
       final googleUser = await GoogleSignIn.instance.authenticate();
       final googleAuth = googleUser.authentication;
-      final authorization = await googleUser.authorizationClient
-          .authorizationForScopes(const <String>['email', 'profile']);
       final idToken = googleAuth.idToken;
-      final accessToken = authorization?.accessToken;
+      final accessToken = await _googleAccessTokenForSupabase(googleUser);
 
       if (idToken == null) {
         throw const AuthException('Google hat kein ID Token geliefert.');
@@ -263,16 +262,15 @@ class AuthService {
     try {
       final googleUser = await GoogleSignIn.instance.authenticate();
       final googleAuth = googleUser.authentication;
-      final authorization = await googleUser.authorizationClient
-          .authorizationForScopes(const <String>['email', 'profile']);
       final idToken = googleAuth.idToken;
+      final accessToken = await _googleAccessTokenForSupabase(googleUser);
       if (idToken == null) {
         throw const AuthException('Google hat kein ID Token geliefert.');
       }
       await _db.auth.linkIdentityWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
-        accessToken: authorization?.accessToken,
+        accessToken: accessToken,
         nonce: googleRawNonce,
       );
     } on GoogleSignInException catch (e) {
@@ -417,6 +415,16 @@ class AuthService {
       Error.throwWithStackTrace(error, stackTrace);
     });
     return _googleInitFuture!;
+  }
+
+  static Future<String> _googleAccessTokenForSupabase(
+    GoogleSignInAccount googleUser,
+  ) async {
+    final authClient = googleUser.authorizationClient;
+    final authorization =
+        await authClient.authorizationForScopes(_googleSupabaseScopes) ??
+        await authClient.authorizeScopes(_googleSupabaseScopes);
+    return authorization.accessToken;
   }
 
   static Future<void> _startOAuthSignIn(

@@ -18,6 +18,8 @@ class CommunityChatService {
 
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+  static const String duplicateRoutePostMessage =
+      'Diese Route hast du in dieser Community schon gepostet.';
 
   static const String _communitySelect =
       'id, owner_id, name, description, is_public, invite_code, created_at, '
@@ -30,6 +32,11 @@ class CommunityChatService {
       'profiles:owner_id(id, username, email, avatar_url)';
 
   static const String _messageSelect =
+      'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
+      'reply_to_message_id, route_attachment, pinned_at, pinned_by, '
+      'profiles:user_id(id, username, email, avatar_url)';
+
+  static const String _messageSelectWithoutPins =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, '
       'profiles:user_id(id, username, email, avatar_url)';
@@ -357,13 +364,24 @@ class CommunityChatService {
           .limit(150);
     } on PostgrestException catch (e) {
       if (!_isMissingColumn(e)) rethrow;
-      rows = await _db
-          .from('community_messages')
-          .select(_legacyMessageSelect)
-          .eq('community_id', communityId)
-          .isFilter('deleted_at', null)
-          .order('created_at', ascending: true)
-          .limit(150);
+      try {
+        rows = await _db
+            .from('community_messages')
+            .select(_messageSelectWithoutPins)
+            .eq('community_id', communityId)
+            .isFilter('deleted_at', null)
+            .order('created_at', ascending: true)
+            .limit(150);
+      } on PostgrestException catch (fallbackError) {
+        if (!_isMissingColumn(fallbackError)) rethrow;
+        rows = await _db
+            .from('community_messages')
+            .select(_legacyMessageSelect)
+            .eq('community_id', communityId)
+            .isFilter('deleted_at', null)
+            .order('created_at', ascending: true)
+            .limit(150);
+      }
     }
     return List<Map<String, dynamic>>.from(rows as List);
   }
@@ -479,6 +497,16 @@ class CommunityChatService {
     if (cleanBody.length > AppInputLimits.communityMessageMaxLength) {
       throw const CommunityChatServiceException('Nachricht ist zu lang.');
     }
+    final routeId = routeAttachment?['route_id']?.toString().trim();
+    if (routeId != null && routeId.isNotEmpty) {
+      final alreadyPosted = await hasOwnRoutePostForCommunity(
+        communityId: communityId,
+        routeId: routeId,
+      );
+      if (alreadyPosted) {
+        throw const CommunityChatServiceException(duplicateRoutePostMessage);
+      }
+    }
 
     try {
       final payload = <String, dynamic>{
@@ -491,6 +519,14 @@ class CommunityChatService {
       try {
         await _db.from('community_messages').insert(payload);
       } on PostgrestException catch (e) {
+        if (_isMissingColumn(e) && routeAttachment != null) {
+          throw const CommunityChatServiceException(
+            'Routen-Anhänge sind in Supabase noch nicht aktiv.',
+          );
+        }
+        if (e.code == '23505') {
+          throw const CommunityChatServiceException(duplicateRoutePostMessage);
+        }
         if (!_isMissingColumn(e)) rethrow;
         payload
           ..remove('reply_to_message_id')
@@ -502,6 +538,33 @@ class CommunityChatService {
     }
   }
 
+  static Future<bool> hasOwnRoutePostForCommunity({
+    required String communityId,
+    required String routeId,
+  }) async {
+    final uid = _userId;
+    final cleanedCommunityId = communityId.trim();
+    final cleanedRouteId = routeId.trim();
+    if (uid == null || cleanedCommunityId.isEmpty || cleanedRouteId.isEmpty) {
+      return false;
+    }
+
+    try {
+      final rows = await _db
+          .from('community_messages')
+          .select('id')
+          .eq('community_id', cleanedCommunityId)
+          .eq('user_id', uid)
+          .isFilter('deleted_at', null)
+          .filter('route_attachment->>route_id', 'eq', cleanedRouteId)
+          .limit(1);
+      return (rows as List).isNotEmpty;
+    } on PostgrestException catch (e) {
+      if (_isMissingColumn(e)) return false;
+      rethrow;
+    }
+  }
+
   static Future<void> deleteMessage(String messageId) async {
     try {
       await _db
@@ -509,6 +572,25 @@ class CommunityChatService {
           .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
           .eq('id', messageId);
     } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(e.message);
+    }
+  }
+
+  static Future<void> setMessagePinned({
+    required String messageId,
+    required bool pinned,
+  }) async {
+    try {
+      await _db.rpc(
+        'set_community_message_pinned',
+        params: {'p_message_id': messageId, 'p_pinned': pinned},
+      );
+    } on PostgrestException catch (e) {
+      if (_isMissingColumn(e) || e.message.contains('function')) {
+        throw const CommunityChatServiceException(
+          'Pin-Funktion ist in der Datenbank noch nicht aktiv.',
+        );
+      }
       throw CommunityChatServiceException(e.message);
     }
   }

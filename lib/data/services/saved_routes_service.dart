@@ -512,6 +512,15 @@ class SavedRoutesService {
     ).hasMatch(value);
   }
 
+  static bool _isMissingColumnError(Object error) {
+    if (error is! PostgrestException) return false;
+    final message = error.message.toLowerCase();
+    return error.code == '42703' ||
+        error.code == 'PGRST204' ||
+        message.contains('column') && message.contains('does not exist') ||
+        message.contains('could not find') && message.contains('column');
+  }
+
   /// Prüft ob eine Route (anhand ID) dem aktuellen User gehört / gespeichert ist.
   static Future<bool> isRouteSavedByUser(String routeId) async {
     final userId = _db.auth.currentUser?.id;
@@ -713,6 +722,9 @@ class SavedRoutesService {
           .where((candidate) => areEquivalentRoutes(route, candidate))
           .map((candidate) => candidate.id)
           .toSet();
+      routeIds.addAll(savedCopies);
+
+      await _deleteRoutePublicationsForUser(userId: userId, routeIds: routeIds);
 
       if (savedCopies.isNotEmpty) {
         await _db
@@ -731,12 +743,107 @@ class SavedRoutesService {
   }
 
   static Future<void> deleteRoute(String id) async {
+    final userId = _db.auth.currentUser?.id;
+    final routeId = id.trim();
+    if (routeId.isEmpty) return;
+
+    final routeIds = <String>{routeId};
+    if (userId != null) {
+      try {
+        final row = await _db
+            .from('routes')
+            .select('source_route_id')
+            .eq('id', routeId)
+            .eq('user_id', userId)
+            .maybeSingle();
+        final sourceRouteId = row?['source_route_id']?.toString().trim();
+        if (sourceRouteId != null && sourceRouteId.isNotEmpty) {
+          routeIds.add(sourceRouteId);
+        }
+      } on PostgrestException catch (e) {
+        if (!_isMissingColumnError(e)) rethrow;
+      }
+
+      await _deleteRoutePublicationsForUser(userId: userId, routeIds: routeIds);
+    }
+
     try {
-      await _db.from('routes').delete().eq('id', id);
+      final query = _db.from('routes').delete().eq('id', routeId);
+      if (userId != null) {
+        await query.eq('user_id', userId);
+      } else {
+        await query;
+      }
       invalidateWeeklyTopRouteCache();
     } catch (e) {
       debugPrint('[SavedRoutes] deleteRoute Fehler: $e');
       rethrow; // UI soll informiert werden, dass Löschen fehlschlug
+    }
+  }
+
+  static Future<void> _deleteRoutePublicationsForUser({
+    required String userId,
+    required Iterable<String> routeIds,
+  }) async {
+    final ids = routeIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return;
+
+    try {
+      await _db
+          .from('posts')
+          .delete()
+          .eq('user_id', userId)
+          .inFilter('shared_route_id', ids);
+    } on PostgrestException catch (e) {
+      if (_isMissingColumnError(e)) {
+        debugPrint('[SavedRoutes] shared_route_id fehlt, Posts uebersprungen.');
+      } else {
+        rethrow;
+      }
+    }
+
+    final deletedAt = DateTime.now().toUtc().toIso8601String();
+    for (final routeId in ids) {
+      await _softDeleteCommunityRouteMessages(
+        userId: userId,
+        routeJsonKey: 'route_id',
+        routeId: routeId,
+        deletedAt: deletedAt,
+      );
+      await _softDeleteCommunityRouteMessages(
+        userId: userId,
+        routeJsonKey: 'source_route_id',
+        routeId: routeId,
+        deletedAt: deletedAt,
+      );
+    }
+  }
+
+  static Future<void> _softDeleteCommunityRouteMessages({
+    required String userId,
+    required String routeJsonKey,
+    required String routeId,
+    required String deletedAt,
+  }) async {
+    try {
+      await _db
+          .from('community_messages')
+          .update({'deleted_at': deletedAt, 'updated_at': deletedAt})
+          .eq('user_id', userId)
+          .isFilter('deleted_at', null)
+          .filter('route_attachment->>$routeJsonKey', 'eq', routeId);
+    } on PostgrestException catch (e) {
+      if (_isMissingColumnError(e)) {
+        debugPrint(
+          '[SavedRoutes] route_attachment fehlt, Chat-Routen uebersprungen.',
+        );
+      } else {
+        rethrow;
+      }
     }
   }
 }

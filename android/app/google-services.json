@@ -12,7 +12,20 @@
           "package_name": "com.vucko.cruiserconnect"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "643677007260-hjldicthn86cefpkmuqbg4st47opj5sd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.vucko.cruiserconnect",
+            "certificate_hash": "912dd6bbd14b8a3780ea3d542eeaeae8e591a3ad"
+          }
+        },
+        {
+          "client_id": "643677007260-o3kbi4k2n6qdb3dr8nt1rborn6g71bav.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBEanuPYPcaiTHwZZGvbb5qDgoTTHajMP4"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "643677007260-o3kbi4k2n6qdb3dr8nt1rborn6g71bav.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "643677007260-84bkcpbgcq7f3qrc6um7tmso0ulgcdn3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.vucko.cruiserconnect"
+              }
+            }
+          ]
         }
       }
     }

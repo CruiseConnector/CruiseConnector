@@ -24,10 +24,9 @@ import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
-import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
-import 'package:cruise_connect/presentation/pages/notifications_page.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
+import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 enum _HomeWidgetId {
@@ -1532,87 +1531,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                         const SizedBox(width: 8),
                         // 2026-05-23 (vucko): Bell-Icon mit Unread-Badge links
                         // vom Avatar — führt zur Notifications-Inbox.
-                        Consumer<NotificationService>(
-                          builder: (context, notifSvc, _) {
-                            final count = notifSvc.unreadCount;
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8, right: 6),
-                              child: Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  Material(
-                                    color: Colors.transparent,
-                                    shape: const CircleBorder(),
-                                    child: InkWell(
-                                      customBorder: const CircleBorder(),
-                                      onTap: () => Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              const NotificationsPage(),
-                                        ),
-                                      ),
-                                      child: Container(
-                                        width: 42,
-                                        height: 42,
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.06,
-                                          ),
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: Colors.white.withValues(
-                                              alpha: 0.12,
-                                            ),
-                                          ),
-                                        ),
-                                        child: const Icon(
-                                          Icons.notifications_none_rounded,
-                                          color: Colors.white,
-                                          size: 22,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  if (count > 0)
-                                    Positioned(
-                                      right: -2,
-                                      top: -2,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 6,
-                                          vertical: 2,
-                                        ),
-                                        constraints: const BoxConstraints(
-                                          minWidth: 18,
-                                          minHeight: 18,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: accent,
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
-                                          border: Border.all(
-                                            color: const Color(0xFF0B0E14),
-                                            width: 2,
-                                          ),
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: Text(
-                                          count > 99 ? '99+' : '$count',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w900,
-                                            letterSpacing: -0.2,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+                        NotificationBellButton(accent: accent),
                         const SizedBox(width: 8),
                         Stack(
                           alignment: Alignment.topRight,

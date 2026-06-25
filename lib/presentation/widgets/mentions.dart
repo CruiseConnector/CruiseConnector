@@ -24,6 +24,7 @@ List<InlineSpan> buildMentionSpans({
   required String text,
   required TextStyle baseStyle,
   TextStyle? mentionStyle,
+  Set<String> plainMentions = const {},
 }) {
   final spans = <InlineSpan>[];
   final effectiveMentionStyle =
@@ -39,13 +40,22 @@ List<InlineSpan> buildMentionSpans({
       spans.add(TextSpan(text: text.substring(cursor, match.start)));
     }
     final username = match.group(1)!;
-    spans.add(
-      _MentionSpan.build(
-        label: '@$username',
-        style: effectiveMentionStyle,
-        onTap: () => _openProfileByUsername(context, username),
-      ),
-    );
+    if (plainMentions.contains(username.toLowerCase())) {
+      spans.add(
+        TextSpan(
+          text: '@$username',
+          style: effectiveMentionStyle.copyWith(fontWeight: FontWeight.w800),
+        ),
+      );
+    } else {
+      spans.add(
+        _MentionSpan.build(
+          label: '@$username',
+          style: effectiveMentionStyle,
+          onTap: () => _openProfileByUsername(context, username),
+        ),
+      );
+    }
     cursor = match.end;
   }
   if (cursor < text.length) {

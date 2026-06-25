@@ -48,7 +48,7 @@ class Badge {
     Badge(
       id: 'badge_04',
       name: 'Gruppen-Finisher',
-      description: 'Schließe 5 gestartete Gruppenfahrten komplett ab.',
+      description: 'Schließe deine erste gestartete Gruppenfahrt komplett ab.',
       emoji: '\u{1F465}',
       category: 'groups',
       assetPath: 'lib/images/badges/badge_04_silver_turbo_wings.png',

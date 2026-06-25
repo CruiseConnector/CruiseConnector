@@ -17,6 +17,7 @@ import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/post_skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -58,7 +59,6 @@ class _CommunityPageState extends State<CommunityPage>
   List<Map<String, dynamic>> _suggestedUsers = [];
   List<Map<String, dynamic>> _searchResults = [];
   Map<String, dynamic>? _searchedGroup;
-  int _unreadNotifications = 0;
   final _searchController = TextEditingController();
   // Group-Discover-Filter
   final _groupSearchController = TextEditingController();
@@ -68,7 +68,6 @@ class _CommunityPageState extends State<CommunityPage>
   Position? _userPosition;
   RealtimeChannel? _postsChannel;
   RealtimeChannel? _groupsChannel;
-  RealtimeChannel? _notificationsChannel;
   final Set<String> _expandedGroupNames = {};
 
   @override
@@ -116,7 +115,6 @@ class _CommunityPageState extends State<CommunityPage>
   void dispose() {
     _postsChannel?.unsubscribe();
     _groupsChannel?.unsubscribe();
-    _notificationsChannel?.unsubscribe();
     CommunityPage.pendingGroupFocus.removeListener(_onPendingGroupFocus);
     _tabController.dispose();
     _searchController.dispose();
@@ -213,29 +211,8 @@ class _CommunityPageState extends State<CommunityPage>
         )
         .subscribe();
 
-    // Echtzeit-Updates für Benachrichtigungen
-    final uid = db.auth.currentUser?.id;
-    if (uid != null) {
-      _notificationsChannel = db
-          .channel('public:notifications:$uid')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'notifications',
-            filter: PostgresChangeFilter(
-              type: PostgresChangeFilterType.eq,
-              column: 'user_id',
-              value: uid,
-            ),
-            callback: (payload) {
-              debugPrint('[Community] New notification');
-              if (mounted) {
-                setState(() => _unreadNotifications++);
-              }
-            },
-          )
-          .subscribe();
-    }
+    // Notifications laufen zentral über NotificationService, damit Home und
+    // Community dieselbe Inbox und denselben Badge-State verwenden.
   }
 
   Future<void> _loadData() async {
@@ -245,7 +222,6 @@ class _CommunityPageState extends State<CommunityPage>
         provider.loadAll(),
         SocialService.getMyGroups(),
         SocialService.getDiscoverGroups(),
-        SocialService.getUnreadCount(),
         SocialService.getSuggestedUsers(),
       ]);
 
@@ -253,8 +229,7 @@ class _CommunityPageState extends State<CommunityPage>
         setState(() {
           _myGroups = results[1] as List<Map<String, dynamic>>;
           _discoverGroups = results[2] as List<Map<String, dynamic>>;
-          _unreadNotifications = results[3] as int;
-          _suggestedUsers = results[4] as List<Map<String, dynamic>>;
+          _suggestedUsers = results[3] as List<Map<String, dynamic>>;
           _loading = false;
         });
       }
@@ -371,33 +346,9 @@ class _CommunityPageState extends State<CommunityPage>
             icon: const Icon(Icons.search, color: Colors.white),
             onPressed: () => _showSearchDialog(),
           ),
-          Stack(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.notifications_none, color: Colors.white),
-                onPressed: () => _showNotifications(),
-              ),
-              if (_unreadNotifications > 0)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: accent,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(
-                      '$_unreadNotifications',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
+          NotificationBellButton(
+            accent: accent,
+            padding: const EdgeInsets.only(top: 6, right: 12),
           ),
         ],
         bottom: TabBar(
@@ -2976,8 +2927,6 @@ class _CommunityPageState extends State<CommunityPage>
     }
   }
 
-  // ── Notifications ─────────────────────────────────────────────────────
-
   Future<String?> _joinGroupByCode(String code) async {
     try {
       final groupId = await SocialService.joinGroupWithCode(code);
@@ -2995,406 +2944,6 @@ class _CommunityPageState extends State<CommunityPage>
       }
       return null;
     }
-  }
-
-  void _showNotifications() async {
-    await SocialService.markAllRead();
-    if (!mounted) return;
-    setState(() => _unreadNotifications = 0);
-
-    final notifications = await SocialService.getNotifications();
-    if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF0B0E14),
-      // Sheet darf bis zu ~75% Screen-Höhe einnehmen, damit lange
-      // Listen scrollbar sind statt zu overflowen.
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.75,
-      ),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) {
-        final items = notifications.take(50).toList();
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(vertical: 12),
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[600],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Benachrichtigungen',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              Flexible(
-                child: items.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.all(32),
-                        child: Text(
-                          'Keine Benachrichtigungen',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      )
-                    : ListView.builder(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.only(bottom: 12),
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          final n = items[index];
-                          final from = n['profiles'] as Map<String, dynamic>?;
-                          final fromName = SocialService.publicDisplayName(
-                            from,
-                            fallbackUserId: n['from_user_id'] as String?,
-                          );
-                          final fromId = from?['id'] as String?;
-                          final type = n['type'];
-                          String message;
-                          IconData icon;
-                          switch (type) {
-                            case 'follow':
-                              message = '$fromName folgt dir jetzt';
-                              icon = Icons.person_add;
-                              break;
-                            case 'follow_request':
-                              message = '$fromName möchte dir folgen';
-                              icon = Icons.person_add_alt_1;
-                              break;
-                            case 'follow_accepted':
-                              message =
-                                  '$fromName hat deine Anfrage angenommen';
-                              icon = Icons.check_circle;
-                              break;
-                            case 'like':
-                              message = '$fromName hat deinen Post geliked';
-                              icon = Icons.favorite;
-                              break;
-                            case 'comment':
-                              message = '$fromName hat deinen Post kommentiert';
-                              icon = Icons.comment;
-                              break;
-                            case 'comment_reply':
-                              message =
-                                  '$fromName hat auf deinen Kommentar geantwortet';
-                              icon = Icons.reply;
-                              break;
-                            case 'comment_like':
-                              message =
-                                  '$fromName hat deinen Kommentar geliked';
-                              icon = Icons.favorite;
-                              break;
-                            case 'repost':
-                              message = '$fromName hat deinen Post geteilt';
-                              icon = Icons.repeat;
-                              break;
-                            case 'group_invite':
-                              message =
-                                  '$fromName hat dich in eine Gruppe eingeladen';
-                              icon = Icons.group_add;
-                              break;
-                            case 'group_public_created':
-                              message =
-                                  '$fromName hat eine neue öffentliche Gruppe erstellt';
-                              icon = Icons.groups_2;
-                              break;
-                            case 'group_joined':
-                              message =
-                                  '$fromName ist deiner Gruppe beigetreten';
-                              icon = Icons.group;
-                              break;
-                            case 'group_ride_started':
-                              message =
-                                  '$fromName hat die Gruppenfahrt gestartet';
-                              icon = Icons.navigation;
-                              break;
-                            case 'mention':
-                              message = '$fromName hat dich erwähnt';
-                              icon = Icons.alternate_email;
-                              break;
-                            default:
-                              message = '$fromName hat interagiert';
-                              icon = Icons.notifications;
-                          }
-
-                          return ListTile(
-                            onTap: () {
-                              Navigator.pop(sheetContext);
-                              final referenceId = n['reference_id'] as String?;
-                              final isGroupNotification =
-                                  type == 'group_invite' ||
-                                  type == 'group_public_created' ||
-                                  type == 'group_joined' ||
-                                  type == 'group_ride_started';
-                              if (isGroupNotification && referenceId != null) {
-                                Future.delayed(
-                                  const Duration(milliseconds: 150),
-                                  () {
-                                    if (!mounted) return;
-                                    Navigator.push(
-                                      this.context,
-                                      MaterialPageRoute(
-                                        builder: (_) => GroupLobbyPage(
-                                          groupId: referenceId,
-                                        ),
-                                      ),
-                                    ).then((_) => _loadData());
-                                  },
-                                );
-                              } else if (fromId != null) {
-                                Future.delayed(
-                                  const Duration(milliseconds: 150),
-                                  () {
-                                    if (mounted) {
-                                      _openUserProfile(fromId, fromName);
-                                    }
-                                  },
-                                );
-                              }
-                            },
-                            leading: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                UserAvatar.fromProfile(
-                                  from,
-                                  fallbackName: fromName.toString(),
-                                  radius: 18,
-                                ),
-                                Positioned(
-                                  right: -2,
-                                  bottom: -2,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(3),
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF0B0E14),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      icon,
-                                      color: AppAccentColors.accent,
-                                      size: 12,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            title: Text(
-                              message,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                              ),
-                            ),
-                            subtitle: Text(
-                              _formatTimeAgo(n['created_at']),
-                              style: const TextStyle(
-                                color: Colors.grey,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: _buildNotificationTrailing(
-                              type: type as String?,
-                              referenceId: n['reference_id'] as String?,
-                              fromId: fromId,
-                              sheetContext: sheetContext,
-                              setSheetState: () {
-                                // Mark as handled lokal: type→null verhindert dass die
-                                // Buttons zweimal feuern. Reicht als optisches Feedback;
-                                // beim nächsten _loadData ist der DB-State eh aktuell.
-                                n['type'] = '_handled';
-                              },
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget? _buildNotificationTrailing({
-    required String? type,
-    required String? referenceId,
-    required String? fromId,
-    required BuildContext sheetContext,
-    required VoidCallback setSheetState,
-  }) {
-    if (type == 'group_invite' && referenceId != null) {
-      return GestureDetector(
-        onTap: () async {
-          final joined = await _joinVisibleGroup(referenceId);
-          if (!joined) return;
-          if (!sheetContext.mounted) return;
-          Navigator.pop(sheetContext);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Gruppe beigetreten!'),
-                backgroundColor: Color(0xFF1C1F26),
-              ),
-            );
-            _loadData();
-          }
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppAccentColors.accent,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Text(
-            'Beitreten',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      );
-    }
-
-    if ((type == 'group_public_created' ||
-            type == 'group_joined' ||
-            type == 'group_ride_started') &&
-        referenceId != null) {
-      return GestureDetector(
-        onTap: () {
-          Navigator.pop(sheetContext);
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => GroupLobbyPage(groupId: referenceId),
-            ),
-          ).then((_) => _loadData());
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: AppAccentColors.accent),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            'Öffnen',
-            style: TextStyle(
-              color: AppAccentColors.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (type == 'follow_request' && fromId != null) {
-      final provider = context.read<CommunityProvider>();
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          GestureDetector(
-            onTap: () async {
-              try {
-                setSheetState();
-                await provider.acceptFollowRequest(fromId);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Anfrage angenommen'),
-                    backgroundColor: Color(0xFF1C1F26),
-                  ),
-                );
-              } catch (_) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Anfrage konnte nicht angenommen werden'),
-                    backgroundColor: Color(0xFF1C1F26),
-                  ),
-                );
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppAccentColors.accent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text(
-                'Annehmen',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: () async {
-              try {
-                setSheetState();
-                await provider.rejectFollowRequest(fromId);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Anfrage abgelehnt'),
-                    backgroundColor: Color(0xFF1C1F26),
-                  ),
-                );
-              } catch (_) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Anfrage konnte nicht abgelehnt werden'),
-                    backgroundColor: Color(0xFF1C1F26),
-                  ),
-                );
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text(
-                'Ablehnen',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    return null;
   }
 }
 

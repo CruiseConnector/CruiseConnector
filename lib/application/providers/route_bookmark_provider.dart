@@ -74,6 +74,37 @@ class RouteBookmarkProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> removeRouteEverywhere(SavedRoute route) async {
+    final userId = _userId;
+    if (userId == null || _busyRouteIds.contains(route.id)) return;
+
+    _busyRouteIds.add(route.id);
+    final previousRoutes = List<SavedRoute>.from(_savedRoutes);
+    _savedRoutes = _savedRoutes
+        .where(
+          (candidate) =>
+              !SavedRoutesService.areEquivalentRoutes(route, candidate),
+        )
+        .toList();
+    _syncSavedRouteMap(_savedRoutes);
+    _markRouteState(route, false);
+    notifyListeners();
+
+    try {
+      await SavedRoutesService.unsaveRouteEverywhere(route);
+      _savedRoutes = await SavedRoutesService.getSavedRouteLibrary();
+      _syncSavedRouteMap(_savedRoutes);
+    } catch (e) {
+      _savedRoutes = previousRoutes;
+      _syncSavedRouteMap(_savedRoutes);
+      debugPrint('[RouteBookmarkProvider] removeRouteEverywhere Fehler: $e');
+      rethrow;
+    } finally {
+      _busyRouteIds.remove(route.id);
+      notifyListeners();
+    }
+  }
+
   Future<void> loadSavedRoutes() async {
     final userId = _userId;
     if (userId == null) {

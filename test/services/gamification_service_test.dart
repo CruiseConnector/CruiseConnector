@@ -57,9 +57,18 @@ void main() {
       // 2026-06-15 (vucko): pro aktivem Tag +0,1, KEIN Cap. Wird auch echt aufs
       // Konto angerechnet (xp_awarded), nicht nur angezeigt.
       expect(GamificationService.streakMultiplierForDays(0), 1.0);
-      expect(GamificationService.streakMultiplierForDays(1), closeTo(1.1, 1e-9));
-      expect(GamificationService.streakMultiplierForDays(2), closeTo(1.2, 1e-9));
-      expect(GamificationService.streakMultiplierForDays(4), closeTo(1.4, 1e-9));
+      expect(
+        GamificationService.streakMultiplierForDays(1),
+        closeTo(1.1, 1e-9),
+      );
+      expect(
+        GamificationService.streakMultiplierForDays(2),
+        closeTo(1.2, 1e-9),
+      );
+      expect(
+        GamificationService.streakMultiplierForDays(4),
+        closeTo(1.4, 1e-9),
+      );
       expect(
         GamificationService.streakMultiplierForDays(10),
         closeTo(2.0, 1e-9),
@@ -248,6 +257,45 @@ void main() {
         expect(totals.totalRoutes, 1);
         expect(totals.totalDistanceKm, 50);
         expect(totals.totalXp, 0);
+      },
+    );
+
+    test(
+      'counts only completed drive sessions with group_id as group rides',
+      () {
+        final sessions = [
+          UserDriveSession(
+            id: 'group-complete',
+            userId: 'user-1',
+            distanceKm: 12,
+            durationSeconds: 900,
+            xpAwarded: 120,
+            completedAtEnd: true,
+            groupId: 'group-1',
+            createdAt: DateTime.utc(2026, 1, 3),
+          ),
+          UserDriveSession(
+            id: 'group-early-stop',
+            userId: 'user-1',
+            distanceKm: 8,
+            durationSeconds: 600,
+            xpAwarded: 80,
+            completedAtEnd: false,
+            groupId: 'group-2',
+            createdAt: DateTime.utc(2026, 1, 4),
+          ),
+          UserDriveSession(
+            id: 'solo-complete',
+            userId: 'user-1',
+            distanceKm: 15,
+            durationSeconds: 1000,
+            xpAwarded: 150,
+            completedAtEnd: true,
+            createdAt: DateTime.utc(2026, 1, 5),
+          ),
+        ];
+
+        expect(GamificationService.completedGroupRideCount(sessions), 1);
       },
     );
 
