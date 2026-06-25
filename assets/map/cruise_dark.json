@@ -7,10 +7,18 @@
       "type": "vector",
       "url": "pmtiles://https://tiles.cruiseconnector.at/dach.pmtiles",
       "attribution": "© OpenStreetMap"
+    },
+    "world-dark": {
+      "type": "raster",
+      "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+      "tileSize": 256,
+      "maxzoom": 14,
+      "attribution": "© Esri, © OpenStreetMap"
     }
   },
   "layers": [
     { "id": "background", "type": "background", "paint": { "background-color": "#0d1117" } },
+    { "id": "world-dark-raster", "type": "raster", "source": "world-dark", "paint": { "raster-opacity": 1.0, "raster-fade-duration": 200 } },
     { "id": "earth", "type": "fill", "source": "protomaps", "source-layer": "earth", "paint": { "fill-color": "#0d1117" } },
     { "id": "water", "type": "fill", "source": "protomaps", "source-layer": "water", "filter": ["all", ["in", "kind", "ocean", "lake", "water"], ["!in", "kind_detail", "river", "stream", "canal", "basin", "dock"]], "paint": { "fill-color": "#16273b" } },
     { "id": "water-river-line", "type": "line", "source": "protomaps", "source-layer": "water", "filter": ["==", "kind", "river"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#16273b", "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 11, 1.1, 14, 2.2, 17, 4.5], "line-opacity": 0.85 } },

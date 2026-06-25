@@ -1163,27 +1163,37 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// 0 = Start → Zwischenstopp i hat Sequenz i+1.
   void _markPassedWaypoints(geo.Position position) {
     if (_activeIntermediateWaypoints.isEmpty) return;
-    for (var i = 0; i < _activeIntermediateWaypoints.length; i++) {
-      if (_passedWaypointIndices.contains(i)) continue;
-      final wp = _activeIntermediateWaypoints[i];
-      final d = geo.Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        wp[1],
-        wp[0],
-      );
-      if (d <= 120.0) {
-        _passedWaypointIndices.add(i);
-        final tripId = _activeTripId;
-        if (tripId != null) {
-          unawaited(
-            TripService.instance.markStopReached(tripId, i + 1).catchError((
-              Object e,
-            ) {
-              debugPrint('[CruiseMode] markStopReached fail (silent): $e');
-            }),
-          );
-        }
+    // 2026-06-25 (vucko Trip-Chronologie-Fix): NUR den NÄCHSTEN erwarteten Stopp
+    // abhaken (kleinster noch-nicht-passierter Index), nicht jeden geometrisch
+    // nahen. Vorher konnte auf einer kurvigen Strecke ein SPÄTERER Stopp (der
+    // zufällig <120 m an der Route lag) VOR einem früheren als „erreicht"
+    // markiert werden → beim Speichern/Resume falsche Reihenfolge & Chronologie
+    // (genau der gemeldete Bug). So bleibt die abgehakte Sequenz strikt monoton;
+    // bewusstes Überspringen läuft weiterhin über _remainingWaypointsForReroute.
+    var nextIdx = 0;
+    while (nextIdx < _activeIntermediateWaypoints.length &&
+        _passedWaypointIndices.contains(nextIdx)) {
+      nextIdx++;
+    }
+    if (nextIdx >= _activeIntermediateWaypoints.length) return;
+    final wp = _activeIntermediateWaypoints[nextIdx];
+    final d = geo.Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      wp[1],
+      wp[0],
+    );
+    if (d <= 120.0) {
+      _passedWaypointIndices.add(nextIdx);
+      final tripId = _activeTripId;
+      if (tripId != null) {
+        unawaited(
+          TripService.instance.markStopReached(tripId, nextIdx + 1).catchError((
+            Object e,
+          ) {
+            debugPrint('[CruiseMode] markStopReached fail (silent): $e');
+          }),
+        );
       }
     }
   }
