@@ -8,17 +8,27 @@
       "url": "pmtiles://https://tiles.cruiseconnector.at/dach.pmtiles",
       "attribution": "© OpenStreetMap"
     },
-    "world-dark": {
-      "type": "raster",
-      "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
-      "tileSize": 256,
-      "maxzoom": 14,
-      "attribution": "© Esri, © OpenStreetMap"
+    "eu": {
+      "type": "vector",
+      "url": "pmtiles://https://tiles.cruiseconnector.at/eu.pmtiles",
+      "attribution": "© OpenStreetMap"
     }
   },
   "layers": [
     { "id": "background", "type": "background", "paint": { "background-color": "#0d1117" } },
-    { "id": "world-dark-raster", "type": "raster", "source": "world-dark", "paint": { "raster-opacity": 1.0, "raster-fade-duration": 200 } },
+
+    { "id": "eu-earth", "type": "fill", "source": "eu", "source-layer": "earth", "paint": { "fill-color": "#0d1117" } },
+    { "id": "eu-water", "type": "fill", "source": "eu", "source-layer": "water", "filter": ["all", ["in", "kind", "ocean", "lake", "water"], ["!in", "kind_detail", "river", "stream", "canal", "basin", "dock"]], "paint": { "fill-color": "#16273b" } },
+    { "id": "eu-water-river-line", "type": "line", "source": "eu", "source-layer": "water", "filter": ["==", "kind", "river"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#16273b", "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 11, 1.1, 14, 2.2, 17, 4.5], "line-opacity": 0.85 } },
+    { "id": "eu-boundaries", "type": "line", "source": "eu", "source-layer": "boundaries", "filter": ["in", "kind", "country", "unrecognized_country"], "paint": { "line-color": "#8c99b3", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.0, 6, 1.8, 9, 2.6, 13, 3.6], "line-dasharray": [3, 2], "line-opacity": 0.92 } },
+    { "id": "eu-roads-minor", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "minor_road"], "minzoom": 13, "paint": { "line-color": "#363e4a", "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.5, 15, 1.4, 16, 2.6, 20, 9.0] } },
+    { "id": "eu-roads-medium", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "medium_road"], "minzoom": 12, "paint": { "line-color": "#48515f", "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 14, 2.4, 16, 5.0, 20, 16.0] } },
+    { "id": "eu-roads-major-casing", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "major_road"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#1c222b", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.8, 14, 5.2, 16, 9.5, 20, 26.0] } },
+    { "id": "eu-roads-major", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "major_road"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#545f6e", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.0, 14, 3.4, 16, 6.5, 20, 20.0] } },
+    { "id": "eu-roads-highway-casing", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "highway"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#262e3a", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 2.4, 14, 6.8, 16, 12.0, 20, 30.0] } },
+    { "id": "eu-roads-highway", "type": "line", "source": "eu", "source-layer": "roads", "filter": ["==", "kind", "highway"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#6f7f99", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.4, 14, 4.8, 16, 8.8, 20, 24.0] } },
+    { "id": "eu-places", "type": "symbol", "source": "eu", "source-layer": "places", "filter": ["in", "kind_detail", "city", "town"], "layout": { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 13, 9, 16, 12, 20, 15, 24, 18, 27], "text-max-width": 7 }, "paint": { "text-color": "#f3f6fa", "text-halo-color": "#04070b", "text-halo-width": 2.8 } },
+
     { "id": "earth", "type": "fill", "source": "protomaps", "source-layer": "earth", "paint": { "fill-color": "#0d1117" } },
     { "id": "water", "type": "fill", "source": "protomaps", "source-layer": "water", "filter": ["all", ["in", "kind", "ocean", "lake", "water"], ["!in", "kind_detail", "river", "stream", "canal", "basin", "dock"]], "paint": { "fill-color": "#16273b" } },
     { "id": "water-river-line", "type": "line", "source": "protomaps", "source-layer": "water", "filter": ["==", "kind", "river"], "layout": { "line-cap": "round", "line-join": "round" }, "paint": { "line-color": "#16273b", "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 11, 1.1, 14, 2.2, 17, 4.5], "line-opacity": 0.85 } },

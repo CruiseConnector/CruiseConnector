@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:http/http.dart' as http;
+import 'package:maplibre_gl/maplibre_gl.dart' as mb;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:cruise_connect/data/services/offline_map_service.dart';
 
 /// Baut den MapLibre-Style und verwaltet die OFFLINE-DACH-PMTiles.
 ///
@@ -436,5 +440,75 @@ class MapStyleService {
       final part = File('${f.path}.part');
       if (await part.exists()) await part.delete();
     } catch (_) {}
+  }
+
+  // 2026-06-25 (vucko Süd-Offline): Trip-Modus außerhalb DACH soll die Strecke
+  // OFFLINE verfügbar haben. DACH ist als ganze dach.pmtiles schon lokal; für
+  // den Süden (eu.pmtiles, remote) lädt MapLibre besuchte Kacheln in den
+  // Ambient-Cache — zusätzlich pre-cachen wir hier den Routen-KORRIDOR als
+  // MapLibre-Offline-Region, damit er auch OHNE Vorab-Fahren offline da ist.
+  bool _routeRegionInFlight = false;
+
+  /// Lädt den Strecken-Korridor EINER Route als MapLibre-Offline-Region — NUR
+  /// wenn die Route DACH verlässt (drinnen deckt die lokale dach.pmtiles ab).
+  /// Best-effort: WLAN-gegated (kein Mobilvolumen), gedeckelter Zoom, eigener
+  /// Pfad mit try/catch → kann die Karte NIE kaputtmachen.
+  Future<void> downloadRouteOfflineRegion(
+    List<List<double>> routeCoordinates, {
+    int minZoom = 6,
+    int maxZoom = 13,
+  }) async {
+    if (kIsWeb || routeCoordinates.length < 2 || _routeRegionInFlight) return;
+    _routeRegionInFlight = true;
+    try {
+      await loadAutoDownloadSettings();
+      final conn = await Connectivity().checkConnectivity();
+      final online = conn.any((r) => r != ConnectivityResult.none);
+      if (!online) return;
+      final hasWifi = conn.contains(ConnectivityResult.wifi);
+      if (_autoDownloadPolicy == MapAutoDownloadPolicy.wifiOnly && !hasWifi) {
+        return;
+      }
+
+      var minLat = routeCoordinates.first[1], maxLat = routeCoordinates.first[1];
+      var minLng = routeCoordinates.first[0], maxLng = routeCoordinates.first[0];
+      for (final c in routeCoordinates) {
+        if (c.length < 2) continue;
+        minLng = math.min(minLng, c[0]);
+        maxLng = math.max(maxLng, c[0]);
+        minLat = math.min(minLat, c[1]);
+        maxLat = math.max(maxLat, c[1]);
+      }
+      // Nur wenn die Route DACH (teilweise) verlässt — sonst ist alles schon
+      // über die lokale dach.pmtiles offline.
+      final outsideDach = minLat < OfflineMapService.dachBboxSouthLat ||
+          maxLat > OfflineMapService.dachBboxNorthLat ||
+          minLng < OfflineMapService.dachBboxWestLng ||
+          maxLng > OfflineMapService.dachBboxEastLng;
+      if (!outsideDach) return;
+
+      final padLat = (maxLat - minLat) * 0.06 + 0.02;
+      final padLng = (maxLng - minLng) * 0.06 + 0.02;
+      final bounds = mb.LatLngBounds(
+        southwest: mb.LatLng(minLat - padLat, minLng - padLng),
+        northeast: mb.LatLng(maxLat + padLat, maxLng + padLng),
+      );
+
+      await mb.setOfflineTileCountLimit(250000);
+      await mb.downloadOfflineRegion(
+        mb.OfflineRegionDefinition(
+          bounds: bounds,
+          mapStyleUrl: _remoteStyleUrl,
+          minZoom: minZoom.toDouble(),
+          maxZoom: maxZoom.toDouble(),
+        ),
+        metadata: const {'type': 'route-corridor'},
+      );
+      debugPrint('[MapStyle] Offline-Region für Route außerhalb DACH geladen.');
+    } catch (e) {
+      debugPrint('[MapStyle] Offline-Region-Download fehlgeschlagen (silent): $e');
+    } finally {
+      _routeRegionInFlight = false;
+    }
   }
 }

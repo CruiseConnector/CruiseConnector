@@ -43,6 +43,7 @@ import 'package:cruise_connect/data/services/navigation_live_activity_service.da
 import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:vector_map_tiles/vector_map_tiles.dart';
 import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
 import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
@@ -11349,6 +11350,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       ),
     );
     unawaited(OfflineMapService.instance.cacheRouteRegion(result.coordinates));
+    // 2026-06-25 (vucko Süd-Offline): außerhalb DACH den Strecken-Korridor als
+    // MapLibre-Offline-Region vorab cachen → Trip-/Single-Strecke offline.
+    unawaited(
+      MapStyleService.instance.downloadRouteOfflineRegion(result.coordinates),
+    );
     return true;
   }
 
@@ -11501,6 +11507,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       unawaited(
         OfflineMapService.instance.cacheRouteRegion(
+          routeForOffline.coordinates,
+        ),
+      );
+      // 2026-06-25 (vucko): Trip außerhalb DACH — native MapLibre-Offline-Region
+      // für den Strecken-Korridor (eu.pmtiles) laden, damit die Strecke beim
+      // Fahren auch ohne Internet sichtbar bleibt. Gilt Single + Gruppe + Trip,
+      // greift NUR wenn die Route DACH verlässt (drinnen deckt dach.pmtiles ab).
+      unawaited(
+        MapStyleService.instance.downloadRouteOfflineRegion(
           routeForOffline.coordinates,
         ),
       );
