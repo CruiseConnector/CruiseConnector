@@ -19,6 +19,46 @@ class RouteMapShareService {
 
   static const _tileTemplate =
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile';
+  // Beschriftungs-Layer (Ortsnamen/Straßennamen) — transparente Tiles, kommen
+  // ÜBER den abgedunkelten Basis-Layer, damit man die Orte sieht.
+  static const _labelTemplate =
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile';
+
+  /// Zeichnet alle Tiles eines Templates in das Tile-Gitter. Gibt true zurück,
+  /// wenn mindestens ein Tile geladen wurde.
+  static Future<bool> _drawTileLayer(
+    Canvas canvas,
+    String template,
+    int z,
+    int x0,
+    int x1,
+    int y0,
+    int y1,
+  ) async {
+    var any = false;
+    for (var tx = x0; tx <= x1; tx++) {
+      for (var ty = y0; ty <= y1; ty++) {
+        try {
+          final resp = await http
+              .get(Uri.parse('$template/$z/$ty/$tx'))
+              .timeout(const Duration(seconds: 8));
+          if (resp.statusCode != 200) continue;
+          final img = await _decode(resp.bodyBytes);
+          final dx = ((tx - x0) * 256).toDouble();
+          final dy = ((ty - y0) * 256).toDouble();
+          canvas.drawImageRect(
+            img,
+            Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+            Rect.fromLTWH(dx, dy, 256, 256),
+            Paint()..filterQuality = FilterQuality.medium,
+          );
+          img.dispose();
+          any = true;
+        } catch (_) {}
+      }
+    }
+    return any;
+  }
 
   static double _mercX(double lng) => (lng + 180.0) / 360.0;
   static double _mercY(double lat) {
@@ -38,6 +78,9 @@ class RouteMapShareService {
     required List<List<double>> route,
     required Color accent,
     int targetPx = 900,
+    // Ziel-Seitenverhältnis (Breite/Höhe) des Vorschaurahmens. Die Bounding-Box
+    // wird darauf erweitert, sodass BoxFit.cover die Route NICHT abschneidet.
+    double aspect = 9 / 16,
   }) async {
     if (route.length < 2) return null;
     var minLng = route.first[0], maxLng = route.first[0];
@@ -48,16 +91,32 @@ class RouteMapShareService {
       minLat = math.min(minLat, p[1]);
       maxLat = math.max(maxLat, p[1]);
     }
-    // 12 % Rand, plus Mindest-Padding für sehr kleine/punktförmige Routen.
-    final padLng = (maxLng - minLng) * 0.12 + 0.0009;
-    final padLat = (maxLat - minLat) * 0.12 + 0.0009;
+    // 16 % Rand, plus Mindest-Padding für sehr kleine/punktförmige Routen → die
+    // Route klebt nie am Bildrand, die Umgebung (Orte) ist mit zu sehen.
+    final padLng = (maxLng - minLng) * 0.16 + 0.0012;
+    final padLat = (maxLat - minLat) * 0.16 + 0.0012;
     minLng -= padLng;
     maxLng += padLng;
     minLat -= padLat;
     maxLat += padLat;
 
-    final mxMin = _mercX(minLng), mxMax = _mercX(maxLng);
-    final myMin = _mercY(maxLat), myMax = _mercY(minLat); // y ist invertiert
+    // Merc-Box, dann auf das Ziel-Seitenverhältnis erweitern (mittig), damit das
+    // gerenderte Bild exakt zum 9:16-/1:1-Rahmen passt und nichts wegcroppt.
+    var mxMin = _mercX(minLng), mxMax = _mercX(maxLng);
+    var myMin = _mercY(maxLat), myMax = _mercY(minLat); // y ist invertiert
+    final cx = (mxMin + mxMax) / 2, cy = (myMin + myMax) / 2;
+    var halfX = (mxMax - mxMin).abs() / 2, halfY = (myMax - myMin).abs() / 2;
+    if (halfX <= 0) halfX = 1e-6;
+    if (halfY <= 0) halfY = 1e-6;
+    if (halfX / halfY < aspect) {
+      halfX = halfY * aspect; // zu schmal → verbreitern
+    } else {
+      halfY = halfX / aspect; // zu breit → erhöhen
+    }
+    mxMin = cx - halfX;
+    mxMax = cx + halfX;
+    myMin = cy - halfY;
+    myMax = cy + halfY;
     final spanX = (mxMax - mxMin).abs();
     final spanY = (myMax - myMin).abs();
     final maxSpan = math.max(math.max(spanX, spanY), 1e-7);
@@ -89,47 +148,28 @@ class RouteMapShareService {
       Paint()..color = const Color(0xFF0D1117),
     );
 
-    var anyTile = false;
-    for (var tx = x0; tx <= x1; tx++) {
-      for (var ty = y0; ty <= y1; ty++) {
-        try {
-          final resp = await http
-              .get(Uri.parse('$_tileTemplate/$z/$ty/$tx'))
-              .timeout(const Duration(seconds: 8));
-          if (resp.statusCode != 200) continue;
-          final img = await _decode(resp.bodyBytes);
-          final dx = ((tx - x0) * 256).toDouble();
-          final dy = ((ty - y0) * 256).toDouble();
-          canvas.drawImageRect(
-            img,
-            Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
-            Rect.fromLTWH(dx, dy, 256, 256),
-            Paint()..filterQuality = FilterQuality.medium,
-          );
-          img.dispose();
-          anyTile = true;
-        } catch (_) {}
-      }
-    }
+    final anyTile =
+        await _drawTileLayer(canvas, _tileTemplate, z, x0, x1, y0, y1);
     if (!anyTile) return null;
 
-    // 2026-06-25 (vucko): Esri „Dark Gray" ist nur MITTELGRAU — passt nicht zum
-    // tiefdunklen App-Design (#0B0E14). Zwei Schritte machen es echt dunkel,
-    // ohne die Straßenstruktur zu verschlucken:
-    //  1) MULTIPLY mit einem dunklen Blau-Grau → dunkelt alles proportional ab
-    //     (Mitteltöne stark, Straßen bleiben relativ heller = sichtbar).
-    //  2) srcOver-Tönung Richtung App-Hintergrund → vereinheitlicht den Look.
+    // 2026-06-25 (vucko): Esri „Dark Gray" ist mittelgrau. Leicht abdunkeln
+    // passend zum App-Design (#0B0E14), aber NICHT zu hart, sonst verschwinden
+    // Straßen/Orte. Multiply mit hellerem Ton + dezente Tönung = dunkel + lesbar.
     final fullRect = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
     canvas.drawRect(
       fullRect,
       Paint()
-        ..color = const Color(0xFF2A2F3A)
+        ..color = const Color(0xFF3A4150)
         ..blendMode = BlendMode.multiply,
     );
     canvas.drawRect(
       fullRect,
-      Paint()..color = const Color(0xFF0B0E14).withValues(alpha: 0.34),
+      Paint()..color = const Color(0xFF0B0E14).withValues(alpha: 0.22),
     );
+
+    // Ortsnamen/Straßennamen als heller Reference-Layer OBEN drauf → man sieht
+    // die Orte wie auf der echten Karte. Best-effort; Fehlen ist unkritisch.
+    await _drawTileLayer(canvas, _labelTemplate, z, x0, x1, y0, y1);
 
     Offset proj(List<double> p) => Offset(
           _mercX(p[0]) * n * 256 - x0 * 256,

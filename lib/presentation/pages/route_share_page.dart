@@ -128,6 +128,14 @@ class _RouteSharePageState extends State<RouteSharePage> {
   bool get _isSticker => _format == _ShareFormat.sticker;
   bool get _isMap => _format == _ShareFormat.map;
 
+  @override
+  void initState() {
+    super.initState();
+    // Karte schon beim Öffnen laden → beim Wechsel auf „Karte" ist sie sofort da
+    // (kein störender Lade-Spinner mehr).
+    _ensureMapImage();
+  }
+
   void _selectFormat(_ShareFormat f) {
     setState(() {
       _format = f;
@@ -150,6 +158,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
       final bytes = await RouteMapShareService.buildRouteMapPng(
         route: route,
         accent: AppAccentColors.accent,
+        aspect: 9 / 16, // Karte-Modus ist 9:16 → kein Crop der Route
       );
       if (mounted) setState(() => _mapBytes = bytes);
     } catch (_) {
@@ -397,17 +406,20 @@ class _RouteSharePageState extends State<RouteSharePage> {
       if (_mapBytes != null) {
         return Image.memory(_mapBytes!, fit: BoxFit.cover);
       }
-      return const Stack(
+      // Solange die echte Karte lädt: KEIN Spinner, sondern direkt die Route auf
+      // dunklem Grund → es ist immer sofort eine Route da, die echte Karte
+      // blendet sich danach drüber.
+      return Stack(
         fit: StackFit.expand,
         children: [
           gradient,
-          Center(
-            child: SizedBox(
-              width: 30,
-              height: 30,
-              child: CircularProgressIndicator(strokeWidth: 2.4),
+          if (widget.data.segments.isNotEmpty)
+            CustomPaint(
+              painter: _RouteLinePainter(
+                segments: widget.data.segments,
+                accent: AppAccentColors.accent,
+              ),
             ),
-          ),
         ],
       );
     }
@@ -730,11 +742,12 @@ class RouteShareCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          // Routen-Skizze (im Karte-Modus aus → sonst doppelte Route).
+          const SizedBox(height: 10),
+          // Routen-Skizze (im Karte-Modus aus → sonst doppelte Route). Kompakter
+          // gehalten, damit die Karte im Quadrat (1:1) nicht über den Rahmen geht.
           if (showSketch && data.segments.isNotEmpty)
             Container(
-              height: 116,
+              height: 94,
               width: double.infinity,
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.22),
@@ -747,10 +760,10 @@ class RouteShareCard extends StatelessWidget {
                 ),
               ),
             ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _shadowText(
             data.title,
-            fontSize: 21,
+            fontSize: 20,
             weight: FontWeight.w900,
             maxLines: 2,
           ),
