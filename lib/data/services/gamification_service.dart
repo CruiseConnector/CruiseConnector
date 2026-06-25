@@ -343,6 +343,17 @@ class GamificationService {
   }
 
   @visibleForTesting
+  static int completedGroupRideCount(Iterable<UserDriveSession> sessions) {
+    return sessions
+        .where(
+          (session) =>
+              session.completedAtEnd &&
+              (session.groupId?.trim().isNotEmpty ?? false),
+        )
+        .length;
+  }
+
+  @visibleForTesting
   static Map<String, dynamic> buildDriveSessionInsert({
     required String userId,
     required double distanceKm,
@@ -502,7 +513,9 @@ class GamificationService {
       final url = data?['photo_url'] as String?;
       return (url != null && url.trim().isNotEmpty) ? url : null;
     } catch (e) {
-      debugPrint('[Gamification] photoUrlForRouteFingerprint fehlgeschlagen: $e');
+      debugPrint(
+        '[Gamification] photoUrlForRouteFingerprint fehlgeschlagen: $e',
+      );
       return null;
     }
   }
@@ -574,6 +587,7 @@ class GamificationService {
     final completedSessions = sessions
         .where((session) => session.completedAtEnd)
         .toList();
+    final completedGroupRides = completedGroupRideCount(sessions);
 
     // 3. Level aus XP berechnen
     final level = UserLevel.fromXp(totalXp.toDouble());
@@ -600,6 +614,7 @@ class GamificationService {
 
     // Routen- und Gruppen-Badges
     if (completedSessions.isNotEmpty) currentlyQualifiedBadges.add('badge_02');
+    if (completedGroupRides >= 1) currentlyQualifiedBadges.add('badge_04');
     if (routePostCount >= 1) currentlyQualifiedBadges.add('badge_05');
     if (createdGroupCount >= 1) currentlyQualifiedBadges.add('badge_07');
     if (savedRouteReferenceCount >= 5) {

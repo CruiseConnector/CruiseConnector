@@ -9,8 +9,20 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+
+enum _CommunityChatPostFilter { all, groupRides, sharedRoutes }
+
+const _communityChatTopicMentions = {
+  'gruppe',
+  'gruppen',
+  'gruppenfahrt',
+  'gruppenfahrten',
+  'gruppenfahert',
+  'geteilteroute',
+};
 
 class CommunityChatDetailPage extends StatefulWidget {
   const CommunityChatDetailPage({super.key, required this.communityId});
@@ -38,6 +50,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Map<String, dynamic>? _replyToMessage;
   SavedRoute? _attachedRoute;
   Timer? _reloadDebounce;
+  _CommunityChatPostFilter _postFilter = _CommunityChatPostFilter.all;
 
   @override
   void initState() {
@@ -117,6 +130,22 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     final routeAttachment = attachedRoute == null
         ? null
         : _routeAttachmentFor(attachedRoute);
+    if (routeAttachment != null) {
+      final alreadyPosted =
+          await CommunityChatService.hasOwnRoutePostForCommunity(
+            communityId: widget.communityId,
+            routeId: routeAttachment['route_id'].toString(),
+          );
+      if (alreadyPosted) {
+        _showError(
+          const CommunityChatServiceException(
+            CommunityChatService.duplicateRoutePostMessage,
+          ),
+          fallback: CommunityChatService.duplicateRoutePostMessage,
+        );
+        return;
+      }
+    }
     final replyToId = replyTo?['id']?.toString();
     final persistedReplyToId =
         replyToId == null || replyToId.startsWith('local-') ? null : replyToId;
@@ -198,6 +227,9 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       'title': route.name ?? route.style,
       'style': route.style,
       'distance_km': route.distanceKm,
+      if (route.durationSeconds != null)
+        'duration_seconds': route.durationSeconds,
+      if (route.sourceRouteId != null) 'source_route_id': route.sourceRouteId,
     };
   }
 
@@ -290,6 +322,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   }
 
   bool get _amAdmin => _myRole == 'owner';
+  bool get _canPinMessages => CommunityChatService.canModerate(_myRole);
   bool get _canWrite {
     if (_community?['owner_only_messages'] != true) return true;
     return CommunityChatService.canModerate(_myRole);
@@ -348,10 +381,43 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     }
   }
 
+  Future<void> _setMessagePinned(
+    Map<String, dynamic> message, {
+    required bool pinned,
+  }) async {
+    final id = message['id']?.toString();
+    if (id == null || id.isEmpty || id.startsWith('local-')) return;
+    final previous = List<Map<String, dynamic>>.from(_messages);
+    setState(() {
+      _messages = _messages.map((entry) {
+        if (entry['id']?.toString() != id) return entry;
+        return {
+          ...entry,
+          'pinned_at': pinned ? DateTime.now().toUtc().toIso8601String() : null,
+          'pinned_by': pinned
+              ? Supabase.instance.client.auth.currentUser?.id
+              : null,
+        };
+      }).toList();
+    });
+    try {
+      await CommunityChatService.setMessagePinned(
+        messageId: id,
+        pinned: pinned,
+      );
+      unawaited(_load(scrollToBottom: false));
+      _showToast(pinned ? 'Post angepinnt.' : 'Pin entfernt.');
+    } catch (e) {
+      if (mounted) setState(() => _messages = previous);
+      _showError(e, fallback: 'Pin konnte nicht gespeichert werden.');
+    }
+  }
+
   void _showMessageActions(Map<String, dynamic> message) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final isMine = message['user_id'] == uid;
     final canDelete = isMine || CommunityChatService.canModerate(_myRole);
+    final isPinned = message['pinned_at'] != null;
 
     showModalBottomSheet<void>(
       context: context,
@@ -392,6 +458,15 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                     unawaited(_copyMessage(message));
                   },
                 ),
+                if (_canPinMessages)
+                  _MessageActionTile(
+                    icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    label: isPinned ? 'Pin entfernen' : 'Anpinnen',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_setMessagePinned(message, pinned: !isPinned));
+                    },
+                  ),
                 if (canDelete)
                   _MessageActionTile(
                     icon: Icons.delete_outline_rounded,
@@ -554,7 +629,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       );
       return;
     }
-    final index = _messages.indexWhere(
+    final visibleMessages = _visibleMessages();
+    final index = visibleMessages.indexWhere(
       (message) => message['id']?.toString() == messageId,
     );
     if (index < 0 || !_scrollCtrl.hasClients) return;
@@ -771,12 +847,17 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
           ? Center(
               child: CircularProgressIndicator(color: AppAccentColors.accent),
             )
-          : Column(
-              children: [
-                if (community != null) _buildCommunityHeader(community),
-                Expanded(child: _buildMessages()),
-                _buildComposer(),
-              ],
+          : GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+              child: Column(
+                children: [
+                  if (community != null) _buildCommunityHeader(community),
+                  _buildPostFilters(),
+                  Expanded(child: _buildMessages()),
+                  _buildComposer(),
+                ],
+              ),
             ),
     );
   }
@@ -912,33 +993,180 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     );
   }
 
+  Widget _buildPostFilters() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14),
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          children: [
+            _buildPostFilterChip(
+              filter: _CommunityChatPostFilter.all,
+              icon: Icons.auto_awesome_motion_outlined,
+              label: 'Alles',
+            ),
+            const SizedBox(width: 8),
+            _buildPostFilterChip(
+              filter: _CommunityChatPostFilter.groupRides,
+              icon: Icons.groups_2_outlined,
+              label: '@Gruppenfahrten',
+            ),
+            const SizedBox(width: 8),
+            _buildPostFilterChip(
+              filter: _CommunityChatPostFilter.sharedRoutes,
+              icon: Icons.route_outlined,
+              label: 'Geteilte Routen',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostFilterChip({
+    required _CommunityChatPostFilter filter,
+    required IconData icon,
+    required String label,
+  }) {
+    final selected = _postFilter == filter;
+    return InkWell(
+      onTap: () => setState(() => _postFilter = filter),
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppAccentColors.accent.withValues(alpha: 0.18)
+              : const Color(0xFF151821),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected
+                ? AppAccentColors.accent
+                : Colors.white.withValues(alpha: 0.10),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: selected ? AppAccentColors.accent : Colors.white60,
+              size: 17,
+            ),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.white70,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _visibleMessages() {
+    final filtered = switch (_postFilter) {
+      _CommunityChatPostFilter.all => _messages.toList(),
+      _CommunityChatPostFilter.groupRides =>
+        _messages.where(_messageMatchesGroupRide).toList(),
+      _CommunityChatPostFilter.sharedRoutes =>
+        _messages
+            .where((message) => _routeAttachmentFrom(message) != null)
+            .toList(),
+    };
+    filtered.sort((a, b) {
+      final aPinned = a['pinned_at'] != null;
+      final bPinned = b['pinned_at'] != null;
+      if (aPinned != bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) {
+        final ap =
+            DateTime.tryParse(a['pinned_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bp =
+            DateTime.tryParse(b['pinned_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bp.compareTo(ap);
+      }
+      return _messageDate(a).compareTo(_messageDate(b));
+    });
+    return filtered;
+  }
+
+  DateTime _messageDate(Map<String, dynamic> message) {
+    return DateTime.tryParse(message['created_at']?.toString() ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  bool _messageMatchesGroupRide(Map<String, dynamic> message) {
+    final body = (message['body'] ?? '').toString().toLowerCase();
+    return RegExp(
+          r'@(gruppe|gruppen|gruppenfahrt|gruppenfahrten|gruppenfahert)\b',
+          caseSensitive: false,
+        ).hasMatch(body) ||
+        body.contains('gruppenfahrt') ||
+        body.contains('gruppen fahr');
+  }
+
+  int _replyCountFor(String? messageId) {
+    if (messageId == null || messageId.isEmpty) return 0;
+    return _messages
+        .where(
+          (message) => message['reply_to_message_id']?.toString() == messageId,
+        )
+        .length;
+  }
+
+  String _postTopicLabel(Map<String, dynamic> message) {
+    if (_routeAttachmentFrom(message) != null) return 'r/GeteilteRouten';
+    if (_messageMatchesGroupRide(message)) return 'r/Gruppenfahrten';
+    final raw = (_community?['name'] ?? 'Community').toString().trim();
+    final compact = raw.replaceAll(RegExp(r'\s+'), '');
+    return 'r/${compact.isEmpty ? 'Community' : compact}';
+  }
+
   Widget _buildMessages() {
-    if (_messages.isEmpty) {
+    final visibleMessages = _visibleMessages();
+    if (visibleMessages.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.chat_bubble_outline,
-                color: Colors.grey[700],
-                size: 44,
-              ),
+              Icon(Icons.article_outlined, color: Colors.grey[700], size: 44),
               const SizedBox(height: 12),
-              const Text(
-                'Noch keine Nachrichten',
-                style: TextStyle(
+              Text(
+                _postFilter == _CommunityChatPostFilter.all
+                    ? 'Noch keine Posts'
+                    : 'Keine passenden Posts',
+                style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
               ),
               const SizedBox(height: 4),
-              const Text(
-                'Schreib die erste Nachricht in diese Community.',
+              Text(
+                _postFilter == _CommunityChatPostFilter.groupRides
+                    ? 'Nutze Tags wie @Gruppenfahrt oder @Gruppenfahrten.'
+                    : _postFilter == _CommunityChatPostFilter.sharedRoutes
+                    ? 'Hänge eine gespeicherte Route an deinen Post.'
+                    : 'Schreib den ersten Post in diese Community.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 13),
+                style: const TextStyle(color: Colors.grey, fontSize: 13),
               ),
             ],
           ),
@@ -948,20 +1176,21 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
 
     return ListView.builder(
       controller: _scrollCtrl,
-      padding: const EdgeInsets.fromLTRB(12, 14, 12, 14),
-      itemCount: _messages.length,
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
+      itemCount: visibleMessages.length,
       itemBuilder: (context, index) {
-        final message = _messages[index];
+        final message = visibleMessages[index];
         final id = message['id']?.toString();
         final key = id == null
             ? null
             : _messageKeys.putIfAbsent(id, GlobalKey.new);
-        return KeyedSubtree(key: key, child: _buildMessageBubble(message));
+        return KeyedSubtree(key: key, child: _buildCommunityPostCard(message));
       },
     );
   }
 
-  Widget _buildMessageBubble(Map<String, dynamic> message) {
+  Widget _buildCommunityPostCard(Map<String, dynamic> message) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final isMine = message['user_id'] == uid;
     final rawProfile = message['profiles'];
@@ -978,126 +1207,249 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     final replyToId = message['reply_to_message_id']?.toString();
     final repliedMessage = _messageById(replyToId);
     final routeAttachment = _routeAttachmentFrom(message);
+    final messageId = message['id']?.toString();
+    final replies = _replyCountFor(messageId);
+    final isPinned = message['pinned_at'] != null;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPress: () => _showMessageActions(message),
-        child: Row(
-          mainAxisAlignment: isMine
-              ? MainAxisAlignment.end
-              : MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (!isMine) ...[
-              UserAvatar.fromProfile(profile, fallbackName: name, radius: 16),
-              const SizedBox(width: 8),
-            ],
-            Flexible(
-              flex: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: isMine
-                      ? AppAccentColors.accent
-                      : const Color(0xFF1C1F26),
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(14),
-                    topRight: const Radius.circular(14),
-                    bottomLeft: Radius.circular(isMine ? 14 : 4),
-                    bottomRight: Radius.circular(isMine ? 4 : 14),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF151821),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isPinned
+                  ? AppAccentColors.accent.withValues(alpha: 0.46)
+                  : Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (isPinned) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.push_pin,
+                          color: AppAccentColors.accent,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Angepinnt',
+                          style: TextStyle(
+                            color: AppAccentColors.accent,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  border: isMine
-                      ? null
-                      : Border.all(color: Colors.white.withValues(alpha: 0.05)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 9),
+                ],
+                Row(
                   children: [
-                    if (!isMine)
-                      Text(
-                        name,
+                    UserAvatar.fromProfile(
+                      profile,
+                      fallbackName: name,
+                      radius: 14,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_postTopicLabel(message)} · $name · $time',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppAccentColors.accent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
                         ),
-                      ),
-                    if (!isMine) const SizedBox(height: 3),
-                    if (replyToId != null && replyToId.isNotEmpty) ...[
-                      InkWell(
-                        onTap: () => _scrollToMessage(replyToId),
-                        borderRadius: BorderRadius.circular(9),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 9,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(9),
-                            border: Border(
-                              left: BorderSide(
-                                color: Colors.white.withValues(alpha: 0.72),
-                                width: 3,
-                              ),
-                            ),
-                          ),
-                          child: Text(
-                            repliedMessage?['body']?.toString() ??
-                                'Antwort anzeigen',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.78),
-                              fontSize: 11.5,
-                              height: 1.25,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 7),
-                    ],
-                    Text(
-                      body,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        height: 1.35,
                       ),
                     ),
-                    if (routeAttachment != null) ...[
-                      const SizedBox(height: 8),
-                      RouteAttachmentCard(
-                        routeId: routeAttachment['route_id'].toString(),
-                        compact: true,
-                        showRideButton: true,
+                    if (isMine)
+                      Container(
+                        margin: const EdgeInsets.only(right: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppAccentColors.accent.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          isPending ? 'sendet...' : 'Du',
+                          style: TextStyle(
+                            color: AppAccentColors.accent,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
-                    ],
-                    const SizedBox(height: 4),
-                    Text(
-                      isPending ? '$time · sendet...' : time,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.62),
-                        fontSize: 10.5,
+                    IconButton(
+                      tooltip: 'Aktionen',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _showMessageActions(message),
+                      icon: const Icon(
+                        Icons.more_horiz,
+                        color: Colors.white54,
+                        size: 20,
                       ),
                     ),
                   ],
                 ),
-              ),
+                if (replyToId != null && replyToId.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  InkWell(
+                    onTap: () => _scrollToMessage(replyToId),
+                    borderRadius: BorderRadius.circular(9),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0B0E14),
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border(
+                          left: BorderSide(
+                            color: AppAccentColors.accent,
+                            width: 3,
+                          ),
+                        ),
+                      ),
+                      child: Text(
+                        repliedMessage?['body']?.toString() ??
+                            'Antwort anzeigen',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.78),
+                          fontSize: 11.5,
+                          height: 1.25,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (body.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text.rich(
+                    TextSpan(
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        height: 1.38,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      children: buildMentionSpans(
+                        context: context,
+                        text: body,
+                        baseStyle: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          height: 1.38,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        plainMentions: _communityChatTopicMentions,
+                      ),
+                    ),
+                  ),
+                ],
+                if (routeAttachment != null) ...[
+                  const SizedBox(height: 12),
+                  RouteAttachmentCard(
+                    routeId: routeAttachment['route_id'].toString(),
+                    compact: true,
+                    showRideButton: true,
+                    fallbackTitle: routeAttachment['title']?.toString(),
+                    fallbackStyle: routeAttachment['style']?.toString(),
+                    fallbackDistanceKm: (routeAttachment['distance_km'] as num?)
+                        ?.toDouble(),
+                    fallbackDurationSeconds:
+                        (routeAttachment['duration_seconds'] as num?)
+                            ?.toDouble(),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _PostAction(
+                      icon: Icons.mode_comment_outlined,
+                      label: replies == 1 ? '1 Antwort' : '$replies Antworten',
+                      onTap: () => setState(() => _replyToMessage = message),
+                    ),
+                    _PostAction(
+                      icon: Icons.reply_rounded,
+                      label: 'Antworten',
+                      onTap: () => setState(() => _replyToMessage = message),
+                    ),
+                    _PostAction(
+                      icon: Icons.copy_rounded,
+                      label: 'Kopieren',
+                      onTap: () => unawaited(_copyMessage(message)),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            if (isMine) const SizedBox(width: 48),
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  void _insertComposerTag(String tag) {
+    final text = _messageCtrl.text;
+    final needsSpace = text.isNotEmpty && !RegExp(r'\s$').hasMatch(text);
+    final next = '$text${needsSpace ? ' ' : ''}$tag ';
+    if (next.length > AppInputLimits.communityMessageMaxLength) return;
+    _messageCtrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+  }
+
+  Widget _buildComposerTag(String tag) {
+    return ActionChip(
+      onPressed: () => _insertComposerTag(tag),
+      avatar: Icon(
+        Icons.alternate_email_rounded,
+        color: AppAccentColors.accent,
+        size: 15,
+      ),
+      label: Text(tag),
+      labelStyle: const TextStyle(
+        color: Colors.white,
+        fontSize: 12,
+        fontWeight: FontWeight.w800,
+      ),
+      backgroundColor: const Color(0xFF0B0E14),
+      side: BorderSide(color: Colors.white.withValues(alpha: 0.10)),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 
@@ -1119,8 +1471,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
             if (_replyToMessage != null) ...[
               _ComposerPreview(
                 icon: Icons.reply_rounded,
-                title: 'Antwort',
-                text: _replyToMessage?['body']?.toString() ?? 'Nachricht',
+                title: 'Antwort auf Post',
+                text: _replyToMessage?['body']?.toString() ?? 'Post',
                 onClear: () => setState(() => _replyToMessage = null),
               ),
               const SizedBox(height: 8),
@@ -1128,7 +1480,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
             if (_attachedRoute != null) ...[
               _ComposerPreview(
                 icon: Icons.route_rounded,
-                title: 'Route angehängt',
+                title: 'Route am Post',
                 text:
                     '${_attachedRoute!.styleEmoji} ${_attachedRoute!.name ?? _attachedRoute!.style}',
                 onClear: () => setState(() => _attachedRoute = null),
@@ -1156,7 +1508,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                     const SizedBox(width: 8),
                     const Expanded(
                       child: Text(
-                        'Nur Admins können hier schreiben.',
+                        'Nur Admins können hier posten.',
                         style: TextStyle(
                           color: Colors.white70,
                           fontWeight: FontWeight.w800,
@@ -1166,7 +1518,24 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   ],
                 ),
               )
-            else
+            else ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    children: [
+                      _buildComposerTag('@Gruppenfahrt'),
+                      const SizedBox(width: 8),
+                      _buildComposerTag('@Gruppenfahrten'),
+                      const SizedBox(width: 8),
+                      _buildComposerTag('@Gruppen'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
@@ -1191,7 +1560,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                       maxLines: 4,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
-                        hintText: 'Nachricht schreiben',
+                        hintText: 'Post schreiben',
                         hintStyle: const TextStyle(color: Colors.grey),
                         counterText: '',
                         filled: true,
@@ -1235,6 +1604,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   ),
                 ],
               ),
+            ],
           ],
         ),
       ),
@@ -1247,6 +1617,44 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     final h = dt.hour.toString().padLeft(2, '0');
     final m = dt.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+}
+
+class _PostAction extends StatelessWidget {
+  const _PostAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.grey, size: 18),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

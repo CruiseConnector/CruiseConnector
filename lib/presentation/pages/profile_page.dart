@@ -11,6 +11,7 @@ import 'package:cruise_connect/application/providers/route_bookmark_provider.dar
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -99,6 +100,12 @@ class _ProfilePageState extends State<ProfilePage>
     }
 
     try {
+      try {
+        await GamificationService.calculateAndSync();
+      } catch (e) {
+        debugPrint('[Profile] Gamification-Sync fehlgeschlagen: $e');
+      }
+
       final results = await Future.wait([
         SocialService.getFollowerCount(uid),
         SocialService.getFollowingCount(uid),
@@ -1491,6 +1498,8 @@ class _ProfilePageState extends State<ProfilePage>
                 children: [
                   Text(
                     route.name ?? route.style,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -1505,7 +1514,26 @@ class _ProfilePageState extends State<ProfilePage>
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton.icon(
+                  onPressed: () => _removeSavedRoute(route),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFFF5A5F),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 36),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text(
+                    'Löschen',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
+              ],
+            ),
           ],
         ),
       ),
@@ -1606,55 +1634,90 @@ class _ProfilePageState extends State<ProfilePage>
                     },
                   ),
                   _buildOptionTile(
-                    Icons.bookmark_remove_outlined,
-                    'Gespeicherte Route entfernen',
-                    Colors.grey,
-                    () async {
+                    Icons.delete_outline,
+                    'Löschen',
+                    const Color(0xFFFF5A5F),
+                    () {
                       Navigator.pop(ctx);
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (c) => AlertDialog(
-                          backgroundColor: const Color(0xFF1C1F26),
-                          title: const Text(
-                            'Route entfernen?',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                          content: const Text(
-                            'Diese Route wird aus deinen gespeicherten Routen entfernt. Du kannst sie später wieder speichern.',
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(c, false),
-                              child: const Text(
-                                'Abbrechen',
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(c, true),
-                              child: Text(
-                                'Entfernen',
-                                style: TextStyle(color: AppAccentColors.accent),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirmed == true) {
-                        await SavedRoutesService.unsaveRouteEverywhere(route);
-                        if (!mounted) return;
-                        await context
-                            .read<RouteBookmarkProvider>()
-                            .loadSavedRoutes();
-                        _loadData();
-                      }
+                      _removeSavedRoute(route);
                     },
                   ),
                 ],
               ),
             ),
           ),
+        );
+      },
+    );
+  }
+
+  Future<void> _removeSavedRoute(SavedRoute route) async {
+    final confirmed = await _confirmRemoveSavedRoute(route);
+    if (confirmed != true || !mounted) return;
+
+    final previousRoutes = List<SavedRoute>.from(_savedRoutes);
+    setState(() {
+      _savedRoutes = _savedRoutes
+          .where(
+            (candidate) =>
+                !SavedRoutesService.areEquivalentRoutes(route, candidate),
+          )
+          .toList();
+    });
+
+    try {
+      await context.read<RouteBookmarkProvider>().removeRouteEverywhere(route);
+      if (!mounted) return;
+      await _loadData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route und zugehörige Posts wurden entfernt.'),
+          backgroundColor: Color(0xFF1C1F26),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _savedRoutes = previousRoutes);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route konnte nicht entfernt werden.'),
+          backgroundColor: Color(0xFF301B20),
+        ),
+      );
+    }
+  }
+
+  Future<bool?> _confirmRemoveSavedRoute(SavedRoute route) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1C1F26),
+          title: const Text(
+            'Route entfernen?',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            'Wenn du "${route.name ?? route.style}" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts.',
+            style: const TextStyle(color: Colors.grey),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(
+                'Entfernen',
+                style: TextStyle(color: AppAccentColors.accent),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -1844,7 +1907,9 @@ class _ProfilePageState extends State<ProfilePage>
                   MaterialPageRoute(
                     builder: (_) => const SavedRouteBookmarksPage(),
                   ),
-                );
+                ).then((_) {
+                  if (mounted) _loadData();
+                });
               },
             ),
             _buildMenuItem(

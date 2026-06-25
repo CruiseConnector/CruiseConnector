@@ -8,7 +8,10 @@ import 'package:cruise_connect/application/providers/route_bookmark_provider.dar
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 
 class SavedRouteBookmarksPage extends StatefulWidget {
   const SavedRouteBookmarksPage({super.key});
@@ -106,15 +109,8 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
                         final isOwnRoute = route.userId == userId;
                         return _SavedRouteCard(
                           route: route,
-                          onStart: () => _startRoute(route),
                           isOwnRoute: isOwnRoute,
-                          onRename: () => _renameRoute(route),
-                          onRemove: () async {
-                            await SavedRoutesService.unsaveRouteEverywhere(
-                              route,
-                            );
-                            await _refresh();
-                          },
+                          onOpen: () => _showRouteOptions(route),
                         );
                       },
                     ),
@@ -176,92 +172,322 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
     await SavedRoutesService.renameRoute(route.id, newName);
     await _refresh();
   }
+
+  void _showRouteOptions(SavedRoute route) {
+    final isOwnRoute =
+        route.userId == Supabase.instance.client.auth.currentUser?.id;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1C1F26),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[600],
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      route.name ?? route.style,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${route.formattedDistance} · ${route.formattedDuration}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
+                  const SizedBox(height: 20),
+                  _buildOptionTile(
+                    Icons.map_outlined,
+                    'Übersicht',
+                    AppAccentColors.accent,
+                    () {
+                      Navigator.pop(ctx);
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => RideDetailPage.fromSavedRoute(route),
+                        ),
+                      );
+                    },
+                  ),
+                  _buildOptionTile(
+                    Icons.play_circle_fill,
+                    'Nochmal fahren',
+                    const Color(0xFF34D399),
+                    () {
+                      Navigator.pop(ctx);
+                      _startRoute(route);
+                    },
+                  ),
+                  if (isOwnRoute)
+                    _buildOptionTile(
+                      Icons.edit_outlined,
+                      'Route umbenennen',
+                      const Color(0xFFFFD166),
+                      () {
+                        Navigator.pop(ctx);
+                        _renameRoute(route);
+                      },
+                    ),
+                  _buildOptionTile(
+                    Icons.share,
+                    'Als Post teilen',
+                    const Color(0xFF00E5FF),
+                    () {
+                      Navigator.pop(ctx);
+                      _shareRouteAsPost(route);
+                    },
+                  ),
+                  _buildOptionTile(
+                    Icons.ios_share_rounded,
+                    'Extern als Bild teilen',
+                    const Color(0xFFD7B48A),
+                    () {
+                      Navigator.pop(ctx);
+                      _shareRouteExternally(route);
+                    },
+                  ),
+                  _buildOptionTile(
+                    Icons.delete_outline,
+                    'Löschen',
+                    const Color(0xFFFF5A5F),
+                    () {
+                      Navigator.pop(ctx);
+                      _removeRoute(route);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _removeRoute(SavedRoute route) async {
+    final confirmed = await _confirmRemoveRoute(route);
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await context.read<RouteBookmarkProvider>().removeRouteEverywhere(route);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route und zugehörige Posts wurden entfernt.'),
+          backgroundColor: Color(0xFF1C1F26),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route konnte nicht entfernt werden.'),
+          backgroundColor: Color(0xFF301B20),
+        ),
+      );
+    }
+  }
+
+  Future<bool?> _confirmRemoveRoute(SavedRoute route) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1C1F26),
+          title: const Text(
+            'Route entfernen?',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            'Wenn du "${route.name ?? route.style}" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts.',
+            style: const TextStyle(color: Colors.grey),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text(
+                'Abbrechen',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(
+                'Entfernen',
+                style: TextStyle(color: AppAccentColors.accent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildOptionTile(
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onTap,
+  ) {
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(
+        label,
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
+      onTap: onTap,
+    );
+  }
+
+  void _shareRouteAsPost(SavedRoute route) {
+    final routeText =
+        '${route.styleEmoji} ${route.name ?? route.style}\n'
+        '${route.formattedDistance} · ${route.formattedDuration}\n\n';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            CreatePostPage(initialText: routeText, sharedRouteId: route.id),
+      ),
+    ).then((_) => _refresh());
+  }
+
+  void _shareRouteExternally(SavedRoute route) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RouteSharePage(
+          data: RouteShareData(
+            title: route.name?.trim().isNotEmpty == true
+                ? route.name!.trim()
+                : '${route.displayStyleLabel} Route',
+            subtitle: route.displayStyleLabel,
+            segments: RouteShareData.segmentsFromGeometry(route.geometry),
+            distanceLabel: route.formattedDistance,
+            durationLabel: route.formattedDuration,
+            styleLabel: route.displayStyleLabel,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SavedRouteCard extends StatelessWidget {
   const _SavedRouteCard({
     required this.route,
-    required this.onStart,
-    required this.onRemove,
-    required this.onRename,
     required this.isOwnRoute,
+    required this.onOpen,
   });
 
   final SavedRoute route;
-  final VoidCallback onStart;
-  final VoidCallback onRemove;
-  final VoidCallback onRename;
   final bool isOwnRoute;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppAccentColors.accent.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Center(
-              child: Text(
-                route.styleEmoji,
-                style: const TextStyle(fontSize: 20),
+    return GestureDetector(
+      onTap: onOpen,
+      onLongPress: onOpen,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppAccentColors.accent.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Text(
+                  route.styleEmoji,
+                  style: const TextStyle(fontSize: 20),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  route.name ?? route.style,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    route.name ?? route.style,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${route.formattedDistance} · ${route.formattedDuration}',
-                  style: const TextStyle(color: Colors.grey, fontSize: 12),
-                ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${route.formattedDistance} · ${route.formattedDuration}',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isOwnRoute)
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFD166).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      'Eigene',
+                      style: TextStyle(
+                        color: Color(0xFFFFD166),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
               ],
             ),
-          ),
-          IconButton(
-            tooltip: 'Route fahren',
-            onPressed: onStart,
-            icon: Icon(Icons.play_circle_fill, color: AppAccentColors.accent),
-          ),
-          if (isOwnRoute)
-            IconButton(
-              tooltip: 'Route umbenennen',
-              onPressed: onRename,
-              icon: const Icon(Icons.edit_outlined, color: Color(0xFFFFD166)),
-            ),
-          IconButton(
-            tooltip: 'Gespeicherte Route entfernen',
-            onPressed: onRemove,
-            icon: const Icon(
-              Icons.bookmark_remove_outlined,
-              color: Color(0xFFFFD166),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
