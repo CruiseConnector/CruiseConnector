@@ -1883,6 +1883,58 @@ class _CommunityPageState extends State<CommunityPage>
                                       replyToName = cName;
                                     });
                                   },
+                                  // 2026-06-25 (vucko): eigene Kommentare
+                                  // löschen (RLS erlaubt nur user_id=auth.uid()).
+                                  // DB-Delete kaskadiert auf Antworten+Likes →
+                                  // kein Datenmüll.
+                                  onDelete: cm['user_id'] ==
+                                          Supabase.instance.client.auth
+                                              .currentUser?.id
+                                      ? () async {
+                                          final ok = await showDialog<bool>(
+                                            context: context,
+                                            builder: (dctx) => AlertDialog(
+                                              backgroundColor:
+                                                  const Color(0xFF1A1E28),
+                                              title: const Text(
+                                                'Kommentar löschen?',
+                                                style: TextStyle(
+                                                    color: Colors.white),
+                                              ),
+                                              content: const Text(
+                                                'Dein Kommentar (und Antworten darauf) wird dauerhaft entfernt.',
+                                                style: TextStyle(
+                                                    color: Colors.white70),
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(dctx, false),
+                                                  child: const Text('Abbrechen'),
+                                                ),
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(dctx, true),
+                                                  child: const Text(
+                                                    'Löschen',
+                                                    style: TextStyle(
+                                                        color:
+                                                            Color(0xFFE5736F)),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          );
+                                          if (ok != true) return;
+                                          try {
+                                            await SocialService.deleteComment(
+                                              cm['id'],
+                                              post['id'],
+                                            );
+                                          } catch (_) {}
+                                          await reload();
+                                        }
+                                      : null,
                                 );
                               },
                             ),
@@ -2000,6 +2052,7 @@ class _CommunityPageState extends State<CommunityPage>
     required bool canReply,
     required VoidCallback onLike,
     required VoidCallback onReply,
+    VoidCallback? onDelete,
   }) {
     final cProfile = comment['profiles'] as Map<String, dynamic>?;
     final cName = SocialService.publicDisplayName(
@@ -2133,6 +2186,27 @@ class _CommunityPageState extends State<CommunityPage>
                           style: TextStyle(color: Colors.grey, fontSize: 11),
                         ),
                       ),
+                    if (onDelete != null) ...[
+                      const SizedBox(width: 16),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: onDelete,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(minHeight: 40),
+                          child: const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Löschen',
+                              style: TextStyle(
+                                color: Color(0xFFE5736F),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ],

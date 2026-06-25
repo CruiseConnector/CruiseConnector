@@ -3,6 +3,10 @@ import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
+import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 
 /// Inbox-Page für alle Notifications.
 /// Pull-to-Refresh + Swipe-to-Dismiss + Mark-all-as-read.
@@ -107,10 +111,7 @@ class _NotificationTile extends StatelessWidget {
           ? accent.withValues(alpha: 0.06)
           : Colors.transparent,
       child: InkWell(
-        onTap: () {
-          NotificationService.instance.markAsRead(notif.id);
-          // TODO Deep-Link logik: zu Post/Profile/Group navigieren
-        },
+        onTap: () => _openTarget(context),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
           child: Row(
@@ -173,6 +174,99 @@ class _NotificationTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// 2026-06-25 (vucko): Deeplink je Notification-Typ. Gelöschte Ziele →
+  /// „nicht mehr verfügbar"-Popup statt Navigation ins Leere.
+  Future<void> _openTarget(BuildContext context) async {
+    NotificationService.instance.markAsRead(notif.id);
+    final type = notif.type;
+    final ref = notif.referenceId;
+
+    // Follow / Freundschaftsanfrage → Profil des Absenders.
+    if (type == 'follow' || type == 'friend_request') {
+      if (notif.fromUserId.isEmpty) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => UserProfilePage(
+            userId: notif.fromUserId,
+            initialUsername: notif.fromUsername,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Post-bezogen (Like/Kommentar/Repost) → Post-Detail oder „weg".
+    if (type == 'like' || type == 'comment' || type == 'repost') {
+      if (ref == null) return;
+      final post = await SocialService.getPostById(ref);
+      if (!context.mounted) return;
+      if (post == null) {
+        _showUnavailable(context, 'Dieser Beitrag ist nicht mehr verfügbar.');
+        return;
+      }
+      final profile = post['profiles'] as Map<String, dynamic>?;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PostDetailPage(
+            postId: ref,
+            name: SocialService.publicDisplayName(
+              profile,
+              fallbackUserId: post['user_id'] as String?,
+            ),
+            handle: SocialService.publicHandle(
+              profile,
+              fallbackUserId: post['user_id'] as String?,
+            ),
+            content: (post['content'] ?? '').toString(),
+            time: '',
+            sharedRouteId: post['shared_route_id'] as String?,
+            avatarUrl: profile?['avatar_url'] as String?,
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Gruppen-bezogen → Lobby oder „diese Gruppe ist nicht mehr verfügbar".
+    if (type.startsWith('group_')) {
+      if (ref == null) return;
+      final exists = await SocialService.groupExists(ref);
+      if (!context.mounted) return;
+      if (!exists) {
+        _showUnavailable(context, 'Diese Gruppe ist nicht mehr verfügbar.');
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: ref)),
+      );
+      return;
+    }
+    // weather_recommendation / trip_reminder: rein informativ, kein Ziel.
+  }
+
+  void _showUnavailable(BuildContext context, String message) {
+    showDialog<void>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1E28),
+        title: const Text(
+          'Nicht mehr verfügbar',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Text(message, style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx),
+            child: Text(
+              'OK',
+              style: TextStyle(color: accent, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ),
     );
   }

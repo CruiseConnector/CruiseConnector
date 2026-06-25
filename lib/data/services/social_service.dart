@@ -483,6 +483,22 @@ class SocialService {
     }
   }
 
+  /// 2026-06-25 (vucko): existiert die Gruppe (noch)? Für Notification-Deeplinks
+  /// — gelöschte/abgelaufene Gruppen → „nicht mehr verfügbar"-Popup statt
+  /// Navigation ins Leere. Liefert false auch bei fehlender Leseberechtigung.
+  static Future<bool> groupExists(String groupId) async {
+    try {
+      final row = await _db
+          .from('groups')
+          .select('id')
+          .eq('id', groupId)
+          .maybeSingle();
+      return row != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── Likes ─────────────────────────────────────────────────────────────
 
   static Future<bool> toggleLike(String postId) async {
