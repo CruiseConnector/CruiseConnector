@@ -92,8 +92,14 @@ class AuthService {
         'Google Login ist noch nicht konfiguriert (iOS Client ID fehlt).',
       );
     }
+    // 2026-06-25 (vucko): Nativer Google-Login NUR auf iOS. Auf Android braucht
+    // der native Credential-Manager-Flow eine in Firebase/Google-Cloud
+    // registrierte SHA-1 des Signing-Keys — die fehlt hier (google-services.json
+    // hat leere oauth_clients), darum bricht er nach der Konto-Auswahl ab
+    // („Anmeldung abgebrochen"). Auf Android nehmen wir daher den Supabase-
+    // Browser-OAuth (wie bei Apple) → kommt OHNE SHA-1 aus.
     final canUseNative =
-        onMobile && GoogleSignIn.instance.supportsAuthenticate();
+        onIos && GoogleSignIn.instance.supportsAuthenticate();
 
     if (!canUseNative) {
       await _startOAuthSignIn(OAuthProvider.google, scopes: 'email profile');
