@@ -50,6 +50,7 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.addListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
     CruiseModePage.pendingGroupView.addListener(_onPendingGroupView);
+    CruiseModePage.openCruiseTab.addListener(_onOpenCruiseTab);
     AppTutorialService.replayRequests.addListener(_onTutorialReplayRequested);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -247,6 +248,7 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.isFullscreen.removeListener(_onFullscreenChanged);
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     CruiseModePage.pendingGroupView.removeListener(_onPendingGroupView);
+    CruiseModePage.openCruiseTab.removeListener(_onOpenCruiseTab);
     _communityProvider?.stopRealtime();
     NotificationService.instance.onNew = null;
     unawaited(NotificationService.instance.stopRealtime());
@@ -288,6 +290,16 @@ class _HomePageState extends State<HomePage> {
         _visitedTabs.add(2);
       });
     }
+  }
+
+  /// 2026-06-25 (vucko): Wetter-Benachrichtigung → direkt auf den Cruise-Tab.
+  void _onOpenCruiseTab() {
+    if (!mounted) return;
+    setState(() {
+      _selectedIndex = 2;
+      _refreshCounter++;
+      _visitedTabs.add(2);
+    });
   }
 
   void _onPendingGroupView() {

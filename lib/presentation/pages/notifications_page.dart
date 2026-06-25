@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
@@ -245,7 +246,16 @@ class _NotificationTile extends StatelessWidget {
       );
       return;
     }
-    // weather_recommendation / trip_reminder: rein informativ, kein Ziel.
+
+    // Tägliche Wetterempfehlung / Trip-Reminder → zurück zum Home und auf den
+    // Cruise-Tab (Route generieren / losfahren). Tab-Wechsel statt loser
+    // Vollbild-Seite, damit die Bottom-Nav erhalten bleibt.
+    if (type == 'weather_recommendation' || type == 'trip_reminder') {
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      CruiseModePage.openCruiseTab.value =
+          CruiseModePage.openCruiseTab.value + 1;
+      return;
+    }
   }
 
   void _showUnavailable(BuildContext context, String message) {

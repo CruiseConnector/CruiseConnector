@@ -240,7 +240,12 @@ class AppNotification {
   /// gleiche notification.id) — User sieht nicht zweimal denselben Text
   /// und alle Notifications haben einen frischen Anstrich.
   (String title, String body) renderTexts() {
-    final name = fromUsername ?? 'Jemand';
+    // 2026-06-25 (vucko): Immer den @Namen des Auslösers zeigen — z.B.
+    // „@vucko hat deinen Post geliked". Nur wenn wirklich kein Username da ist,
+    // Fallback auf „Jemand".
+    final name = (fromUsername != null && fromUsername!.trim().isNotEmpty)
+        ? '@${fromUsername!.trim()}'
+        : 'Jemand';
     // Deterministischer Index pro Notification — gleiche ID → gleicher Text.
     final variantIdx = id.hashCode.abs();
     String pick(List<String> options) =>

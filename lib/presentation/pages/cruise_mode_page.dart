@@ -116,6 +116,12 @@ class CruiseModePage extends StatefulWidget {
     null,
   );
 
+  /// 2026-06-25 (vucko): Anforderung „öffne den Cruise-Tab" (z.B. aus der
+  /// Wetter-Benachrichtigung). Zähler — Home hört darauf und schaltet auf den
+  /// Cruise-Tab (Index 2). So landet man im echten Tab mit Bottom-Nav, nicht
+  /// auf einer losen Vollbild-Seite.
+  static final ValueNotifier<int> openCruiseTab = ValueNotifier<int>(0);
+
   /// 2026-06-20 (vucko Gruppen-Rejoin): Geräte-lokales Set von Gruppen, deren
   /// AKTIVE Fahrt der Nutzer bewusst verlassen hat. Die Lobby darf ihn dann
   /// NICHT automatisch zurück in die Navigation ziehen — sonst reisst ihn der
