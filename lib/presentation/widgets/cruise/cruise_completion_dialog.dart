@@ -205,7 +205,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     if (_isPickingPhoto || _isSaving || _isSharing) return;
     setState(() => _isPickingPhoto = true);
     try {
-      final bytes = await pickAndCropRidePhoto(context);
+      final bytes = await pickAndCropRidePhoto(context, lockedAspect: 4 / 3);
       if (bytes != null && mounted) {
         final stale = _uploadedPhotoUrl;
         setState(() {

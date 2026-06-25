@@ -171,9 +171,10 @@ class _RideDetailPageState extends State<RideDetailPage> {
   Future<void> _changePhoto() async {
     if (_photoBusy) return;
     try {
-      // Foto wählen + Ausschnitt/Zoom frei festlegen (was genau + in welchem
-      // Ausmaß gezeigt wird). Persistiert dank der drive-session UPDATE-Policy.
-      final bytes = await pickAndCropRidePhoto(context);
+      // Foto wählen + Ausschnitt/Zoom festlegen. Festes 4:3 = exakt das
+      // Anzeige-Format der Foto-Sektion → was zugeschnitten wird ist genau das,
+      // was später gezeigt wird (nichts wird nachträglich weggeschnitten).
+      final bytes = await pickAndCropRidePhoto(context, lockedAspect: 4 / 3);
       if (bytes == null) return;
       setState(() => _photoBusy = true);
       final oldUrl = _photoUrl;

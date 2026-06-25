@@ -17,6 +17,10 @@ import 'package:image_picker/image_picker.dart';
 Future<Uint8List?> pickAndCropRidePhoto(
   BuildContext context, {
   ImageSource source = ImageSource.gallery,
+  // Wenn gesetzt (z.B. 4/3), ist das Seitenverhältnis FIX (= das spätere
+  // Anzeige-Format) → der Nutzer pannt/zoomt nur im Rahmen, und was er sieht
+  // ist exakt was später angezeigt wird (nichts wird nachträglich abgeschnitten).
+  double? lockedAspect,
 }) async {
   final picked = await ImagePicker().pickImage(
     source: source,
@@ -25,17 +29,24 @@ Future<Uint8List?> pickAndCropRidePhoto(
   );
   if (picked == null) return null;
 
-  const presets = <CropAspectRatioPreset>[
-    CropAspectRatioPreset.original,
-    CropAspectRatioPreset.square,
-    CropAspectRatioPreset.ratio4x3,
-    CropAspectRatioPreset.ratio16x9,
-  ];
+  final lockedRatio = lockedAspect == null
+      ? null
+      : CropAspectRatio(ratioX: lockedAspect, ratioY: 1);
+  final locked = lockedRatio != null;
+  final presets = locked
+      ? const <CropAspectRatioPreset>[CropAspectRatioPreset.ratio4x3]
+      : const <CropAspectRatioPreset>[
+          CropAspectRatioPreset.original,
+          CropAspectRatioPreset.square,
+          CropAspectRatioPreset.ratio4x3,
+          CropAspectRatioPreset.ratio16x9,
+        ];
 
   final cropped = await ImageCropper().cropImage(
     sourcePath: picked.path,
     maxWidth: 1600,
     maxHeight: 2000,
+    aspectRatio: lockedRatio,
     compressFormat: ImageCompressFormat.jpg,
     compressQuality: 88,
     uiSettings: [
@@ -46,17 +57,17 @@ Future<Uint8List?> pickAndCropRidePhoto(
         activeControlsWidgetColor: AppAccentColors.accent,
         backgroundColor: const Color(0xFF0B0E14),
         cropStyle: CropStyle.rectangle,
-        lockAspectRatio: false,
-        hideBottomControls: false,
-        initAspectRatio: CropAspectRatioPreset.original,
+        lockAspectRatio: locked,
+        hideBottomControls: locked,
+        initAspectRatio: CropAspectRatioPreset.ratio4x3,
         aspectRatioPresets: presets,
       ),
       IOSUiSettings(
         title: 'Foto zuschneiden',
         doneButtonTitle: 'Fertig',
         cancelButtonTitle: 'Abbrechen',
-        aspectRatioLockEnabled: false,
-        resetAspectRatioEnabled: true,
+        aspectRatioLockEnabled: locked,
+        resetAspectRatioEnabled: !locked,
         rotateButtonsHidden: false,
         rotateClockwiseButtonHidden: false,
         cropStyle: CropStyle.rectangle,

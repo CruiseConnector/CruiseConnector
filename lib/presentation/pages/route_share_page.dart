@@ -156,13 +156,10 @@ class _RouteSharePageState extends State<RouteSharePage> {
     final boundary = ctx.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return null;
     final dpr = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 3.0).toDouble();
-    // Warten bis die Vorschau fertig gemalt ist (sonst leeres/halbes Bild →
-    // geteiltes Bild wäre leer / Capture schlägt fehl).
-    var paintTries = 0;
-    while (boundary.debugNeedsPaint && paintTries < 6) {
-      await Future<void>.delayed(const Duration(milliseconds: 40));
-      paintTries++;
-    }
+    // WICHTIG: NICHT boundary.debugNeedsPaint abfragen — der Getter setzt seinen
+    // Rückgabewert in einem assert(()=>...)-Block, der im RELEASE entfernt ist →
+    // LateInitializationError (genau das ließ „Teilen" im Release fehlschlagen).
+    // Die Paint-Bereitschaft sichert das feste Delay in _share().
     final image = await boundary.toImage(pixelRatio: dpr);
     try {
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -192,10 +189,13 @@ class _RouteSharePageState extends State<RouteSharePage> {
       // Beim Karten-Format sicherstellen, dass das Karten-Bild geladen ist,
       // bevor wir die Vorschau abfotografieren.
       if (_isMap && _mapBytes == null) await _ensureMapImage();
-      // Auf den nächsten vollständig gemalten Frame warten.
-      await WidgetsBinding.instance.endOfFrame;
+      // Kurz warten, damit die Vorschau sicher fertig gemalt ist. (Bewusst ein
+      // fixes Delay statt WidgetsBinding.endOfFrame — letzteres kann auf einem
+      // komplett idle Screen hängen, dann reagiert der Teilen-Button gar nicht.)
+      await Future<void>.delayed(const Duration(milliseconds: 160));
       final png = await _capturePng();
       if (png == null || png.isEmpty) {
+        debugPrint('[ShareFehler] PNG null/leer (capture)');
         _toast('Bild konnte nicht erstellt werden. Bitte erneut versuchen.');
         return;
       }
@@ -219,8 +219,11 @@ class _RouteSharePageState extends State<RouteSharePage> {
       if (result.status == ShareResultStatus.unavailable) {
         _toast('Teilen ist auf diesem Gerät nicht verfügbar.');
       }
-    } catch (e) {
-      _toast('Teilen fehlgeschlagen. Bitte erneut versuchen.');
+    } catch (e, st) {
+      debugPrint('[ShareFehler] $e\n$st');
+      // Echte Fehlerursache sichtbar machen (debugPrint loggt im Release nicht).
+      final msg = e.toString().replaceAll('\n', ' ');
+      _toast('Teilen-Fehler: ${msg.length > 150 ? msg.substring(0, 150) : msg}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -280,7 +283,11 @@ class _RouteSharePageState extends State<RouteSharePage> {
           alignment: _isSticker ? Alignment.center : Alignment.bottomCenter,
           child: Padding(
             padding: EdgeInsets.all(_isSticker ? 8 : 18),
-            child: RouteShareCard(data: widget.data, accent: accent),
+            child: RouteShareCard(
+              data: widget.data,
+              accent: accent,
+              showSketch: !_isMap,
+            ),
           ),
         ),
       ],
@@ -483,10 +490,19 @@ class _RouteSharePageState extends State<RouteSharePage> {
 /// während das Foto durchscheint. Isoliert testbar (Sim-Vorschau hell/dunkel)
 /// und wiederverwendbar (Share-Composer, evtl. Post-Route).
 class RouteShareCard extends StatelessWidget {
-  const RouteShareCard({super.key, required this.data, required this.accent});
+  const RouteShareCard({
+    super.key,
+    required this.data,
+    required this.accent,
+    this.showSketch = true,
+  });
 
   final RouteShareData data;
   final Color accent;
+
+  /// Im Karte-Modus IST der Hintergrund schon die Karte mit der Route → dann die
+  /// kleine Skizze in der Card ausblenden, sonst erscheint die Route doppelt.
+  final bool showSketch;
 
   @override
   Widget build(BuildContext context) {
@@ -548,8 +564,8 @@ class RouteShareCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          // Routen-Skizze.
-          if (data.segments.isNotEmpty)
+          // Routen-Skizze (im Karte-Modus aus → sonst doppelte Route).
+          if (showSketch && data.segments.isNotEmpty)
             Container(
               height: 116,
               width: double.infinity,
