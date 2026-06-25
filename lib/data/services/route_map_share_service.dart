@@ -113,6 +113,14 @@ class RouteMapShareService {
     }
     if (!anyTile) return null;
 
+    // 2026-06-25 (vucko): Dunkler Tint über die (mittelgrauen) Esri-Tiles →
+    // tieferes Schwarz passend zum App-Design (#0B0E14), nicht das helle Grau.
+    // srcOver bei ~0,45 deckt ab, ohne die Straßenstruktur zu verschlucken.
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+      Paint()..color = const Color(0xFF0B0E14).withValues(alpha: 0.46),
+    );
+
     Offset proj(List<double> p) => Offset(
           _mercX(p[0]) * n * 256 - x0 * 256,
           _mercY(p[1]) * n * 256 - y0 * 256,

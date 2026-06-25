@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -12,6 +13,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/data/services/instagram_share_service.dart';
 import 'package:cruise_connect/data/services/route_map_share_service.dart';
+import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 
 /// Entkoppelte Daten für die Share-Karte — funktioniert von überall
 /// (gespeicherte Route, Fahrt-Detail, Post-Route). Segmente = Liste von
@@ -112,6 +114,11 @@ class _RouteSharePageState extends State<RouteSharePage> {
   double _cardScale = 1.0;
   double _scaleStartFactor = 1.0;
 
+  // Eigenes Foto/Selfie als Hintergrund (Story/Quadrat). Optional — Default ist
+  // der dunkle Verlauf. Crop/Zoom passiert beim Auswählen (Bestätigen = „Fertig").
+  Uint8List? _bgPhoto;
+  bool _picking = false;
+
   double get _aspect => switch (_format) {
         _ShareFormat.story => 9 / 16,
         _ShareFormat.square => 1,
@@ -153,6 +160,64 @@ class _RouteSharePageState extends State<RouteSharePage> {
     }
   }
 
+  /// Eigenes Foto/Selfie als Hintergrund wählen. Beim Auswählen kann der Nutzer
+  /// zuschneiden/zoomen (9:16 passend zum Story-Rahmen) und mit „Fertig"
+  /// bestätigen. Danach liegt das Bild als Hintergrund, die Eckdaten-Karte
+  /// darüber (frei verschieb-/skalierbar).
+  Future<void> _pickBackground(ImageSource source) async {
+    if (_picking) return;
+    setState(() => _picking = true);
+    try {
+      final bytes = await pickAndCropRidePhoto(
+        context,
+        source: source,
+        lockedAspect: _format == _ShareFormat.square ? 1 : 9 / 16,
+      );
+      if (bytes != null && mounted) setState(() => _bgPhoto = bytes);
+    } catch (_) {
+      // Abbruch / kein Zugriff — still ignorieren.
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  /// Hintergrund-Foto entfernen — MIT Sicherheitsabfrage („Bist du sicher?").
+  Future<void> _removeBackgroundWithConfirm() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161A22),
+        title: const Text(
+          'Foto entfernen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: const Text(
+          'Bist du dir sicher, dass du das Hintergrund-Foto entfernen möchtest?',
+          style: TextStyle(color: Color(0xFFA0AEC0)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Color(0xFFA0AEC0)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(
+              'Entfernen',
+              style: TextStyle(
+                color: Color(0xFFF87171),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) setState(() => _bgPhoto = null);
+  }
 
   Future<Uint8List?> _capturePng() async {
     final ctx = _captureKey.currentContext;
@@ -379,6 +444,8 @@ class _RouteSharePageState extends State<RouteSharePage> {
         ],
       );
     }
+    // Eigenes Foto/Selfie als Hintergrund (Story/Quadrat) — sonst dunkler Grund.
+    if (_bgPhoto != null) return Image.memory(_bgPhoto!, fit: BoxFit.cover);
     return gradient;
   }
 
@@ -407,7 +474,41 @@ class _RouteSharePageState extends State<RouteSharePage> {
             ],
           ),
           const SizedBox(height: 10),
-          // Kurzer Hinweis je Modus (statt In-App-Foto-Compositing).
+          // Foto/Selfie als Hintergrund (nur Story/Quadrat — Karte hat die echte
+          // Karte, Sticker bleibt transparent fürs Drüberlegen).
+          if (!_isMap && !_isSticker) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _photoButton(
+                    _bgPhoto == null ? 'Foto' : 'Foto ändern',
+                    Icons.photo_library_rounded,
+                    _picking ? null : () => _pickBackground(ImageSource.gallery),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _photoButton(
+                    'Selfie',
+                    Icons.camera_alt_rounded,
+                    _picking ? null : () => _pickBackground(ImageSource.camera),
+                  ),
+                ),
+                if (_bgPhoto != null) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _photoButton(
+                      'Entfernen',
+                      Icons.delete_outline_rounded,
+                      _removeBackgroundWithConfirm,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
+          // Kurzer Hinweis je Modus.
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Row(
@@ -426,7 +527,9 @@ class _RouteSharePageState extends State<RouteSharePage> {
                         ? 'Transparenter Sticker — leg ihn in der Story-App über dein eigenes Foto.'
                         : _isMap
                             ? 'Echte Karte mit deiner Route — direkt teilen.'
-                            : 'Sauberer Hintergrund — perfekt für WhatsApp & Chats. Eigenes Foto? Nimm „Sticker".',
+                            : _bgPhoto != null
+                                ? 'Dein Foto als Hintergrund — Karte drüber frei ziehen & skalieren.'
+                                : 'Foto/Selfie als Hintergrund hinzufügen — oder dunkel lassen für Chats.',
                     style: const TextStyle(
                       color: Color(0xFF8B97A8),
                       fontSize: 11.5,
@@ -571,6 +674,42 @@ class _RouteSharePageState extends State<RouteSharePage> {
     );
   }
 
+  Widget _photoButton(String label, IconData icon, VoidCallback? onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Opacity(
+        opacity: onTap == null ? 0.5 : 1.0,
+        child: Container(
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1F26),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: Colors.white, size: 16),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Öffentliche, wiederverwendbare Eckdaten-„Glass"-Karte: Scrim 0.42 +
