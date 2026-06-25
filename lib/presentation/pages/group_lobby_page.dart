@@ -14,6 +14,7 @@ import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
 import '../widgets/user_avatar.dart';
 import 'cruise_mode_page.dart';
+import 'group_chat_page.dart';
 import 'user_profile_page.dart';
 
 /// Lobby vor dem gemeinsamen Start: zeigt Mitglieder, Rollen, Startbutton
@@ -492,6 +493,17 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           _group?.name ?? 'Lobby',
           style: const TextStyle(color: Colors.white),
         ),
+        actions: [
+          if (_group != null)
+            IconButton(
+              tooltip: 'Gruppen-Chat',
+              onPressed: _openChat,
+              icon: const Icon(
+                Icons.chat_bubble_outline_rounded,
+                color: Colors.white,
+              ),
+            ),
+        ],
       ),
       body: _loading
           ? const _LobbySkeleton()
@@ -501,6 +513,17 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           ? _buildConnecting()
           : _buildNotFound(),
       bottomNavigationBar: _loading || _group == null ? null : _buildBottom(),
+    );
+  }
+
+  void _openChat() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GroupChatPage(
+          groupId: widget.groupId,
+          groupName: _group?.name,
+        ),
+      ),
     );
   }
 
@@ -619,6 +642,8 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        _buildChatCard(),
         if (_leaderboard.isNotEmpty) ...[
           const SizedBox(height: 16),
           _buildLeaderboardCard(),
@@ -659,6 +684,62 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         const SizedBox(height: 8),
         _buildRoleSelector(),
       ],
+      ),
+    );
+  }
+
+  /// Einstieg in den Gruppen-Chat: Treffpunkt, Tempo, „wo seid ihr?" klären.
+  Widget _buildChatCard() {
+    return InkWell(
+      onTap: _openChat,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: AppAccentColors.accent.withValues(alpha: 0.28),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: AppAccentColors.accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.chat_bubble_outline_rounded,
+                color: AppAccentColors.accent,
+              ),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Gruppen-Chat',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Treffpunkt & Tempo mit der Gruppe klären',
+                    style: TextStyle(color: Colors.grey, fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white38),
+          ],
+        ),
       ),
     );
   }

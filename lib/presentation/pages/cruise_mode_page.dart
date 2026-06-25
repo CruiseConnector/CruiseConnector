@@ -16122,6 +16122,14 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _onRouteCompleted() {
     if (!mounted || _disposed) return;
+    // 2026-06-25 (vucko): Fahrt am Ziel abgeschlossen → Gruppe „abschließen".
+    // Setzt closed_at, ab dann läuft die 24h-Frist bis Gruppe + Chat per
+    // pg_cron gelöscht werden. Idempotent (jedes Mitglied darf es auslösen),
+    // fehlertolerant (das Post-Sheet darf nie daran scheitern).
+    final groupId = widget.groupId;
+    if (groupId != null) {
+      unawaited(CruiseGroupService.closeGroup(groupId));
+    }
     final snapshot = _buildCompletionSnapshot(
       isEarlyStop: false,
       belowMinimum: _completionProgressBelowXpMinimum(completed: true),

@@ -118,6 +118,18 @@ class CruiseGroupService {
     await _notifyGroupMembers(groupId, 'group_ride_started');
   }
 
+  /// 2026-06-25 (vucko): „Fahrt abgeschlossen → Gruppe abgeschlossen". Setzt
+  /// `closed_at` (idempotent via RPC close_group) — ab dann läuft die 24h-Frist
+  /// bis die Gruppe inkl. Chat per pg_cron gelöscht wird. Bewusst fehlertolerant:
+  /// das Fahrt-Ende darf nie an einem fehlgeschlagenen Schließen scheitern.
+  static Future<void> closeGroup(String groupId) async {
+    try {
+      await _db.rpc('close_group', params: {'p_group_id': groupId});
+    } catch (_) {
+      // Sicherheitsnetz: der pg_cron-Job auto-schließt hängende Gruppen ohnehin.
+    }
+  }
+
   static Future<void> updateMemberRole({
     required String groupId,
     required String userId,

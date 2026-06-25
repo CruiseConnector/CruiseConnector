@@ -1,0 +1,91 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:cruise_connect/data/services/social_service.dart';
+
+/// 2026-06-25 (vucko): Gruppen-Chat. Mitglieder einer Cruise-Gruppe können sich
+/// austauschen (Treffpunkt, Tempo, „wo seid ihr?"). Gespiegelt vom bewährten
+/// Community-Chat ([CommunityChatService]). Tabelle `group_messages` wird per
+/// FK ON DELETE CASCADE automatisch mit der Gruppe gelöscht (24h nach
+/// Fahrt-Ende, siehe Migration group_chat_and_24h_lifecycle).
+class GroupChatService {
+  GroupChatService._();
+
+  static SupabaseClient get _db => Supabase.instance.client;
+  static String? get _userId => _db.auth.currentUser?.id;
+
+  static const String _messageSelect =
+      'id, group_id, user_id, body, created_at, deleted_at, '
+      'profiles:user_id(id, username, email, avatar_url)';
+
+  static const int _bodyMaxLength = 2000;
+
+  static String displayName(
+    Map<String, dynamic>? profile, {
+    String? fallbackUserId,
+  }) {
+    return SocialService.publicDisplayName(
+      profile,
+      fallbackUserId: fallbackUserId,
+    );
+  }
+
+  /// Lädt die letzten 150 sichtbaren Nachrichten (aufsteigend), inkl. Profil.
+  static Future<List<Map<String, dynamic>>> fetchMessages(
+    String groupId,
+  ) async {
+    final rows = await _db
+        .from('group_messages')
+        .select(_messageSelect)
+        .eq('group_id', groupId)
+        .isFilter('deleted_at', null)
+        .order('created_at', ascending: true)
+        .limit(150);
+    return List<Map<String, dynamic>>.from(rows as List);
+  }
+
+  /// Schreibt eine Nachricht. Leerer Text wird ignoriert.
+  static Future<void> sendMessage(String groupId, String body) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final cleanBody = body.trim();
+    if (cleanBody.isEmpty) return;
+    final trimmed = cleanBody.length > _bodyMaxLength
+        ? cleanBody.substring(0, _bodyMaxLength)
+        : cleanBody;
+    await _db.from('group_messages').insert({
+      'group_id': groupId,
+      'user_id': uid,
+      'body': trimmed,
+    });
+  }
+
+  /// Soft-Delete der eigenen Nachricht.
+  static Future<void> deleteMessage(String messageId) async {
+    await _db
+        .from('group_messages')
+        .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
+        .eq('id', messageId);
+  }
+
+  /// Realtime-Abo auf neue/geänderte Nachrichten dieser Gruppe.
+  static RealtimeChannel subscribeMessages(
+    String groupId,
+    void Function() onChange, {
+    void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
+  }) {
+    final channel = _db.channel('group_messages_$groupId');
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'group_messages',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'group_id',
+        value: groupId,
+      ),
+      callback: (_) => onChange(),
+    );
+    channel.subscribe(onStatus);
+    return channel;
+  }
+}
