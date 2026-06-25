@@ -207,10 +207,18 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     try {
       final bytes = await pickAndCropRidePhoto(context);
       if (bytes != null && mounted) {
+        final stale = _uploadedPhotoUrl;
         setState(() {
           _photoBytes = bytes;
           _uploadedPhotoUrl = null; // neu zugeschnitten → neu hochladen
         });
+        // Eine evtl. bereits hochgeladene Vorversion (Save-Retry) entfernen.
+        if (stale != null) {
+          await SocialService.deleteUserAsset(
+            bucket: 'ride-photos',
+            publicUrl: stale,
+          );
+        }
       }
     } catch (e) {
       debugPrint('[CruiseCompletion] Foto wählen fehlgeschlagen: $e');
@@ -220,10 +228,20 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Future<void> _removePhoto() async {
+    final uploaded = _uploadedPhotoUrl;
     setState(() {
       _photoBytes = null;
       _uploadedPhotoUrl = null;
     });
+    // Falls das Foto schon hochgeladen war (z.B. Speichern schlug fehl und der
+    // User entfernt es danach), die verwaiste Datei wieder aus dem Storage
+    // löschen → kein Müll.
+    if (uploaded != null) {
+      await SocialService.deleteUserAsset(
+        bucket: 'ride-photos',
+        publicUrl: uploaded,
+      );
+    }
   }
 
   /// Lädt das gewählte Foto (falls vorhanden) in den public `ride-photos`-Bucket

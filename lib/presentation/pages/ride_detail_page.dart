@@ -176,6 +176,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
       final bytes = await pickAndCropRidePhoto(context);
       if (bytes == null) return;
       setState(() => _photoBusy = true);
+      final oldUrl = _photoUrl;
       final url = await SocialService.uploadUserAsset(
         bucket: 'ride-photos',
         bytes: bytes,
@@ -184,6 +185,25 @@ class _RideDetailPageState extends State<RideDetailPage> {
       );
       if (url != null) {
         await GamificationService.updateDriveSessionPhoto(_s.id, url);
+        // Altes Foto entfernen, falls es unter einem ANDEREN Pfad lag (z.B. ein
+        // Post-Route-Foto ride_<ts>.jpg) → kein verwaister Storage-Müll. Bei
+        // gleichem Pfad hat der upsert die Datei bereits überschrieben.
+        if (oldUrl != null) {
+          final oldPath = SocialService.storagePathFromPublicUrl(
+            'ride-photos',
+            oldUrl,
+          );
+          final newPath = SocialService.storagePathFromPublicUrl(
+            'ride-photos',
+            url,
+          );
+          if (oldPath != null && oldPath != newPath) {
+            await SocialService.deleteUserAsset(
+              bucket: 'ride-photos',
+              publicUrl: oldUrl,
+            );
+          }
+        }
         if (mounted) setState(() => _photoUrl = url);
       }
     } catch (_) {
@@ -203,7 +223,15 @@ class _RideDetailPageState extends State<RideDetailPage> {
   Future<void> _removePhoto() async {
     if (_photoBusy) return;
     setState(() => _photoBusy = true);
+    final oldUrl = _photoUrl;
     await GamificationService.updateDriveSessionPhoto(_s.id, null);
+    // Auch die Bild-Datei aus dem Storage löschen → kein verwaister Müll.
+    if (oldUrl != null) {
+      await SocialService.deleteUserAsset(
+        bucket: 'ride-photos',
+        publicUrl: oldUrl,
+      );
+    }
     if (mounted) {
       setState(() {
         _photoUrl = null;

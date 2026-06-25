@@ -2324,6 +2324,39 @@ class SocialService {
     return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
   }
 
+  /// Extrahiert den Storage-Pfad (`<uid>/<datei>`) aus einer Public-URL eines
+  /// Buckets (Cache-Buster `?t=` wird abgeschnitten). Für Vergleich + Löschen.
+  static String? storagePathFromPublicUrl(String bucket, String publicUrl) {
+    final marker = '/object/public/$bucket/';
+    final idx = publicUrl.indexOf(marker);
+    if (idx < 0) return null;
+    var path = publicUrl.substring(idx + marker.length);
+    final q = path.indexOf('?');
+    if (q >= 0) path = path.substring(0, q);
+    path = Uri.decodeComponent(path);
+    return path.isEmpty ? null : path;
+  }
+
+  /// Löscht eine zuvor via [uploadUserAsset] hochgeladene Datei wieder aus dem
+  /// Bucket — anhand ihrer Public-URL. So bleibt KEIN verwaister Storage-Müll
+  /// zurück, wenn der User ein Foto entfernt oder durch ein neues ersetzt.
+  /// RLS erlaubt das Löschen eigener Dateien (`<uid>/...`). Best-effort: wirft
+  /// nie, ein Fehlschlag darf den UI-Flow nicht blockieren.
+  static Future<bool> deleteUserAsset({
+    required String bucket,
+    required String publicUrl,
+  }) async {
+    final path = storagePathFromPublicUrl(bucket, publicUrl);
+    if (path == null) return false;
+    try {
+      await _db.storage.from(bucket).remove([path]);
+      return true;
+    } catch (e) {
+      debugPrint('[Social] Storage-Cleanup fehlgeschlagen ($path): $e');
+      return false;
+    }
+  }
+
   /// Persistiert die Public-URL mit Cache-Buster im jeweiligen
   /// Profil-Feld — für Avatar oder Banner.
   static Future<void> updateProfileImageUrl({
