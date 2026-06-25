@@ -462,15 +462,48 @@ class GamificationService {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return false;
     try {
-      await _db
+      // .select() zurückholen → ein leeres Ergebnis bedeutet 0 geänderte Zeilen
+      // (z.B. RLS blockiert / falsche id), damit ein stiller Fehlschlag NICHT
+      // fälschlich Erfolg meldet (das war die Wurzel des „Foto verschwindet").
+      final rows = await _db
           .from('user_drive_sessions')
           .update({'photo_url': photoUrl})
           .eq('id', sessionId)
-          .eq('user_id', userId);
+          .eq('user_id', userId)
+          .select('id');
+      if (rows.isEmpty) {
+        debugPrint('[Gamification] Foto-Update: 0 Zeilen geändert (RLS/id?).');
+        return false;
+      }
       return true;
     } catch (e) {
       debugPrint('[Gamification] Foto-Update fehlgeschlagen: $e');
       return false;
+    }
+  }
+
+  /// Sucht die jüngste EIGENE Drive-Session mit gegebenem route_fingerprint, die
+  /// ein Foto trägt. So kann eine GESPEICHERTE Route das Foto der zugehörigen
+  /// gefahrenen Fahrt anzeigen (eine Quelle = user_drive_sessions.photo_url),
+  /// ohne das Foto doppelt zu speichern. RLS-konform (nur eigene Zeilen).
+  static Future<String?> photoUrlForRouteFingerprint(String fingerprint) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null || fingerprint.trim().isEmpty) return null;
+    try {
+      final data = await _db
+          .from('user_drive_sessions')
+          .select('photo_url')
+          .eq('user_id', userId)
+          .eq('route_fingerprint', fingerprint)
+          .not('photo_url', 'is', null)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      final url = data?['photo_url'] as String?;
+      return (url != null && url.trim().isNotEmpty) ? url : null;
+    } catch (e) {
+      debugPrint('[Gamification] photoUrlForRouteFingerprint fehlgeschlagen: $e');
+      return null;
     }
   }
 

@@ -695,6 +695,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Fahr-Status. _navigationStartTime bleibt für _isActivelyDrivingRoute aktiv.
   int _xpStreakDays = 1;
   bool _driveSessionRecordedForCompletion = false;
+  // 2026-06-25 (vucko Foto-Persistenz): id der aufgenommenen Drive-Session, um
+  // ein erst im Abschluss-Sheet hinzugefügtes Foto nachtragen zu können.
+  String? _recordedDriveSessionId;
   double?
   _originalRouteDistance; // Ursprüngliche Gesamtdistanz (für Zeitberechnung)
   double?
@@ -16131,12 +16134,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         avgSpeedKmh: snapshot.avgSpeedKmh,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-        onSave: (rating, tags, title) async {
+        onSave: (rating, tags, title, photoUrl) async {
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
             title: title,
             completed: true,
+            photoUrl: photoUrl,
           );
           _resetAfterCompletion();
           return result;
@@ -16199,11 +16203,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         belowMinimum: snapshot.belowMinimum,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-        onSave: (rating, tags, title) async {
+        onSave: (rating, tags, title, photoUrl) async {
           final result = await _saveRouteAndSyncXp(
             rating: rating,
             ratingTags: tags,
             title: title,
+            photoUrl: photoUrl,
           );
           _resetAfterCompletion(tripGoalReached: false);
           return result;
@@ -16230,6 +16235,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     List<String> ratingTags = const [],
     String? title,
     bool completed = false,
+    String? photoUrl,
   }) async {
     int? previousLevel;
     int? previousTotalXp;
@@ -16273,7 +16279,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           'progress=${(progressFraction * 100).round()}%, '
           'xp=${xpBreakdown.totalXp}',
         );
-        await _recordDriveSessionForCurrentRoute(completed: completed);
+        await _recordDriveSessionForCurrentRoute(
+          completed: completed,
+          photoUrl: photoUrl,
+        );
         await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _selectedStyle,
@@ -16353,8 +16362,22 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _recordDriveSessionForCurrentRoute({
     required bool completed,
+    String? photoUrl,
   }) async {
-    if (_driveSessionRecordedForCompletion) return;
+    if (_driveSessionRecordedForCompletion) {
+      // Session wurde bereits (über einen anderen Pfad) aufgenommen — ein Foto,
+      // das der User erst im Abschluss-Sheet hinzufügt, nachtragen (greift dank
+      // der drive-session UPDATE-Policy auf photo_url).
+      if (photoUrl != null &&
+          photoUrl.isNotEmpty &&
+          _recordedDriveSessionId != null) {
+        await GamificationService.updateDriveSessionPhoto(
+          _recordedDriveSessionId!,
+          photoUrl,
+        );
+      }
+      return;
+    }
     final adjustedResult = _buildAdjustedCompletionResult();
     if (adjustedResult == null) return;
     final drivenKm = adjustedResult.distanceKm ?? 0;
@@ -16375,7 +16398,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       style: _selectedStyle,
       streakDays: _xpStreakDays,
     );
-    await GamificationService.recordDriveSession(
+    final recordedSession = await GamificationService.recordDriveSession(
       distanceKm: drivenKm,
       durationSeconds: adjustedResult.durationSeconds?.round() ?? 0,
       completedAtEnd: completed,
@@ -16391,7 +16414,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-25 (vucko Routen-Detail-Page): den GEFAHRENEN Track mitspeichern
       // → die Detailseite zeigt die echte gefahrene Strecke akkurat (wie Strava).
       trackGeometry: _drivenTrackRecorder.snapshot().coordinates,
+      // 2026-06-25 (vucko Foto-Persistenz): Foto aus dem Abschluss-Sheet direkt
+      // beim Insert mitspeichern → erscheint sofort in „zuletzt gefahren",
+      // Detailseite, Share (verschwindet nicht mehr).
+      photoUrl: photoUrl,
     );
+    _recordedDriveSessionId = recordedSession?.id;
     _driveSessionRecordedForCompletion = true;
     await GamificationService.calculateAndSync();
   }

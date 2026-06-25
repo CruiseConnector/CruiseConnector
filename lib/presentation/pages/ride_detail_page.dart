@@ -1,8 +1,7 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -49,6 +48,9 @@ class RideDetailPage extends StatefulWidget {
         routeType: route.routeType,
         groupId: route.groupId,
         trackGeometry: coords.length >= 2 ? coords : null,
+        // Fingerprint mitführen → die gespeicherte Route kann das Foto der
+        // zugehörigen GEFAHRENEN Fahrt nachladen (Single Source of Truth).
+        routeFingerprint: route.routeFingerprint,
       ),
     );
   }
@@ -66,7 +68,6 @@ class _RideDetailPageState extends State<RideDetailPage> {
     'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez',
   ];
 
-  final ImagePicker _picker = ImagePicker();
   String? _photoUrl;
   bool _photoBusy = false;
   List<GroupLeaderboardEntry> _leaderboard = const [];
@@ -79,6 +80,20 @@ class _RideDetailPageState extends State<RideDetailPage> {
     super.initState();
     _photoUrl = _s.photoUrl;
     if (_s.isGroupRide) _loadLeaderboard();
+    // Gespeicherte Route ohne eigenes Foto: das Foto der zugehörigen gefahrenen
+    // Fahrt (per route_fingerprint) nachladen → erscheint bei „gespeicherte
+    // Routen" konsistent, verschwindet nicht mehr.
+    if (_photoUrl == null && (_s.routeFingerprint?.trim().isNotEmpty ?? false)) {
+      _loadLinkedRidePhoto();
+    }
+  }
+
+  Future<void> _loadLinkedRidePhoto() async {
+    final url = await GamificationService.photoUrlForRouteFingerprint(
+      _s.routeFingerprint!,
+    );
+    if (!mounted || url == null) return;
+    setState(() => _photoUrl = url);
   }
 
   Future<void> _loadLeaderboard() async {
@@ -156,14 +171,11 @@ class _RideDetailPageState extends State<RideDetailPage> {
   Future<void> _changePhoto() async {
     if (_photoBusy) return;
     try {
-      final picked = await _picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1600,
-        imageQuality: 86,
-      );
-      if (picked == null) return;
+      // Foto wählen + Ausschnitt/Zoom frei festlegen (was genau + in welchem
+      // Ausmaß gezeigt wird). Persistiert dank der drive-session UPDATE-Policy.
+      final bytes = await pickAndCropRidePhoto(context);
+      if (bytes == null) return;
       setState(() => _photoBusy = true);
-      final Uint8List bytes = await picked.readAsBytes();
       final url = await SocialService.uploadUserAsset(
         bucket: 'ride-photos',
         bytes: bytes,
@@ -478,20 +490,27 @@ class _RideDetailPageState extends State<RideDetailPage> {
               ),
             ),
           ),
-          Positioned(
-            right: 8,
-            top: 8,
-            child: Row(
-              children: [
-                _circleBtn(Icons.edit_rounded, _photoBusy ? null : _changePhoto),
-                const SizedBox(width: 8),
-                _circleBtn(
-                  Icons.delete_outline_rounded,
-                  _photoBusy ? null : _removePhoto,
-                ),
-              ],
+          // Bearbeiten/Entfernen nur bei einer ECHTEN Drive-Session (allowPhoto).
+          // Bei gespeicherten Routen wird das Foto der zugehörigen Fahrt nur
+          // angezeigt (read-only) — Bearbeiten geht dort über „zuletzt gefahren".
+          if (widget.allowPhoto)
+            Positioned(
+              right: 8,
+              top: 8,
+              child: Row(
+                children: [
+                  _circleBtn(
+                    Icons.edit_rounded,
+                    _photoBusy ? null : _changePhoto,
+                  ),
+                  const SizedBox(width: 8),
+                  _circleBtn(
+                    Icons.delete_outline_rounded,
+                    _photoBusy ? null : _removePhoto,
+                  ),
+                ],
+              ),
             ),
-          ),
           if (_photoBusy)
             const Positioned.fill(
               child: ColoredBox(

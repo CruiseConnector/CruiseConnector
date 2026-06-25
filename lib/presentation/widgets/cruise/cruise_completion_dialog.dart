@@ -2,7 +2,11 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
+// XFile (PNG-Share-Export) — kam zuvor über image_picker; share_plus
+// re-exportiert XFile und ist die passende direkte Dependency dafür.
+import 'package:share_plus/share_plus.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/completion_title_generator.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
@@ -135,6 +139,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     int? rating,
     List<String> tags,
     String? title,
+    String? photoUrl,
   )
   onSave;
   final Future<void> Function() onDiscard;
@@ -159,6 +164,9 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   // 2026-05-31 (vucko): Editierbarer Auto-Titel + optionales Foto fürs Teilen.
   late final TextEditingController _titleController;
   Uint8List? _photoBytes;
+  // 2026-06-25 (vucko Foto-Persistenz): hochgeladene Public-URL cachen, damit
+  // ein erneutes Speichern (Retry) das gleiche Foto nicht doppelt hochlädt.
+  String? _uploadedPhotoUrl;
   bool _isPickingPhoto = false;
 
   @override
@@ -190,19 +198,19 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     super.dispose();
   }
 
-  /// Foto aus Galerie/Kamera wählen → fließt in die teilbare Share-Card.
+  /// Foto wählen + Ausschnitt/Zoom frei festlegen (was genau + in welchem
+  /// Ausmaß gezeigt wird). Fließt in die teilbare Share-Card UND wird beim
+  /// Speichern dauerhaft an der Fahrt persistiert (nicht nur im RAM).
   Future<void> _pickPhoto() async {
     if (_isPickingPhoto || _isSaving || _isSharing) return;
     setState(() => _isPickingPhoto = true);
     try {
-      final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1600,
-        imageQuality: 85,
-      );
-      if (picked != null) {
-        final bytes = await picked.readAsBytes();
-        if (mounted) setState(() => _photoBytes = bytes);
+      final bytes = await pickAndCropRidePhoto(context);
+      if (bytes != null && mounted) {
+        setState(() {
+          _photoBytes = bytes;
+          _uploadedPhotoUrl = null; // neu zugeschnitten → neu hochladen
+        });
       }
     } catch (e) {
       debugPrint('[CruiseCompletion] Foto wählen fehlgeschlagen: $e');
@@ -212,7 +220,36 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Future<void> _removePhoto() async {
-    setState(() => _photoBytes = null);
+    setState(() {
+      _photoBytes = null;
+      _uploadedPhotoUrl = null;
+    });
+  }
+
+  /// Lädt das gewählte Foto (falls vorhanden) in den public `ride-photos`-Bucket
+  /// und gibt die Public-URL zurück. Best-effort: ein Upload-Fehler darf das
+  /// Speichern der Fahrt NIE blockieren (Foto ist optional). Gecacht, damit ein
+  /// Retry nicht doppelt hochlädt.
+  Future<String?> _ensurePhotoUploaded() async {
+    final bytes = _photoBytes;
+    if (bytes == null) return null;
+    if (_uploadedPhotoUrl != null) return _uploadedPhotoUrl;
+    try {
+      final url = await SocialService.uploadUserAsset(
+        bucket: 'ride-photos',
+        bytes: bytes,
+        fileName: 'ride_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        contentType: 'image/jpeg',
+      );
+      _uploadedPhotoUrl = url;
+      return url;
+    } catch (e) {
+      debugPrint(
+        '[CruiseCompletion] Foto-Upload fehlgeschlagen '
+        '(Fahrt wird trotzdem gespeichert): $e',
+      );
+      return null;
+    }
   }
 
   Future<void> _handleSave() async {
@@ -220,10 +257,15 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     setState(() => _isSaving = true);
     final title = _titleController.text.trim();
     try {
+      // Foto dauerhaft sichern, BEVOR die Fahrt gespeichert wird → fließt mit in
+      // den user_drive_sessions-Insert (taucht danach in „zuletzt gefahren",
+      // Detailseite, Share auf — verschwindet nicht mehr).
+      final photoUrl = await _ensurePhotoUploaded();
       final result = await widget.onSave(
         _selectedRating > 0 ? _selectedRating : null,
         _selectedTags.toList(growable: false),
         title.isEmpty ? null : title,
+        photoUrl,
       );
       if (!mounted) return;
       setState(() => _isSaving = false);

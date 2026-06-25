@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -87,7 +88,6 @@ class RouteSharePage extends StatefulWidget {
 
 class _RouteSharePageState extends State<RouteSharePage> {
   final GlobalKey _captureKey = GlobalKey();
-  final ImagePicker _picker = ImagePicker();
 
   Uint8List? _photo;
   _ShareFormat _format = _ShareFormat.story;
@@ -137,15 +137,10 @@ class _RouteSharePageState extends State<RouteSharePage> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final picked = await _picker.pickImage(
-        source: source,
-        maxWidth: 1600,
-        imageQuality: 88,
-      );
-      if (picked != null) {
-        final bytes = await picked.readAsBytes();
-        if (mounted) setState(() => _photo = bytes);
-      }
+      // Foto wählen + Ausschnitt/Zoom frei festlegen → der User steuert, was im
+      // geteilten Bild zu sehen ist (und in welchem Ausmaß).
+      final bytes = await pickAndCropRidePhoto(context, source: source);
+      if (bytes != null && mounted) setState(() => _photo = bytes);
     } catch (_) {
       // Galerie/Kamera abgebrochen oder kein Zugriff — still ignorieren.
     } finally {
@@ -170,6 +165,12 @@ class _RouteSharePageState extends State<RouteSharePage> {
   Future<void> _share() async {
     if (_busy) return;
     setState(() => _busy = true);
+    // iPad: Share-Sheet ist ein Popover und braucht einen Anker — VOR den awaits
+    // erfassen, sonst erscheint das Sheet leer/falsch positioniert.
+    final shareBox = context.findRenderObject() as RenderBox?;
+    final shareOrigin = shareBox != null
+        ? shareBox.localToGlobal(Offset.zero) & shareBox.size
+        : null;
     try {
       // Einen Frame warten, damit das Capture-Widget sicher gelayoutet ist.
       await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -189,6 +190,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
             ? '${widget.data.title} · $dist — mit Cruise Connector'
             : '${widget.data.title} — mit Cruise Connector',
         subject: 'Cruise Connector Route',
+        sharePositionOrigin: shareOrigin,
       );
     } catch (_) {
       // Teilen abgebrochen — kein Fehler-Toast nötig.

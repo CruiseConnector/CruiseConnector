@@ -14,8 +14,13 @@ void main() {
 
   Future<void> pumpCompletionDialog(
     WidgetTester tester, {
-    Future<CruiseCompletionActionResult> Function(int?, List<String>, String?)?
-        onSave,
+    Future<CruiseCompletionActionResult> Function(
+      int?,
+      List<String>,
+      String?,
+      String?,
+    )?
+    onSave,
     Future<void> Function()? onDiscard,
     List<List<List<double>>>? routeSegments,
   }) async {
@@ -35,7 +40,7 @@ void main() {
             routeSegments: routeSegments,
             onSave:
                 onSave ??
-                (rating, tags, title) async {
+                (rating, tags, title, photoUrl) async {
                   return CruiseCompletionActionResult(success: false);
                 },
             onDiscard: onDiscard ?? () async {},
@@ -57,7 +62,7 @@ void main() {
 
     await pumpCompletionDialog(
       tester,
-      onSave: (rating, tags, title) async {
+      onSave: (rating, tags, title, photoUrl) async {
         savedRating = rating;
         savedTags = tags;
         return CruiseCompletionActionResult(success: false);
