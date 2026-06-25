@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/deep_links.dart';
+import 'package:cruise_connect/data/services/instagram_share_service.dart';
 import 'package:cruise_connect/data/services/route_map_share_service.dart';
 
 /// Entkoppelte Daten für die Share-Karte — funktioniert von überall
@@ -104,6 +105,13 @@ class _RouteSharePageState extends State<RouteSharePage> {
   Uint8List? _mapBytes;
   bool _mapLoading = false;
 
+  // 2026-06-25 (vucko): Overlay-Karte frei positionieren — ziehen (verschieben)
+  // + zwei Finger (skalieren). Das landet 1:1 im geteilten Bild, weil die
+  // RepaintBoundary die transformierte Karte miterfasst.
+  Offset _cardOffset = Offset.zero;
+  double _cardScale = 1.0;
+  double _scaleStartFactor = 1.0;
+
   double get _aspect => switch (_format) {
         _ShareFormat.story => 9 / 16,
         _ShareFormat.square => 1,
@@ -115,7 +123,12 @@ class _RouteSharePageState extends State<RouteSharePage> {
   bool get _isMap => _format == _ShareFormat.map;
 
   void _selectFormat(_ShareFormat f) {
-    setState(() => _format = f);
+    setState(() {
+      _format = f;
+      // Position/Größe zurücksetzen — die Formate haben andere Grund-Layouts.
+      _cardOffset = Offset.zero;
+      _cardScale = 1.0;
+    });
     if (f == _ShareFormat.map) _ensureMapImage();
   }
 
@@ -224,6 +237,39 @@ class _RouteSharePageState extends State<RouteSharePage> {
     }
   }
 
+  /// Direkt in Instagram Stories: übergibt die (im Sticker-Modus transparente)
+  /// Karte als Story-Sticker → Instagram öffnet die Story mit dem Sticker
+  /// obenauf, der Nutzer macht sein Selfie als Hintergrund und kann den Sticker
+  /// dort frei verschieben/skalieren. Klappt es nicht (Instagram fehlt), Fallback
+  /// auf das normale Teilen.
+  Future<void> _shareToInstagramStory() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (_isMap && _mapBytes == null) await _ensureMapImage();
+      await Future<void>.delayed(const Duration(milliseconds: 160));
+      final png = await _capturePng();
+      if (png == null || png.isEmpty) {
+        _toast('Bild konnte nicht erstellt werden. Bitte erneut versuchen.');
+        return;
+      }
+      final tmpDir = await getTemporaryDirectory();
+      final outFile = File(
+        '${tmpDir.path}/cruise-ig-story_${DateTime.now().millisecondsSinceEpoch}.png',
+      );
+      await outFile.writeAsBytes(png, flush: true);
+      final ok = await InstagramShareService.shareStorySticker(outFile.path);
+      if (!ok && mounted) {
+        // Instagram nicht verfügbar → normales Teilen als Fallback.
+        _toast('Instagram nicht gefunden — teile stattdessen unten mit „Teilen".');
+      }
+    } catch (e) {
+      _toast('Instagram-Teilen fehlgeschlagen.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = AppAccentColors.accent;
@@ -278,10 +324,26 @@ class _RouteSharePageState extends State<RouteSharePage> {
           alignment: _isSticker ? Alignment.center : Alignment.bottomCenter,
           child: Padding(
             padding: EdgeInsets.all(_isSticker ? 8 : 18),
-            child: RouteShareCard(
-              data: widget.data,
-              accent: accent,
-              showSketch: !_isMap,
+            // Frei positionierbar: 1 Finger ziehen = verschieben, 2 Finger =
+            // skalieren. Die transformierte Karte wird 1:1 mitfotografiert.
+            child: GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onScaleStart: (_) => _scaleStartFactor = _cardScale,
+              onScaleUpdate: (d) => setState(() {
+                _cardScale = (_scaleStartFactor * d.scale).clamp(0.55, 2.4);
+                _cardOffset += d.focalPointDelta;
+              }),
+              child: Transform.translate(
+                offset: _cardOffset,
+                child: Transform.scale(
+                  scale: _cardScale,
+                  child: RouteShareCard(
+                    data: widget.data,
+                    accent: accent,
+                    showSketch: !_isMap,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -375,6 +437,51 @@ class _RouteSharePageState extends State<RouteSharePage> {
               ],
             ),
           ),
+          // Verschieben/Skalieren-Hinweis + Zurücksetzen (nur wenn verändert).
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.open_with_rounded,
+                  size: 15,
+                  color: Color(0xFF8B97A8),
+                ),
+                const SizedBox(width: 7),
+                const Expanded(
+                  child: Text(
+                    'Ziehen zum Verschieben · 2 Finger zum Skalieren',
+                    style: TextStyle(color: Color(0xFF8B97A8), fontSize: 11.5),
+                  ),
+                ),
+                if (_cardOffset != Offset.zero || _cardScale != 1.0)
+                  GestureDetector(
+                    onTap: () => setState(() {
+                      _cardOffset = Offset.zero;
+                      _cardScale = 1.0;
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1C1F26),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        'Zurücksetzen',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           SizedBox(
             width: double.infinity,
             height: 54,
@@ -402,6 +509,34 @@ class _RouteSharePageState extends State<RouteSharePage> {
                   color: Colors.white,
                   fontSize: 17,
                   fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Direkt zu Instagram Stories (Sticker drüber, Selfie dahinter in IG).
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              onPressed: _busy ? null : _shareToInstagramStory,
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              icon: const Icon(
+                Icons.camera_alt_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+              label: const Text(
+                'Instagram Story',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ),
