@@ -1,3 +1,6 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -182,13 +185,20 @@ class _LoginOptionsSectionState extends State<LoginOptionsSection> {
                       ),
                       const Divider(color: Colors.white10, height: 1),
                     ],
-                    _buildRow(
-                      icon: Icons.apple,
-                      label: 'Apple',
-                      identity: _identityFor('apple'),
-                      provider: 'apple',
-                    ),
-                    const Divider(color: Colors.white10, height: 1),
+                    // 2026-06-25 (vucko): Apple-Verbinden NUR auf iOS (nativ).
+                    // Auf Android fehlt der Supabase-Apple-Browser-OAuth-Secret
+                    // → „Verbinden" würde scheitern. Wer Apple aber schon (auf
+                    // iOS) verknüpft hat, sieht/trennt es auch auf Android.
+                    if ((!kIsWeb && Platform.isIOS) ||
+                        _identityFor('apple') != null) ...[
+                      _buildRow(
+                        icon: Icons.apple,
+                        label: 'Apple',
+                        identity: _identityFor('apple'),
+                        provider: 'apple',
+                      ),
+                      const Divider(color: Colors.white10, height: 1),
+                    ],
                     _buildRow(
                       icon: Icons.g_mobiledata,
                       label: 'Google',

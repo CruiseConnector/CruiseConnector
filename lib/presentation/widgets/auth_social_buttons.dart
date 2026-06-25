@@ -1,3 +1,6 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 const _googleMarkAsset = 'lib/images/google_mark.png';
@@ -24,6 +27,12 @@ class AuthSocialButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 2026-06-25 (vucko): Apple-Login NUR auf iOS anbieten. Auf iOS läuft es
+    // nativ (idToken) und ist von Apple vorgeschrieben, sobald es Drittanbieter-
+    // Logins gibt. Auf Android wäre der Browser-OAuth-Weg nötig, der einen
+    // Supabase-Apple-Provider mit Services-ID + Secret braucht (bewusst NICHT
+    // eingerichtet) → dort gibt es nur Google. Web ebenfalls ohne Apple.
+    final showApple = !kIsWeb && Platform.isIOS;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -41,20 +50,22 @@ class AuthSocialButtons extends StatelessWidget {
             filterQuality: FilterQuality.high,
           ),
         ),
-        const SizedBox(width: 20),
-        _AuthSocialButton(
-          label: 'Mit Apple fortfahren',
-          loading: appleLoading,
-          enabled: enabled && !googleLoading && !appleLoading,
-          onTap: onApple,
-          surfaceColor: surfaceColor,
-          borderColor: borderColor,
-          child: Icon(
-            Icons.apple,
-            size: 36,
-            color: Colors.white.withValues(alpha: 0.9),
+        if (showApple) ...[
+          const SizedBox(width: 20),
+          _AuthSocialButton(
+            label: 'Mit Apple fortfahren',
+            loading: appleLoading,
+            enabled: enabled && !googleLoading && !appleLoading,
+            onTap: onApple,
+            surfaceColor: surfaceColor,
+            borderColor: borderColor,
+            child: Icon(
+              Icons.apple,
+              size: 36,
+              color: Colors.white.withValues(alpha: 0.9),
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
