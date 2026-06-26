@@ -31,7 +31,7 @@ class SocialService {
       'danach kannst du die Strecke erneut posten.';
 
   static const String _profileSelect =
-      'id, username, email, created_at, level, total_km, total_routes, '
+      'id, username, created_at, level, total_km, total_routes, '
       'badges, badge_showcase, bio_title, bio, avatar_url, banner_url, link, is_private, '
       'username_changed_at, '
       'car_brand, car_name, car_country_code, car_top_speed, car_engine_size, '
@@ -39,7 +39,7 @@ class SocialService {
       'car_first_reg, car_mileage, car_image_url';
 
   static const String _legacyProfileSelect =
-      'id, username, email, created_at, level, total_km, total_routes, '
+      'id, username, created_at, level, total_km, total_routes, '
       'badges, bio, avatar_url, banner_url, link, is_private, '
       'username_changed_at, '
       'car_brand, car_name, car_top_speed, car_engine_size, '
@@ -239,7 +239,7 @@ class SocialService {
           .toSet();
 
       const select =
-          '*, profiles(id, username, email, avatar_url), shared_route_id';
+          '*, profiles(id, username, avatar_url), shared_route_id';
 
       // Zwei disjunkte Queries (nach visibility) parallel — Filter auf
       // Query-Ebene verhindert, dass private Posts überhaupt ans Frontend
@@ -340,7 +340,7 @@ class SocialService {
     try {
       final posts = await _db
           .from('posts')
-          .select('*, profiles(id, username, email, avatar_url)')
+          .select('*, profiles(id, username, avatar_url)')
           .eq('user_id', userId)
           .order('created_at', ascending: false);
 
@@ -365,7 +365,7 @@ class SocialService {
       final posts = await _db
           .from('posts')
           .select(
-            '*, profiles(id, username, email, avatar_url, is_private), shared_route_id',
+            '*, profiles(id, username, avatar_url, is_private), shared_route_id',
           )
           .eq('visibility', 'public')
           .neq('is_hidden', true)
@@ -469,7 +469,7 @@ class SocialService {
       final result = await _db
           .from('posts')
           .select(
-            '*, profiles(id, username, email, avatar_url), shared_route_id',
+            '*, profiles(id, username, avatar_url), shared_route_id',
           )
           .eq('id', postId)
           .maybeSingle();
@@ -573,7 +573,7 @@ class SocialService {
   static Future<List<Map<String, dynamic>>> getUserLikes(String userId) async {
     final likes = await _db
         .from('post_likes')
-        .select('*, posts(*, profiles(id, username, email, avatar_url))')
+        .select('*, posts(*, profiles(id, username, avatar_url))')
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
@@ -606,7 +606,7 @@ class SocialService {
     final results = await _db
         .from('comments')
         .select(
-          '*, profiles!comments_user_id_profiles_fkey(id, username, email, avatar_url)',
+          '*, profiles!comments_user_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('post_id', postId)
         .order('created_at', ascending: true);
@@ -831,7 +831,7 @@ class SocialService {
   ) async {
     final reposts = await _db
         .from('reposts')
-        .select('*, posts(*, profiles(id, username, email, avatar_url))')
+        .select('*, posts(*, profiles(id, username, avatar_url))')
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
@@ -1043,7 +1043,7 @@ class SocialService {
         .from('follows')
         .select(
           'follower_id, created_at, '
-          'profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)',
+          'profiles!follows_follower_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('following_id', uid)
         .eq('status', 'pending')
@@ -1100,7 +1100,7 @@ class SocialService {
     final rows = await _db
         .from('follows')
         .select(
-          'follower_id, profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)',
+          'follower_id, profiles!follows_follower_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('following_id', uid)
         .eq('status', 'accepted');
@@ -1176,7 +1176,7 @@ class SocialService {
     final result = await _db
         .from('follows')
         .select(
-          'follower_id, profiles!follows_follower_id_profiles_fkey(id, username, email, avatar_url)',
+          'follower_id, profiles!follows_follower_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('following_id', userId)
         .eq('status', 'accepted');
@@ -1190,7 +1190,7 @@ class SocialService {
     final result = await _db
         .from('follows')
         .select(
-          'following_id, profiles!follows_following_id_profiles_fkey(id, username, email, avatar_url)',
+          'following_id, profiles!follows_following_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('follower_id', userId)
         .eq('status', 'accepted');
@@ -1206,8 +1206,8 @@ class SocialService {
     final blocked = await getBlockedAndBlockerIds();
     final results = await _db
         .from('profiles')
-        .select('id, username, email, avatar_url, is_private')
-        .or('username.ilike.%$sanitized%,email.ilike.%$sanitized%')
+        .select('id, username, avatar_url, is_private')
+        .or('username.ilike.%$sanitized%')
         .limit(20);
 
     final profiles = List<Map<String, dynamic>>.from(
@@ -1265,7 +1265,7 @@ class SocialService {
       final fof = await _db
           .from('follows')
           .select(
-            'following_id, profiles!follows_following_id_profiles_fkey(id, username, email, avatar_url, is_private)',
+            'following_id, profiles!follows_following_id_profiles_fkey(id, username, avatar_url, is_private)',
           )
           .inFilter('follower_id', myFollowingIds)
           .eq('status', 'accepted')
@@ -1285,7 +1285,7 @@ class SocialService {
     // 2) Fallback: neueste Profile (nicht-private)
     final recent = await _db
         .from('profiles')
-        .select('id, username, email, avatar_url, is_private')
+        .select('id, username, avatar_url, is_private')
         .eq('is_private', false)
         .order('created_at', ascending: false)
         .limit(limit + excluded.length);
@@ -1731,7 +1731,7 @@ class SocialService {
           .from('group_join_requests')
           .select(
             'id, message, created_at, user_id, '
-            'profiles:user_id(id, username, email, avatar_url)',
+            'profiles:user_id(id, username, avatar_url)',
           )
           .eq('group_id', groupId)
           .eq('status', 'pending')
@@ -1763,7 +1763,7 @@ class SocialService {
     final results = await _db
         .from('notifications')
         .select(
-          '*, profiles!notifications_from_user_id_profiles_fkey(id, username, email, avatar_url)',
+          '*, profiles!notifications_from_user_id_profiles_fkey(id, username, avatar_url)',
         )
         .eq('user_id', uid)
         .order('created_at', ascending: false)
@@ -2548,7 +2548,7 @@ class SocialService {
       final rows = await _db
           .from('user_blocks')
           .select(
-            'blocked_id, created_at, profiles!user_blocks_blocked_id_fkey(id, username, email, avatar_url)',
+            'blocked_id, created_at, profiles!user_blocks_blocked_id_fkey(id, username, avatar_url)',
           )
           .eq('blocker_id', uid)
           .order('created_at', ascending: false);
