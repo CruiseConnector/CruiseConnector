@@ -11253,7 +11253,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-06 (vucko P2/P4): Reroute-Banner-Flag zurücksetzen (nächster Off-
     // Route-Zyklus darf wieder genau EIN Banner zeigen) + die GRAUE Vorschau-/
     // Hintergrundroute deterministisch neu zeichnen (gleicher Signatur-
-    // Fingerprint bei Rundkurs-Reroute hätte sie sonst stehen lassen).    _mlController?.forceResyncLines();
+    // Fingerprint bei Rundkurs-Reroute hätte sie sonst stehen lassen).
+    // 2026-06-26 (vucko): Aufruf war seit 00cb464 in den Kommentar geschluckt
+    // (Dead Code) — wieder als echte Anweisung. Sonst blieb die graue Vorschau-
+    // linie nach gleich-langem Rundkurs-Reroute auf alter Geometrie stehen.
+    _mlController?.forceResyncLines();
     unawaited(
       RouteCacheService.instance.storeConfirmedRoute(
         route: result,

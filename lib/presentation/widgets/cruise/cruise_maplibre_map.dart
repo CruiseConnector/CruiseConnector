@@ -1224,12 +1224,24 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       return;
     }
     final pts = widget.activeRoutePoints;
-    final sig = pts.length < 2
-        ? 'empty'
-        : '${pts.length}:${pts.first.latitude.toStringAsFixed(5)},'
-              '${pts.first.longitude.toStringAsFixed(5)}>'
-              '${pts.last.latitude.toStringAsFixed(5)},'
-              '${pts.last.longitude.toStringAsFixed(5)}';
+    // 2026-06-26 (vucko Rundkurs-Fix): Signatur MUSS Interior-Punkte samplen
+    // (¼/½/¾) wie _linesSignature — sonst kollidiert ein gleich-langer Rundkurs
+    // (first==last) mit der vorigen Revision, setGeoJsonSource wird übersprungen
+    // und die alte rote Linie bleibt stehen (Reroute / Gruppen-Revision /
+    // Overview-Fenster). first+last+count allein reichen bei Loops nicht.
+    String fmtPt(ll.LatLng p) =>
+        '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}';
+    final String sig;
+    if (pts.length < 2) {
+      sig = 'empty';
+    } else {
+      final mid = pts.length > 3
+          ? '${fmtPt(pts[pts.length ~/ 4])}|'
+                '${fmtPt(pts[pts.length ~/ 2])}|'
+                '${fmtPt(pts[(pts.length * 3) ~/ 4])}'
+          : '';
+      sig = '${pts.length}:${fmtPt(pts.first)}>$mid>${fmtPt(pts.last)}';
+    }
     if (sig == _lastActiveSig) return;
     _lastActiveSig = sig;
     try {
