@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 
@@ -158,8 +159,9 @@ class CarCard extends StatelessWidget {
               fit: StackFit.expand,
               children: [
                 if (imageUrl != null)
-                  Image.network(
-                    imageUrl,
+                  Image(
+                    // Disk-gecacht statt bei jedem Swipe neu zu laden.
+                    image: CachedNetworkImageProvider(imageUrl),
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) =>
                         _VehicleImagePlaceholder(isBike: isBike),

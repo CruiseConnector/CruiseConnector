@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -326,7 +328,9 @@ class _AvatarOrIcon extends StatelessWidget {
           CircleAvatar(
             radius: 22,
             backgroundColor: Colors.white12,
-            backgroundImage: NetworkImage(avatar),
+            // Cached + DPR-resized statt jedes Scrollen neu zu laden.
+            backgroundImage:
+                UserAvatar.avatarImageProvider(context, avatar, radius: 22),
           ),
           Positioned(
             right: 0,

@@ -70,6 +70,10 @@ class _CommunityPageState extends State<CommunityPage>
   RealtimeChannel? _postsChannel;
   RealtimeChannel? _groupsChannel;
   final Set<String> _expandedGroupNames = {};
+  // Lazy einmalig erstellt (viewportFraction braucht MediaQuery); früher wurde
+  // bei JEDEM build ein neuer PageController alloziert und nie disposed.
+  PageController? _usersCarouselCtrl;
+  PageController? _groupsCarouselCtrl;
 
   @override
   void initState() {
@@ -120,6 +124,8 @@ class _CommunityPageState extends State<CommunityPage>
     _tabController.dispose();
     _searchController.dispose();
     _groupSearchController.dispose();
+    _usersCarouselCtrl?.dispose();
+    _groupsCarouselCtrl?.dispose();
     super.dispose();
   }
 
@@ -855,11 +861,9 @@ class _CommunityPageState extends State<CommunityPage>
     required int itemCount,
     required double itemWidth,
     required IndexedWidgetBuilder itemBuilder,
+    required PageController controller,
     String? subtitle,
   }) {
-    final ctrl = PageController(
-      viewportFraction: itemWidth / MediaQuery.of(context).size.width,
-    );
     return Column(
       children: [
         const SizedBox(height: 10),
@@ -912,7 +916,7 @@ class _CommunityPageState extends State<CommunityPage>
               SizedBox(
                 height: height,
                 child: PageView.builder(
-                  controller: ctrl,
+                  controller: controller,
                   padEnds: false,
                   itemCount: itemCount,
                   itemBuilder: itemBuilder,
@@ -1119,11 +1123,15 @@ class _CommunityPageState extends State<CommunityPage>
 
   Widget _buildUsersCarousel() {
     final visibleCount = math.min(_suggestedUsers.length, 5);
+    _usersCarouselCtrl ??= PageController(
+      viewportFraction: 160 / MediaQuery.of(context).size.width,
+    );
     return _buildCarouselSection(
       title: 'Leute, denen du folgen könntest',
       height: 170,
       itemCount: visibleCount,
       itemWidth: 160,
+      controller: _usersCarouselCtrl!,
       itemBuilder: (ctx, i) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6),
         child: _buildSuggestedUserCard(_suggestedUsers[i]),
@@ -1132,11 +1140,15 @@ class _CommunityPageState extends State<CommunityPage>
   }
 
   Widget _buildGroupsCarousel() {
+    _groupsCarouselCtrl ??= PageController(
+      viewportFraction: 220 / MediaQuery.of(context).size.width,
+    );
     return _buildCarouselSection(
       title: 'Gruppen entdecken',
       height: 170,
       itemCount: _discoverGroups.length,
       itemWidth: 220,
+      controller: _groupsCarouselCtrl!,
       itemBuilder: (ctx, i) {
         final group = _discoverGroups[i];
         final groupId = group['id'] as String;
