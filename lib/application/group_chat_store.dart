@@ -128,4 +128,77 @@ class GroupChatStore extends ChangeNotifier {
     _pending[groupId]?.removeWhere((m) => m['id'] == messageId);
     notifyListeners();
   }
+
+  /// Eigene, bereits gesendete Nachricht bearbeiten (optimistisch + DB).
+  Future<void> editMessage(
+    String groupId,
+    String messageId,
+    String newBody,
+  ) async {
+    final clean = newBody.trim();
+    if (clean.isEmpty) return;
+    final list = _server[groupId];
+    if (list != null) {
+      for (final m in list) {
+        if (m['id'] == messageId) {
+          m['body'] = clean;
+          m['edited_at'] = DateTime.now().toUtc().toIso8601String();
+          break;
+        }
+      }
+      notifyListeners();
+    }
+    try {
+      await GroupChatService.editMessage(messageId, clean);
+    } catch (_) {
+      // Bei Fehler holt der reload den echten Stand zurück.
+    }
+    await reload(groupId);
+  }
+
+  /// Emoji-Reaktion auf eine bereits gesendete Nachricht umschalten
+  /// (optimistisch + DB). [myUid] ist die eigene User-ID.
+  void toggleReaction(
+    String groupId,
+    String messageId,
+    String emoji,
+    String myUid,
+  ) {
+    final list = _server[groupId];
+    Map<String, dynamic>? msg;
+    if (list != null) {
+      for (final m in list) {
+        if (m['id'] == messageId) {
+          msg = m;
+          break;
+        }
+      }
+    }
+    if (msg == null) return;
+
+    final reactions = <Map<String, dynamic>>[
+      for (final r in (msg['group_message_reactions'] as List?) ?? const [])
+        if (r is Map) Map<String, dynamic>.from(r),
+    ];
+    final mine = reactions.any(
+      (r) => r['emoji'] == emoji && r['user_id'] == myUid,
+    );
+
+    // Optimistisch umschalten.
+    if (mine) {
+      reactions.removeWhere(
+        (r) => r['emoji'] == emoji && r['user_id'] == myUid,
+      );
+    } else {
+      reactions.add({'emoji': emoji, 'user_id': myUid});
+    }
+    msg['group_message_reactions'] = reactions;
+    notifyListeners();
+
+    // Server (Add/Remove), danach echten Stand nachziehen.
+    final future = mine
+        ? GroupChatService.removeReaction(messageId, emoji)
+        : GroupChatService.addReaction(messageId, emoji);
+    future.then((_) => reload(groupId)).catchError((_) => reload(groupId));
+  }
 }

@@ -14,8 +14,9 @@ class GroupChatService {
   static String? get _userId => _db.auth.currentUser?.id;
 
   static const String _messageSelect =
-      'id, group_id, user_id, body, created_at, deleted_at, client_tag, '
-      'profiles:user_id(id, username, email, avatar_url)';
+      'id, group_id, user_id, body, created_at, deleted_at, edited_at, '
+      'client_tag, profiles:user_id(id, username, email, avatar_url), '
+      'group_message_reactions(emoji, user_id)';
 
   static const int _bodyMaxLength = 2000;
 
@@ -83,6 +84,45 @@ class GroupChatService {
         .eq('id', messageId);
   }
 
+  /// Eigene Nachricht bearbeiten (Body + edited_at). RLS lässt nur eigene zu.
+  static Future<void> editMessage(String messageId, String newBody) async {
+    final clean = newBody.trim();
+    if (clean.isEmpty) return;
+    final trimmed = clean.length > _bodyMaxLength
+        ? clean.substring(0, _bodyMaxLength)
+        : clean;
+    await _db
+        .from('group_messages')
+        .update({
+          'body': trimmed,
+          'edited_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', messageId);
+  }
+
+  /// Emoji-Reaktion setzen (idempotent — doppeltes Setzen ist ein No-Op).
+  static Future<void> addReaction(String messageId, String emoji) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db.from('group_message_reactions').upsert(
+      {'message_id': messageId, 'user_id': uid, 'emoji': emoji},
+      onConflict: 'message_id,user_id,emoji',
+      ignoreDuplicates: true,
+    );
+  }
+
+  /// Eigene Emoji-Reaktion entfernen.
+  static Future<void> removeReaction(String messageId, String emoji) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db
+        .from('group_message_reactions')
+        .delete()
+        .eq('message_id', messageId)
+        .eq('user_id', uid)
+        .eq('emoji', emoji);
+  }
+
   /// Realtime-Abo auf neue/geänderte Nachrichten dieser Gruppe.
   static RealtimeChannel subscribeMessages(
     String groupId,
@@ -99,6 +139,15 @@ class GroupChatService {
         column: 'group_id',
         value: groupId,
       ),
+      callback: (_) => onChange(),
+    );
+    // Reaktionen haben kein group_id → kein Spalten-Filter möglich; die RLS
+    // liefert per Realtime nur Reaktionen aus den eigenen Gruppen aus, also
+    // unkritisch. Jede Reaktions-Änderung triggert einen Reload.
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'group_message_reactions',
       callback: (_) => onChange(),
     );
     channel.subscribe(onStatus);

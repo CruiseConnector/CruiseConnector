@@ -29,12 +29,19 @@ class GroupChatPanel extends StatefulWidget {
 class _GroupChatPanelState extends State<GroupChatPanel> {
   final _messageCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _focusNode = FocusNode();
   final _store = GroupChatStore.instance;
 
   RealtimeChannel? _channel;
   Timer? _reloadDebounce;
   bool _loading = true;
   int _lastCount = 0;
+
+  /// Nachricht, die gerade im Composer bearbeitet wird (null = normaler Modus).
+  Map<String, dynamic>? _editing;
+
+  /// Schnell-Reaktionen im Lang-Druck-Menü.
+  static const List<String> _quickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
   String? get _uid => Supabase.instance.client.auth.currentUser?.id;
   String get _gid => widget.groupId;
@@ -52,11 +59,13 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
 
   @override
   void dispose() {
-    // Entwurf sichern (Senden hat ihn ggf. schon geleert).
-    _store.setDraft(_gid, _messageCtrl.text);
+    // Entwurf sichern (Senden hat ihn ggf. schon geleert). Im Edit-Modus NICHT
+    // den echten Entwurf mit dem Bearbeitungstext überschreiben.
+    if (_editing == null) _store.setDraft(_gid, _messageCtrl.text);
     _store.removeListener(_onStore);
     _reloadDebounce?.cancel();
     _channel?.unsubscribe();
+    _focusNode.dispose();
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -92,10 +101,58 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
     if (text.isEmpty) return;
     final uid = _uid;
     if (uid == null) return;
+
+    // Edit-Modus: bestehende Nachricht aktualisieren statt neue senden.
+    final editing = _editing;
+    if (editing != null) {
+      final id = editing['id']?.toString();
+      if (id != null && id.isNotEmpty) {
+        _store.editMessage(_gid, id, text);
+      }
+      setState(() {
+        _editing = null;
+        _messageCtrl.text = _store.draftFor(_gid);
+      });
+      _messageCtrl.selection = TextSelection.fromPosition(
+        TextPosition(offset: _messageCtrl.text.length),
+      );
+      return;
+    }
+
     _store.send(_gid, text, _myProfile(uid));
     _messageCtrl.clear();
     _store.setDraft(_gid, '');
     _scrollToBottom();
+  }
+
+  /// Startet den Edit-Modus für die eigene Nachricht (Composer übernimmt Text).
+  void _startEdit(Map<String, dynamic> message) {
+    final id = message['id']?.toString();
+    if (id == null) return;
+    setState(() {
+      _editing = message;
+      _messageCtrl.text = message['body']?.toString() ?? '';
+    });
+    _messageCtrl.selection = TextSelection.fromPosition(
+      TextPosition(offset: _messageCtrl.text.length),
+    );
+    _focusNode.requestFocus();
+  }
+
+  void _cancelEdit() {
+    setState(() {
+      _editing = null;
+      _messageCtrl.text = _store.draftFor(_gid);
+    });
+    _messageCtrl.selection = TextSelection.fromPosition(
+      TextPosition(offset: _messageCtrl.text.length),
+    );
+  }
+
+  void _toggleReaction(String messageId, String emoji) {
+    final uid = _uid;
+    if (uid == null) return;
+    _store.toggleReaction(_gid, messageId, emoji, uid);
   }
 
   Map<String, dynamic> _myProfile(String uid) {
@@ -126,8 +183,13 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
   }
 
   void _messageActions(Map<String, dynamic> message) {
-    if (message['user_id'] != _uid) return;
-    final failed = message['_status'] == 'failed';
+    final isMine = message['user_id'] == _uid;
+    final status = message['_status'];
+    final failed = status == 'failed';
+    // Reagieren/Bearbeiten nur bei bestätigten Server-Nachrichten (echte ID).
+    final canReact = status == null;
+    final id = message['id']?.toString();
+
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF151821),
@@ -148,7 +210,58 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                 borderRadius: BorderRadius.circular(99),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
+            // Emoji-Schnellreaktion (auf jede bestätigte Nachricht, auch eigene).
+            if (canReact && id != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    for (final emoji in _quickEmojis)
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _toggleReaction(id, emoji);
+                        },
+                        child: Container(
+                          width: 46,
+                          height: 46,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1C1F26),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.06),
+                            ),
+                          ),
+                          child: Text(emoji,
+                              style: const TextStyle(fontSize: 24)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            if (canReact && id != null)
+              Divider(
+                color: Colors.white.withValues(alpha: 0.06),
+                height: 18,
+              ),
+            if (isMine && canReact && id != null)
+              ListTile(
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _startEdit(message);
+                },
+                leading: const Icon(Icons.edit_outlined, color: Colors.white),
+                title: const Text(
+                  'Bearbeiten',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
             if (failed)
               ListTile(
                 onTap: () {
@@ -165,21 +278,22 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                   ),
                 ),
               ),
-            ListTile(
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _deleteMessage(message);
-              },
-              leading: const Icon(Icons.delete_outline_rounded,
-                  color: Colors.redAccent),
-              title: const Text(
-                'Löschen',
-                style: TextStyle(
-                  color: Colors.redAccent,
-                  fontWeight: FontWeight.w800,
+            if (isMine)
+              ListTile(
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _deleteMessage(message);
+                },
+                leading: const Icon(Icons.delete_outline_rounded,
+                    color: Colors.redAccent),
+                title: const Text(
+                  'Löschen',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -294,7 +408,7 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
       padding: EdgeInsets.only(top: groupedWithPrev ? 2 : 10),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onLongPress: isMine ? () => _messageActions(message) : null,
+        onLongPress: () => _messageActions(message),
         onTap: failed ? () => _store.retry(_gid, message) : null,
         child: Row(
           mainAxisAlignment:
@@ -315,9 +429,13 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
             if (!isMine) const SizedBox(width: 8),
             Flexible(
               flex: 8,
-              child: Opacity(
-                opacity: sending ? 0.72 : 1,
-                child: Container(
+              child: Column(
+                crossAxisAlignment:
+                    isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  Opacity(
+                    opacity: sending ? 0.72 : 1,
+                    child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 9,
@@ -391,6 +509,17 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                               fontSize: 10.5,
                             ),
                           ),
+                          if (message['edited_at'] != null && !sending) ...[
+                            const SizedBox(width: 4),
+                            Text(
+                              'bearbeitet',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 10,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
                           if (sending) ...[
                             const SizedBox(width: 5),
                             SizedBox(
@@ -429,10 +558,90 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                       ),
                     ],
                   ),
-                ),
+                    ),
+                  ),
+                  _buildReactions(message),
+                ],
               ),
             ),
             if (isMine) const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Reaktions-Pillen unter der Blase (Emoji + Anzahl, eigene hervorgehoben).
+  Widget _buildReactions(Map<String, dynamic> message) {
+    final raw = message['group_message_reactions'];
+    if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
+
+    final counts = <String, int>{};
+    final mineEmojis = <String>{};
+    for (final r in raw) {
+      if (r is! Map) continue;
+      final emoji = r['emoji']?.toString();
+      if (emoji == null || emoji.isEmpty) continue;
+      counts[emoji] = (counts[emoji] ?? 0) + 1;
+      if (r['user_id'] == _uid) mineEmojis.add(emoji);
+    }
+    if (counts.isEmpty) return const SizedBox.shrink();
+
+    final id = message['id']?.toString();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        children: [
+          for (final entry in counts.entries)
+            _reactionPill(
+              entry.key,
+              entry.value,
+              mine: mineEmojis.contains(entry.key),
+              messageId: id,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _reactionPill(
+    String emoji,
+    int count, {
+    required bool mine,
+    required String? messageId,
+  }) {
+    return GestureDetector(
+      onTap: messageId == null ? null : () => _toggleReaction(messageId, emoji),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: mine
+              ? AppAccentColors.accent.withValues(alpha: 0.22)
+              : const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: mine
+                ? AppAccentColors.accent.withValues(alpha: 0.85)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 13)),
+            if (count > 1) ...[
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(
+                  color: mine ? Colors.white : Colors.white70,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -450,20 +659,29 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
             top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
           ),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            if (_editing != null) _buildEditBanner(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
             Expanded(
               child: TextField(
                 controller: _messageCtrl,
+                focusNode: _focusNode,
                 minLines: 1,
                 maxLines: 4,
                 style: const TextStyle(color: Colors.white),
                 textInputAction: TextInputAction.send,
-                onChanged: (v) => _store.setDraft(_gid, v),
+                onChanged: (v) {
+                  if (_editing == null) _store.setDraft(_gid, v);
+                },
                 onSubmitted: (_) => _send(),
                 decoration: InputDecoration(
-                  hintText: 'Nachricht an die Gruppe',
+                  hintText: _editing != null
+                      ? 'Nachricht bearbeiten …'
+                      : 'Nachricht an die Gruppe',
                   hintStyle: const TextStyle(color: Colors.grey),
                   counterText: '',
                   filled: true,
@@ -486,12 +704,60 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                 style: IconButton.styleFrom(
                   backgroundColor: AppAccentColors.accent,
                 ),
-                icon: const Icon(Icons.send_rounded,
-                    color: Colors.white, size: 18),
+                icon: Icon(
+                  _editing != null
+                      ? Icons.check_rounded
+                      : Icons.send_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
               ),
+            ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildEditBanner() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 7, 4, 7),
+      decoration: BoxDecoration(
+        color: AppAccentColors.accent.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppAccentColors.accent.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.edit_outlined, color: AppAccentColors.accent, size: 16),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Nachricht bearbeiten',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: _cancelEdit,
+            visualDensity: VisualDensity.compact,
+            icon: Icon(
+              Icons.close_rounded,
+              color: Colors.white.withValues(alpha: 0.7),
+              size: 18,
+            ),
+          ),
+        ],
       ),
     );
   }
