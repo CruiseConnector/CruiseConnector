@@ -25,30 +25,30 @@ class CommunityChatService {
   static const String _communitySelect =
       'id, owner_id, name, description, is_public, invite_code, created_at, '
       'updated_at, owner_only_messages, community_members(user_id, role), '
-      'profiles:owner_id(id, username, email, avatar_url)';
+      'profiles:owner_id(id, username, avatar_url)';
 
   static const String _legacyCommunitySelect =
       'id, owner_id, name, description, is_public, invite_code, created_at, '
       'updated_at, community_members(user_id, role), '
-      'profiles:owner_id(id, username, email, avatar_url)';
+      'profiles:owner_id(id, username, avatar_url)';
 
   static const String _messageSelect =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, pinned_at, pinned_by, '
-      'profiles:user_id(id, username, email, avatar_url)';
+      'profiles:user_id(id, username, avatar_url)';
 
   static const String _messageSelectWithoutPins =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, '
-      'profiles:user_id(id, username, email, avatar_url)';
+      'profiles:user_id(id, username, avatar_url)';
 
   static const String _legacyMessageSelect =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
-      'profiles:user_id(id, username, email, avatar_url)';
+      'profiles:user_id(id, username, avatar_url)';
 
   static const String _memberSelect =
       'id, community_id, user_id, role, created_at, '
-      'profiles:user_id(id, username, email, avatar_url)';
+      'profiles:user_id(id, username, avatar_url)';
 
   static String? normalizeInviteCode(String raw) {
     final cleaned = raw.trim().toUpperCase().replaceAll(

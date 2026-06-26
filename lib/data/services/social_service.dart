@@ -1376,7 +1376,7 @@ class SocialService {
     final groups = await _db
         .from('groups')
         .select(
-          '*, group_members(user_id), profiles:created_by(id, username, email)',
+          '*, group_members(user_id), profiles:created_by(id, username)',
         )
         .eq('is_public', true)
         .eq('is_active', false)
@@ -1629,7 +1629,7 @@ class SocialService {
       final row = await _db
           .from('groups')
           .select(
-            '*, group_members(user_id), profiles:created_by(id, username, email)',
+            '*, group_members(user_id), profiles:created_by(id, username)',
           )
           .eq('invite_code', code)
           .maybeSingle();

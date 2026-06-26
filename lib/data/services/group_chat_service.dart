@@ -15,7 +15,7 @@ class GroupChatService {
 
   static const String _messageSelect =
       'id, group_id, user_id, body, created_at, deleted_at, edited_at, '
-      'client_tag, profiles:user_id(id, username, email, avatar_url), '
+      'client_tag, profiles:user_id(id, username, avatar_url), '
       'group_message_reactions(emoji, user_id)';
 
   static const int _bodyMaxLength = 2000;
