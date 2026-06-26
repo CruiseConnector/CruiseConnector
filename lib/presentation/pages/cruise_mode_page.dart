@@ -38,6 +38,7 @@ import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
+import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
@@ -3683,7 +3684,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 .heading;
           }
           if (targetHeading != null) {
-            final delta = _angleDiff(_camToHeading, targetHeading).abs();
+            final delta = GeoBearing.angleDiff(_camToHeading, targetHeading).abs();
             // Mikro-Jitter (<0,6°) ignorieren — sonst zappelt die Karte im Stand.
             if (delta >= 0.6) {
               _camToHeading = targetHeading;
@@ -3718,7 +3719,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final prevHeading = _camCurHeading;
     _camCurLat += (_camToLat - _camCurLat) * f;
     _camCurLng += (_camToLng - _camCurLng) * f;
-    _camCurHeading = _lerpAngleDeg(_camCurHeading, _camToHeading, f);
+    _camCurHeading = GeoBearing.lerpAngleDeg(_camCurHeading, _camToHeading, f);
     final stepMeters = geo.Geolocator.distanceBetween(
       prevLat,
       prevLng,
@@ -3729,7 +3730,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Konvergenz-Stop: praktisch keine Bewegung mehr (<1 cm/Frame, <0.05°)
     // über ~45 Frames → Ticker stoppen, kein moveCamera-Spam im Stillstand.
     if (stepMeters < 0.01 &&
-        _angleDiff(prevHeading, _camCurHeading).abs() < 0.05) {
+        GeoBearing.angleDiff(prevHeading, _camCurHeading).abs() < 0.05) {
       if (++_camIdleTicks >= 45) {
         _camIdleTicks = 0;
         _cameraAnimController?.stop();
@@ -3742,8 +3743,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     final ctrl = _mlController;
     if (ctrl == null) return;
     // Forward-Offset: Zentrum ~100m voraus → Puck sitzt im unteren Drittel.
-    final offLat = _camCurLat + _forwardOffsetLat(_camCurHeading);
-    final offLng = _camCurLng + _forwardOffsetLng(_camCurHeading);
+    final offLat = _camCurLat + GeoBearing.forwardOffsetLat(_camCurHeading);
+    final offLng = _camCurLng + GeoBearing.forwardOffsetLng(_camCurHeading);
     _camMoveInFlight = true;
     ctrl
         .moveTo(lat: offLat, lng: offLng, zoom: 16.5, bearing: _camCurHeading)
@@ -3762,7 +3763,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? 1.0
         : 1.5;
     var effectiveHeading = heading;
-    final headingDelta = _angleDiff(_lastCameraHeading, heading).abs();
+    final headingDelta = GeoBearing.angleDiff(_lastCameraHeading, heading).abs();
     if (headingDelta < deadZoneDegrees) {
       effectiveHeading = _lastCameraHeading;
     } else {
@@ -3787,32 +3788,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  /// Zirkuläre Interpolation für Heading (0–360°).
-  static double _lerpAngleDeg(double from, double to, double t) {
-    var diff = (to - from) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    return (from + diff * t) % 360;
-  }
-
-  /// Kleinster Winkelunterschied (mit Vorzeichen, -180..+180).
-  static double _angleDiff(double from, double to) {
-    var diff = (to - from) % 360;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    return diff;
-  }
-
-  /// Forward-Offset: ~100m nach Norden in Breitengrad-Grad.
-  static double _forwardOffsetLat(double headingDeg) {
-    return math.cos(headingDeg * math.pi / 180) * 0.0009; // ~100m
-  }
-
-  /// Forward-Offset: ~100m nach Osten in Längengrad-Grad.
-  static double _forwardOffsetLng(double headingDeg) {
-    return math.sin(headingDeg * math.pi / 180) *
-        0.0012; // ~100m (breitenabhängig)
-  }
 
   void _handleRouteModeChanged(bool isRoundTrip) {
     final roundTripStyles = {
@@ -9431,7 +9406,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!position.heading.isFinite || position.heading < 0) return true;
     final coords = _fullRouteCoordinates;
     final i = match.index.clamp(0, coords.length - 2);
-    final tangent = _bearingDegrees(
+    final tangent = GeoBearing.bearingDegrees(
       coords[i][1],
       coords[i][0],
       coords[i + 1][1],
@@ -9455,7 +9430,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final coords = _fullRouteCoordinates;
     if (coords.length < 2) return false;
     final i = match.index.clamp(0, coords.length - 2);
-    final tangent = _bearingDegrees(
+    final tangent = GeoBearing.bearingDegrees(
       coords[i][1],
       coords[i][0],
       coords[i + 1][1],
@@ -9490,7 +9465,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         coords[i + 1][0],
       );
       acc += seg;
-      final b = _bearingDegrees(
+      final b = GeoBearing.bearingDegrees(
         coords[i][1],
         coords[i][0],
         coords[i + 1][1],
@@ -9507,21 +9482,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     return false;
   }
 
-  static double _bearingDegrees(
-    double lat1,
-    double lng1,
-    double lat2,
-    double lng2,
-  ) {
-    final phi1 = lat1 * math.pi / 180.0;
-    final phi2 = lat2 * math.pi / 180.0;
-    final dLng = (lng2 - lng1) * math.pi / 180.0;
-    final y = math.sin(dLng) * math.cos(phi2);
-    final x =
-        math.cos(phi1) * math.sin(phi2) -
-        math.sin(phi1) * math.cos(phi2) * math.cos(dLng);
-    return (math.atan2(y, x) * 180.0 / math.pi + 360.0) % 360.0;
-  }
 
   /// 2026-06-21 (vucko Geräte-Video „Route immer leicht geneigt"): Kamera-Bearing
   /// aus der ROUTEN-TANGENTE statt aus dem verrauschten GPS-Kurs. Schaut von der
@@ -9572,7 +9532,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     // Zu kurzer Vorlauf → unzuverlässige Tangente, lieber GPS-Fallback.
     if (dist < 5.0) return null;
-    return _bearingDegrees(head.latitude, head.longitude, aheadLat, aheadLng);
+    return GeoBearing.bearingDegrees(head.latitude, head.longitude, aheadLat, aheadLng);
   }
 
   bool _isApproachingCurrentDestination(geo.Position position) {
@@ -11148,7 +11108,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         probeIdx++;
       }
-      final routeStartBearing = _bearingDegrees(
+      final routeStartBearing = GeoBearing.bearingDegrees(
         c[0][1],
         c[0][0],
         c[probeIdx][1],
@@ -15153,13 +15113,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     } else if (_nativeSmoother.hasValidHeading) {
       smoothedHeading = _nativeSmoother.heading;
     }
-    if (_isUsableHeading(smoothedHeading)) {
+    if (GeoBearing.isUsableHeading(smoothedHeading)) {
       return smoothedHeading! % 360;
     }
 
     final rawHeading = position.heading;
     final rawAccuracy = position.headingAccuracy;
-    if (_isUsableHeading(rawHeading) &&
+    if (GeoBearing.isUsableHeading(rawHeading) &&
         (!rawAccuracy.isFinite || rawAccuracy <= 45)) {
       return rawHeading % 360;
     }
@@ -15173,8 +15133,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     return 0.0;
   }
 
-  static bool _isUsableHeading(double? heading) =>
-      heading != null && heading.isFinite && heading >= 0 && heading <= 360;
 
   /// Berechnet die Distanz entlang der Route vom aktuellen Index zum nächsten Manöver.
   int? _activeVisibleManeuverIndex() {
