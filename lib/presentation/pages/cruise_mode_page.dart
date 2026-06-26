@@ -68,6 +68,7 @@ import 'package:cruise_connect/domain/models/route_maneuver.dart'
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/controllers/cruise_navigation_controller.dart';
+import 'package:cruise_connect/presentation/pages/cruise/route_loading_phases.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
@@ -850,79 +851,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (mounted && !_disposed) setState(fn);
   }
 
-  static const List<String> _roundTripLoadingPhases = [
-    'Wir suchen eine passende Route',
-    'Alternativen werden geprüft',
-    'Route verfeinern',
-    'Strecke final prüfen',
-    'Fast fertig',
-  ];
-
-  static const List<String> _waypointLoadingPhases = [
-    'Stopps verbinden',
-    'Nächste Straßen finden',
-    'Stil anwenden',
-    'Route final prüfen',
-    'Fast fertig',
-  ];
-
-  static const List<String> _pointToPointLoadingPhases = [
-    'Ziel prüfen',
-    'Straßen finden',
-    'Stil anwenden',
-    'Route final prüfen',
-    'Fast fertig',
-  ];
-
-  static const List<String> _existingRouteLoadingPhases = [
-    'Andockpunkt finden',
-    'Anfahrt berechnen',
-    'Route verbinden',
-    'Rückweg vorbereiten',
-    'Fast fertig',
-  ];
-
-  static const List<String> _groupLoadingPhases = [
-    'Route abstimmen',
-    'Gruppe synchronisieren',
-    'Fast fertig',
-  ];
-
-  String get _routeLoadingStatusText {
-    if (widget.groupId != null) {
-      final phaseIndex = _routeLoadingPhaseIndex.clamp(
-        0,
-        _groupLoadingPhases.length - 1,
+  // Lade-Phasen-Texte + Auswahl: extrahiert nach
+  // presentation/pages/cruise/route_loading_phases.dart (behavior-preserving).
+  String get _routeLoadingStatusText => RouteLoadingPhases.statusText(
+        isGroup: widget.groupId != null,
+        isPreparingExisting: _isPreparingExistingRoute,
+        isWaypoint: _isWaypointPlanning,
+        isRoundTrip: _isRoundTrip,
+        phaseIndex: _routeLoadingPhaseIndex,
       );
-      return _groupLoadingPhases[phaseIndex];
-    }
-    if (_isPreparingExistingRoute) {
-      final phaseIndex = _routeLoadingPhaseIndex.clamp(
-        0,
-        _existingRouteLoadingPhases.length - 1,
-      );
-      return _existingRouteLoadingPhases[phaseIndex];
-    }
-    if (_isWaypointPlanning) {
-      final phaseIndex = _routeLoadingPhaseIndex.clamp(
-        0,
-        _waypointLoadingPhases.length - 1,
-      );
-      return _waypointLoadingPhases[phaseIndex];
-    }
-    if (!_isRoundTrip) {
-      final phaseIndex = _routeLoadingPhaseIndex.clamp(
-        0,
-        _pointToPointLoadingPhases.length - 1,
-      );
-      return _pointToPointLoadingPhases[phaseIndex];
-    }
-    final phaseIndex = _routeLoadingPhaseIndex.clamp(
-      0,
-      _roundTripLoadingPhases.length - 1,
-    );
-    return _roundTripLoadingPhases[phaseIndex];
-  }
 
   void _startRouteLoadingUi({
     required int generationId,
@@ -953,15 +890,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       _safeSetState(() {
         _routeSearchProgress = math.min(_routeSearchProgress + 0.024, 0.92);
-        final phaseCount = widget.groupId != null
-            ? _groupLoadingPhases.length
-            : _isPreparingExistingRoute
-            ? _existingRouteLoadingPhases.length
-            : _isWaypointPlanning
-            ? _waypointLoadingPhases.length
-            : !_isRoundTrip
-            ? _pointToPointLoadingPhases.length
-            : _roundTripLoadingPhases.length;
+        final phaseCount = RouteLoadingPhases.phaseCount(
+          isGroup: widget.groupId != null,
+          isPreparingExisting: _isPreparingExistingRoute,
+          isWaypoint: _isWaypointPlanning,
+          isRoundTrip: _isRoundTrip,
+        );
         _routeLoadingPhaseIndex = math.min(
           (_routeSearchProgress * phaseCount).floor(),
           phaseCount - 1,
@@ -8938,7 +8872,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           );
           _routeLoadingPhaseIndex = math.min(
             math.max(_routeLoadingPhaseIndex, 2) + (poll % 4 == 0 ? 1 : 0),
-            _roundTripLoadingPhases.length - 1,
+            RouteLoadingPhases.roundTrip.length - 1,
           );
         });
       }
