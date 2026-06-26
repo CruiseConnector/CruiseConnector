@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1791,11 +1792,7 @@ class _CommunityPageState extends State<CommunityPage>
                     ),
                     Expanded(
                       child: loading
-                          ? Center(
-                              child: CircularProgressIndicator(
-                                color: AppAccentColors.accent,
-                              ),
-                            )
+                          ? const SkeletonList(count: 6, avatarSize: 34)
                           : topLevel.isEmpty
                           ? const Center(
                               child: Text(

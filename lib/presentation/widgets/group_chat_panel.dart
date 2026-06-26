@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/group_chat_store.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/group_chat_service.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 /// 2026-06-25 (vucko): Gruppen-Chat als einbettbares Panel (Lobby → „Chat").
@@ -205,9 +206,7 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
   Widget build(BuildContext context) {
     final messages = _store.messagesFor(_gid);
     if (_loading && messages.isEmpty) {
-      return Center(
-        child: CircularProgressIndicator(color: AppAccentColors.accent),
-      );
+      return const SkeletonChat();
     }
     return Column(
       children: [

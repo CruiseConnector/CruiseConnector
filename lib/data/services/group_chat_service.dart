@@ -43,33 +43,36 @@ class GroupChatService {
     return List<Map<String, dynamic>>.from(rows as List);
   }
 
-  /// Schreibt eine Nachricht und gibt die gespeicherte Zeile (inkl. Profil)
-  /// zurück. [clientTag] erlaubt dem Sender, seine optimistische Nachricht
-  /// eindeutig mit der bestätigten Zeile zu matchen (kein Doppel/Verlust).
-  /// Wirft bei Fehler (der aufrufende Outbox-Retry fängt das ab).
-  static Future<Map<String, dynamic>?> sendMessage(
+  /// Schreibt eine Nachricht. [clientTag] erlaubt dem Sender, seine optimistische
+  /// Nachricht eindeutig mit der bestätigten Server-Zeile zu matchen (kein
+  /// Doppel/Verlust). Wirft bei Fehler — der Outbox-Retry im GroupChatStore
+  /// fängt das ab (4 Versuche, dann „nicht gesendet"-Status).
+  ///
+  /// 2026-06-25 (vucko): BEWUSST nur INSERT, KEIN `.select(_messageSelect)`-
+  /// Embed beim Senden. Der profiles-Embed hing früher hier am FK
+  /// group_messages→profiles (der fehlte → JEDER Send schlug fehl). Jetzt ist
+  /// der Sende-Pfad maximal schlank + schnell und hängt an gar keinem Embed; die
+  /// volle Zeile (inkl. Profil) holt der Realtime-Reload (fetchMessages).
+  static Future<void> sendMessage(
     String groupId,
     String body, {
     String? clientTag,
   }) async {
     final uid = _userId;
-    if (uid == null) return null;
+    if (uid == null) {
+      throw Exception('Nicht angemeldet.');
+    }
     final cleanBody = body.trim();
-    if (cleanBody.isEmpty) return null;
+    if (cleanBody.isEmpty) return;
     final trimmed = cleanBody.length > _bodyMaxLength
         ? cleanBody.substring(0, _bodyMaxLength)
         : cleanBody;
-    final row = await _db
-        .from('group_messages')
-        .insert({
-          'group_id': groupId,
-          'user_id': uid,
-          'body': trimmed,
-          if (clientTag != null) 'client_tag': clientTag,
-        })
-        .select(_messageSelect)
-        .single();
-    return Map<String, dynamic>.from(row);
+    await _db.from('group_messages').insert({
+      'group_id': groupId,
+      'user_id': uid,
+      'body': trimmed,
+      if (clientTag != null) 'client_tag': clientTag,
+    });
   }
 
   /// Soft-Delete der eigenen Nachricht.

@@ -170,3 +170,46 @@ class SkeletonList extends StatelessWidget {
     );
   }
 }
+
+/// Chat-Skeleton: wechselnde Nachrichten-Blasen (links mit Avatar, rechts
+/// eigene). Für Community-/Gruppen-Chat-Ladezustand — nie ein Kreis-Spinner.
+class SkeletonChat extends StatelessWidget {
+  const SkeletonChat({super.key, this.count = 8});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    const widths = <double>[200, 130, 240, 96, 170, 150, 210, 120];
+    const heights = <double>[40, 34, 56, 34, 40, 48, 40, 34];
+    return SkeletonShimmer(
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(14, 18, 14, 14),
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: count,
+        itemBuilder: (context, i) {
+          final mine = i.isOdd;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(
+              mainAxisAlignment:
+                  mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (!mine) ...[
+                  const SkeletonCircle(size: 32),
+                  const SizedBox(width: 8),
+                ],
+                SkeletonBox(
+                  width: widths[i % widths.length],
+                  height: heights[i % heights.length],
+                  radius: 16,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -844,9 +845,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         ],
       ),
       body: _loading
-          ? Center(
-              child: CircularProgressIndicator(color: AppAccentColors.accent),
-            )
+          ? const SkeletonChat()
           : GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
