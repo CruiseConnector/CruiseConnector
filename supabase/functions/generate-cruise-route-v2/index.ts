@@ -2548,9 +2548,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 // false — wir lesen den JWT-sub nur zum Keying, prüfen die Signatur NICHT.
 const RL_ENABLED = (Deno.env.get('RATE_LIMIT_ENABLED') ?? 'true') === 'true';
 const RL_DB_TIMEOUT_MS = 800;
+// 2026-06-26 (vucko): authed-Limits bewusst großzügig — ein ungeduldiger Nutzer,
+// der „Andere Route" mehrfach tippt, oder dichtes Reroute auf kurviger Strecke
+// soll NIE ein 429 sehen. Der per-User-Deckel (100/min) ist für einen Menschen
+// unerreichbar, stoppt aber Skript-Abuse pro Account. anon (nur Direkt-API ohne
+// Login + Test-Suite) bleibt 600/min/IP gegen anonymes Hämmern auf GraphHopper.
 const RL_LIMITS = {
-  authed_generate: { max: 60, windowSec: 60 },
-  authed_reroute: { max: 120, windowSec: 60 },
+  authed_generate: { max: 100, windowSec: 60 },
+  authed_reroute: { max: 200, windowSec: 60 },
   anon_generate: { max: 600, windowSec: 60 },
 } as const;
 
