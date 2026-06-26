@@ -6560,7 +6560,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-06-10 (vucko 3km-Sichtdesign): Gesamtlänge fürs GPU-Gradient
       // (transparent hinterm Puck / 3 km voll / Rest dezent). In der Übersicht
       // 0 → Gradient aus, ganze Route voll sichtbar.
-      routeTotalMeters: _isOverviewActive ? 0.0 : _routeTotalLenM,
+      // 2026-06-26 (vucko Route-unsichtbar-Fix): Der 3km-Gradient (transparent
+      // hinterm Puck, Rest dezent) darf NUR während der bestätigten Fahrt
+      // greifen. In der VORSCHAU (Route berechnet, noch nicht bestätigt) ließ er
+      // nach Ablauf der 4s-Übersicht ~die ganze Route blass werden → „ich sehe
+      // keine Route". Vorschau + Übersicht => Gradient aus, ganze Route voll.
+      routeTotalMeters:
+          (_isOverviewActive || !_isRouteConfirmed) ? 0.0 : _routeTotalLenM,
       routeColor: AppAccentColors.accent,
       // 2026-06-10 (vucko Fahr-Ruckeln-Fix): Puck folgt pro Frame der Kalman-
       // Prediction (Dead Reckoning zwischen den ~1Hz-GPS-Fixes) statt der
