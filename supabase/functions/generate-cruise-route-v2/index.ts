@@ -18,6 +18,7 @@
 // Route-Service kann v1 oder v2 via Feature-Toggle ansprechen.
 
 import { serve } from 'https://deno.land/std@0.210.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const GRAPHHOPPER_URL = Deno.env.get('GRAPHHOPPER_URL') ?? 'http://graphhopper.local:8989';
 // DE-Server (PC1 Port 8991) — kompakter Backup, aktuell mit Mittelost-Daten
@@ -2540,6 +2541,86 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+// ── Rate-Limiting (fail-open) ───────────────────────────────────────────────
+// Schützt DB + GraphHopper gegen Spam/Abuse, OHNE normale Nutzer (oder die
+// live-testende Suite) je zu treffen: großzügige Limits + jeder Fehler/Timeout
+// => Request darf durch. Kill-Switch via RATE_LIMIT_ENABLED. verify_jwt bleibt
+// false — wir lesen den JWT-sub nur zum Keying, prüfen die Signatur NICHT.
+const RL_ENABLED = (Deno.env.get('RATE_LIMIT_ENABLED') ?? 'true') === 'true';
+const RL_DB_TIMEOUT_MS = 800;
+const RL_LIMITS = {
+  authed_generate: { max: 60, windowSec: 60 },
+  authed_reroute: { max: 120, windowSec: 60 },
+  anon_generate: { max: 600, windowSec: 60 },
+} as const;
+
+// Service-Role-Client NUR für den check_rate_limit-RPC, einmal modul-global.
+// Fehlt eine ENV => null => Limiter komplett aus (fail-open).
+const _rlAdmin = (() => {
+  try {
+    const u = Deno.env.get('SUPABASE_URL');
+    const k = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!u || !k) return null;
+    return createClient(u, k, { auth: { persistSession: false } });
+  } catch (_) {
+    return null;
+  }
+})();
+
+function rlExtractKey(req: Request): { key: string; tier: 'authed' | 'anon' } {
+  try {
+    const auth = req.headers.get('authorization') ?? '';
+    const token = auth.replace(/^Bearer\s+/i, '');
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(
+        atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
+      );
+      if (
+        payload.role === 'authenticated' &&
+        typeof payload.sub === 'string' &&
+        payload.sub.length > 0
+      ) {
+        return { key: `uid:${payload.sub}`, tier: 'authed' };
+      }
+    }
+  } catch (_) {
+    // unparsebar/anon => IP-Pfad
+  }
+  const ip =
+    req.headers.get('cf-connecting-ip') ??
+    (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
+  return { key: ip ? `ip:${ip}` : 'anon:shared', tier: 'anon' };
+}
+
+async function rlAllows(
+  key: string,
+  action: string,
+  max: number,
+  windowSec: number,
+): Promise<{ allowed: boolean; retryAfter: number }> {
+  if (!RL_ENABLED || !_rlAdmin) return { allowed: true, retryAfter: 0 };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), RL_DB_TIMEOUT_MS);
+    const { data, error } = await _rlAdmin
+      .rpc('check_rate_limit', {
+        p_key: key,
+        p_action: action,
+        p_max: max,
+        p_window_seconds: windowSec,
+      })
+      .abortSignal(ctrl.signal)
+      .maybeSingle();
+    clearTimeout(t);
+    if (error || !data) return { allowed: true, retryAfter: 0 };
+    const row = data as { allowed?: boolean; retry_after?: number };
+    return { allowed: row.allowed === true, retryAfter: row.retry_after ?? 0 };
+  } catch (_) {
+    return { allowed: true, retryAfter: 0 };
+  }
+}
+
 async function handler(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
@@ -2581,6 +2662,38 @@ async function handler(req: Request): Promise<Response> {
       user_message: 'Standort ist nicht verfügbar — bitte App-Berechtigungen prüfen.',
       debug_message: 'Edge v2: neither start_location nor startLocation in request body',
     }, 400);
+  }
+  // ── Rate-Limit-Gate (fail-open) ── direkt vor der teuren GraphHopper-Arbeit,
+  // nach OPTIONS/health/method/JSON/start_location (die werden nie limitiert).
+  const rl = rlExtractKey(req);
+  const rlBody = body as { reroute_request?: boolean; moving_start?: boolean };
+  const isReroute = rlBody.reroute_request === true || rlBody.moving_start === true;
+  const rlAction = rl.tier === 'authed'
+    ? (isReroute ? 'route_reroute' : 'route_generate')
+    : 'route_generate_anon';
+  const rlLimit = rl.tier === 'authed'
+    ? (isReroute ? RL_LIMITS.authed_reroute : RL_LIMITS.authed_generate)
+    : RL_LIMITS.anon_generate;
+  const rlGate = await rlAllows(rl.key, rlAction, rlLimit.max, rlLimit.windowSec);
+  if (!rlGate.allowed) {
+    return new Response(
+      JSON.stringify({
+        error: 'rate_limited',
+        user_message:
+          'Zu viele Routenanfragen in kurzer Zeit. Bitte einen Moment warten und erneut versuchen.',
+        retry_after: rlGate.retryAfter,
+      }),
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': ALLOWED_ORIGINS,
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Retry-After': String(rlGate.retryAfter),
+        },
+      },
+    );
   }
   return await generateRoute(body);
 }
