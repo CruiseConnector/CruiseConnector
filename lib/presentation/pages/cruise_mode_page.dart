@@ -38,6 +38,7 @@ import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
+import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
 import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
@@ -66,6 +67,7 @@ import 'package:cruise_connect/domain/models/route_maneuver.dart'
     show RouteManeuver, RouteWindowMatch, ManeuverType;
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/controllers/cruise_navigation_controller.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maneuver_indicator.dart';
@@ -263,6 +265,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   final _routeService = RouteService();
   final _smartRerouteEngine = const SmartRerouteEngine();
   final _navigationSocketService = NavigationProgressSocketService();
+  final _navigationController = CruiseNavigationController();
   final _drivenTrackRecorder = DrivenTrackRecorder();
   // 2026-06-23 (vucko Post-Route Top-Speed): höchstes geglättetes Tempo der
   // aktuellen Fahrt (m/s). Smoother statt Roh-GPS → kein Multipath-Spike; <100
@@ -562,7 +565,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // froren ein. Timer-basiert (unabhängig vom Stream).
   DateTime? _lastLocationFixAt; // wann kam der letzte verarbeitete GPS-Fix
   double _gpsLastFixSpeedMps = 0.0; // Tempo beim LETZTEN Fix (fährt vs. steht)
-  DateTime? _lastStallGlideAt; // letzter Dead-Reckoning-Glide-Tick während Stall
+  DateTime?
+  _lastStallGlideAt; // letzter Dead-Reckoning-Glide-Tick während Stall
   Timer? _gpsStallWatchdog;
   bool _gpsWeak = false; // „GPS schwach"-Hinweis sichtbar?
   static const Duration _gpsWeakThreshold = Duration(seconds: 5);
@@ -587,13 +591,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const int _maxGpsJumpRejects = 4;
 
   // 2026-06-17 (vucko Geräte-Video: Manöver-Distanz friert ein / springt HOCH):
-  // Monotone, sprung-freie Banner-Distanz. _shownManeuverDistM = zuletzt
-  // gezeigter Wert, _shownManeuverSig = Identität des aktiven sichtbaren
-  // Manövers (Routen-Index), _shownManeuverAt = Zeitstempel für die zeit-
-  // normierte Glättung. Siehe monotonicManeuverDistanceMeters.
-  double? _shownManeuverDistM;
-  int? _shownManeuverSig;
-  DateTime? _shownManeuverAt;
+  // Monotone Banner-Distanz liegt jetzt im CruiseNavigationController.
   String? _lastLiveActivitySignature;
   DateTime? _lastLiveActivitySentAt;
 
@@ -1565,7 +1563,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (last == null) return null;
     final gap = renderAt.difference(last);
     if (gap < _gpsStallGlideThreshold) return null; // GPS fließt → normal
-    if (gap > const Duration(seconds: 25)) return null; // aufgeben, kein Run-away
+    if (gap > const Duration(seconds: 25)) {
+      return null; // aufgeben, kein Run-away
+    }
     if (_gpsLastFixSpeedMps < 3.0) return null; // Wagen stand → kein Glide
     if (_renderLockDistM < 0) return null;
     final lastGlide = _lastStallGlideAt ?? last;
@@ -1638,15 +1638,19 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     // Initialer Stand (best-effort, nicht blockierend).
     unawaited(
-      Connectivity().checkConnectivity().then((results) {
-        if (!mounted || _disposed) return;
-        final offline = results.isEmpty ||
-            results.every((r) => r == ConnectivityResult.none);
-        if (offline != _offline) {
-          _offline = offline;
-          _safeSetState(() {});
-        }
-      }).catchError((_) {}),
+      Connectivity()
+          .checkConnectivity()
+          .then((results) {
+            if (!mounted || _disposed) return;
+            final offline =
+                results.isEmpty ||
+                results.every((r) => r == ConnectivityResult.none);
+            if (offline != _offline) {
+              _offline = offline;
+              _safeSetState(() {});
+            }
+          })
+          .catchError((_) {}),
     );
   }
 
@@ -3670,7 +3674,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       // „kriecht" über den festgehaltenen Boden (zusätzlich zum unvermeidbaren
       // 1-Frame-Overlay-Lag). Bei Bewegung ODER gesperrter Kamera bleibt der
       // volle Vorhalt (flüssiges Gleiten / Kamera-Sync) unverändert.
-      final stationaryFreePan = !_isCameraLocked &&
+      final stationaryFreePan =
+          !_isCameraLocked &&
           _nativeSmoother.speed < 0.6 &&
           (_userLocation?.speed ?? 0) < 0.8;
       final lockPos = _routeLockedRenderPosition(
@@ -3732,7 +3737,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Heading-up-Wert EINFRIEREN (Position folgt weiter, nur keine Drehung
         // mehr aus dem kaputten Endsegment).
         final remainingForCam = _remainingDistance;
-        final inArrivalWindow = remainingForCam != null &&
+        final inArrivalWindow =
+            remainingForCam != null &&
             remainingForCam.isFinite &&
             remainingForCam <= _arrivalCameraFreezeMeters;
         if (!inArrivalWindow) {
@@ -5639,7 +5645,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // das Panel ließ sich kaum runterziehen. Wenn der Header sichtbar ist, wird
     // der transparente Oberstreifen höher, damit der Greiftab klar UNTER dem
     // Header sitzt (keine Überdeckung mehr).
-    final showExpandedModeHeader = _isWaypointPlanning &&
+    final showExpandedModeHeader =
+        _isWaypointPlanning &&
         !_showRouteInfoBanner &&
         _routeSearchNoticeTitle == null;
     return Stack(
@@ -5701,7 +5708,8 @@ class _CruiseModePageState extends State<CruiseModePage>
                     // — so ist sofort klar, dass man scrollen kann.
                     // 2026-06-24 (vucko): + Platz für den Top-Mode-Header, damit
                     // der Greiftab darunter (statt darunter VERdeckt) sitzt.
-                    height: MediaQuery.of(context).padding.top +
+                    height:
+                        MediaQuery.of(context).padding.top +
                         (showExpandedModeHeader ? 116 : 64),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
@@ -10149,9 +10157,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastRouteIndexAdvanceAt = null;
       _lastPlausibleRawFix = null;
       _gpsJumpRejects = 0;
-      _shownManeuverDistM = null;
-      _shownManeuverSig = null;
-      _shownManeuverAt = null;
+      _navigationController.clearManeuverDistanceSmoothing();
       _showRouteInfoBanner = false;
       _isRouteConfirmed = false;
       _isExistingRouteSession = false;
@@ -10255,9 +10261,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // werden entfernt und durch eine FRISCHE Lobby ersetzt. Kein PopScope-Trigger
     // (kein Geister-„verlassen?"-Dialog), keine Doppel-Lobby, kein Dead-End.
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (_) => GroupLobbyPage(groupId: groupId),
-      ),
+      MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),
       (route) => route.isFirst,
     );
   }
@@ -11004,20 +11008,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   double _calculatePolylineDistanceMeters(List<List<double>> coordinates) {
-    if (coordinates.length < 2) return 0;
-
-    var distance = 0.0;
-    for (var i = 0; i < coordinates.length - 1; i++) {
-      final from = coordinates[i];
-      final to = coordinates[i + 1];
-      distance += geo.Geolocator.distanceBetween(
-        from[1],
-        from[0],
-        to[1],
-        to[0],
-      );
-    }
-    return distance;
+    return GeoDistance.polylineMetersLngLat(coordinates);
   }
 
   double _estimateDurationSecondsForDistance(double distanceMeters) {
@@ -11260,9 +11251,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _distanceSinceLastRedraw = 0.0;
       _advanceCapRejects = 0;
       _lastRouteIndexAdvanceAt = null;
-      _shownManeuverDistM = null;
-      _shownManeuverSig = null;
-      _shownManeuverAt = null;
+      _navigationController.clearManeuverDistanceSmoothing();
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _announcedManeuverIndices.clear();
@@ -11804,9 +11793,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastRouteIndexAdvanceAt = null;
       _lastPlausibleRawFix = null;
       _gpsJumpRejects = 0;
-      _shownManeuverDistM = null;
-      _shownManeuverSig = null;
-      _shownManeuverAt = null;
+      _navigationController.clearManeuverDistanceSmoothing();
     }
     _navigationStartTime ??= DateTime.now();
     _driveSessionRecordedForCompletion = false;
@@ -12675,7 +12662,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         _updateDistanceToFinalTarget(position) ?? double.infinity;
     final plannedForArrival =
         _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
-    final drivenMostOfRoute = plannedForArrival != null &&
+    final drivenMostOfRoute =
+        plannedForArrival != null &&
         plannedForArrival > 0 &&
         _totalDistanceDriven >= plannedForArrival * 0.80;
     final arrivedAtRouteEnd =
@@ -14121,7 +14109,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         TopToast.show(
           context,
-          message: 'Reroute dauert zu lange — bitte weiterfahren, ich versuche es gleich erneut',
+          message:
+              'Reroute dauert zu lange — bitte weiterfahren, ich versuche es gleich erneut',
           icon: Icons.refresh_rounded,
           isError: true,
           duration: const Duration(milliseconds: 4000),
@@ -15255,129 +15244,58 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Berechnet die Distanz entlang der Route vom aktuellen Index zum nächsten Manöver.
   int? _activeVisibleManeuverIndex() {
-    return selectActiveGuidanceManeuverIndex(
+    return _navigationController.activeVisibleManeuverIndex(
       maneuvers: _maneuvers,
       currentRouteIndex: _currentRouteIndex,
+      activeManeuverIndex: _activeManeuverIndex,
       remainingRouteDistanceMeters: _remainingDistance,
       distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
-      startIndex: _activeManeuverIndex,
       arrivalRadiusMeters: _arrivalRadiusMeters,
     );
   }
 
   RouteManeuver? _activeVisibleManeuver() {
-    final index = _activeVisibleManeuverIndex();
-    if (index == null) return null;
-    return _maneuvers[index.clamp(0, _maneuvers.length - 1).toInt()];
+    return _navigationController.activeVisibleManeuver(
+      maneuvers: _maneuvers,
+      currentRouteIndex: _currentRouteIndex,
+      activeManeuverIndex: _activeManeuverIndex,
+      remainingRouteDistanceMeters: _remainingDistance,
+      distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
+      arrivalRadiusMeters: _arrivalRadiusMeters,
+    );
   }
 
   double? _calculateDistanceToManeuver([RouteManeuver? visibleManeuver]) {
-    if (_maneuvers.isEmpty || _fullRouteCoordinates.length < 2) return null;
-    final maneuver = visibleManeuver ?? _activeVisibleManeuver();
-    if (maneuver == null) return null;
-    var targetIndex = maneuver.routeIndex
-        .clamp(0, _fullRouteCoordinates.length - 1)
-        .toInt();
-    // 2026-06-13 (vucko Google/Apple-Bar-Review G2): Ist das sichtbare Manöver
-    // bereits hinter dem Puck-Index (überfahren), zeigt Google IMMER das
-    // NÄCHSTE noch nicht passierte Manöver — nicht nur die Luftlinie. Das
-    // nächste Manöver mit routeIndex > _currentRouteIndex suchen.
-    if (targetIndex <= _currentRouteIndex) {
-      var nextIdx = -1;
-      for (final m in _maneuvers) {
-        final mi = m.routeIndex
-            .clamp(0, _fullRouteCoordinates.length - 1)
-            .toInt();
-        if (mi > _currentRouteIndex) {
-          nextIdx = mi;
-          break;
-        }
-      }
-      // Kein weiteres Manöver (Routenende) → ehrliche Luftlinie zur Route.
-      if (nextIdx < 0) {
-        return _offRouteGapMeters > 0 ? _offRouteGapMeters : 0;
-      }
-      targetIndex = nextIdx;
-    }
-
-    double dist = 0.0;
-    for (var i = _currentRouteIndex; i < targetIndex; i++) {
-      final c1 = _fullRouteCoordinates[i];
-      final c2 = _fullRouteCoordinates[i + 1];
-      dist += geo.Geolocator.distanceBetween(c1[1], c1[0], c2[1], c2[0]);
-    }
-    // 2026-06-13 (vucko Video Banner-Freeze): off-route kommt die Luftlinie
-    // GPS→Route dazu — die Anzeige wächst ehrlich mit, statt einzufrieren.
-    return dist + _offRouteGapMeters;
-  }
-
-  /// 2026-06-17 (vucko Manöver-Distanz smooth, Video): Glatte Distanzbasis für
-  /// Banner, Haptik und Voice. [_calculateDistanceToManeuver] rechnet ab dem
-  /// 1-Hz-Index (_currentRouteIndex) → die Meter stehen zwischen GPS-Fixen ~1 s
-  /// still und stufen dann. Hier ziehen wir den Vorlauf der KONTINUIERLICHEN
-  /// Render-Distanz (gleitet pro Frame, geo-verankert am Puck) ab.
-  double? _smoothManeuverDistanceTargetMeters([
-    RouteManeuver? visibleManeuver,
-  ]) {
-    final base = _calculateDistanceToManeuver(visibleManeuver);
-    if (base == null) return null;
-    final cum = _routeCumDistM;
-    // 2026-06-17 (vucko Schnellstraße-Freeze, Video): GESAMTEN gleitenden
-    // Render-Vorlauf abziehen (keine 80-m-Kappe mehr). Sonst klebte das Banner
-    // auf Schnellstraßen (weite Routen-Stützpunkte) beim Index-Wert (~„1,0 km"),
-    // während die echte Distanz längst sank. Logik + Tests in
-    // nav_distance_format.dart::smoothManeuverDistanceMeters.
-    return cum == null
-        ? base
-        : smoothManeuverDistanceMeters(
-            base: base,
-            cum: cum,
-            render: _renderLockDistM,
-            currentIndex: _currentRouteIndex,
-          );
+    return _navigationController.calculateDistanceToManeuver(
+      maneuvers: _maneuvers,
+      routeCoordinates: _fullRouteCoordinates,
+      currentRouteIndex: _currentRouteIndex,
+      activeManeuverIndex: _activeManeuverIndex,
+      remainingRouteDistanceMeters: _remainingDistance,
+      distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
+      arrivalRadiusMeters: _arrivalRadiusMeters,
+      offRouteGapMeters: _offRouteGapMeters,
+      visibleManeuver: visibleManeuver,
+    );
   }
 
   /// Banner-Distanz: gleiche geglättete Rohdistanz wie Voice/Haptik, danach nur
   /// noch visuelle Monotonie, damit der Text innerhalb desselben Manövers nicht
   /// nach oben springt.
   double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
-    final raw = _smoothManeuverDistanceTargetMeters(visibleManeuver);
-    if (raw == null) {
-      _shownManeuverDistM = null;
-      _shownManeuverSig = null;
-      _shownManeuverAt = null;
-      return null;
-    }
-    // 2026-06-17 (vucko Geräte-Video: Manöver-Distanz friert ein / springt HOCH):
-    // Die Roh-Distanz [raw] sprang am Kreisverkehr/Routenende in groben Stufen
-    // und nach Reroute-/Re-Anchor nach OBEN („10 m → 40 m"). monoton + sprung-frei
-    // anzeigen: innerhalb DESSELBEN Manövers (gleicher Routen-Index) nie hoch,
-    // grobe Stufen weich runter; bei echtem neuem Manöver auf den neuen Wert
-    // snappen. Idempotent bei Mehrfach-Aufruf im selben Frame.
-    final sig =
-        (visibleManeuver ?? _activeVisibleManeuver())?.routeIndex ??
-        _activeManeuverIndex;
-    final now = DateTime.now();
-    final sameManeuver = _shownManeuverSig == sig;
-    final lastAt = _shownManeuverAt;
-    if (sameManeuver &&
-        _shownManeuverDistM != null &&
-        lastAt != null &&
-        now.difference(lastAt).inMilliseconds < 16) {
-      return _shownManeuverDistM;
-    }
-    final shown = monotonicManeuverDistanceMeters(
-      prevShown: sameManeuver ? _shownManeuverDistM : null,
-      target: raw,
-      maneuverChanged: !sameManeuver,
-      dtMs: (!sameManeuver || lastAt == null)
-          ? 90
-          : now.difference(lastAt).inMilliseconds,
+    return _navigationController.displayManeuverDistanceMeters(
+      maneuvers: _maneuvers,
+      routeCoordinates: _fullRouteCoordinates,
+      currentRouteIndex: _currentRouteIndex,
+      activeManeuverIndex: _activeManeuverIndex,
+      remainingRouteDistanceMeters: _remainingDistance,
+      distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
+      arrivalRadiusMeters: _arrivalRadiusMeters,
+      offRouteGapMeters: _offRouteGapMeters,
+      cumulativeDistancesMeters: _routeCumDistM,
+      renderLockDistanceMeters: _renderLockDistM,
+      visibleManeuver: visibleManeuver,
     );
-    _shownManeuverSig = sig;
-    _shownManeuverDistM = shown;
-    _shownManeuverAt = now;
-    return shown;
   }
 
   NavigationLiveActivitySnapshot _navigationLiveActivitySnapshot() {
@@ -15478,20 +15396,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _updateActiveManeuver() {
-    if (_maneuvers.isEmpty) return;
-    // 2026-06-13 (vucko Manöver-26km-Bug): IMMER von 0 das erste Manöver mit
-    // routeIndex >= _currentRouteIndex ableiten (statt nur ab dem alten Index
-    // vorwärts). Sprang _currentRouteIndex je kurz hoch (Selbstüberlapp-
-    // Teleport) und kam zurück, klebte der alte „nur vorwärts"-Index am
-    // End-Manöver fest → Banner zeigte „in 26 km abbiegen". Jetzt spiegelt der
-    // aktive Index immer den echten Fortschritt wider.
-    for (var i = 0; i < _maneuvers.length; i++) {
-      if (_maneuvers[i].routeIndex >= _currentRouteIndex) {
-        _activeManeuverIndex = i;
-        return;
-      }
-    }
-    _activeManeuverIndex = _maneuvers.length - 1;
+    _activeManeuverIndex = _navigationController.activeManeuverIndexForProgress(
+      maneuvers: _maneuvers,
+      currentRouteIndex: _currentRouteIndex,
+      fallbackIndex: _activeManeuverIndex,
+    );
   }
 
   List<({double lat, double lng})> _roundaboutTopologyProbePoints(
@@ -16115,7 +16024,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       belowMinimum: belowMinimum,
       topSpeedKmh: _maxSpeedMps * 3.6,
       // Ø nur plausibel zeigen (≤ Top-Speed, kein Glitch durch Mini-Distanz).
-      avgSpeedKmh: avgKmh.isFinite && avgKmh > 0 && avgKmh <= _maxSpeedMps * 3.6 + 5
+      avgSpeedKmh:
+          avgKmh.isFinite && avgKmh > 0 && avgKmh <= _maxSpeedMps * 3.6 + 5
           ? avgKmh
           : 0.0,
     );

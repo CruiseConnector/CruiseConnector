@@ -1,3 +1,5 @@
+import 'package:cruise_connect/data/services/route_semantics.dart';
+
 /// Generiert einen passenden, NICHT zufälligen Titel für eine gefahrene Route
 /// — im Stil von Strava ("Sportlicher Donnerstag").
 ///
@@ -50,6 +52,22 @@ class CompletionTitleGenerator {
   }
 
   static String _normalizeStyle(String style) {
+    final aliases = RouteSemantics.styleKeyAliases(style);
+    if (aliases.contains('sport') || aliases.contains('sport_mode')) {
+      return 'sport';
+    }
+    if (aliases.contains('kurvenjagd') ||
+        aliases.contains('kurvenreich') ||
+        aliases.contains('alpenstrassen')) {
+      return 'kurven';
+    }
+    if (aliases.contains('abendrunde') || aliases.contains('panorama')) {
+      return 'entspannt';
+    }
+    if (aliases.contains('entdecker') || aliases.contains('zufall')) {
+      return 'entdecker';
+    }
+
     final s = style.toLowerCase().trim();
     if (s.contains('sport')) return 'sport';
     if (s.contains('kurv')) return 'kurven';
@@ -74,12 +92,13 @@ class CompletionTitleGenerator {
   }) {
     // Deterministischer Seed aus den Fahrt-Daten — gleiche Fahrt → gleicher
     // Titel, verschiedene Fahrten variieren leicht im (stilpassenden) Adjektiv.
-    final seed = (time.weekday * 31 +
-            time.hour * 7 +
-            distanceKm.round() * 3 +
-            curves +
-            (isRoundTrip ? 0 : 5))
-        .abs();
+    final seed =
+        (time.weekday * 31 +
+                time.hour * 7 +
+                distanceKm.round() * 3 +
+                curves +
+                (isRoundTrip ? 0 : 5))
+            .abs();
 
     final weekday = _weekdays[(time.weekday - 1).clamp(0, 6)];
     final suffix = _timeOfDaySuffix(time.hour);

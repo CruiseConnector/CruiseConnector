@@ -5,12 +5,15 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/geo_distance.dart';
+import 'package:cruise_connect/data/services/route_pool_coverage_policy.dart';
+import 'package:cruise_connect/data/services/route_semantics.dart';
+import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/domain/models/route_pool_candidate.dart';
 import 'package:cruise_connect/domain/models/route_pool_coverage.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/route_region.dart';
 import 'package:cruise_connect/domain/models/route_seed_job.dart';
-import 'package:cruise_connect/data/services/route_style_config.dart';
 
 class RoutePoolQuery {
   const RoutePoolQuery({
@@ -224,44 +227,6 @@ class RoutePoolCoverageCheck {
       'region_warming_up': shouldSurfaceWarmup,
     };
   }
-}
-
-class _CoveragePolicy {
-  const _CoveragePolicy({
-    required this.requiredVerifiedCount,
-    required this.difficultyLevel,
-    required this.hardRegionStatus,
-    required this.bootstrapEnabled,
-    required this.curatedSeedPreferred,
-    required this.minVerifiedCount,
-    required this.targetPoolSize,
-    required this.maxPoolSize,
-    required this.candidateBufferLimit,
-    required this.acceptableReserveLimitPercent,
-    required this.minDistinctFingerprints,
-    required this.healthyThreshold,
-    required this.thinThreshold,
-    required this.seedBudgetUnits,
-    required this.seedCooldownMinutes,
-  });
-
-  final int? requiredVerifiedCount;
-  final String difficultyLevel;
-  final String hardRegionStatus;
-  final bool bootstrapEnabled;
-  final bool curatedSeedPreferred;
-  final int minVerifiedCount;
-  final int targetPoolSize;
-  final int maxPoolSize;
-  final int candidateBufferLimit;
-  final int acceptableReserveLimitPercent;
-  final int minDistinctFingerprints;
-  final int healthyThreshold;
-  final int thinThreshold;
-  final int seedBudgetUnits;
-  final int seedCooldownMinutes;
-
-  bool get isHard => difficultyLevel == 'hard';
 }
 
 class RoutePoolRequiredCombination {
@@ -2847,7 +2812,7 @@ class RoutePoolService {
 
   Future<_SeedJobUpsertResult> _ensureSeedJob({
     required RoutePoolRegionAssignment assignment,
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required int distanceBucket,
     required String styleKey,
     required bool avoidHighways,
@@ -3343,98 +3308,23 @@ class RoutePoolService {
     return null;
   }
 
-  static _CoveragePolicy _coveragePolicyFor({
+  static RoutePoolCoveragePolicy _coveragePolicyFor({
     required RouteRegion region,
     RoutePoolCoverage? coverage,
     RoutePoolRequiredCombination? requiredCombination,
   }) {
     final requiredVerifiedCount = requiredCombination?.requiredVerifiedCount;
-    final minVerifiedCount = math.max(
-      0,
-      math.min(
-        defaultMaxPoolSize,
-        requiredVerifiedCount ?? defaultMinVerifiedPerCell,
-      ),
-    );
-    final hardCuratedRegion =
-        region.difficultyLevel.trim().toLowerCase() == 'hard' &&
-        region.curatedSeedPreferred;
-    final targetFloor = hardCuratedRegion
-        ? region.defaultTargetPoolSize
-        : defaultTargetPoolSize;
-    final maxFloor = hardCuratedRegion
-        ? region.defaultMaxPoolSize
-        : defaultMaxPoolSize;
-    final configuredTargetPoolSize = math.max(
-      coverage?.targetPoolSize ?? 0,
-      region.defaultTargetPoolSize,
-    );
-    final targetPoolSize = math.max(
-      minVerifiedCount,
-      math.max(targetFloor, configuredTargetPoolSize),
-    );
-    final configuredMaxPoolSize = math.max(
-      coverage?.maxPoolSize ?? 0,
-      region.defaultMaxPoolSize,
-    );
-    final maxPoolSize = math.max(
-      targetPoolSize,
-      math.max(maxFloor, configuredMaxPoolSize),
-    );
-    final candidateBufferLimit = math.max(
-      0,
-      math.max(
-        coverage?.candidateBufferLimit ?? 0,
-        math.max(defaultCandidateBufferLimit, targetPoolSize * 4),
-      ),
-    );
-    final acceptableReserveLimitPercent = math.max(
-      0,
-      math.min(
-        100,
-        coverage?.acceptableReserveLimitPercent ??
-            defaultAcceptableReserveLimitPercent,
-      ),
-    );
-    final healthyThreshold = math.max(
-      1,
-      math.min(maxPoolSize, minVerifiedCount),
-    );
-    final thinThreshold = math.max(
-      0,
-      math.min(
-        healthyThreshold - 1,
-        region.thinThreshold >= 0
-            ? region.thinThreshold
-            : (coverage?.thinThreshold ?? 1),
-      ),
-    );
-    return _CoveragePolicy(
+    return RoutePoolCoveragePolicy.forRegion(
+      region: region,
+      coverage: coverage,
       requiredVerifiedCount: requiredVerifiedCount,
-      difficultyLevel: region.difficultyLevel,
-      hardRegionStatus: region.hardRegionStatus,
-      bootstrapEnabled: region.bootstrapEnabled,
-      curatedSeedPreferred: region.curatedSeedPreferred,
-      minVerifiedCount: minVerifiedCount,
-      targetPoolSize: targetPoolSize,
-      maxPoolSize: maxPoolSize,
-      candidateBufferLimit: candidateBufferLimit,
-      acceptableReserveLimitPercent: acceptableReserveLimitPercent,
-      minDistinctFingerprints: defaultMinDistinctFingerprints,
-      healthyThreshold: healthyThreshold,
-      thinThreshold: thinThreshold,
-      seedBudgetUnits: math.max(
-        0,
-        region.seedBudgetUnits >= 0
-            ? region.seedBudgetUnits
-            : (coverage?.seedBudgetUnits ?? 1),
-      ),
-      seedCooldownMinutes: math.max(
-        1,
-        region.seedCooldownMinutes > 0
-            ? region.seedCooldownMinutes
-            : (coverage?.seedCooldownMinutes ?? 20),
-      ),
+      defaultMinVerifiedPerCell: defaultMinVerifiedPerCell,
+      defaultTargetPoolSize: defaultTargetPoolSize,
+      defaultMaxPoolSize: defaultMaxPoolSize,
+      defaultCandidateBufferLimit: defaultCandidateBufferLimit,
+      defaultAcceptableReserveLimitPercent:
+          defaultAcceptableReserveLimitPercent,
+      defaultMinDistinctFingerprints: defaultMinDistinctFingerprints,
     );
   }
 
@@ -3444,66 +3334,30 @@ class RoutePoolService {
     required int requiredCombinationCount,
     required int totalVerifiedCount,
   }) {
-    if (requiredCombinationCount > 0 &&
-        fulfilledCombinationCount >= requiredCombinationCount) {
-      return totalVerifiedCount >= region.defaultTargetPoolSize
-          ? 'healthy_full'
-          : 'healthy_minimum';
-    }
-    if (region.difficultyLevel == 'hard') {
-      if (region.curatedSeedPreferred ||
-          region.hardRegionStatus == 'curated_needed' ||
-          !region.bootstrapEnabled) {
-        return 'hard_region_curated_needed';
-      }
-      return totalVerifiedCount > 0 ? 'hard_region_thin' : 'empty';
-    }
-    return totalVerifiedCount > 0 ? 'thin' : 'empty';
+    return RoutePoolCoveragePolicy.deriveClusterCoverageStatus(
+      region: region,
+      fulfilledCombinationCount: fulfilledCombinationCount,
+      requiredCombinationCount: requiredCombinationCount,
+      totalVerifiedCount: totalVerifiedCount,
+    );
   }
 
   static RoutePoolCoverage _applyCoveragePolicySnapshot(
     RoutePoolCoverage coverage, {
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
   }) {
-    return coverage.copyWith(
-      difficultyLevel: policy.difficultyLevel,
-      hardRegionStatus: policy.hardRegionStatus,
-      bootstrapEnabled: policy.bootstrapEnabled,
-      curatedSeedPreferred: policy.curatedSeedPreferred,
-      minVerifiedCount: policy.minVerifiedCount,
-      targetPoolSize: policy.targetPoolSize,
-      maxPoolSize: policy.maxPoolSize,
-      candidateBufferLimit: policy.candidateBufferLimit,
-      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
-      healthyThreshold: policy.healthyThreshold,
-      thinThreshold: policy.thinThreshold,
-      seedBudgetUnits: policy.seedBudgetUnits,
-      seedCooldownMinutes: policy.seedCooldownMinutes,
-    );
+    return policy.applySnapshot(coverage);
   }
 
   static bool _coveragePolicyChanged(
     RoutePoolCoverage current,
     RoutePoolCoverage next,
   ) {
-    return current.difficultyLevel != next.difficultyLevel ||
-        current.hardRegionStatus != next.hardRegionStatus ||
-        current.bootstrapEnabled != next.bootstrapEnabled ||
-        current.curatedSeedPreferred != next.curatedSeedPreferred ||
-        current.minVerifiedCount != next.minVerifiedCount ||
-        current.targetPoolSize != next.targetPoolSize ||
-        current.maxPoolSize != next.maxPoolSize ||
-        current.candidateBufferLimit != next.candidateBufferLimit ||
-        current.acceptableReserveLimitPercent !=
-            next.acceptableReserveLimitPercent ||
-        current.healthyThreshold != next.healthyThreshold ||
-        current.thinThreshold != next.thinThreshold ||
-        current.seedBudgetUnits != next.seedBudgetUnits ||
-        current.seedCooldownMinutes != next.seedCooldownMinutes;
+    return RoutePoolCoveragePolicy.coverageSnapshotChanged(current, next);
   }
 
   static bool _shouldCreateSeedJob({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required RoutePoolCoverage coverage,
     required RouteSeedJob? existingSeedJob,
     bool allowUserDemandLearningJob = false,
@@ -3532,7 +3386,7 @@ class RoutePoolService {
   }
 
   static bool _allowUserDemandLearningJob({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required String routeType,
     required String subscriptionTier,
     required bool createSeedJob,
@@ -3644,7 +3498,7 @@ class RoutePoolService {
   }
 
   static String _deriveCoverageStatus({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required int currentVerifiedCount,
     required int idealCount,
     required int goodCount,
@@ -3653,98 +3507,36 @@ class RoutePoolService {
     required bool hasBootstrapPending,
     required bool isCooldown,
   }) {
-    if (currentVerifiedCount > policy.maxPoolSize) return 'overfull';
-    final goodEnoughCount = idealCount + goodCount;
-    final acceptableLimit = _acceptableReserveLimit(
+    return policy.deriveCoverageStatus(
       currentVerifiedCount: currentVerifiedCount,
-      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
+      idealCount: idealCount,
+      goodCount: goodCount,
+      acceptableCount: acceptableCount,
+      distinctFingerprintCount: distinctFingerprintCount,
+      hasBootstrapPending: hasBootstrapPending,
+      isCooldown: isCooldown,
     );
-    final acceptableOverLimit =
-        currentVerifiedCount > 0 && acceptableCount > acceptableLimit;
-    final minimumMet =
-        currentVerifiedCount >= policy.minVerifiedCount &&
-        distinctFingerprintCount >= policy.minDistinctFingerprints &&
-        goodEnoughCount >= policy.minVerifiedCount &&
-        !acceptableOverLimit;
-    if (minimumMet && currentVerifiedCount >= policy.targetPoolSize) {
-      return 'target_met';
-    }
-    if (minimumMet) return 'healthy';
-    if (currentVerifiedCount >= policy.minVerifiedCount &&
-        (goodEnoughCount < policy.minVerifiedCount || acceptableOverLimit)) {
-      return 'quality_thin';
-    }
-    if (policy.isHard) {
-      if (hasBootstrapPending || isCooldown) return 'bootstrap_limited';
-      if (currentVerifiedCount > 0) return 'hard_region_thin';
-      if (!policy.bootstrapEnabled ||
-          policy.curatedSeedPreferred ||
-          policy.hardRegionStatus == 'curated_needed') {
-        return 'hard_region_curated_needed';
-      }
-      return 'empty';
-    }
-    if (isCooldown) return 'cooldown';
-    if (hasBootstrapPending) return 'warming_up';
-    if (currentVerifiedCount > 0) return 'thin';
-    return 'empty';
   }
 
   static bool _coverageMeetsMinimum({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required RoutePoolCoverage coverage,
   }) {
-    final goodEnoughCount = coverage.idealCount + coverage.goodCount;
-    final acceptableLimit = _acceptableReserveLimit(
-      currentVerifiedCount: coverage.currentVerifiedCount,
-      acceptableReserveLimitPercent: policy.acceptableReserveLimitPercent,
-    );
-    return coverage.currentVerifiedCount >= policy.minVerifiedCount &&
-        coverage.distinctFingerprintCount >= policy.minDistinctFingerprints &&
-        goodEnoughCount >= policy.minVerifiedCount &&
-        coverage.acceptableCount <= acceptableLimit;
+    return policy.meetsMinimum(coverage);
   }
 
   static bool _coverageMeetsTarget({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required RoutePoolCoverage coverage,
   }) {
-    return _coverageMeetsMinimum(policy: policy, coverage: coverage) &&
-        coverage.currentVerifiedCount >= policy.targetPoolSize;
+    return policy.meetsTarget(coverage);
   }
 
   static int _missingMinimumCoverageCount({
-    required _CoveragePolicy policy,
+    required RoutePoolCoveragePolicy policy,
     required RoutePoolCoverage coverage,
   }) {
-    if (_coverageMeetsMinimum(policy: policy, coverage: coverage)) return 0;
-    final missingVerified = math.max(
-      0,
-      policy.minVerifiedCount - coverage.currentVerifiedCount,
-    );
-    final missingDistinct = math.max(
-      0,
-      policy.minDistinctFingerprints - coverage.distinctFingerprintCount,
-    );
-    final missingGoodEnough = math.max(
-      0,
-      policy.minVerifiedCount - (coverage.idealCount + coverage.goodCount),
-    );
-    return math.max(
-      missingVerified,
-      math.max(missingDistinct, missingGoodEnough),
-    );
-  }
-
-  static int _acceptableReserveLimit({
-    required int currentVerifiedCount,
-    required int acceptableReserveLimitPercent,
-  }) {
-    if (currentVerifiedCount <= 0 || acceptableReserveLimitPercent <= 0) {
-      return 0;
-    }
-    return (currentVerifiedCount * (acceptableReserveLimitPercent / 100))
-        .floor();
+    return policy.missingMinimumCoverageCount(coverage);
   }
 
   static double _candidateLocalityScore({required double distanceToCenterKm}) {
@@ -3792,44 +3584,15 @@ class RoutePoolService {
   }
 
   static String _normalizeStyleKey(String style) {
-    final cleaned = style
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_|_$'), '');
-    return cleaned.isEmpty ? 'standard' : cleaned;
+    return RouteSemantics.normalizeStyleKey(style);
   }
 
   static Set<String> _styleKeyAliases(String style) {
-    final normalized = _normalizeStyleKey(style);
-    if (normalized == 'sport' ||
-        normalized == 'sport_mode' ||
-        normalized == 'sportmode') {
-      return const {'sport_mode', 'sport'};
-    }
-    if (normalized == 'kurvenjagd' ||
-        normalized == 'kurvenreich' ||
-        normalized == 'curvy' ||
-        normalized == 'curves' ||
-        normalized == 'alpenstrassen' ||
-        normalized == 'alpenstrasse' ||
-        normalized == 'alpenstra_en') {
-      return const {
-        'kurvenjagd',
-        'kurvenreich',
-        'curvy',
-        'alpenstrassen',
-        'alpenstrasse',
-        'alpenstra_en',
-      };
-    }
-    return {normalized};
+    return RouteSemantics.styleKeyAliases(style);
   }
 
   static bool _styleKeyMatches(String style, Set<String> aliases) {
-    final normalized = _normalizeStyleKey(style);
-    return aliases.any((alias) => _sameText(normalized, alias));
+    return RouteSemantics.styleKeyMatches(style, aliases);
   }
 
   static String _cellKeyPart(String? value) {
@@ -3837,7 +3600,7 @@ class RoutePoolService {
   }
 
   static List<String> _normalizeStyleKeyList(List<String> styles) {
-    return styles.map(_normalizeStyleKey).toList(growable: false);
+    return RouteSemantics.normalizeStyleKeyList(styles);
   }
 
   static List<String> _styleTagsFromRaw(Object? raw) {
@@ -3909,17 +3672,12 @@ class RoutePoolService {
     double lat2,
     double lng2,
   ) {
-    const earthRadiusKm = 6371.0;
-    final dLat = _toRadians(lat2 - lat1);
-    final dLng = _toRadians(lng2 - lng1);
-    final a =
-        math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_toRadians(lat1)) *
-            math.cos(_toRadians(lat2)) *
-            math.sin(dLng / 2) *
-            math.sin(dLng / 2);
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-    return earthRadiusKm * c;
+    return GeoDistance.haversineKm(
+      fromLat: lat1,
+      fromLng: lng1,
+      toLat: lat2,
+      toLng: lng2,
+    );
   }
 
   static bool _styleMatches(RoutePoolEntry candidate, String style) {
@@ -4156,50 +3914,19 @@ class RoutePoolService {
   }
 
   static bool _sameText(String? left, String? right) {
-    return (left ?? '').trim().toLowerCase() ==
-        (right ?? '').trim().toLowerCase();
+    return RouteSemantics.sameText(left, right);
   }
 
   static String _normalizeRouteType(String routeType) {
-    final cleaned = routeType
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_|_$'), '');
-    if (cleaned == 'round_trip' ||
-        cleaned == 'roundtrip' ||
-        cleaned == 'rundkurs') {
-      return 'ROUND_TRIP';
-    }
-    if (cleaned == 'point_to_point' ||
-        cleaned == 'pointtopoint' ||
-        cleaned == 'a_b' ||
-        cleaned == 'ab') {
-      return 'POINT_TO_POINT';
-    }
-    return routeType.trim().toUpperCase();
+    return RouteSemantics.normalizeRouteType(routeType);
   }
 
   static bool _routeTypeMatches(String? left, String? right) {
-    return _normalizeRouteType(left ?? '') == _normalizeRouteType(right ?? '');
+    return RouteSemantics.routeTypeMatches(left, right);
   }
 
   static Set<String> _routeTypeAliases(String routeType) {
-    return switch (_normalizeRouteType(routeType)) {
-      'ROUND_TRIP' => const {
-        'ROUND_TRIP',
-        'round_trip',
-        'roundtrip',
-        'Rundkurs',
-      },
-      'POINT_TO_POINT' => const {
-        'POINT_TO_POINT',
-        'point_to_point',
-        'pointtopoint',
-      },
-      final normalized => {normalized},
-    };
+    return RouteSemantics.routeTypeAliases(routeType);
   }
 
   static int _boolScore(bool value) => value ? 1 : 0;

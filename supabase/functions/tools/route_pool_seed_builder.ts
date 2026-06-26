@@ -180,7 +180,7 @@ if (!supabaseAnonKey) {
 }
 const edgeEndpoint = Deno.args.find((arg) => arg.startsWith("--endpoint="))
   ?.slice("--endpoint=".length) ??
-  "https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route";
+  "https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route-v2";
 
 const clusters: Record<
   SeedCluster,

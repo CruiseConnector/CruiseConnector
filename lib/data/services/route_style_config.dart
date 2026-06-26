@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:cruise_connect/data/services/route_semantics.dart';
+
 /// Konfiguration für die 4 Fahrstile — bestimmt Waypoint-Muster,
 /// Mapbox-Parameter und Post-Generierungs-Validierung.
 ///
@@ -118,14 +120,25 @@ class RouteStyleConfig {
 
   /// Gibt die passende Config für einen Stil-Namen zurück.
   static RouteStyleConfig forMode(String mode) {
-    final normalized = mode.trim().toLowerCase();
-    return switch (normalized) {
-      'sport mode' || 'sport' || 'autobahn' => sport,
-      'kurvenjagd' || 'kurvenreich' || 'alpenstraßen' => kurvenjagd,
-      'abendrunde' || 'panorama' => abendrunde,
-      'entdecker' || 'zufall' => entdecker,
-      _ => sport,
-    };
+    final normalized = RouteSemantics.normalizeStyleKey(mode);
+    final aliases = RouteSemantics.styleKeyAliases(mode);
+    if (aliases.contains('sport_mode') ||
+        aliases.contains('sport') ||
+        normalized == 'autobahn') {
+      return sport;
+    }
+    if (aliases.contains('kurvenjagd') ||
+        aliases.contains('kurvenreich') ||
+        aliases.contains('alpenstrassen')) {
+      return kurvenjagd;
+    }
+    if (aliases.contains('abendrunde') || aliases.contains('panorama')) {
+      return abendrunde;
+    }
+    if (aliases.contains('entdecker') || aliases.contains('zufall')) {
+      return entdecker;
+    }
+    return sport;
   }
 
   /// Prüft ob die generierte Route die stilspezifischen Qualitätskriterien erfüllt.

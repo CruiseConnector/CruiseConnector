@@ -634,7 +634,7 @@ void main() {
   const endpointValue = String.fromEnvironment(
     'BENCHMARK_ENDPOINT',
     defaultValue:
-        'https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route',
+        'https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/generate-cruise-route-v2',
   );
   const outputPath = String.fromEnvironment(
     'BENCHMARK_OUTPUT',
@@ -1637,47 +1637,47 @@ void main() {
               'motorwayToggleHonored': null,
             }
           : <String, dynamic>{
-        'totalRuns': results.length,
-        'usableRoutes': results.where((entry) {
-          final bucket = entry['bucket'];
-          return bucket == 'good' || bucket == 'acceptable';
-        }).length,
-        'weakRoutes': results
-            .where((entry) => entry['bucket'] == 'weak')
-            .length,
-        'realErrors': results
-            .where((entry) => entry['bucket'] == 'error')
-            .length,
-        'goodRoutes': results
-            .where((entry) => entry['bucket'] == 'good')
-            .length,
-        'acceptableRoutes': results
-            .where((entry) => entry['bucket'] == 'acceptable')
-            .length,
-        'averageDurationMs':
-            results
-                .map((entry) => entry['durationMs'] as int)
-                .fold<int>(0, (sum, value) => sum + value) /
-            results.length,
-        'p95DurationMs':
-            durations[(durations.length * 0.95).floor().clamp(
-              0,
-              durations.length - 1,
-            )],
-        'pointToPointDistinctRuns': results
-            .where((entry) => entry['routeType'] == 'POINT_TO_POINT')
-            .where((entry) => entry['geometryDifferent'] == true)
-            .length,
-        'mapboxRoutes': results
-            .where((entry) => entry['source'] == 'mapbox')
-            .length,
-        'poolFallbackRoutes': results
-            .where((entry) => entry['source'] == 'pool')
-            .length,
-        'cacheRoutes': results
-            .where((entry) => entry['source'] == 'cache')
-            .length,
-      };
+              'totalRuns': results.length,
+              'usableRoutes': results.where((entry) {
+                final bucket = entry['bucket'];
+                return bucket == 'good' || bucket == 'acceptable';
+              }).length,
+              'weakRoutes': results
+                  .where((entry) => entry['bucket'] == 'weak')
+                  .length,
+              'realErrors': results
+                  .where((entry) => entry['bucket'] == 'error')
+                  .length,
+              'goodRoutes': results
+                  .where((entry) => entry['bucket'] == 'good')
+                  .length,
+              'acceptableRoutes': results
+                  .where((entry) => entry['bucket'] == 'acceptable')
+                  .length,
+              'averageDurationMs':
+                  results
+                      .map((entry) => entry['durationMs'] as int)
+                      .fold<int>(0, (sum, value) => sum + value) /
+                  results.length,
+              'p95DurationMs':
+                  durations[(durations.length * 0.95).floor().clamp(
+                    0,
+                    durations.length - 1,
+                  )],
+              'pointToPointDistinctRuns': results
+                  .where((entry) => entry['routeType'] == 'POINT_TO_POINT')
+                  .where((entry) => entry['geometryDifferent'] == true)
+                  .length,
+              'mapboxRoutes': results
+                  .where((entry) => entry['source'] == 'mapbox')
+                  .length,
+              'poolFallbackRoutes': results
+                  .where((entry) => entry['source'] == 'pool')
+                  .length,
+              'cacheRoutes': results
+                  .where((entry) => entry['source'] == 'cache')
+                  .length,
+            };
       final motorwayToggleCandidates = results
           .where((entry) => entry['motorwayExcludeActive'] != null)
           .toList();

@@ -17,11 +17,13 @@ import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
 import 'package:cruise_connect/data/services/roundabout_topology_service.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/route_cache_service.dart';
+import 'package:cruise_connect/data/services/route_debug_state.dart';
 import 'package:cruise_connect/data/services/route_generation_coordinator.dart';
 import 'package:cruise_connect/data/services/route_pool_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/route_scenario.dart';
+import 'package:cruise_connect/data/services/route_semantics.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/data/services/route_variant.dart';
@@ -132,13 +134,9 @@ class RouteService {
     : _invoker = invoker ?? const SupabaseRouteInvoker(),
       _routePoolService = routePoolService ?? RoutePoolService();
 
-  // Migration 2026-05-20: vom 15.000-Zeilen Mapbox-Hack 'generate-cruise-route'
-  // auf den schlanken GraphHopper-Adapter 'generate-cruise-route-v2'.
-  // Response-Format ist v1-kompatibel (route.distance in Meter,
-  // route.duration in Millisekunden) — der bestehende Flutter-Parsing-Code
-  // (_invoke + RouteResult-Mapping) funktioniert unverändert weiter.
-  //
-  // Rollback: einfach diesen String auf 'generate-cruise-route' zurücksetzen.
+  // Migration 2026-05-20: alle Routing-Calls laufen über den GraphHopper-
+  // Adapter. Der alte generate-cruise-route Entrypoint ist serverseitig
+  // deaktiviert und darf nicht mehr als Fallback verwendet werden.
   static const String edgeFunction = 'generate-cruise-route-v2';
   static const String _liveRouteSource = 'graphhopper';
   static const String _legacyMapboxRouteSource = 'mapbox';
@@ -165,67 +163,233 @@ class RouteService {
       'route_service_last_successful_route';
   static final Map<String, RouteResult> _recentSuccessfulRoutes = {};
   static final Map<String, RouteResult> _recentDisplayedRoutes = {};
+  static final RouteDebugState _routeDebugState = RouteDebugState(
+    defaultGenerationSource: _liveRouteSource,
+  );
 
   /// Flag: letzte Route kam aus dem Offline-Cache
-  static bool lastRouteFromCache = false;
-  static bool lastRouteSessionCacheHit = false;
-  static bool lastRouteRecentFallbackUsed = false;
-  static bool lastRoutePersistentCacheFallbackUsed = false;
-  static bool lastRoutePreparedBufferHit = false;
-  static bool lastRoutePreparedBufferUsed = false;
-  static bool lastRouteDuplicateFallbackUsed = false;
-  static bool lastRouteEmergencyFallbackUsed = false;
-  static bool lastRoutePoolFallbackUsed = false;
-  static bool lastRoutePoolDistanceRuleApplied = false;
-  static bool lastRoutePoolRejectedTooFar = false;
-  static bool lastRoutePoolExactBucketMissing = false;
-  static bool lastRouteAlternativeDistanceOffered = false;
-  static int lastRoutePoolCandidateCount = 0;
-  static int lastRoutePoolSeenCandidateCount = 0;
-  static bool lastRouteDuplicateSkipped = false;
-  static String? lastRouteSourceDecision;
-  static String? lastRouteLiveAttemptReason;
-  static String? lastRoutePoolUsedReason;
-  static List<String> lastRoutePreviousFingerprints = const [];
-  static int? lastRouteRequestedDistanceBucket;
-  static int? lastRouteReturnedDistanceBucket;
-  static bool lastRouteAccessLegUsed = false;
-  static double? lastRouteAccessLegDistanceKm;
-  static String lastRouteGenerationSource = _liveRouteSource;
-  static String lastRouteSubscriptionTier = 'premium';
-  static String? lastRouteRequestedStyle;
-  static String? lastRoutePoolMatchId;
-  static String? lastRoutePoolMatchTier;
-  static double? lastRoutePoolStartDistanceKm;
-  static bool lastRouteDeadEndSpikeDetected = false;
-  static int lastRouteApiCallCount = 0;
-  static int? lastRouteGenerationStartedAtMs;
-  static String? lastRouteDebugFingerprint;
-  static double? lastRouteSimilarityToPreviousPercent;
-  static String? lastRouteDebugTrigger;
-  static String? lastRouteCoverageStatus;
-  static bool lastRouteSeedJobCreated = false;
-  static bool lastRouteDuplicateSeedJobPrevented = false;
-  static bool lastRoutePoolBootstrapPending = false;
-  static String? lastRouteRegionDifficulty;
-  static String? lastRouteHardRegionStatus;
-  static String? lastRouteChosenCluster;
-  static bool lastRouteCandidateInserted = false;
-  static bool lastRouteVerifiedInserted = false;
-  static bool lastRouteCandidateSaveFailed = false;
-  static bool lastRouteCandidateDuplicateFingerprint = false;
-  static String? lastRouteCandidateDuplicateSource;
-  static bool lastRouteCandidateCoverageRefreshFailed = false;
-  static String? lastRouteCandidateSaveErrorType;
-  static String? lastRouteCandidateSaveErrorCode;
-  static String? lastRouteCandidateSaveErrorReason;
-  static String? lastRouteCandidateSaveSkippedReason;
-  static bool lastRouteTemporaryCandidate = false;
-  static bool lastRouteHardRegionExplorationUsed = false;
-  static bool lastRouteMovingStartDetected = false;
-  static String? lastRouteStartSnapStrategy;
-  static bool? lastRouteStartOnMotorway;
-  static double? lastRouteAvoidManeuverRadiusUsed;
+  static bool get lastRouteFromCache => _routeDebugState.fromCache;
+  static set lastRouteFromCache(bool value) =>
+      _routeDebugState.fromCache = value;
+  static bool get lastRouteSessionCacheHit => _routeDebugState.sessionCacheHit;
+  static set lastRouteSessionCacheHit(bool value) =>
+      _routeDebugState.sessionCacheHit = value;
+  static bool get lastRouteRecentFallbackUsed =>
+      _routeDebugState.recentFallbackUsed;
+  static set lastRouteRecentFallbackUsed(bool value) =>
+      _routeDebugState.recentFallbackUsed = value;
+  static bool get lastRoutePersistentCacheFallbackUsed =>
+      _routeDebugState.persistentCacheFallbackUsed;
+  static set lastRoutePersistentCacheFallbackUsed(bool value) =>
+      _routeDebugState.persistentCacheFallbackUsed = value;
+  static bool get lastRoutePreparedBufferHit =>
+      _routeDebugState.preparedBufferHit;
+  static set lastRoutePreparedBufferHit(bool value) =>
+      _routeDebugState.preparedBufferHit = value;
+  static bool get lastRoutePreparedBufferUsed =>
+      _routeDebugState.preparedBufferUsed;
+  static set lastRoutePreparedBufferUsed(bool value) =>
+      _routeDebugState.preparedBufferUsed = value;
+  static bool get lastRouteDuplicateFallbackUsed =>
+      _routeDebugState.duplicateFallbackUsed;
+  static set lastRouteDuplicateFallbackUsed(bool value) =>
+      _routeDebugState.duplicateFallbackUsed = value;
+  static bool get lastRouteEmergencyFallbackUsed =>
+      _routeDebugState.emergencyFallbackUsed;
+  static set lastRouteEmergencyFallbackUsed(bool value) =>
+      _routeDebugState.emergencyFallbackUsed = value;
+  static bool get lastRoutePoolFallbackUsed =>
+      _routeDebugState.poolFallbackUsed;
+  static set lastRoutePoolFallbackUsed(bool value) =>
+      _routeDebugState.poolFallbackUsed = value;
+  static bool get lastRoutePoolDistanceRuleApplied =>
+      _routeDebugState.poolDistanceRuleApplied;
+  static set lastRoutePoolDistanceRuleApplied(bool value) =>
+      _routeDebugState.poolDistanceRuleApplied = value;
+  static bool get lastRoutePoolRejectedTooFar =>
+      _routeDebugState.poolRejectedTooFar;
+  static set lastRoutePoolRejectedTooFar(bool value) =>
+      _routeDebugState.poolRejectedTooFar = value;
+  static bool get lastRoutePoolExactBucketMissing =>
+      _routeDebugState.poolExactBucketMissing;
+  static set lastRoutePoolExactBucketMissing(bool value) =>
+      _routeDebugState.poolExactBucketMissing = value;
+  static bool get lastRouteAlternativeDistanceOffered =>
+      _routeDebugState.alternativeDistanceOffered;
+  static set lastRouteAlternativeDistanceOffered(bool value) =>
+      _routeDebugState.alternativeDistanceOffered = value;
+  static int get lastRoutePoolCandidateCount =>
+      _routeDebugState.poolCandidateCount;
+  static set lastRoutePoolCandidateCount(int value) =>
+      _routeDebugState.poolCandidateCount = value;
+  static int get lastRoutePoolSeenCandidateCount =>
+      _routeDebugState.poolSeenCandidateCount;
+  static set lastRoutePoolSeenCandidateCount(int value) =>
+      _routeDebugState.poolSeenCandidateCount = value;
+  static bool get lastRouteDuplicateSkipped =>
+      _routeDebugState.duplicateSkipped;
+  static set lastRouteDuplicateSkipped(bool value) =>
+      _routeDebugState.duplicateSkipped = value;
+  static String? get lastRouteSourceDecision => _routeDebugState.sourceDecision;
+  static set lastRouteSourceDecision(String? value) =>
+      _routeDebugState.sourceDecision = value;
+  static String? get lastRouteLiveAttemptReason =>
+      _routeDebugState.liveAttemptReason;
+  static set lastRouteLiveAttemptReason(String? value) =>
+      _routeDebugState.liveAttemptReason = value;
+  static String? get lastRoutePoolUsedReason => _routeDebugState.poolUsedReason;
+  static set lastRoutePoolUsedReason(String? value) =>
+      _routeDebugState.poolUsedReason = value;
+  static List<String> get lastRoutePreviousFingerprints =>
+      _routeDebugState.previousFingerprints;
+  static set lastRoutePreviousFingerprints(List<String> value) =>
+      _routeDebugState.previousFingerprints = value;
+  static int? get lastRouteRequestedDistanceBucket =>
+      _routeDebugState.requestedDistanceBucket;
+  static set lastRouteRequestedDistanceBucket(int? value) =>
+      _routeDebugState.requestedDistanceBucket = value;
+  static int? get lastRouteReturnedDistanceBucket =>
+      _routeDebugState.returnedDistanceBucket;
+  static set lastRouteReturnedDistanceBucket(int? value) =>
+      _routeDebugState.returnedDistanceBucket = value;
+  static bool get lastRouteAccessLegUsed => _routeDebugState.accessLegUsed;
+  static set lastRouteAccessLegUsed(bool value) =>
+      _routeDebugState.accessLegUsed = value;
+  static double? get lastRouteAccessLegDistanceKm =>
+      _routeDebugState.accessLegDistanceKm;
+  static set lastRouteAccessLegDistanceKm(double? value) =>
+      _routeDebugState.accessLegDistanceKm = value;
+  static String get lastRouteGenerationSource =>
+      _routeDebugState.generationSource;
+  static set lastRouteGenerationSource(String value) =>
+      _routeDebugState.generationSource = value;
+  static String get lastRouteSubscriptionTier =>
+      _routeDebugState.subscriptionTier;
+  static set lastRouteSubscriptionTier(String value) =>
+      _routeDebugState.subscriptionTier = value;
+  static String? get lastRouteRequestedStyle => _routeDebugState.requestedStyle;
+  static set lastRouteRequestedStyle(String? value) =>
+      _routeDebugState.requestedStyle = value;
+  static String? get lastRoutePoolMatchId => _routeDebugState.poolMatchId;
+  static set lastRoutePoolMatchId(String? value) =>
+      _routeDebugState.poolMatchId = value;
+  static String? get lastRoutePoolMatchTier => _routeDebugState.poolMatchTier;
+  static set lastRoutePoolMatchTier(String? value) =>
+      _routeDebugState.poolMatchTier = value;
+  static double? get lastRoutePoolStartDistanceKm =>
+      _routeDebugState.poolStartDistanceKm;
+  static set lastRoutePoolStartDistanceKm(double? value) =>
+      _routeDebugState.poolStartDistanceKm = value;
+  static bool get lastRouteDeadEndSpikeDetected =>
+      _routeDebugState.deadEndSpikeDetected;
+  static set lastRouteDeadEndSpikeDetected(bool value) =>
+      _routeDebugState.deadEndSpikeDetected = value;
+  static int get lastRouteApiCallCount => _routeDebugState.apiCallCount;
+  static set lastRouteApiCallCount(int value) =>
+      _routeDebugState.apiCallCount = value;
+  static int? get lastRouteGenerationStartedAtMs =>
+      _routeDebugState.generationStartedAtMs;
+  static set lastRouteGenerationStartedAtMs(int? value) =>
+      _routeDebugState.generationStartedAtMs = value;
+  static String? get lastRouteDebugFingerprint =>
+      _routeDebugState.debugFingerprint;
+  static set lastRouteDebugFingerprint(String? value) =>
+      _routeDebugState.debugFingerprint = value;
+  static double? get lastRouteSimilarityToPreviousPercent =>
+      _routeDebugState.similarityToPreviousPercent;
+  static set lastRouteSimilarityToPreviousPercent(double? value) =>
+      _routeDebugState.similarityToPreviousPercent = value;
+  static String? get lastRouteDebugTrigger => _routeDebugState.debugTrigger;
+  static set lastRouteDebugTrigger(String? value) =>
+      _routeDebugState.debugTrigger = value;
+  static String? get lastRouteCoverageStatus => _routeDebugState.coverageStatus;
+  static set lastRouteCoverageStatus(String? value) =>
+      _routeDebugState.coverageStatus = value;
+  static bool get lastRouteSeedJobCreated => _routeDebugState.seedJobCreated;
+  static set lastRouteSeedJobCreated(bool value) =>
+      _routeDebugState.seedJobCreated = value;
+  static bool get lastRouteDuplicateSeedJobPrevented =>
+      _routeDebugState.duplicateSeedJobPrevented;
+  static set lastRouteDuplicateSeedJobPrevented(bool value) =>
+      _routeDebugState.duplicateSeedJobPrevented = value;
+  static bool get lastRoutePoolBootstrapPending =>
+      _routeDebugState.poolBootstrapPending;
+  static set lastRoutePoolBootstrapPending(bool value) =>
+      _routeDebugState.poolBootstrapPending = value;
+  static String? get lastRouteRegionDifficulty =>
+      _routeDebugState.regionDifficulty;
+  static set lastRouteRegionDifficulty(String? value) =>
+      _routeDebugState.regionDifficulty = value;
+  static String? get lastRouteHardRegionStatus =>
+      _routeDebugState.hardRegionStatus;
+  static set lastRouteHardRegionStatus(String? value) =>
+      _routeDebugState.hardRegionStatus = value;
+  static String? get lastRouteChosenCluster => _routeDebugState.chosenCluster;
+  static set lastRouteChosenCluster(String? value) =>
+      _routeDebugState.chosenCluster = value;
+  static bool get lastRouteCandidateInserted =>
+      _routeDebugState.candidateInserted;
+  static set lastRouteCandidateInserted(bool value) =>
+      _routeDebugState.candidateInserted = value;
+  static bool get lastRouteVerifiedInserted =>
+      _routeDebugState.verifiedInserted;
+  static set lastRouteVerifiedInserted(bool value) =>
+      _routeDebugState.verifiedInserted = value;
+  static bool get lastRouteCandidateSaveFailed =>
+      _routeDebugState.candidateSaveFailed;
+  static set lastRouteCandidateSaveFailed(bool value) =>
+      _routeDebugState.candidateSaveFailed = value;
+  static bool get lastRouteCandidateDuplicateFingerprint =>
+      _routeDebugState.candidateDuplicateFingerprint;
+  static set lastRouteCandidateDuplicateFingerprint(bool value) =>
+      _routeDebugState.candidateDuplicateFingerprint = value;
+  static String? get lastRouteCandidateDuplicateSource =>
+      _routeDebugState.candidateDuplicateSource;
+  static set lastRouteCandidateDuplicateSource(String? value) =>
+      _routeDebugState.candidateDuplicateSource = value;
+  static bool get lastRouteCandidateCoverageRefreshFailed =>
+      _routeDebugState.candidateCoverageRefreshFailed;
+  static set lastRouteCandidateCoverageRefreshFailed(bool value) =>
+      _routeDebugState.candidateCoverageRefreshFailed = value;
+  static String? get lastRouteCandidateSaveErrorType =>
+      _routeDebugState.candidateSaveErrorType;
+  static set lastRouteCandidateSaveErrorType(String? value) =>
+      _routeDebugState.candidateSaveErrorType = value;
+  static String? get lastRouteCandidateSaveErrorCode =>
+      _routeDebugState.candidateSaveErrorCode;
+  static set lastRouteCandidateSaveErrorCode(String? value) =>
+      _routeDebugState.candidateSaveErrorCode = value;
+  static String? get lastRouteCandidateSaveErrorReason =>
+      _routeDebugState.candidateSaveErrorReason;
+  static set lastRouteCandidateSaveErrorReason(String? value) =>
+      _routeDebugState.candidateSaveErrorReason = value;
+  static String? get lastRouteCandidateSaveSkippedReason =>
+      _routeDebugState.candidateSaveSkippedReason;
+  static set lastRouteCandidateSaveSkippedReason(String? value) =>
+      _routeDebugState.candidateSaveSkippedReason = value;
+  static bool get lastRouteTemporaryCandidate =>
+      _routeDebugState.temporaryCandidate;
+  static set lastRouteTemporaryCandidate(bool value) =>
+      _routeDebugState.temporaryCandidate = value;
+  static bool get lastRouteHardRegionExplorationUsed =>
+      _routeDebugState.hardRegionExplorationUsed;
+  static set lastRouteHardRegionExplorationUsed(bool value) =>
+      _routeDebugState.hardRegionExplorationUsed = value;
+  static bool get lastRouteMovingStartDetected =>
+      _routeDebugState.movingStartDetected;
+  static set lastRouteMovingStartDetected(bool value) =>
+      _routeDebugState.movingStartDetected = value;
+  static String? get lastRouteStartSnapStrategy =>
+      _routeDebugState.startSnapStrategy;
+  static set lastRouteStartSnapStrategy(String? value) =>
+      _routeDebugState.startSnapStrategy = value;
+  static bool? get lastRouteStartOnMotorway => _routeDebugState.startOnMotorway;
+  static set lastRouteStartOnMotorway(bool? value) =>
+      _routeDebugState.startOnMotorway = value;
+  static double? get lastRouteAvoidManeuverRadiusUsed =>
+      _routeDebugState.avoidManeuverRadiusUsed;
+  static set lastRouteAvoidManeuverRadiusUsed(double? value) =>
+      _routeDebugState.avoidManeuverRadiusUsed = value;
 
   static bool _isLiveRouteSource(String? source) =>
       source == _liveRouteSource || source == _legacyMapboxRouteSource;
@@ -269,7 +433,7 @@ class RouteService {
   // ─────────────────────────── Public API ────────────────────────────────────
 
   static bool requiresDestination(String routeType) {
-    return routeType == 'POINT_TO_POINT';
+    return RouteSemantics.routeTypeMatches(routeType, 'POINT_TO_POINT');
   }
 
   @visibleForTesting
@@ -315,65 +479,7 @@ class RouteService {
   }
 
   static void _resetRouteDebugState() {
-    lastRouteFromCache = false;
-    lastRouteSessionCacheHit = false;
-    lastRouteRecentFallbackUsed = false;
-    lastRoutePersistentCacheFallbackUsed = false;
-    lastRoutePreparedBufferHit = false;
-    lastRoutePreparedBufferUsed = false;
-    lastRouteDuplicateFallbackUsed = false;
-    lastRouteEmergencyFallbackUsed = false;
-    lastRoutePoolFallbackUsed = false;
-    lastRoutePoolDistanceRuleApplied = false;
-    lastRoutePoolRejectedTooFar = false;
-    lastRoutePoolExactBucketMissing = false;
-    lastRouteAlternativeDistanceOffered = false;
-    lastRoutePoolCandidateCount = 0;
-    lastRoutePoolSeenCandidateCount = 0;
-    lastRouteDuplicateSkipped = false;
-    lastRouteSourceDecision = null;
-    lastRouteLiveAttemptReason = null;
-    lastRoutePoolUsedReason = null;
-    lastRoutePreviousFingerprints = const [];
-    lastRouteRequestedDistanceBucket = null;
-    lastRouteReturnedDistanceBucket = null;
-    lastRouteAccessLegUsed = false;
-    lastRouteAccessLegDistanceKm = null;
-    lastRouteGenerationSource = _liveRouteSource;
-    lastRouteSubscriptionTier = 'premium';
-    lastRouteRequestedStyle = null;
-    lastRoutePoolMatchId = null;
-    lastRoutePoolMatchTier = null;
-    lastRoutePoolStartDistanceKm = null;
-    lastRouteDeadEndSpikeDetected = false;
-    lastRouteApiCallCount = 0;
-    lastRouteGenerationStartedAtMs = null;
-    lastRouteDebugFingerprint = null;
-    lastRouteSimilarityToPreviousPercent = null;
-    lastRouteDebugTrigger = null;
-    lastRouteCoverageStatus = null;
-    lastRouteSeedJobCreated = false;
-    lastRouteDuplicateSeedJobPrevented = false;
-    lastRoutePoolBootstrapPending = false;
-    lastRouteRegionDifficulty = null;
-    lastRouteHardRegionStatus = null;
-    lastRouteChosenCluster = null;
-    lastRouteCandidateInserted = false;
-    lastRouteVerifiedInserted = false;
-    lastRouteCandidateSaveFailed = false;
-    lastRouteCandidateDuplicateFingerprint = false;
-    lastRouteCandidateDuplicateSource = null;
-    lastRouteCandidateCoverageRefreshFailed = false;
-    lastRouteCandidateSaveErrorType = null;
-    lastRouteCandidateSaveErrorCode = null;
-    lastRouteCandidateSaveErrorReason = null;
-    lastRouteCandidateSaveSkippedReason = null;
-    lastRouteTemporaryCandidate = false;
-    lastRouteHardRegionExplorationUsed = false;
-    lastRouteMovingStartDetected = false;
-    lastRouteStartSnapStrategy = null;
-    lastRouteStartOnMotorway = null;
-    lastRouteAvoidManeuverRadiusUsed = null;
+    _routeDebugState.reset(defaultGenerationSource: _liveRouteSource);
   }
 
   static void _debugRouteSearch(String message) {

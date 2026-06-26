@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/domain/models/community_chat_message.dart';
 
 class CommunityChatServiceException implements Exception {
   const CommunityChatServiceException(this.message);
@@ -383,7 +384,13 @@ class CommunityChatService {
             .limit(150);
       }
     }
-    return List<Map<String, dynamic>>.from(rows as List);
+    return (rows as List)
+        .map(
+          (row) => CommunityChatMessage.fromJson(
+            Map<String, dynamic>.from(row as Map),
+          ).toJson(),
+        )
+        .toList(growable: false);
   }
 
   static Future<List<Map<String, dynamic>>> fetchMembers(

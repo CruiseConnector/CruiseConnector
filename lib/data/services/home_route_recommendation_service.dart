@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 
@@ -37,16 +38,16 @@ class HomeRouteRecommendation {
   /// 2.+ App-Start sofort gerendert wird, kein leerer "Starte deine erste
   /// Route"-Empty-State mehr.
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'pool_entry': poolEntry.toJson(),
-        'route': route.toJson(),
-        'display_name': displayName,
-        'quality_score': qualityScore,
-        'recommendation_score': recommendationScore,
-        'completion_count': completionCount,
-        'average_rating': averageRating,
-        'rating_count': ratingCount,
-        'completion_rate': completionRate,
-      };
+    'pool_entry': poolEntry.toJson(),
+    'route': route.toJson(),
+    'display_name': displayName,
+    'quality_score': qualityScore,
+    'recommendation_score': recommendationScore,
+    'completion_count': completionCount,
+    'average_rating': averageRating,
+    'rating_count': ratingCount,
+    'completion_rate': completionRate,
+  };
 
   factory HomeRouteRecommendation.fromJson(Map<String, dynamic> json) {
     return HomeRouteRecommendation(
@@ -129,10 +130,17 @@ class HomeRouteRecommendationService {
       // _regionRadiusKm vom User. Verhindert dass User in Wien eine
       // Bregenz-Route empfohlen bekommt.
       if (userLat != null && userLng != null) {
-        entries = entries.where((e) {
-          final distKm = _haversineKm(userLat, userLng, e.startLat, e.startLng);
-          return distKm <= _regionRadiusKm;
-        }).toList(growable: false);
+        entries = entries
+            .where((e) {
+              final distKm = _haversineKm(
+                userLat,
+                userLng,
+                e.startLat,
+                e.startLng,
+              );
+              return distKm <= _regionRadiusKm;
+            })
+            .toList(growable: false);
       }
 
       if (entries.isEmpty) {
@@ -547,14 +555,7 @@ class HomeRouteRecommendationService {
   }
 
   static double _maxSegmentMeters(List<List<double>> coords) {
-    var maxMeters = 0.0;
-    for (var i = 1; i < coords.length; i++) {
-      final prev = coords[i - 1];
-      final next = coords[i];
-      final meters = _haversineKm(prev[1], prev[0], next[1], next[0]) * 1000.0;
-      if (meters > maxMeters) maxMeters = meters;
-    }
-    return maxMeters;
+    return GeoDistance.maxSegmentMetersLngLat(coords);
   }
 
   static double _haversineKm(
@@ -563,19 +564,13 @@ class HomeRouteRecommendationService {
     double lat2,
     double lon2,
   ) {
-    const radiusKm = 6371.0;
-    final dLat = _toRadians(lat2 - lat1);
-    final dLon = _toRadians(lon2 - lon1);
-    final a =
-        math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_toRadians(lat1)) *
-            math.cos(_toRadians(lat2)) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-    return radiusKm * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    return GeoDistance.haversineKm(
+      fromLat: lat1,
+      fromLng: lon1,
+      toLat: lat2,
+      toLng: lon2,
+    );
   }
-
-  static double _toRadians(double degrees) => degrees * (math.pi / 180.0);
 }
 
 class _ScoredEntry {
