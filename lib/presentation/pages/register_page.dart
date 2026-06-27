@@ -24,7 +24,6 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
-  final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
@@ -37,7 +36,6 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   void dispose() {
-    _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
@@ -94,20 +92,12 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _signUp() async {
-    final username = _usernameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text;
     final confirm = _confirmController.text;
 
-    if (username.isEmpty || email.isEmpty || password.isEmpty) {
+    if (email.isEmpty || password.isEmpty) {
       setState(() => _errorMsg = 'Bitte alle Felder ausfüllen.');
-      return;
-    }
-    if (!AppInputLimits.isValidUsername(username)) {
-      setState(
-        () => _errorMsg =
-            'Benutzername: 3-${AppInputLimits.usernameMaxLength} Zeichen, nur Buchstaben, Zahlen und _.',
-      );
       return;
     }
     if (password != confirm) {
@@ -125,12 +115,17 @@ class _RegisterPageState extends State<RegisterPage> {
     });
 
     try {
-      await AuthService.signUp(
-        email: email,
-        password: password,
-        username: username,
-      );
+      await AuthService.signUp(email: email, password: password);
       if (!mounted) return;
+      // Auto-Confirm aktiv (keine E-Mail-Bestätigung nötig) => direkt in den
+      // Onboarding-Wizard. @-Name, Anzeigename, Region usw. holt der Wizard.
+      if (AuthService.currentUser != null) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const PostAuthGate()),
+          (route) => false,
+        );
+        return;
+      }
       await showDialog(
         context: context,
         barrierDismissible: false,
@@ -422,16 +417,6 @@ class _RegisterPageState extends State<RegisterPage> {
                         ),
                       ),
                       const SizedBox(height: 22),
-
-                      _label('Benutzername'),
-                      _inputField(
-                        controller: _usernameController,
-                        icon: Icons.person_outline,
-                        hint: 'DeinFahrername',
-                        maxLength: AppInputLimits.usernameMaxLength,
-                        inputFormatters: AppInputLimits.usernameFormatters,
-                      ),
-                      const SizedBox(height: 16),
 
                       _label('E-Mail Adresse'),
                       _inputField(
