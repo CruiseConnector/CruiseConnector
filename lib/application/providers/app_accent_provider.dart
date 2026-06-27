@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum AppAccentOption {
-  red('Rot', Color(0xFFFF3B30)),
+  red('Rot', Color(0xFFFF4D24)),
   blue('Blau', Color(0xFF2F80ED)),
   green('Grün', Color(0xFF22C55E)),
   teal('Türkis', Color(0xFF14B8A6)),

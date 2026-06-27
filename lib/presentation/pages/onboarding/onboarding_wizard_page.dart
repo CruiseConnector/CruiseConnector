@@ -14,6 +14,7 @@
 
 import 'dart:async';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -23,9 +24,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// Marken-Rot-Orange als festes Onboarding-Scheme (Default der App), unabhängig
-// vom persönlichen Theme-Akzent — das Onboarding ist immer on-brand.
-const Color _accent = Color(0xFFFF4D24);
 const Color _bg = Color(0xFF0B0E14);
 const Color _card = Color(0xFF171B26);
 const Color _muted = Color(0xFF8A93A6);
@@ -383,7 +381,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   // ── UI ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    const accent = _accent;
+    final accent = AppAccentColors.accent;
     final canExit = _needsAccount && _page == 0;
     return PopScope(
       canPop: canExit,
