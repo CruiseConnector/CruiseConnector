@@ -14,7 +14,6 @@
 
 import 'dart:async';
 
-import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -24,8 +23,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+// Marken-Rot-Orange als festes Onboarding-Scheme (Default der App), unabhängig
+// vom persönlichen Theme-Akzent — das Onboarding ist immer on-brand.
+const Color _accent = Color(0xFFFF4D24);
 const Color _bg = Color(0xFF0B0E14);
-const Color _card = Color(0xFF161B26);
+const Color _card = Color(0xFF171B26);
 const Color _muted = Color(0xFF8A93A6);
 const Color _ok = Color(0xFF2ECC71);
 const Color _err = Color(0xFFE74C3C);
@@ -381,7 +383,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   // ── UI ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final accent = AppAccentColors.accent;
+    const accent = _accent;
     final canExit = _needsAccount && _page == 0;
     return PopScope(
       canPop: canExit,
@@ -389,27 +391,27 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         backgroundColor: _bg,
         body: Stack(
           children: [
-            // dezenter Akzent-Schimmer oben
-            Positioned(
-              top: -120,
-              left: -60,
-              right: -60,
-              height: 320,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(0, -0.4),
-                      radius: 0.9,
-                      colors: [
-                        accent.withValues(alpha: 0.16),
-                        accent.withValues(alpha: 0.0),
-                      ],
-                    ),
+            // Kühler Tiefen-Verlauf als Basis
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0xFF151A24),
+                      Color(0xFF0B0E14),
+                      Color(0xFF07090F),
+                    ],
+                    stops: [0.0, 0.55, 1.0],
                   ),
                 ),
               ),
             ),
+            // Akzent-Glow oben links + unten rechts (Tiefe + Marke)
+            Positioned(top: -150, left: -90, child: _glow(accent, 320, 0.22)),
+            Positioned(
+                bottom: -180, right: -110, child: _glow(accent, 340, 0.13)),
             SafeArea(
               child: Column(
                 children: [
@@ -447,6 +449,19 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       ),
     );
   }
+
+  Widget _glow(Color c, double size, double opacity) => IgnorePointer(
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [c.withValues(alpha: opacity), c.withValues(alpha: 0)],
+            ),
+          ),
+        ),
+      );
 
   Widget _topBar(Color accent, bool canExit) {
     return Padding(
@@ -624,7 +639,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             ),
           ),
           const SizedBox(height: 32),
-          const Text('Willkommen bei\nCruiseConnect',
+          const Text('Willkommen bei\nCruise Connector',
               style: TextStyle(
                   color: Colors.white,
                   fontSize: 30,
@@ -632,7 +647,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                   height: 1.15)),
           const SizedBox(height: 12),
           const Text(
-            'In wenigen Schritten ist dein Profil bereit — dann geht\'s los.',
+            'In wenigen Schritten ist dein Profil bereit und du kannst sofort losfahren.',
             style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
           ),
           const SizedBox(height: 28),
@@ -690,7 +705,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       icon: Icons.alternate_email_rounded,
       title: 'Erstelle dein Konto',
       subtitle:
-          'E-Mail und Passwort — damit sichern wir dein Profil und deine Fahrten.',
+          'E-Mail und Passwort, damit wir dein Profil und deine Fahrten sichern.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -780,7 +795,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       icon: Icons.tag_rounded,
       title: 'Wähl deinen @-Namen',
       subtitle:
-          'Dein eindeutiger Handle — daran finden dich andere. 3–20 Zeichen, '
+          'Dein eindeutiger Handle, daran finden dich andere. 3 bis 20 Zeichen, '
           'Buchstaben, Zahlen und _.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -872,10 +887,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     final (String text, Color color) = switch (_uState) {
       _UNameState.available =>
         ('@${_usernameCtrl.text.trim()} ist frei 🎉', _ok),
-      _UNameState.taken => ('Schon vergeben — probier einen Vorschlag.', _err),
+      _UNameState.taken => ('Schon vergeben, probier einen Vorschlag.', _err),
       _UNameState.reserved => ('Dieser Name ist reserviert.', _err),
-      _UNameState.invalid => ('3–20 Zeichen: Buchstaben, Zahlen, _ '
-          '(kein __, nicht mit _ beginnen/enden).', _muted),
+      _UNameState.invalid => ('3 bis 20 Zeichen: Buchstaben, Zahlen, _ '
+          '(kein __, nicht mit _ beginnen oder enden).', _muted),
       _UNameState.checking => ('Prüfe Verfügbarkeit…', _muted),
       _UNameState.error => ('Konnte gerade nicht prüfen.', _muted),
       _UNameState.idle => ('', _muted),
@@ -890,7 +905,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       icon: Icons.badge_rounded,
       title: 'Wie sollen dich\nandere sehen?',
       subtitle:
-          'Dein Anzeigename (ohne @). Den kannst du jederzeit ändern — der '
+          'Dein Anzeigename ohne @. Den kannst du jederzeit ändern, der '
           '@-Name bleibt fest.',
       child: TextField(
         controller: _displayCtrl,
@@ -1054,7 +1069,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           const SizedBox(height: 12),
           const Text(
             'Dein Profil steht. Finde Freunde in der Community, plane deine '
-            'erste Route — und ab auf die Straße.',
+            'erste Route und ab auf die Straße.',
             textAlign: TextAlign.center,
             style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
           ),
