@@ -19,6 +19,7 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -58,6 +59,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   int _page = 0;
   bool _forward = true;
   bool _busy = false;
+  bool _accountCreated = false;
 
   // Account-Schritt
   final _emailCtrl = TextEditingController();
@@ -251,6 +253,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             'Bitte bestätige deine E-Mail und melde dich anschließend an.');
         return false;
       }
+      _accountCreated = true;
       return true;
     } on AuthException catch (e) {
       setState(() => _accountErr = _translateAuthError(e.message));
@@ -320,6 +323,76 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     });
   }
 
+  // Erste Seite, hinter die man nicht zurück kann. Nach Konto-Erstellung ist das
+  // die @-Name-Seite (Welcome/Account werden nicht erneut betreten).
+  int get _floorPage => _accountCreated ? _steps.indexOf(_Step.username) : 0;
+
+  void _handleBack() {
+    if (_busy) return;
+    if (_page > _floorPage) {
+      _goTo(_page - 1, forward: false);
+    } else {
+      _handleExit();
+    }
+  }
+
+  Future<void> _handleExit() async {
+    // Noch kein Konto angelegt (reine Registrierung) → ohne Nachfrage zurück.
+    if (AuthService.currentUser == null) {
+      _toWelcome();
+      return;
+    }
+    final confirmed = await _confirmCancel();
+    if (confirmed == true) await _cancelOnboarding();
+  }
+
+  Future<bool?> _confirmCancel() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Onboarding abbrechen?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'Bist du dir sicher, dass du das Onboarding abbrechen willst? Du wirst '
+          'abgemeldet und kannst es später jederzeit neu starten.',
+          style: TextStyle(color: _muted, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Weiter einrichten',
+                style: TextStyle(color: _muted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Abbrechen',
+                style: TextStyle(
+                    color: AppAccentColors.accent,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _cancelOnboarding() async {
+    setState(() => _busy = true);
+    try {
+      await AuthService.signOut();
+    } catch (_) {}
+    _toWelcome();
+  }
+
+  void _toWelcome() {
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const WelcomePage()),
+      (r) => false,
+    );
+  }
+
   Future<void> _skip() async {
     if (_isLast) {
       await _finish();
@@ -382,9 +455,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   @override
   Widget build(BuildContext context) {
     final accent = AppAccentColors.accent;
-    final canExit = _needsAccount && _page == 0;
     return PopScope(
-      canPop: canExit,
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _handleBack();
+      },
       child: Scaffold(
         backgroundColor: _bg,
         body: Stack(
@@ -413,7 +488,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             SafeArea(
               child: Column(
                 children: [
-                  _topBar(accent, canExit),
+                  _topBar(accent),
                   Expanded(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 360),
@@ -461,29 +536,19 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         ),
       );
 
-  Widget _topBar(Color accent, bool canExit) {
+  Widget _topBar(Color accent) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
       child: Row(
         children: [
           SizedBox(
             width: 40,
-            child: (_page > 0 || canExit)
-                ? IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.arrow_back_ios_new,
-                        color: _muted, size: 18),
-                    onPressed: _busy
-                        ? null
-                        : () {
-                            if (_page == 0 && canExit) {
-                              Navigator.of(context).maybePop();
-                            } else if (_page > 0) {
-                              _goTo(_page - 1, forward: false);
-                            }
-                          },
-                  )
-                : null,
+            child: IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.arrow_back_ios_new,
+                  color: _muted, size: 18),
+              onPressed: _busy ? null : _handleBack,
+            ),
           ),
           Expanded(
             child: Row(
