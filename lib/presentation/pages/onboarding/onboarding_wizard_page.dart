@@ -697,7 +697,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                     ),
                   ],
                 ),
-                child: Icon(Icons.directions_car_filled, color: accent, size: 56),
+                child: Padding(
+                  padding: const EdgeInsets.all(25),
+                  child: Image.asset(
+                    'assets/branding/cruiseconnect_icon_foreground.png',
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.high,
+                  ),
+                ),
               ),
             ),
           ),
