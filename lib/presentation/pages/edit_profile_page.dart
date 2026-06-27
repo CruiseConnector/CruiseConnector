@@ -21,7 +21,10 @@ enum _ImageCropPreset { avatar, banner, car }
 const int _vehicleDescriptionMaxLength =
     AppInputLimits.vehicleDescriptionMaxLength;
 const int _vehicleTuningMaxLength = AppInputLimits.vehicleTuningMaxLength;
-const bool _usernameEditingLockedForTest = true;
+// 2026-06-27 (vucko): @-Namen-Änderung freigeschaltet. Eindeutigkeit + der
+// 30-Tage-Lock werden jetzt SERVER-SEITIG erzwungen (set_username-RPC +
+// Guard-Trigger, Server-Zeit) — nicht mehr per Handy-Datum umgehbar.
+const bool _usernameEditingLockedForTest = false;
 
 final List<_CountryOption> _countryOptions = <_CountryOption>[
   _CountryOption('AT', 'AT-AUT'),
@@ -658,6 +661,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
         });
       }
       if (mounted) Navigator.pop(context, true);
+    } on UsernameChangeException catch (e) {
+      // @-Name abgelehnt (vergeben/reserviert/Cooldown) — klare Meldung, das
+      // Username-Feld auf den alten Wert zurück, Rest bleibt erhalten.
+      debugPrint('[EditProfile] @-Name abgelehnt: ${e.reason}');
+      if (mounted) {
+        _usernameController.text = _initialUsername;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: Colors.red),
+        );
+        setState(() => _saving = false);
+      }
     } catch (e) {
       debugPrint('[EditProfile] Speichern fehlgeschlagen: $e');
       if (mounted) {

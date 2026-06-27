@@ -12,6 +12,56 @@ class SocialServiceException implements Exception {
   String toString() => message;
 }
 
+/// Strukturiertes Ergebnis des server-seitigen `set_username`-RPC.
+class UsernameSetResult {
+  const UsernameSetResult({
+    required this.ok,
+    this.username,
+    this.error,
+    this.daysRemaining,
+  });
+
+  final bool ok;
+  final String? username;
+
+  /// null bei Erfolg; sonst {invalid_format, reserved, taken, too_soon,
+  /// not_authenticated, unknown}.
+  final String? error;
+  final int? daysRemaining;
+}
+
+/// Geworfen, wenn der @-Name nicht geändert werden konnte. [reason] ist der
+/// RPC-Fehlercode; [daysRemaining] ist bei `too_soon` die Restzeit in Tagen.
+class UsernameChangeException implements Exception {
+  const UsernameChangeException(this.reason, {this.daysRemaining});
+
+  final String reason;
+  final int? daysRemaining;
+
+  String get message {
+    switch (reason) {
+      case 'taken':
+        return 'Dieser @-Name ist bereits vergeben.';
+      case 'reserved':
+        return 'Dieser @-Name ist reserviert.';
+      case 'invalid_format':
+        return '@-Name: 3–20 Zeichen, nur Buchstaben, Zahlen und _ '
+            '(kein __, nicht mit _ beginnen/enden).';
+      case 'too_soon':
+        final d = daysRemaining ?? 30;
+        return 'Du kannst deinen @-Namen erst in $d '
+            '${d == 1 ? 'Tag' : 'Tagen'} wieder ändern.';
+      case 'not_authenticated':
+        return 'Bitte melde dich an.';
+      default:
+        return 'Der @-Name konnte nicht geändert werden.';
+    }
+  }
+
+  @override
+  String toString() => message;
+}
+
 class DuplicateSharedRoutePostException implements Exception {
   const DuplicateSharedRoutePostException();
 
@@ -1847,21 +1897,18 @@ class SocialService {
     final uid = _userId;
     if (uid == null) return (canChange: false, nextChange: null);
     try {
-      final row = await _db
-          .from('profiles')
-          .select('username_changed_at')
-          .eq('id', uid)
-          .maybeSingle();
-      final raw = (row as Map?)?['username_changed_at'] as String?;
-      if (raw == null) return (canChange: true, nextChange: null);
-      final last = DateTime.tryParse(raw);
-      if (last == null) return (canChange: true, nextChange: null);
-      final next = last.add(usernameChangeCooldown);
-      return (canChange: DateTime.now().isAfter(next), nextChange: next);
+      // 2026-06-27 (vucko): Server-RPC statt client-seitiger Rechnung mit
+      // DateTime.now() — der 30-Tage-Lock basiert auf Server-Zeit `now()` und
+      // ist damit NICHT per Handy-Datum manipulierbar.
+      final raw = await _db.rpc<dynamic>('username_change_status');
+      final m = (raw as Map?)?.cast<String, dynamic>() ?? const {};
+      final nextStr = m['next_change_at'] as String?;
+      final next = nextStr != null ? DateTime.tryParse(nextStr) : null;
+      return (canChange: m['can_change'] == true, nextChange: next);
     } catch (e) {
       debugPrint('[Social] canChangeUsername Fehler: $e');
-      // Optimistisch: bei Fehler erlauben — Server-side RLS sollte schützen.
-      return (canChange: true, nextChange: null);
+      // Bei Fehler defensiv sperren — der Server (Trigger) schützt ohnehin.
+      return (canChange: false, nextChange: null);
     }
   }
 
@@ -2031,29 +2078,127 @@ class SocialService {
 
   /// Username ändern. Wirft `StateError`, wenn der Cooldown noch läuft.
   /// Setzt `username_changed_at = now()`, damit der Cooldown beginnt.
+  /// Ändert den @-Namen über den server-seitigen, manipulationssicheren RPC
+  /// `set_username` (Format + globale Eindeutigkeit + 30-Tage-Lock, alles mit
+  /// Server-Zeit `now()` — nicht per Handy-Datum umgehbar; ein Guard-Trigger
+  /// blockt direkte UPDATEs). Wirft [UsernameChangeException] mit klarem Grund.
   static Future<void> updateUsername(String newUsername) async {
+    final res = await setUsername(newUsername);
+    if (res.ok) return;
+    throw UsernameChangeException(
+      res.error ?? 'unknown',
+      daysRemaining: res.daysRemaining,
+    );
+  }
+
+  /// Roher RPC-Aufruf `set_username` → strukturiertes Ergebnis (für Onboarding +
+  /// Profil-Bearbeitung). ok=true => übernommen; sonst error in
+  /// {invalid_format, reserved, taken, too_soon, not_authenticated}.
+  static Future<UsernameSetResult> setUsername(String newUsername) async {
+    final cleaned = newUsername.trim();
+    final raw = await _db.rpc<dynamic>(
+      'set_username',
+      params: {'p_username': cleaned},
+    );
+    final m = (raw as Map?)?.cast<String, dynamic>() ?? const {};
+    return UsernameSetResult(
+      ok: m['ok'] == true,
+      username: m['username'] as String?,
+      error: m['error'] as String?,
+      daysRemaining: (m['days_remaining'] as num?)?.toInt(),
+    );
+  }
+
+  /// Live-Verfügbarkeits-Check über `username_available` (Format + Reserved +
+  /// globale Eindeutigkeit, eigener Name ausgenommen). reason in
+  /// {ok, invalid_format, reserved, taken}.
+  static Future<({bool available, String reason})> isUsernameAvailable(
+    String candidate,
+  ) async {
+    try {
+      final raw = await _db.rpc<dynamic>(
+        'username_available',
+        params: {'p_username': candidate.trim()},
+      );
+      final m = (raw as Map?)?.cast<String, dynamic>() ?? const {};
+      return (
+        available: m['available'] == true,
+        reason: (m['reason'] as String?) ?? 'unknown',
+      );
+    } catch (e) {
+      debugPrint('[Social] isUsernameAvailable Fehler: $e');
+      return (available: false, reason: 'error');
+    }
+  }
+
+  /// Anzeigename (ohne @) — frei + beliebig oft änderbar.
+  static Future<void> setDisplayName(String name) async {
     final uid = _userId;
     if (uid == null) return;
-    final cleaned = newUsername.trim();
-    if (!AppInputLimits.isValidUsername(cleaned)) {
-      throw ArgumentError(
-        'Username muss 3-${AppInputLimits.usernameMaxLength} Zeichen haben '
-        'und darf nur Buchstaben, Zahlen und _ enthalten.',
-      );
-    }
-    final check = await canChangeUsername();
-    if (!check.canChange) {
-      throw StateError(
-        'Username kann erst wieder geändert werden ab ${check.nextChange}',
-      );
+    final cleaned = name.trim();
+    if (cleaned.length > AppInputLimits.usernameMaxLength * 2) {
+      throw const SocialServiceException('Anzeigename ist zu lang.');
     }
     await _db
         .from('profiles')
-        .update({
-          'username': cleaned,
-          'username_changed_at': DateTime.now().toUtc().toIso8601String(),
-        })
+        .update({'display_name': cleaned.isEmpty ? null : cleaned})
         .eq('id', uid);
+  }
+
+  /// Lädt ein Profilbild (Bytes, bereits zugeschnitten) hoch und setzt
+  /// `avatar_url`. Gibt die Public-URL zurück (oder null bei Fehler).
+  static Future<String?> uploadAvatar(Uint8List bytes) async {
+    final uid = _userId;
+    if (uid == null) return null;
+    final url = await uploadUserAsset(
+      bucket: 'avatars',
+      bytes: bytes,
+      fileName: 'avatar.jpg',
+      contentType: 'image/jpeg',
+    );
+    if (url == null) return null;
+    await _db.from('profiles').update({'avatar_url': url}).eq('id', uid);
+    return url;
+  }
+
+  /// Schreibt Onboarding-Stammdaten (Region/Land/Sprache) + markiert das
+  /// Onboarding als abgeschlossen. Username/Anzeigename laufen über ihre
+  /// eigenen Methoden.
+  static Future<void> completeOnboarding({
+    String? countryCode,
+    String? region,
+    String? language,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return;
+    final patch = <String, dynamic>{'onboarding_completed': true};
+    if (countryCode != null && countryCode.trim().isNotEmpty) {
+      patch['country_code'] = countryCode.trim().toUpperCase();
+    }
+    if (region != null && region.trim().isNotEmpty) {
+      patch['region'] = region.trim();
+    }
+    if (language != null && language.trim().isNotEmpty) {
+      patch['app_language'] = language.trim();
+    }
+    await _db.from('profiles').update(patch).eq('id', uid);
+  }
+
+  /// True, wenn der eingeloggte User das Onboarding noch durchlaufen muss.
+  static Future<bool> needsOnboarding() async {
+    final uid = _userId;
+    if (uid == null) return false;
+    try {
+      final row = await _db
+          .from('profiles')
+          .select('onboarding_completed')
+          .eq('id', uid)
+          .maybeSingle();
+      return (row as Map?)?['onboarding_completed'] != true;
+    } catch (e) {
+      debugPrint('[Social] needsOnboarding Fehler: $e');
+      return false;
+    }
   }
 
   /// Speichert das Auto-Profil (Stammdaten) auf den eingeloggten User.

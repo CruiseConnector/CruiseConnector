@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/pages/register_page.dart';
 import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
@@ -62,7 +62,7 @@ class _LoginPageState extends State<LoginPage> {
       await AuthService.signIn(email: email, password: password);
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(builder: (_) => const PostAuthGate()),
         (route) => false,
       );
     } on AuthException catch (e) {
@@ -111,7 +111,7 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
       if (AuthService.currentUser != null) {
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const HomePage()),
+          MaterialPageRoute(builder: (_) => const PostAuthGate()),
           (route) => false,
         );
       } else {

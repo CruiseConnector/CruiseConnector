@@ -5,8 +5,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
@@ -69,7 +69,7 @@ class _RegisterPageState extends State<RegisterPage> {
       if (!mounted) return;
       if (AuthService.currentUser != null) {
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const HomePage()),
+          MaterialPageRoute(builder: (_) => const PostAuthGate()),
           (route) => false,
         );
       } else {

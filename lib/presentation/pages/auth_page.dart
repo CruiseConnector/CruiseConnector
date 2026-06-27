@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 
 /// Entscheidet anhand des Supabase-Auth-Streams ob Login- oder Home-Screen
@@ -30,7 +30,7 @@ class AuthPage extends StatelessWidget {
             Supabase.instance.client.auth.currentSession;
 
         if (session != null) {
-          return const HomePage();
+          return const PostAuthGate();
         }
         return const WelcomePage();
       },
