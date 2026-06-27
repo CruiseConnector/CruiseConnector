@@ -686,17 +686,15 @@ class RouteService {
         if (freePoolRoute != null) {
           return freePoolRoute;
         }
-        // Pool-Miss => Live-Fallback (KEIN throw). Seed-Job im Hintergrund
-        // anstoßen, damit der Pool für nächste Anfragen wächst, aber NICHT
-        // darauf warten — der User bekommt sofort die Live-Route.
-        unawaited(
-          _ensureCoverageBootstrapStatus(
-            scenario: scenario,
-            userLat: startPosition.latitude,
-            userLng: startPosition.longitude,
-            subscriptionTier: lastRouteSubscriptionTier,
-            createSeedJob: true,
-          ),
+        // Pool-Miss => Live-Fallback (KEIN throw). Seed-Job anstoßen, damit der
+        // Pool für nächste Anfragen wächst (deterministisch, vor dem Live-Call),
+        // dann auf Live durchfallen.
+        await _ensureCoverageBootstrapStatus(
+          scenario: scenario,
+          userLat: startPosition.latitude,
+          userLng: startPosition.longitude,
+          subscriptionTier: lastRouteSubscriptionTier,
+          createSeedJob: true,
         );
         poolHealingFirstPolicy = false;
         onDemandLiveFill = true;

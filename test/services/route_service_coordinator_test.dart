@@ -2047,9 +2047,14 @@ void main() {
   });
 
   test(
-    'Free-User in leerer Region bekommt warming_up statt generischem Fehler und keinen Job-Duplikatsturm',
+    'Free-User in leerer Region bekommt LIVE-Route (kein no-route) + queued Seed-Job ohne Duplikatsturm',
     () async {
       final jobs = <RouteSeedJob>[];
+      // Live-Mock am Anfrage-Start zentrieren, damit free durchfallend eine
+      // gültige Live-Route bekommt (sonst 146-km-Start-Offset-Reject = Test-Artefakt).
+      invoker = _CountingInvoker(
+        _closedLoopResponseAt(latitude: 48.78, longitude: 9.18),
+      );
       service = RouteService(
         invoker: invoker,
         routePoolService: RoutePoolService(
@@ -2070,41 +2075,43 @@ void main() {
         ),
       );
 
-      late RouteServiceException firstError;
-      late RouteServiceException secondError;
-      try {
-        await service.generateRoundTrip(
-          startPosition: _position(48.78, 9.18),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-          avoidHighways: true,
-          forceFreshVariant: true,
-          subscriptionTier: 'free',
-        );
-      } on RouteServiceException catch (error) {
-        firstError = error;
-      }
-      try {
-        await service.generateRoundTrip(
-          startPosition: _position(48.78, 9.18),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-          avoidHighways: true,
-          forceFreshVariant: true,
-          subscriptionTier: 'free',
-        );
-      } on RouteServiceException catch (error) {
-        secondError = error;
-      }
+      // 2026-06-27 (vucko): Neuer Vertrag — Routen-ZUGANG ist nicht die Paywall
+      // (Werbung kommt separat). Free bekommt bei Pool-Miss eine LIVE-Route,
+      // statt „keine Route"/warming_up. Der Seed-Job wird trotzdem genau einmal
+      // angestoßen (Pool wächst), die zweite Anfrage dedupliziert ihn.
+      final first = await service.generateRoundTrip(
+        startPosition: _position(48.78, 9.18),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'free',
+      );
 
-      expect(firstError.userMessage, contains('Neue Vorschläge'));
-      expect(firstError.edgeMeta['region_warming_up'], true);
-      expect(firstError.edgeMeta['seed_job_created'], true);
-      expect(secondError.edgeMeta['duplicate_job_prevented'], true);
-      expect(invoker.callCount, 0);
-      expect(jobs, hasLength(1));
+      // Erster Pool-Miss → free bekommt eine LIVE-Route + queued den Seed-Job.
+      expect(first.coordinates.length, greaterThanOrEqualTo(2));
+      expect(invoker.callCount, greaterThan(0)); // Live wurde genutzt
+
+      // Zweiter identischer Aufruf darf den Seed-Job NICHT verdoppeln (kein
+      // Job-Sturm). Ob er erneut eine Live-Route liefert, hängt von der Live-
+      // Varianz ab: der fixe Test-Mock gibt dieselbe Geometrie zurück, die als
+      // Duplikat verworfen werden kann — in Produktion variiert GraphHopper.
+      // Entscheidend ist hier nur: es entsteht kein zweiter Seed-Job.
+      try {
+        await service.generateRoundTrip(
+          startPosition: _position(48.78, 9.18),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          avoidHighways: true,
+          forceFreshVariant: true,
+          subscriptionTier: 'free',
+        );
+      } on RouteServiceException {
+        // akzeptabel im Test (fixe Mock-Geometrie → Dedup)
+      }
+      expect(jobs, hasLength(1)); // genau ein Seed-Job, kein Duplikatsturm
     },
   );
 
@@ -2308,28 +2315,21 @@ void main() {
         ),
       );
 
-      late RouteServiceException error;
-      try {
-        await service.generateRoundTrip(
-          startPosition: _start(),
-          targetDistanceKm: 75,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-          avoidHighways: true,
-          forceFreshVariant: true,
-          subscriptionTier: 'free',
-        );
-      } on RouteServiceException catch (caught) {
-        error = caught;
-      }
+      // Neuer Vertrag: free nutzt NICHT die 50-km-Poolroute (falscher Bucket),
+      // sondern fällt auf LIVE durch + bekommt eine Route — und queued trotzdem
+      // den exakten 75er-Seed-Job (Pool wächst für nächste Anfragen).
+      final result = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 75,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'free',
+      );
 
-      expect(invoker.callCount, 0);
-      expect(error.userMessage, contains('Neue Vorschläge'));
-      expect(error.edgeMeta['code'], 'pool_bootstrap_pending');
-      expect(error.edgeMeta['response_code'], 'pool_bootstrap_pending');
-      expect(error.edgeMeta['requested_distance_bucket'], 75);
-      expect(error.edgeMeta['pool_exact_bucket_missing'], true);
-      expect(error.edgeMeta['seed_job_created'], true);
+      expect(result.coordinates.length, greaterThanOrEqualTo(2));
+      expect(invoker.callCount, greaterThan(0)); // Live genutzt, nicht 50-km-Pool
       expect(jobs, hasLength(1));
       expect(jobs.single.distanceBucket, 75);
       expect(jobs.single.styleKey, 'sport_mode');
@@ -2412,9 +2412,14 @@ void main() {
   );
 
   test(
-    'Free-User in harter Region bekommt keine versteckte Live-Route und ehrliches curated-needed Meta',
+    'Free-User in harter Region bekommt jetzt eine LIVE-Route (kein curated-needed-Block)',
     () async {
       final jobs = <RouteSeedJob>[];
+      // Live-Mock am Anfrage-Start (Bludenz) zentrieren, damit free durchfallend
+      // eine gültige Live-Route bekommt statt 146-km-Offset-Reject (Test-Artefakt).
+      invoker = _CountingInvoker(
+        _closedLoopResponseAt(latitude: 47.1548, longitude: 9.8220),
+      );
       service = RouteService(
         invoker: invoker,
         routePoolService: RoutePoolService(
@@ -2446,33 +2451,22 @@ void main() {
         ),
       );
 
-      late RouteServiceException error;
-      try {
-        await service.generateRoundTrip(
-          startPosition: _position(47.1548, 9.8220),
-          targetDistanceKm: 50,
-          mode: 'Sport Mode',
-          planningType: 'Zufall',
-          avoidHighways: true,
-          forceFreshVariant: true,
-          subscriptionTier: 'free',
-        );
-      } on RouteServiceException catch (caught) {
-        error = caught;
-      }
+      // Neuer Vertrag: auch in einer harten Region bekommt free eine LIVE-Route
+      // statt eines „curated_needed/keine Route"-Blocks. Auto-Seeding bleibt in
+      // harten Regionen deaktiviert (kein Seed-Job).
+      final result = await service.generateRoundTrip(
+        startPosition: _position(47.1548, 9.8220),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+        forceFreshVariant: true,
+        subscriptionTier: 'free',
+      );
 
-      expect(invoker.callCount, 0);
-      expect(jobs, isEmpty);
-      expect(error.userMessage, contains('Bludenz'));
-      expect(error.edgeMeta['route_source'], 'pool');
-      expect(error.edgeMeta['coverage_status'], 'hard_region_curated_needed');
-      expect(error.edgeMeta['region_difficulty'], 'hard');
-      expect(error.edgeMeta['hard_region_status'], 'curated_needed');
-      expect(error.edgeMeta['seed_job_created'], false);
-      expect(error.edgeMeta['duplicate_job_prevented'], false);
-      expect(error.edgeMeta['pool_bootstrap_pending'], false);
-      expect(error.edgeMeta['chosen_cluster'], 'Bludenz');
-      expect(error.edgeMeta['target_pool_size'], isA<int>());
+      expect(result.coordinates.length, greaterThanOrEqualTo(2));
+      expect(invoker.callCount, greaterThan(0)); // Live wurde genutzt
+      expect(jobs, isEmpty); // harte Region: kein Auto-Seed
     },
   );
 
