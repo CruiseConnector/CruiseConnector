@@ -2312,8 +2312,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  static const double _groupRouteStartAccessMaxMeters = 5000.0;
-
   Future<RouteAccessPlan?> _buildGroupAccessPlanForCurrentPosition(
     RouteResult result,
     Map<String, dynamic> routeData,
@@ -2344,29 +2342,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       return null;
     }
 
-    final start = result.coordinates.first;
-    final distanceToStartMeters = geo.Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      start[1],
-      start[0],
-    );
-    final preferredJoinIndex =
-        distanceToStartMeters <= _groupRouteStartAccessMaxMeters ? 0 : null;
     final style = routeData['style']?.toString() ?? _selectedStyle;
     final avoidHighways =
         (routeData['avoid_highways'] as bool?) ??
         _effectiveNavigationAvoidHighways;
 
     try {
+      // 2026-06-27 (vucko): KEIN „nahe am Start → Join-Index 0"-Pin mehr. Das
+      // zwang die Anfahrt per Luftlinie zum Original-Start (Dornbirn), obwohl die
+      // Route am User (Hohenems) vorbeiläuft. chooseJoinPoint wählt jetzt den
+      // nächsten sinnvollen Punkt: Rundkurs → bester Loop-Einstieg (Ende bleibt
+      // Original-Start), A→B → nächster Vorwärts-Einstieg (joinNearestForward).
       final plan = await _routeService.buildAccessRouteToExistingRoute(
         currentPosition: position,
         existingRoute: result,
         mode: style,
         avoidHighways: avoidHighways,
-        preferredJoinIndex: preferredJoinIndex,
+        preferredJoinIndex: null,
         returnToSessionOrigin: false,
         rebaseClosedLoop: isRoundTrip,
+        joinNearestForward: !isRoundTrip,
       );
       _logAccessLegMeta(plan);
       if (plan.hasAccessLeg ||
@@ -9289,12 +9284,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Der Navigations-Pfad nutzt ebenfalls returnToSessionOrigin:isRoundTrip.
         returnToSessionOrigin: isRoundTrip,
         rebaseClosedLoop: isRoundTrip,
-        // 2026-06-06 (vucko P9): Bei NICHT-Rundkursen (A→B) den Join hart auf den
-        // ECHTEN Routenstart (Index 0) pinnen. Sonst wählt chooseJoinPoint den
-        // nächstgelegenen On-Route-Punkt → sitzt der User mittig, würde der
-        // Routenkopf abgeschnitten und die Strecke begänne mittendrin. Rundkurse
-        // behalten die Loop-Rotation (rebaseClosedLoop wählt den besten Einstieg).
-        preferredJoinIndex: isRoundTrip ? null : 0,
+        // 2026-06-27 (vucko): A→B nicht mehr hart auf den Routenstart (Index 0)
+        // pinnen. Der frühere P9-Pin zwang eine Luftlinie/Anfahrt zum Original-
+        // Start, wenn die Route am User vorbeiläuft. Stattdessen schleichend an
+        // den nächsten Vorwärts-Punkt anschließen (joinNearestForward); Rundkurse
+        // behalten die Loop-Rotation (rebaseClosedLoop, Ende = Original-Start).
+        preferredJoinIndex: null,
+        joinNearestForward: !isRoundTrip,
       );
     } catch (e) {
       // 2026-06-06 (vucko P9-Fix): Schlägt die Access-Leg-Berechnung fehl

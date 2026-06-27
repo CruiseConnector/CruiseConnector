@@ -80,6 +80,7 @@ class RouteAccessPlanner {
     required RouteResult existingRoute,
     int? preferredJoinIndex,
     bool rebaseClosedLoop = false,
+    bool joinNearestForward = false,
   }) {
     return suggestJoinPoints(
       currentPosition: currentPosition,
@@ -87,6 +88,7 @@ class RouteAccessPlanner {
       preferredJoinIndex: preferredJoinIndex,
       maxCandidates: 1,
       rebaseClosedLoop: rebaseClosedLoop,
+      joinNearestForward: joinNearestForward,
     ).first;
   }
 
@@ -96,6 +98,7 @@ class RouteAccessPlanner {
     int? preferredJoinIndex,
     int maxCandidates = _maxSuggestedJoinPoints,
     bool rebaseClosedLoop = false,
+    bool joinNearestForward = false,
   }) {
     final coordinates = existingRoute.coordinates;
     if (coordinates.length < 2) {
@@ -126,6 +129,40 @@ class RouteAccessPlanner {
           index: cappedPreferred,
         ),
       ];
+    }
+
+    // 2026-06-27 (vucko): „Schleichend an die Route anschließen" für OFFENE
+    // Routen (A→B). Wähle den NÄCHSTEN sinnvollen Punkt auf der Route — egal wie
+    // weit fortgeschritten — solange genug Route übrig bleibt. Verhindert die
+    // Luftlinie zurück zum Original-Start, wenn die Route am User vorbeiläuft.
+    // (Rundkurse laufen weiter über rebaseClosedLoop.)
+    if (joinNearestForward && !rebaseClosedLoopMode) {
+      final minRemainingMeters = math.max(700.0, totalDistanceMeters * 0.08);
+      final scanStep = math.max(1, coordinates.length ~/ 40);
+      RouteJoinPoint? best;
+      for (
+        var index = 0;
+        index < math.max(1, coordinates.length - 1);
+        index += scanStep
+      ) {
+        if (deadEndSpikes.any((spike) => spike.containsIndex(index))) continue;
+        final candidate = _buildJoinPoint(
+          currentPosition: currentPosition,
+          coordinates: coordinates,
+          cumulativeDistances: cumulativeDistances,
+          totalDistanceMeters: totalDistanceMeters,
+          deadEndSpikes: deadEndSpikes,
+          closedLoop: closedLoop,
+          rebaseClosedLoop: rebaseClosedLoopMode,
+          index: index,
+          forwardJoin: true,
+        );
+        if (candidate.remainingDistanceMeters < minRemainingMeters) continue;
+        if (best == null || candidate.score < best.score) best = candidate;
+      }
+      if (best != null) {
+        return [best];
+      }
     }
 
     final suggestions = <RouteJoinPoint>[];
@@ -290,6 +327,7 @@ class RouteAccessPlanner {
     required bool closedLoop,
     required bool rebaseClosedLoop,
     required int index,
+    bool forwardJoin = false,
   }) {
     final point = coordinates[index];
     final distanceFromCurrentMeters = geo.Geolocator.distanceBetween(
@@ -317,7 +355,10 @@ class RouteAccessPlanner {
     );
     final headingDeltaDegrees = _angleDiff(approachHeading, localHeading).abs();
 
-    final progressPenalty = rebaseClosedLoop && closedLoop
+    // forwardJoin / Rundkurs-Rebase: nur die extremen Enden meiden, sonst den
+    // NÄCHSTEN Punkt am User zulassen (kein Zwang zum Original-Start).
+    final lenientProgress = (rebaseClosedLoop && closedLoop) || forwardJoin;
+    final progressPenalty = lenientProgress
         ? (progressRatio < 0.04
               ? (0.04 - progressRatio) * 3200.0
               : progressRatio > 0.96
@@ -338,6 +379,7 @@ class RouteAccessPlanner {
     final headingPenalty = headingDeltaDegrees * 4.5;
     final reachabilityPenalty =
         !rebaseClosedLoop &&
+            !forwardJoin &&
             distanceFromCurrentMeters < 140.0 &&
             progressRatio > 0.22
         ? (0.22 - progressRatio).abs() * 200.0

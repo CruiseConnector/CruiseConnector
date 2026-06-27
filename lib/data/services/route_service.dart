@@ -2363,6 +2363,7 @@ class RouteService {
     int? preferredJoinIndex,
     bool returnToSessionOrigin = false,
     bool rebaseClosedLoop = false,
+    bool joinNearestForward = false,
   }) async {
     if (existingRoute.coordinates.length < 2) {
       throw const RouteServiceException(
@@ -2377,6 +2378,7 @@ class RouteService {
       existingRoute: existingRoute,
       preferredJoinIndex: preferredJoinIndex,
       rebaseClosedLoop: rebaseClosedLoop,
+      joinNearestForward: joinNearestForward,
     );
     final accessKey = _accessSingleFlightKey(
       currentPosition: currentPosition,

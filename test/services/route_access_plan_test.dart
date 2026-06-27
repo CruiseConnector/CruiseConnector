@@ -91,6 +91,45 @@ void main() {
         );
       },
     );
+
+    test(
+      'joinNearestForward schliesst eine A->B-Route nahe am User an statt am Originalstart',
+      () {
+        // Offene A->B-Route; der User steht nahe einem SPAETEN Punkt (~70%).
+        final route = _buildLinearRoute();
+        final latePoint = route.coordinates[42];
+        // ~400m SENKRECHT zur Route (>160m), damit der Default in den gekappten
+        // Frueh-Scan faellt und der Vorwaerts-Join den Unterschied zeigt.
+        final userPos = _position(
+          latitude: latePoint[1] + 0.003,
+          longitude: latePoint[0] - 0.003,
+        );
+        const planner = RouteAccessPlanner();
+
+        // Default (gekappt auf ~35-45% Fortschritt) bleibt im ersten Streckenteil.
+        final defaultJoin = planner.chooseJoinPoint(
+          currentPosition: userPos,
+          existingRoute: route,
+        );
+        // joinNearestForward darf den nahen Vorwaerts-Einstieg waehlen.
+        final forwardJoin = planner.chooseJoinPoint(
+          currentPosition: userPos,
+          existingRoute: route,
+          joinNearestForward: true,
+        );
+
+        expect(forwardJoin.index, greaterThan(route.coordinates.length ~/ 2));
+        expect(forwardJoin.progressRatio, greaterThan(0.5));
+        expect(
+          forwardJoin.distanceFromCurrentMeters,
+          lessThan(defaultJoin.distanceFromCurrentMeters),
+        );
+        // Es bleibt genug Route uebrig (nicht direkt am Ziel).
+        expect(forwardJoin.remainingDistanceMeters, greaterThan(700));
+        // Und es ist NICHT der Originalstart (Index 0).
+        expect(forwardJoin.index, greaterThan(0));
+      },
+    );
   });
 
   group('RouteService.buildAccessRouteToExistingRoute', () {
@@ -454,6 +493,29 @@ RouteResult _buildLoopRoute() {
   final geometry = {'type': 'LineString', 'coordinates': coordinates};
   final distanceMeters = _polylineDistanceMeters(coordinates);
 
+  return RouteResult(
+    geoJson: json.encode(geometry),
+    geometry: geometry,
+    coordinates: coordinates,
+    maneuvers: const [],
+    distanceMeters: distanceMeters,
+    durationSeconds: distanceMeters / 16.0,
+    distanceKm: distanceMeters / 1000.0,
+  );
+}
+
+RouteResult _buildLinearRoute() {
+  const startLat = 47.41, startLng = 9.74;
+  const endLat = 47.20, endLng = 9.50;
+  final coordinates = List.generate(60, (index) {
+    final t = index / 59;
+    return [
+      startLng + (endLng - startLng) * t,
+      startLat + (endLat - startLat) * t,
+    ];
+  });
+  final geometry = {'type': 'LineString', 'coordinates': coordinates};
+  final distanceMeters = _polylineDistanceMeters(coordinates);
   return RouteResult(
     geoJson: json.encode(geometry),
     geometry: geometry,
