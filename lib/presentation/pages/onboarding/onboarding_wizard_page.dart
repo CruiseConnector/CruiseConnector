@@ -17,10 +17,12 @@ import 'dart:async';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -421,6 +423,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       );
     } catch (_) {
       // Onboarding darf nie hängen bleiben — im Zweifel weiter zur App.
+    }
+    // Offline-Karte direkt nach abgeschlossener Registrierung automatisch laden
+    // (falls noch nicht vorhanden, nur WLAN, im Hintergrund).
+    if (!kIsWeb) {
+      MapStyleService.instance.ensureAutoDownloadScheduled(
+        reason: 'post_registration',
+      );
     }
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

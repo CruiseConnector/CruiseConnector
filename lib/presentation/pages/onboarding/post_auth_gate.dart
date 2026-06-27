@@ -4,9 +4,11 @@
 // markiert => sofort HomePage. EIN zentraler Entscheidungspunkt für alle
 // Auth-Einstiege (Registrierung, Login, Google/Apple, Session-Restore).
 
+import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 class PostAuthGate extends StatefulWidget {
@@ -18,6 +20,17 @@ class PostAuthGate extends StatefulWidget {
 
 class _PostAuthGateState extends State<PostAuthGate> {
   late final Future<bool> _needs = SocialService.needsOnboarding();
+
+  @override
+  void initState() {
+    super.initState();
+    // Offline-Karte nach Login/Registrierung/Session-Restore automatisch laden,
+    // falls noch nicht vorhanden (nur WLAN, idempotent, im Hintergrund). Startet
+    // früher als der Home-Prewarm, damit die Karte direkt nach dem Anmelden lädt.
+    if (!kIsWeb) {
+      MapStyleService.instance.ensureAutoDownloadScheduled(reason: 'post_auth');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
