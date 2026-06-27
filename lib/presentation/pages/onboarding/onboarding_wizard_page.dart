@@ -1,33 +1,50 @@
-// 2026-06-27 (vucko) — Onboarding-Wizard. Erscheint NUR bei Account-Erstellung
-// (Registrierung + erstes Google/Apple-Login), gegated über
-// profiles.onboarding_completed. NICHT beim normalen Login bestehender User.
+// 2026-06-27 (vucko) — Onboarding-Wizard. Das vollständige „Konto erstellen"-
+// Erlebnis: mehrseitig, animiert, eine Sache pro Seite. Beginnt mit einem
+// Willkommens-Screen („Los geht's"), legt dann das Konto an (E-Mail+Passwort)
+// und sammelt danach Schritt für Schritt das Profil. Am Ende ist man im Account.
 //
-// Clean, mehrseitig (Strava/Komoot/Duolingo-Muster): ein Fokus pro Seite,
-// Fortschrittspunkte, klare „Weiter/Überspringen/Fertig". Pflicht: @-Name,
-// Anzeigename, Region. Optional/skippbar: Foto, Garage, Freunde.
+// Zwei Einstiege:
+//  • Registrierung („Konto erstellen", noch keine Session) → startWithAccount=true,
+//    Schritt „Account" legt das Konto an, danach schreibt jede Seite live ins Profil.
+//  • Social-Login (Google/Apple, bereits eingeloggt) → PostAuthGate ruft den
+//    Wizard ohne Account-Schritt auf; Profil-Daten werden direkt gespeichert.
+//
+// Gegated über profiles.onboarding_completed (siehe PostAuthGate). Erscheint NUR
+// bei Account-Erstellung, nicht beim normalen Login bestehender User.
 
 import 'dart:async';
 
+import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 const Color _bg = Color(0xFF0B0E14);
 const Color _card = Color(0xFF161B26);
-const Color _accent = Color(0xFFFF6A2C);
 const Color _muted = Color(0xFF8A93A6);
+const Color _ok = Color(0xFF2ECC71);
+const Color _err = Color(0xFFE74C3C);
 
 enum _UNameState { idle, checking, available, taken, reserved, invalid, error }
+
+enum _Step { welcome, account, username, displayName, region, photo, garage, finish }
 
 class OnboardingWizardPage extends StatefulWidget {
   const OnboardingWizardPage({
     super.key,
+    this.startWithAccountCreation = false,
     this.initialDisplayName,
     this.initialUsername,
   });
+
+  /// true = Einstieg über „Konto erstellen" (noch keine Session) → der Wizard
+  /// legt das Konto selbst an. false = bereits eingeloggt (Social-Login).
+  final bool startWithAccountCreation;
 
   /// Vorbelegung aus OAuth (Google/Apple liefern oft einen Namen).
   final String? initialDisplayName;
@@ -38,17 +55,25 @@ class OnboardingWizardPage extends StatefulWidget {
 }
 
 class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
-  final _pageCtrl = PageController();
   int _page = 0;
+  bool _forward = true;
+  bool _busy = false;
 
-  // Schritt-Daten
+  // Account-Schritt
+  final _emailCtrl = TextEditingController();
+  final _pwCtrl = TextEditingController();
+  final _confirmCtrl = TextEditingController();
+  bool _obscurePw = true;
+  bool _obscureConf = true;
+  String? _accountErr;
+
+  // Profil-Schritte
   final _usernameCtrl = TextEditingController();
   final _displayCtrl = TextEditingController();
   final _carBrandCtrl = TextEditingController();
   final _carNameCtrl = TextEditingController();
   String? _country;
   Uint8List? _avatarBytes;
-  bool _busy = false;
 
   // @-Name Live-Check
   Timer? _debounce;
@@ -56,7 +81,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   List<String> _suggestions = const [];
   String? _committedUsername;
 
-  static const _totalPages = 7;
+  late final bool _needsAccount;
+  late final List<_Step> _steps;
 
   static const _countries = <(String, String)>[
     ('AT', 'Österreich'),
@@ -71,6 +97,19 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   @override
   void initState() {
     super.initState();
+    _needsAccount = widget.startWithAccountCreation &&
+        AuthService.currentUser == null;
+    _steps = <_Step>[
+      _Step.welcome,
+      if (_needsAccount) _Step.account,
+      _Step.username,
+      _Step.displayName,
+      _Step.region,
+      _Step.photo,
+      _Step.garage,
+      _Step.finish,
+    ];
+
     final dn = widget.initialDisplayName?.trim();
     if (dn != null && dn.isNotEmpty) _displayCtrl.text = dn;
     final un = widget.initialUsername?.trim();
@@ -83,13 +122,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   @override
   void dispose() {
     _debounce?.cancel();
-    _pageCtrl.dispose();
+    _emailCtrl.dispose();
+    _pwCtrl.dispose();
+    _confirmCtrl.dispose();
     _usernameCtrl.dispose();
     _displayCtrl.dispose();
     _carBrandCtrl.dispose();
     _carNameCtrl.dispose();
     super.dispose();
   }
+
+  _Step get _current => _steps[_page];
+  bool get _isLast => _page == _steps.length - 1;
+  bool get _isOptional =>
+      _current == _Step.photo || _current == _Step.garage;
 
   // ── @-Name Verfügbarkeit (debounced, server-seitig) ──────────────────────
   void _onUsernameChanged(String raw) {
@@ -164,9 +210,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       ).message);
       if (res.error == 'taken' || res.error == 'reserved') {
         setState(() {
-          _uState = res.error == 'taken'
-              ? _UNameState.taken
-              : _UNameState.reserved;
+          _uState =
+              res.error == 'taken' ? _UNameState.taken : _UNameState.reserved;
           _suggestions = _genSuggestions(v);
         });
       }
@@ -176,60 +221,116 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     }
   }
 
+  // ── Konto anlegen (Account-Schritt) ──────────────────────────────────────
+  Future<bool> _createAccount() async {
+    final email = _emailCtrl.text.trim();
+    final pw = _pwCtrl.text;
+    final confirm = _confirmCtrl.text;
+    if (email.isEmpty || pw.isEmpty) {
+      setState(() => _accountErr = 'Bitte E-Mail und Passwort eingeben.');
+      return false;
+    }
+    if (pw.length < 6) {
+      setState(() => _accountErr = 'Passwort muss mindestens 6 Zeichen haben.');
+      return false;
+    }
+    if (pw != confirm) {
+      setState(() => _accountErr = 'Passwörter stimmen nicht überein.');
+      return false;
+    }
+    setState(() {
+      _busy = true;
+      _accountErr = null;
+    });
+    try {
+      await AuthService.signUp(email: email, password: pw);
+      if (AuthService.currentUser == null) {
+        // E-Mail-Bestätigung nötig (Autoconfirm aus): hier kann der Wizard nicht
+        // live weiterschreiben → ehrlich hinweisen.
+        setState(() => _accountErr =
+            'Bitte bestätige deine E-Mail und melde dich anschließend an.');
+        return false;
+      }
+      return true;
+    } on AuthException catch (e) {
+      setState(() => _accountErr = _translateAuthError(e.message));
+      return false;
+    } catch (e) {
+      debugPrint('[Onboarding] signUp Fehler: $e');
+      setState(() =>
+          _accountErr = 'Registrierung fehlgeschlagen. Bitte erneut versuchen.');
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _translateAuthError(String msg) {
+    final m = msg.toLowerCase();
+    if (m.contains('already registered') || m.contains('already exists')) {
+      return 'Diese E-Mail ist bereits registriert.';
+    }
+    if (m.contains('password should be')) {
+      return 'Passwort zu schwach. Mindestens 6 Zeichen.';
+    }
+    if (m.contains('invalid email')) return 'Ungültige E-Mail-Adresse.';
+    return 'Registrierung fehlgeschlagen. Bitte erneut versuchen.';
+  }
+
   // ── Navigation ───────────────────────────────────────────────────────────
   Future<void> _next() async {
-    // Pflicht-Validierung je Seite + Persistierung
-    if (_page == 1) {
-      if (!_canLeaveUsernamePage) return;
-      if (!await _commitUsername()) return;
-    } else if (_page == 2) {
-      final name = _displayCtrl.text.trim();
-      if (name.isEmpty) {
-        _showError('Bitte gib einen Anzeigenamen ein.');
-        return;
-      }
-      setState(() => _busy = true);
-      try {
-        await SocialService.setDisplayName(name);
-      } catch (_) {
-      } finally {
-        if (mounted) setState(() => _busy = false);
-      }
-    } else if (_page == 3) {
-      if (_country == null) {
-        _showError('Bitte wähle deine Region.');
-        return;
-      }
+    switch (_current) {
+      case _Step.account:
+        if (!await _createAccount()) return;
+      case _Step.username:
+        if (!_canLeaveUsernamePage) return;
+        if (!await _commitUsername()) return;
+      case _Step.displayName:
+        final name = _displayCtrl.text.trim();
+        if (name.isEmpty) {
+          _showError('Bitte gib einen Anzeigenamen ein.');
+          return;
+        }
+        setState(() => _busy = true);
+        try {
+          await SocialService.setDisplayName(name);
+        } catch (_) {
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
+      case _Step.region:
+        if (_country == null) {
+          _showError('Bitte wähle deine Region.');
+          return;
+        }
+      default:
+        break;
     }
-    if (_page >= _totalPages - 1) {
+    if (_isLast) {
       await _finish();
       return;
     }
-    _goTo(_page + 1);
+    _goTo(_page + 1, forward: true);
   }
 
-  void _goTo(int p) {
-    setState(() => _page = p);
-    _pageCtrl.animateToPage(
-      p,
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeInOut,
-    );
+  void _goTo(int p, {required bool forward}) {
+    setState(() {
+      _forward = forward;
+      _page = p;
+    });
   }
 
   Future<void> _skip() async {
-    // Optionale Schritte (Foto/Garage/Freunde) überspringen.
-    if (_page >= _totalPages - 1) {
+    if (_isLast) {
       await _finish();
     } else {
-      _goTo(_page + 1);
+      _goTo(_page + 1, forward: true);
     }
   }
 
   Future<void> _finish() async {
     setState(() => _busy = true);
     try {
-      // Optionale Garage (wenn auf der Garage-Seite was eingegeben wurde)
       final brand = _carBrandCtrl.text.trim();
       final model = _carNameCtrl.text.trim();
       if (brand.isNotEmpty || model.isNotEmpty) {
@@ -262,7 +363,6 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     );
   }
 
-  // ── Foto ─────────────────────────────────────────────────────────────────
   Future<void> _pickPhoto() async {
     final bytes = await pickAndCropRidePhoto(context, lockedAspect: 1);
     if (bytes == null || !mounted) return;
@@ -281,93 +381,151 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   // ── UI ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final isOptional = _page == 4 || _page == 5 || _page == 6;
-    final isLast = _page == _totalPages - 1;
+    final accent = AppAccentColors.accent;
+    final canExit = _needsAccount && _page == 0;
     return PopScope(
-      canPop: false, // Onboarding nicht per Back verlassen
+      canPop: canExit,
       child: Scaffold(
         backgroundColor: _bg,
-        body: SafeArea(
-          child: Column(
-            children: [
-              _progress(),
-              Expanded(
-                child: PageView(
-                  controller: _pageCtrl,
-                  physics: const NeverScrollableScrollPhysics(),
-                  children: [
-                    _welcomeStep(),
-                    _usernameStep(),
-                    _displayStep(),
-                    _regionStep(),
-                    _photoStep(),
-                    _garageStep(),
-                    _friendsStep(),
-                  ],
+        body: Stack(
+          children: [
+            // dezenter Akzent-Schimmer oben
+            Positioned(
+              top: -120,
+              left: -60,
+              right: -60,
+              height: 320,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: RadialGradient(
+                      center: const Alignment(0, -0.4),
+                      radius: 0.9,
+                      colors: [
+                        accent.withValues(alpha: 0.16),
+                        accent.withValues(alpha: 0.0),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-              _bottomBar(isOptional: isOptional, isLast: isLast),
-            ],
-          ),
+            ),
+            SafeArea(
+              child: Column(
+                children: [
+                  _topBar(accent, canExit),
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 360),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, anim) {
+                        final dx = _forward ? 0.12 : -0.12;
+                        return FadeTransition(
+                          opacity: anim,
+                          child: SlideTransition(
+                            position: Tween<Offset>(
+                              begin: Offset(dx, 0),
+                              end: Offset.zero,
+                            ).animate(anim),
+                            child: child,
+                          ),
+                        );
+                      },
+                      child: KeyedSubtree(
+                        key: ValueKey<int>(_page),
+                        child: _buildStep(_current, accent),
+                      ),
+                    ),
+                  ),
+                  _bottomBar(accent),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _progress() {
+  Widget _topBar(Color accent, bool canExit) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
       child: Row(
-        children: List.generate(_totalPages, (i) {
-          final active = i <= _page;
-          return Expanded(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              height: 4,
-              margin: EdgeInsets.only(right: i == _totalPages - 1 ? 0 : 6),
-              decoration: BoxDecoration(
-                color: active ? _accent : _card,
-                borderRadius: BorderRadius.circular(2),
-              ),
+        children: [
+          SizedBox(
+            width: 40,
+            child: (_page > 0 || canExit)
+                ? IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.arrow_back_ios_new,
+                        color: _muted, size: 18),
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            if (_page == 0 && canExit) {
+                              Navigator.of(context).maybePop();
+                            } else if (_page > 0) {
+                              _goTo(_page - 1, forward: false);
+                            }
+                          },
+                  )
+                : null,
+          ),
+          Expanded(
+            child: Row(
+              children: List.generate(_steps.length, (i) {
+                final active = i <= _page;
+                return Expanded(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 280),
+                    height: 4,
+                    margin: EdgeInsets.only(
+                        right: i == _steps.length - 1 ? 0 : 6),
+                    decoration: BoxDecoration(
+                      color: active ? accent : _card,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                );
+              }),
             ),
-          );
-        }),
+          ),
+          const SizedBox(width: 40),
+        ],
       ),
     );
   }
 
-  Widget _bottomBar({required bool isOptional, required bool isLast}) {
-    final nextEnabled = !_busy && (_page != 1 || _canLeaveUsernamePage);
+  Widget _bottomBar(Color accent) {
+    final nextEnabled = !_busy &&
+        (_current != _Step.username || _canLeaveUsernamePage);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Row(
         children: [
-          if (_page > 0)
-            TextButton(
-              onPressed: _busy ? null : () => _goTo(_page - 1),
-              child: const Text('Zurück',
-                  style: TextStyle(color: _muted, fontSize: 15)),
-            ),
-          const Spacer(),
-          if (isOptional)
+          if (_isOptional)
             TextButton(
               onPressed: _busy ? null : _skip,
               child: const Text('Überspringen',
                   style: TextStyle(color: _muted, fontSize: 15)),
             ),
-          const SizedBox(width: 8),
+          const Spacer(),
           SizedBox(
-            height: 50,
+            height: 52,
             child: ElevatedButton(
               onPressed: nextEnabled ? _next : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: _accent,
-                disabledBackgroundColor: _accent.withValues(alpha: 0.35),
+                backgroundColor: accent,
+                disabledBackgroundColor: accent.withValues(alpha: 0.35),
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 28),
+                padding: EdgeInsets.symmetric(
+                    horizontal: _current == _Step.welcome ? 40 : 30),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(15),
                 ),
+                elevation: 4,
+                shadowColor: accent.withValues(alpha: 0.4),
               ),
               child: _busy
                   ? const SizedBox(
@@ -376,14 +534,17 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : Text(
-                      _page == 0
-                          ? 'Los geht\'s'
-                          : isLast
-                              ? 'Fertig'
-                              : 'Weiter',
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w700),
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _primaryLabel(_current),
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.arrow_forward_rounded, size: 20),
+                      ],
                     ),
             ),
           ),
@@ -392,69 +553,231 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     );
   }
 
-  Widget _stepShell({
-    required String title,
-    required String subtitle,
-    required Widget child,
-  }) {
+  String _primaryLabel(_Step s) {
+    switch (s) {
+      case _Step.welcome:
+        return 'Los geht\'s';
+      case _Step.account:
+        return 'Konto erstellen';
+      case _Step.finish:
+        return 'App starten';
+      default:
+        return 'Weiter';
+    }
+  }
+
+  Widget _buildStep(_Step s, Color accent) {
+    switch (s) {
+      case _Step.welcome:
+        return _welcomeStep(accent);
+      case _Step.account:
+        return _accountStep(accent);
+      case _Step.username:
+        return _usernameStep(accent);
+      case _Step.displayName:
+        return _displayStep(accent);
+      case _Step.region:
+        return _regionStep(accent);
+      case _Step.photo:
+        return _photoStep(accent);
+      case _Step.garage:
+        return _garageStep(accent);
+      case _Step.finish:
+        return _finishStep(accent);
+    }
+  }
+
+  // ── Schritte ──────────────────────────────────────────────────────────────
+  Widget _welcomeStep(Color accent) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  height: 1.15)),
           const SizedBox(height: 8),
-          Text(subtitle,
-              style: const TextStyle(color: _muted, fontSize: 15, height: 1.4)),
-          const SizedBox(height: 28),
-          child,
-        ],
-      ),
-    );
-  }
-
-  Widget _welcomeStep() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: _accent.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(18),
+          Center(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 650),
+              curve: Curves.easeOutBack,
+              builder: (_, t, child) => Transform.scale(
+                scale: 0.7 + 0.3 * t.clamp(0.0, 1.0),
+                child: Opacity(opacity: t.clamp(0.0, 1.0), child: child),
+              ),
+              child: Container(
+                width: 108,
+                height: 108,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: accent.withValues(alpha: 0.4)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.3),
+                      blurRadius: 36,
+                      spreadRadius: -8,
+                    ),
+                  ],
+                ),
+                child: Icon(Icons.directions_car_filled, color: accent, size: 56),
+              ),
             ),
-            child: const Icon(Icons.directions_car_filled,
-                color: _accent, size: 34),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
           const Text('Willkommen bei\nCruiseConnect',
               style: TextStyle(
                   color: Colors.white,
                   fontSize: 30,
                   fontWeight: FontWeight.w800,
                   height: 1.15)),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           const Text(
-            'Lass uns dein Profil in ein paar Schritten einrichten — '
-            'damit andere Cruiser dich finden und du sofort losfahren kannst.',
+            'In wenigen Schritten ist dein Profil bereit — dann geht\'s los.',
             style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
+          ),
+          const SizedBox(height: 28),
+          _welcomePoint(accent, Icons.route_rounded,
+              'Entdecke die schönsten Routen', 'Kurvenreich, scenic, auf dich zugeschnitten.'),
+          _welcomePoint(accent, Icons.groups_rounded,
+              'Cruise mit Freunden', 'Live-Standort, Gruppen-Navigation, gemeinsam fahren.'),
+          _welcomePoint(accent, Icons.emoji_events_rounded,
+              'Sammle XP & teile Fahrten', 'Streaks, Statistiken und Story-Sharing.'),
+        ],
+      ),
+    );
+  }
+
+  Widget _welcomePoint(Color accent, IconData icon, String title, String sub) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: accent, size: 22),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(sub,
+                    style: const TextStyle(
+                        color: _muted, fontSize: 13.5, height: 1.35)),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _usernameStep() {
+  Widget _accountStep(Color accent) {
     return _stepShell(
+      accent: accent,
+      icon: Icons.alternate_email_rounded,
+      title: 'Erstelle dein Konto',
+      subtitle:
+          'E-Mail und Passwort — damit sichern wir dein Profil und deine Fahrten.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fieldLabel('E-Mail Adresse'),
+          TextField(
+            controller: _emailCtrl,
+            keyboardType: TextInputType.emailAddress,
+            autocorrect: false,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(AppInputLimits.emailMaxLength),
+            ],
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            decoration: _fieldDeco(accent,
+                hint: 'deine@email.de',
+                prefixIcon:
+                    Icon(Icons.email_outlined, color: accent, size: 20)),
+          ),
+          const SizedBox(height: 16),
+          _fieldLabel('Passwort'),
+          TextField(
+            controller: _pwCtrl,
+            obscureText: _obscurePw,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(AppInputLimits.passwordMaxLength),
+            ],
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            decoration: _fieldDeco(accent,
+                hint: 'Mindestens 6 Zeichen',
+                prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
+                suffix: IconButton(
+                  icon: Icon(
+                      _obscurePw ? Icons.visibility_off : Icons.visibility,
+                      color: _muted, size: 20),
+                  onPressed: () => setState(() => _obscurePw = !_obscurePw),
+                )),
+          ),
+          const SizedBox(height: 16),
+          _fieldLabel('Passwort bestätigen'),
+          TextField(
+            controller: _confirmCtrl,
+            obscureText: _obscureConf,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(AppInputLimits.passwordMaxLength),
+            ],
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+            decoration: _fieldDeco(accent,
+                hint: 'Passwort wiederholen',
+                prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
+                suffix: IconButton(
+                  icon: Icon(
+                      _obscureConf ? Icons.visibility_off : Icons.visibility,
+                      color: _muted, size: 20),
+                  onPressed: () => setState(() => _obscureConf = !_obscureConf),
+                )),
+          ),
+          if (_accountErr != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF331316),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _err.withValues(alpha: 0.42)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: _err, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(_accountErr!,
+                        style: const TextStyle(
+                            color: Color(0xFFFFB4B4), fontSize: 13)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _usernameStep(Color accent) {
+    return _stepShell(
+      accent: accent,
+      icon: Icons.tag_rounded,
       title: 'Wähl deinen @-Namen',
       subtitle:
           'Dein eindeutiger Handle — daran finden dich andere. 3–20 Zeichen, '
@@ -473,12 +796,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             style: const TextStyle(
                 color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
             decoration: _fieldDeco(
+              accent,
               hint: 'deinname',
-              prefix: const Padding(
-                padding: EdgeInsets.only(left: 14, right: 2),
+              prefixIcon: Padding(
+                padding: const EdgeInsets.only(left: 14, right: 2),
                 child: Text('@',
-                    style: TextStyle(color: _accent, fontSize: 20)),
+                    style: TextStyle(color: accent, fontSize: 20)),
               ),
+              prefixTight: true,
               suffix: _uStatusIcon(),
             ),
           ),
@@ -496,8 +821,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                   .map((s) => GestureDetector(
                         onTap: () {
                           _usernameCtrl.text = s;
-                          _usernameCtrl.selection = TextSelection.collapsed(
-                              offset: s.length);
+                          _usernameCtrl.selection =
+                              TextSelection.collapsed(offset: s.length);
                           _onUsernameChanged(s);
                         },
                         child: Container(
@@ -507,7 +832,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                             color: _card,
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
-                                color: _accent.withValues(alpha: 0.4)),
+                                color: accent.withValues(alpha: 0.4)),
                           ),
                           child: Text('@$s',
                               style: const TextStyle(
@@ -533,11 +858,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
               child: CircularProgressIndicator(strokeWidth: 2, color: _muted)),
         );
       case _UNameState.available:
-        return const Icon(Icons.check_circle, color: Color(0xFF2ECC71));
+        return const Icon(Icons.check_circle, color: _ok);
       case _UNameState.taken:
       case _UNameState.reserved:
       case _UNameState.invalid:
-        return const Icon(Icons.cancel, color: Color(0xFFE74C3C));
+        return const Icon(Icons.cancel, color: _err);
       default:
         return null;
     }
@@ -545,12 +870,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
 
   Widget _uStatusLine() {
     final (String text, Color color) = switch (_uState) {
-      _UNameState.available => ('@${_usernameCtrl.text.trim()} ist frei 🎉',
-          const Color(0xFF2ECC71)),
-      _UNameState.taken => ('Schon vergeben — probier einen Vorschlag.',
-          const Color(0xFFE74C3C)),
-      _UNameState.reserved => ('Dieser Name ist reserviert.',
-          const Color(0xFFE74C3C)),
+      _UNameState.available =>
+        ('@${_usernameCtrl.text.trim()} ist frei 🎉', _ok),
+      _UNameState.taken => ('Schon vergeben — probier einen Vorschlag.', _err),
+      _UNameState.reserved => ('Dieser Name ist reserviert.', _err),
       _UNameState.invalid => ('3–20 Zeichen: Buchstaben, Zahlen, _ '
           '(kein __, nicht mit _ beginnen/enden).', _muted),
       _UNameState.checking => ('Prüfe Verfügbarkeit…', _muted),
@@ -561,8 +884,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     return Text(text, style: TextStyle(color: color, fontSize: 13.5));
   }
 
-  Widget _displayStep() {
+  Widget _displayStep(Color accent) {
     return _stepShell(
+      accent: accent,
+      icon: Icons.badge_rounded,
       title: 'Wie sollen dich\nandere sehen?',
       subtitle:
           'Dein Anzeigename (ohne @). Den kannst du jederzeit ändern — der '
@@ -573,13 +898,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         inputFormatters: [LengthLimitingTextInputFormatter(40)],
         style: const TextStyle(
             color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-        decoration: _fieldDeco(hint: 'Max Mustermann'),
+        decoration: _fieldDeco(accent, hint: 'Max Mustermann'),
       ),
     );
   }
 
-  Widget _regionStep() {
+  Widget _regionStep(Color accent) {
     return _stepShell(
+      accent: accent,
+      icon: Icons.public_rounded,
       title: 'Wo cruisst du?',
       subtitle: 'Hilft uns, dir die besten Routen in deiner Nähe zu zeigen.',
       child: Column(
@@ -589,14 +916,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             padding: const EdgeInsets.only(bottom: 10),
             child: GestureDetector(
               onTap: () => setState(() => _country = c.$1),
-              child: Container(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
                 decoration: BoxDecoration(
-                  color: selected ? _accent.withValues(alpha: 0.14) : _card,
+                  color: selected ? accent.withValues(alpha: 0.14) : _card,
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: selected ? _accent : Colors.transparent,
+                    color: selected ? accent : Colors.transparent,
                     width: 1.5,
                   ),
                 ),
@@ -609,7 +937,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                             fontWeight: FontWeight.w600)),
                     const Spacer(),
                     if (selected)
-                      const Icon(Icons.check_circle, color: _accent, size: 22),
+                      Icon(Icons.check_circle, color: accent, size: 22),
                   ],
                 ),
               ),
@@ -620,8 +948,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     );
   }
 
-  Widget _photoStep() {
+  Widget _photoStep(Color accent) {
     return _stepShell(
+      accent: accent,
+      icon: Icons.add_a_photo_rounded,
       title: 'Zeig dich',
       subtitle: 'Ein Profilbild macht dein Profil persönlich. (Optional)',
       child: Center(
@@ -635,7 +965,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                 decoration: BoxDecoration(
                   color: _card,
                   shape: BoxShape.circle,
-                  border: Border.all(color: _accent.withValues(alpha: 0.4)),
+                  border: Border.all(color: accent.withValues(alpha: 0.4)),
                   image: _avatarBytes != null
                       ? DecorationImage(
                           image: MemoryImage(_avatarBytes!), fit: BoxFit.cover)
@@ -648,7 +978,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
               ),
               const SizedBox(height: 16),
               Text(_avatarBytes == null ? 'Foto auswählen' : 'Foto ändern',
-                  style: const TextStyle(color: _accent, fontSize: 15)),
+                  style: TextStyle(color: accent, fontSize: 15)),
             ],
           ),
         ),
@@ -656,8 +986,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     );
   }
 
-  Widget _garageStep() {
+  Widget _garageStep(Color accent) {
     return _stepShell(
+      accent: accent,
+      icon: Icons.garage_rounded,
       title: 'Was fährst du?',
       subtitle: 'Füg dein erstes Fahrzeug zur Garage hinzu. (Optional)',
       child: Column(
@@ -667,7 +999,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             textCapitalization: TextCapitalization.words,
             inputFormatters: [LengthLimitingTextInputFormatter(40)],
             style: const TextStyle(color: Colors.white, fontSize: 17),
-            decoration: _fieldDeco(hint: 'Marke (z.B. BMW)'),
+            decoration: _fieldDeco(accent, hint: 'Marke (z.B. BMW)'),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -675,56 +1007,124 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             textCapitalization: TextCapitalization.words,
             inputFormatters: [LengthLimitingTextInputFormatter(40)],
             style: const TextStyle(color: Colors.white, fontSize: 17),
-            decoration: _fieldDeco(hint: 'Modell (z.B. M3)'),
+            decoration: _fieldDeco(accent, hint: 'Modell (z.B. M3)'),
           ),
         ],
       ),
     );
   }
 
-  Widget _friendsStep() {
-    return _stepShell(
-      title: 'Fast geschafft!',
-      subtitle:
-          'Freunde findest du jederzeit über Suche & Community. Danach zeigen '
-          'wir dir kurz, wie die App funktioniert.',
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: const Row(
-          children: [
-            Icon(Icons.group_add_outlined, color: _accent, size: 28),
-            SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                'Du kannst später in der Community Freunden folgen und '
-                'gemeinsam cruisen.',
-                style:
-                    TextStyle(color: Colors.white, fontSize: 14.5, height: 1.4),
+  Widget _finishStep(Color accent) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const SizedBox(height: 24),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 700),
+            curve: Curves.elasticOut,
+            builder: (_, t, child) =>
+                Transform.scale(scale: t.clamp(0.0, 1.2), child: child),
+            child: Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.35),
+                    blurRadius: 40,
+                    spreadRadius: -6,
+                  ),
+                ],
               ),
+              child: Icon(Icons.check_rounded, color: accent, size: 68),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 28),
+          const Text('Alles bereit!',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 12),
+          const Text(
+            'Dein Profil steht. Finde Freunde in der Community, plane deine '
+            'erste Route — und ab auf die Straße.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
+          ),
+        ],
       ),
     );
   }
 
-  InputDecoration _fieldDeco({
+  // ── Bausteine ──────────────────────────────────────────────────────────────
+  Widget _stepShell({
+    required Color accent,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Widget child,
+  }) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: Icon(icon, color: accent, size: 26),
+          ),
+          const SizedBox(height: 18),
+          Text(title,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  height: 1.15)),
+          const SizedBox(height: 8),
+          Text(subtitle,
+              style: const TextStyle(color: _muted, fontSize: 15, height: 1.4)),
+          const SizedBox(height: 26),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _fieldLabel(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 6, left: 2),
+        child: Text(text,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+      );
+
+  InputDecoration _fieldDeco(
+    Color accent, {
     required String hint,
-    Widget? prefix,
+    Widget? prefixIcon,
     Widget? suffix,
+    bool prefixTight = false,
   }) {
     return InputDecoration(
       hintText: hint,
       hintStyle: const TextStyle(color: Color(0xFF555E70)),
       filled: true,
       fillColor: _card,
-      prefixIcon: prefix,
-      prefixIconConstraints:
-          const BoxConstraints(minWidth: 0, minHeight: 0),
+      prefixIcon: prefixIcon,
+      prefixIconConstraints: prefixTight
+          ? const BoxConstraints(minWidth: 0, minHeight: 0)
+          : null,
       suffixIcon: suffix,
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -734,7 +1134,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: _accent, width: 1.5),
+        borderSide: BorderSide(color: accent, width: 1.5),
       ),
     );
   }

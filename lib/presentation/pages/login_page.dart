@@ -5,7 +5,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
-import 'package:cruise_connect/presentation/pages/register_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
 import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
@@ -512,7 +512,9 @@ class _LoginPageState extends State<LoginPage> {
                           onTap: () => Navigator.pushReplacement(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => const RegisterPage(),
+                              builder: (_) => const OnboardingWizardPage(
+                                startWithAccountCreation: true,
+                              ),
                             ),
                           ),
                           child: RichText(
