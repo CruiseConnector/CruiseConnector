@@ -668,38 +668,45 @@ class RouteService {
       var onDemandLiveFill = false;
 
       if (_isFreeTier(lastRouteSubscriptionTier)) {
-        lastRouteSourceDecision = 'pool_only_free';
+        // 2026-06-27 (vucko): Routen-ZUGANG ist NICHT die Paywall. Die
+        // Monetarisierung ist Werbung (free) vs. werbefrei (premium) und kommt
+        // separat/später. Daher: free nutzt den Pool zuerst (spart GraphHopper-
+        // Last), fällt aber bei Pool-Miss auf die LIVE-Generierung durch —
+        // NIEMALS hartes „keine Route", solange Live eine liefern kann. (Vorher:
+        // pool_only_free => throw, d.h. dünne Coverage = keine Route.)
+        lastRouteSourceDecision = 'pool_first_free';
         final freePoolRoute = await _tryRoutePoolFallback(
           scenario: scenario,
           styleConfig: styleConfig,
           userLat: startPosition.latitude,
           userLng: startPosition.longitude,
-          fallbackReason: 'free_pool_only',
+          fallbackReason: 'free_pool_first',
           allowDuplicateFallback: allowDuplicateFallbackForThisSearch,
         );
         if (freePoolRoute != null) {
           return freePoolRoute;
         }
-        final coverage = await _ensureCoverageBootstrapStatus(
-          scenario: scenario,
-          userLat: startPosition.latitude,
-          userLng: startPosition.longitude,
-          subscriptionTier: lastRouteSubscriptionTier,
-          createSeedJob: true,
+        // Pool-Miss => Live-Fallback (KEIN throw). Seed-Job im Hintergrund
+        // anstoßen, damit der Pool für nächste Anfragen wächst, aber NICHT
+        // darauf warten — der User bekommt sofort die Live-Route.
+        unawaited(
+          _ensureCoverageBootstrapStatus(
+            scenario: scenario,
+            userLat: startPosition.latitude,
+            userLng: startPosition.longitude,
+            subscriptionTier: lastRouteSubscriptionTier,
+            createSeedJob: true,
+          ),
         );
-        if (coverage == null) {
-          throw const RouteServiceException(
-            type: RouteErrorType.noRoute,
-            userMessage:
-                'Keine passende Route gefunden. Bitte versuche es erneut.',
-            debugMessage: 'No route and no pool coverage bucket available.',
-          );
-        }
-        throw await _buildCoverageWarmupException(
-          scenario: scenario,
-          coverage: coverage,
-          lastError: null,
-        );
+        poolHealingFirstPolicy = false;
+        onDemandLiveFill = true;
+        lastRouteSourceDecision = forceFreshVariant
+            ? 'search_again_free_live_fill'
+            : 'free_pool_miss_live_fill';
+        lastRouteLiveAttemptReason = forceFreshVariant
+            ? 'search_again_force_fresh'
+            : 'free_pool_miss_live_fill';
+        // KEIN throw — Durchfall zur Live-Generierung unten.
       }
 
       if (_isBasicTier(lastRouteSubscriptionTier)) {

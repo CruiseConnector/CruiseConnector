@@ -144,4 +144,61 @@ void main() {
     }
     expect(fail, 0, reason: 'Rundkurs muss in allen Regionen+Settings gehen');
   }, timeout: const Timeout(Duration(minutes: 12)));
+
+  // 2026-06-27 (vucko): FREE-Tier muss bei Pool-Miss auf Live durchfallen,
+  // NICHT „keine Route" werfen (Route-Zugang ist nicht die Paywall).
+  test('FREE tier falls through to live (no hard no-route)', () async {
+    if (_anon.isEmpty) {
+      // ignore: avoid_print
+      print('SKIP: no --dart-define=SB_ANON');
+      return;
+    }
+    SharedPreferences.setMockInitialValues({});
+    const spots = <_Region>[
+      _Region('Dornbirn', 'AT', 47.4125, 9.7414),
+      _Region('Bregenz', 'AT', 47.5031, 9.7471),
+      _Region('Zürich', 'CH', 47.3769, 8.5417),
+    ];
+    var ok = 0, fail = 0;
+    for (final r in spots) {
+      RouteService.resetForTests();
+      final svc = RouteService(invoker: _LiveInvoker());
+      try {
+        final res = await svc.generateRoundTrip(
+          startPosition: _pos(r.lat, r.lng),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+          subscriptionTier: 'free',
+          homeCountryCode: r.country,
+          debugTrigger: 'free-test',
+        );
+        ok++;
+        // ignore: avoid_print
+        print('OK   FREE ${r.name} -> ${res.distanceKm?.toStringAsFixed(1)}km '
+            '(${res.coordinates.length} pts)');
+      } catch (e) {
+        // GraphHopper-down (Server/502/DNS) ist Infrastruktur, KEIN Fix-Fehler —
+        // beweist sogar, dass free bis zum Live-Versuch durchgefallen ist. Nur
+        // der ALTE pool-only/coverage-Pfad (ohne Live-Versuch) wäre ein Fehler.
+        final msg = e.toString();
+        final attemptedLive = e is RouteServiceException &&
+            (e.type == RouteErrorType.server ||
+                msg.contains('GraphHopper') ||
+                msg.contains('502'));
+        if (attemptedLive) {
+          ok++;
+          // ignore: avoid_print
+          print('OK   FREE ${r.name} -> Live versucht (GraphHopper down: '
+              'Infra, kein Fix-Fehler)');
+        } else {
+          fail++;
+          // ignore: avoid_print
+          print('FAIL FREE ${r.name} -> alter pool-only no-route? -> $e');
+        }
+      }
+    }
+    expect(fail, 0,
+        reason: 'FREE muss Live VERSUCHEN (nie sofortiges pool-only-no-route)');
+  }, timeout: const Timeout(Duration(minutes: 5)));
 }
