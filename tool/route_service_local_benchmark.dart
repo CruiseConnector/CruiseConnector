@@ -29,6 +29,12 @@ class _LocalHttpInvoker implements RouteEdgeInvoker {
     try {
       final request = await client.postUrl(endpoint);
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      // 2026-06-27 (vucko Rundkurs-Diagnose): Anon-Key für Live-Edge-Gateway.
+      const anon = String.fromEnvironment('SB_ANON', defaultValue: '');
+      if (anon.isNotEmpty) {
+        request.headers.set('apikey', anon);
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $anon');
+      }
       request.write(jsonEncode(body));
       final response = await request.close();
       final raw = await response.transform(utf8.decoder).join();
