@@ -7,6 +7,18 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
 
 class LegalAcceptanceSnapshot {
+  // 2026-06-28 (vucko): Felder fehlten im Kollegen-Commit „Add legal acceptance
+  // flow" (5150b0c) -> ganze App kompilierte nicht. Aus der Verwendung
+  // (Konstruktor/Factories/toJson/isCurrent) abgeleitet ergänzt.
+  final String termsVersion;
+  final DateTime termsAcceptedAt;
+  final String privacyVersion;
+  final DateTime privacyAcknowledgedAt;
+  final String legalLocale;
+  final String legalSource;
+  final String appVersion;
+  final String platform;
+
   const LegalAcceptanceSnapshot({
     required this.termsVersion,
     required this.termsAcceptedAt,
