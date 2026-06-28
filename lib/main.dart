@@ -19,6 +19,7 @@ import 'package:cruise_connect/application/providers/route_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
+import 'package:cruise_connect/core/legal_documents.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
@@ -27,8 +28,10 @@ import 'package:cruise_connect/data/services/notification_settings_service.dart'
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
-import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
+import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -180,6 +183,11 @@ class _MyAppState extends State<MyApp> {
       unawaited(_handleAuthDeepLinkFeedback(uri));
       return;
     }
+    final legalDocument = LegalDocuments.fromLegalDeepLink(uri);
+    if (legalDocument != null) {
+      unawaited(launchLegalDocument(legalDocument));
+      return;
+    }
     final postId = _postIdFromDeepLink(uri);
     if (postId != null) {
       await Future.delayed(const Duration(milliseconds: 400));
@@ -248,7 +256,9 @@ class _MyAppState extends State<MyApp> {
 
     if (session != null && nav != null) {
       nav.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(
+          builder: (_) => const LegalGatePage(child: PostAuthGate()),
+        ),
         (route) => false,
       );
       if (context != null && context.mounted) {
@@ -441,121 +451,121 @@ class _CruiseLaunchScreen extends StatelessWidget {
           // Transparentes Material liefert den DefaultTextStyle → sauber.
           type: MaterialType.transparency,
           child: Opacity(
-          opacity: opacity,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(0.08, -0.28),
-                radius: 1.12,
-                colors: [
-                  // Opak getönt statt halbtransparent → das Dashboard scheint
-                  // NICHT mehr durch die Splash-Mitte (voll deckend bis Fade).
-                  Color.lerp(const Color(0xFF172232), accent, 0.32)!,
-                  const Color(0xFF172232),
-                  const Color(0xFF080D14),
-                ],
-                stops: const [0, 0.48, 1],
+            opacity: opacity,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0.08, -0.28),
+                  radius: 1.12,
+                  colors: [
+                    // Opak getönt statt halbtransparent → das Dashboard scheint
+                    // NICHT mehr durch die Splash-Mitte (voll deckend bis Fade).
+                    Color.lerp(const Color(0xFF172232), accent, 0.32)!,
+                    const Color(0xFF172232),
+                    const Color(0xFF080D14),
+                  ],
+                  stops: const [0, 0.48, 1],
+                ),
               ),
-            ),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Positioned.fill(
-                  child: CustomPaint(
-                    painter: _LaunchRoutePainter(
-                      progress: routeProgress,
-                      accent: accent,
-                      scan: scan,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _LaunchRoutePainter(
+                        progress: routeProgress,
+                        accent: accent,
+                        scan: scan,
+                      ),
                     ),
                   ),
-                ),
-                Center(
-                  child: Transform.translate(
-                    offset: Offset(0, 18 * (1 - intro)),
-                    child: Transform.scale(
-                      scale: 0.94 + (0.06 * intro),
-                      child: Container(
-                        width: cardWidth,
-                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
-                        decoration: BoxDecoration(
-                          color: const Color(
-                            0xFF121B27,
-                          ).withValues(alpha: 0.86),
-                          borderRadius: BorderRadius.circular(32),
-                          border: Border.all(
-                            color: Color.lerp(
-                              Colors.white.withValues(alpha: 0.08),
-                              accent.withValues(alpha: 0.55),
-                              intro,
-                            )!,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: accent.withValues(alpha: 0.34),
-                              blurRadius: 44,
-                              spreadRadius: -16,
-                              offset: const Offset(0, 24),
+                  Center(
+                    child: Transform.translate(
+                      offset: Offset(0, 18 * (1 - intro)),
+                      child: Transform.scale(
+                        scale: 0.94 + (0.06 * intro),
+                        child: Container(
+                          width: cardWidth,
+                          padding: const EdgeInsets.fromLTRB(24, 22, 24, 20),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFF121B27,
+                            ).withValues(alpha: 0.86),
+                            borderRadius: BorderRadius.circular(32),
+                            border: Border.all(
+                              color: Color.lerp(
+                                Colors.white.withValues(alpha: 0.08),
+                                accent.withValues(alpha: 0.55),
+                                intro,
+                              )!,
                             ),
-                            const BoxShadow(
-                              color: Color(0xCC000000),
-                              blurRadius: 38,
-                              offset: Offset(0, 24),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            SizedBox(
-                              width: math.min(cardWidth * 0.72, 238),
-                              child: Image.asset(
-                                'assets/branding/cruiseconnect_logo_full.png',
-                                fit: BoxFit.contain,
+                            boxShadow: [
+                              BoxShadow(
+                                color: accent.withValues(alpha: 0.34),
+                                blurRadius: 44,
+                                spreadRadius: -16,
+                                offset: const Offset(0, 24),
                               ),
-                            ),
-                            const SizedBox(height: 18),
-                            _LaunchStatusPill(accent: accent, progress: scan),
-                            const SizedBox(height: 16),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(999),
-                              child: SizedBox(
-                                height: 4,
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  children: [
-                                    ColoredBox(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.10,
+                              const BoxShadow(
+                                color: Color(0xCC000000),
+                                blurRadius: 38,
+                                offset: Offset(0, 24),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: math.min(cardWidth * 0.72, 238),
+                                child: Image.asset(
+                                  'assets/branding/cruiseconnect_logo_full.png',
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              _LaunchStatusPill(accent: accent, progress: scan),
+                              const SizedBox(height: 16),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: SizedBox(
+                                  height: 4,
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      ColoredBox(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.10,
+                                        ),
                                       ),
-                                    ),
-                                    FractionallySizedBox(
-                                      alignment: Alignment.centerLeft,
-                                      widthFactor: math.max(0.08, scan),
-                                      child: DecoratedBox(
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            colors: [
-                                              accent.withValues(alpha: 0.35),
-                                              accent,
-                                              const Color(0xFFFF3737),
-                                            ],
+                                      FractionallySizedBox(
+                                        alignment: Alignment.centerLeft,
+                                        widthFactor: math.max(0.08, scan),
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              colors: [
+                                                accent.withValues(alpha: 0.35),
+                                                accent,
+                                                const Color(0xFFFF3737),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
           ),
         );
       },

@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_cache_service.dart';
 
 /// Wrapper um Supabase Auth: Login, Registrierung, Social Login und Abmelden.
@@ -41,6 +42,7 @@ class AuthService {
     required String email,
     required String password,
     String? username,
+    LegalAcceptanceSnapshot? legalAcceptance,
   }) async {
     final rawName = username?.trim().isNotEmpty == true
         ? username!.trim()
@@ -56,10 +58,20 @@ class AuthService {
       email: email,
       password: password,
       emailRedirectTo: authCallbackUrl,
-      data: {'username': rawName},
+      data: {
+        'username': rawName,
+        if (legalAcceptance != null) ...legalAcceptance.toAuthMetadata(),
+      },
     );
     if (response.session != null) {
       await ensureCurrentUserProfile();
+      if (legalAcceptance != null) {
+        await LegalAcceptanceService.recordCurrentAcceptance(
+          source: legalAcceptance.legalSource,
+          snapshot: legalAcceptance,
+        );
+        await LegalAcceptanceService.clearPendingPreAuthAcceptance();
+      }
     }
   }
 
@@ -99,8 +111,7 @@ class AuthService {
     // hat leere oauth_clients), darum bricht er nach der Konto-Auswahl ab
     // („Anmeldung abgebrochen"). Auf Android nehmen wir daher den Supabase-
     // Browser-OAuth (wie bei Apple) → kommt OHNE SHA-1 aus.
-    final canUseNative =
-        onIos && GoogleSignIn.instance.supportsAuthenticate();
+    final canUseNative = onIos && GoogleSignIn.instance.supportsAuthenticate();
 
     if (!canUseNative) {
       await _startOAuthSignIn(OAuthProvider.google, scopes: 'email profile');

@@ -4,8 +4,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
+import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
+import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
+import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/widgets/auth_social_buttons.dart';
 
 const _authBackground = Color(0xFF0D141E);
@@ -62,7 +64,9 @@ class _LoginPageState extends State<LoginPage> {
       await AuthService.signIn(email: email, password: password);
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const PostAuthGate()),
+        MaterialPageRoute(
+          builder: (_) => const LegalGatePage(child: PostAuthGate()),
+        ),
         (route) => false,
       );
     } on AuthException catch (e) {
@@ -101,6 +105,12 @@ class _LoginPageState extends State<LoginPage> {
     required ValueChanged<bool> setLoading,
     required Future<void> Function() action,
   }) async {
+    final accepted = await LegalAcceptancePage.requestPreAuth(
+      context,
+      source: 'app_onboarding',
+    );
+    if (!mounted || accepted == null) return;
+
     setLoading(true);
     setState(() {
       _errorMsg = null;
@@ -111,7 +121,9 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
       if (AuthService.currentUser != null) {
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const PostAuthGate()),
+          MaterialPageRoute(
+            builder: (_) => const LegalGatePage(child: PostAuthGate()),
+          ),
           (route) => false,
         );
       } else {

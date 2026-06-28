@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/legal_documents.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
@@ -19,6 +20,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sh
 import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
+import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
@@ -261,6 +263,31 @@ class _SettingsPageState extends State<SettingsPage> {
     await AppTutorialService.requestReplay();
     if (!mounted) return;
     Navigator.pop(context);
+  }
+
+  Future<void> _openLegalDocument(LegalDocument document) async {
+    final ok = await launchLegalDocument(document);
+    if (!mounted || ok) return;
+    TopToast.show(
+      context,
+      message: '${document.title} konnte nicht geoeffnet werden.',
+      icon: Icons.open_in_new_off_rounded,
+      isError: true,
+      duration: const Duration(seconds: 3),
+    );
+  }
+
+  IconData _legalIcon(LegalDocument document) {
+    if (document == LegalDocuments.terms) return Icons.gavel_outlined;
+    if (document == LegalDocuments.privacy) return Icons.privacy_tip_outlined;
+    if (document == LegalDocuments.imprint) return Icons.badge_outlined;
+    if (document == LegalDocuments.support) return Icons.help_outline;
+    if (document == LegalDocuments.report) return Icons.flag_outlined;
+    if (document == LegalDocuments.communityGuidelines) {
+      return Icons.groups_outlined;
+    }
+    if (document == LegalDocuments.eventRules) return Icons.route_outlined;
+    return Icons.receipt_long_outlined;
   }
 
   Future<bool?> _showDeleteAccountTypeDialog() async {
@@ -516,6 +543,21 @@ class _SettingsPageState extends State<SettingsPage> {
                     onTap: () =>
                         showLocationAlwaysNoticeSheet(context, force: true),
                   ),
+                ]),
+
+                const SizedBox(height: 24),
+
+                _buildSectionHeader('RECHTLICHES'),
+                _buildSectionContainer([
+                  for (final document in LegalDocuments.settingsDocuments) ...[
+                    _buildNavTile(
+                      document.title,
+                      _legalIcon(document),
+                      onTap: () => _openLegalDocument(document),
+                    ),
+                    if (document != LegalDocuments.settingsDocuments.last)
+                      const Divider(color: Colors.white10, height: 1),
+                  ],
                 ]),
 
                 const SizedBox(height: 24),

@@ -20,6 +20,7 @@ import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -35,7 +36,16 @@ const Color _err = Color(0xFFE74C3C);
 
 enum _UNameState { idle, checking, available, taken, reserved, invalid, error }
 
-enum _Step { welcome, account, username, displayName, region, photo, garage, finish }
+enum _Step {
+  welcome,
+  account,
+  username,
+  displayName,
+  region,
+  photo,
+  garage,
+  finish,
+}
 
 class OnboardingWizardPage extends StatefulWidget {
   const OnboardingWizardPage({
@@ -101,8 +111,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   @override
   void initState() {
     super.initState();
-    _needsAccount = widget.startWithAccountCreation &&
-        AuthService.currentUser == null;
+    _needsAccount =
+        widget.startWithAccountCreation && AuthService.currentUser == null;
     _steps = <_Step>[
       _Step.welcome,
       if (_needsAccount) _Step.account,
@@ -138,8 +148,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
 
   _Step get _current => _steps[_page];
   bool get _isLast => _page == _steps.length - 1;
-  bool get _isOptional =>
-      _current == _Step.photo || _current == _Step.garage;
+  bool get _isOptional => _current == _Step.photo || _current == _Step.garage;
 
   // ── @-Name Verfügbarkeit (debounced, server-seitig) ──────────────────────
   void _onUsernameChanged(String raw) {
@@ -208,14 +217,17 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         _committedUsername = v;
         return true;
       }
-      _showError(UsernameChangeException(
-        res.error ?? 'unknown',
-        daysRemaining: res.daysRemaining,
-      ).message);
+      _showError(
+        UsernameChangeException(
+          res.error ?? 'unknown',
+          daysRemaining: res.daysRemaining,
+        ).message,
+      );
       if (res.error == 'taken' || res.error == 'reserved') {
         setState(() {
-          _uState =
-              res.error == 'taken' ? _UNameState.taken : _UNameState.reserved;
+          _uState = res.error == 'taken'
+              ? _UNameState.taken
+              : _UNameState.reserved;
           _suggestions = _genSuggestions(v);
         });
       }
@@ -242,17 +254,35 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       setState(() => _accountErr = 'Passwörter stimmen nicht überein.');
       return false;
     }
+    final legalAcceptance = await LegalAcceptancePage.requestPreAuth(
+      context,
+      source: 'app_onboarding',
+    );
+    if (!mounted || legalAcceptance == null) {
+      setState(
+        () => _accountErr =
+            'Bitte AGB und Datenschutzerklaerung bestaetigen, um dein Konto zu erstellen.',
+      );
+      return false;
+    }
+
     setState(() {
       _busy = true;
       _accountErr = null;
     });
     try {
-      await AuthService.signUp(email: email, password: pw);
+      await AuthService.signUp(
+        email: email,
+        password: pw,
+        legalAcceptance: legalAcceptance,
+      );
       if (AuthService.currentUser == null) {
         // E-Mail-Bestätigung nötig (Autoconfirm aus): hier kann der Wizard nicht
         // live weiterschreiben → ehrlich hinweisen.
-        setState(() => _accountErr =
-            'Bitte bestätige deine E-Mail und melde dich anschließend an.');
+        setState(
+          () => _accountErr =
+              'Bitte bestätige deine E-Mail und melde dich anschließend an.',
+        );
         return false;
       }
       _accountCreated = true;
@@ -262,8 +292,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       return false;
     } catch (e) {
       debugPrint('[Onboarding] signUp Fehler: $e');
-      setState(() =>
-          _accountErr = 'Registrierung fehlgeschlagen. Bitte erneut versuchen.');
+      setState(
+        () => _accountErr =
+            'Registrierung fehlgeschlagen. Bitte erneut versuchen.',
+      );
       return false;
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -354,8 +386,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _card,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Onboarding abbrechen?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        title: const Text(
+          'Onboarding abbrechen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+        ),
         content: const Text(
           'Bist du dir sicher, dass du das Onboarding abbrechen willst? Du wirst '
           'abgemeldet und kannst es später jederzeit neu starten.',
@@ -364,15 +398,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Weiter einrichten',
-                style: TextStyle(color: _muted)),
+            child: const Text(
+              'Weiter einrichten',
+              style: TextStyle(color: _muted),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Abbrechen',
-                style: TextStyle(
-                    color: AppAccentColors.accent,
-                    fontWeight: FontWeight.bold)),
+            child: Text(
+              'Abbrechen',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -493,7 +532,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             // Akzent-Glow oben links + unten rechts (Tiefe + Marke)
             Positioned(top: -150, left: -90, child: _glow(accent, 320, 0.22)),
             Positioned(
-                bottom: -180, right: -110, child: _glow(accent, 340, 0.13)),
+              bottom: -180,
+              right: -110,
+              child: _glow(accent, 340, 0.13),
+            ),
             SafeArea(
               child: Column(
                 children: [
@@ -533,17 +575,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   }
 
   Widget _glow(Color c, double size, double opacity) => IgnorePointer(
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              colors: [c.withValues(alpha: opacity), c.withValues(alpha: 0)],
-            ),
-          ),
+    child: Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            c.withValues(alpha: opacity),
+            c.withValues(alpha: 0),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 
   Widget _topBar(Color accent) {
     return Padding(
@@ -554,8 +599,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             width: 40,
             child: IconButton(
               visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.arrow_back_ios_new,
-                  color: _muted, size: 18),
+              icon: const Icon(
+                Icons.arrow_back_ios_new,
+                color: _muted,
+                size: 18,
+              ),
               onPressed: _busy ? null : _handleBack,
             ),
           ),
@@ -568,7 +616,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                     duration: const Duration(milliseconds: 280),
                     height: 4,
                     margin: EdgeInsets.only(
-                        right: i == _steps.length - 1 ? 0 : 6),
+                      right: i == _steps.length - 1 ? 0 : 6,
+                    ),
                     decoration: BoxDecoration(
                       color: active ? accent : _card,
                       borderRadius: BorderRadius.circular(2),
@@ -585,8 +634,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   }
 
   Widget _bottomBar(Color accent) {
-    final nextEnabled = !_busy &&
-        (_current != _Step.username || _canLeaveUsernamePage);
+    final nextEnabled =
+        !_busy && (_current != _Step.username || _canLeaveUsernamePage);
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Row(
@@ -594,8 +643,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           if (_isOptional)
             TextButton(
               onPressed: _busy ? null : _skip,
-              child: const Text('Überspringen',
-                  style: TextStyle(color: _muted, fontSize: 15)),
+              child: const Text(
+                'Überspringen',
+                style: TextStyle(color: _muted, fontSize: 15),
+              ),
             ),
           const Spacer(),
           SizedBox(
@@ -607,7 +658,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                 disabledBackgroundColor: accent.withValues(alpha: 0.35),
                 foregroundColor: Colors.white,
                 padding: EdgeInsets.symmetric(
-                    horizontal: _current == _Step.welcome ? 40 : 30),
+                  horizontal: _current == _Step.welcome ? 40 : 30,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(15),
                 ),
@@ -619,7 +671,9 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : Row(
                       mainAxisSize: MainAxisSize.min,
@@ -627,7 +681,9 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                         Text(
                           _primaryLabel(_current),
                           style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w700),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         const SizedBox(width: 8),
                         const Icon(Icons.arrow_forward_rounded, size: 20),
@@ -718,24 +774,39 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             ),
           ),
           const SizedBox(height: 32),
-          const Text('Willkommen bei\nCruise Connector',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                  height: 1.15)),
+          const Text(
+            'Willkommen bei\nCruise Connector',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+              height: 1.15,
+            ),
+          ),
           const SizedBox(height: 12),
           const Text(
             'In wenigen Schritten ist dein Profil bereit und du kannst sofort losfahren.',
             style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
           ),
           const SizedBox(height: 28),
-          _welcomePoint(accent, Icons.route_rounded,
-              'Entdecke die schönsten Routen', 'Kurvenreich, scenic, auf dich zugeschnitten.'),
-          _welcomePoint(accent, Icons.groups_rounded,
-              'Cruise mit Freunden', 'Live-Standort, Gruppen-Navigation, gemeinsam fahren.'),
-          _welcomePoint(accent, Icons.emoji_events_rounded,
-              'Sammle XP & teile Fahrten', 'Streaks, Statistiken und Story-Sharing.'),
+          _welcomePoint(
+            accent,
+            Icons.route_rounded,
+            'Entdecke die schönsten Routen',
+            'Kurvenreich, scenic, auf dich zugeschnitten.',
+          ),
+          _welcomePoint(
+            accent,
+            Icons.groups_rounded,
+            'Cruise mit Freunden',
+            'Live-Standort, Gruppen-Navigation, gemeinsam fahren.',
+          ),
+          _welcomePoint(
+            accent,
+            Icons.emoji_events_rounded,
+            'Sammle XP & teile Fahrten',
+            'Streaks, Statistiken und Story-Sharing.',
+          ),
         ],
       ),
     );
@@ -761,15 +832,23 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text(sub,
-                    style: const TextStyle(
-                        color: _muted, fontSize: 13.5, height: 1.35)),
+                Text(
+                  sub,
+                  style: const TextStyle(
+                    color: _muted,
+                    fontSize: 13.5,
+                    height: 1.35,
+                  ),
+                ),
               ],
             ),
           ),
@@ -797,10 +876,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
               LengthLimitingTextInputFormatter(AppInputLimits.emailMaxLength),
             ],
             style: const TextStyle(color: Colors.white, fontSize: 16),
-            decoration: _fieldDeco(accent,
-                hint: 'deine@email.de',
-                prefixIcon:
-                    Icon(Icons.email_outlined, color: accent, size: 20)),
+            decoration: _fieldDeco(
+              accent,
+              hint: 'deine@email.de',
+              prefixIcon: Icon(Icons.email_outlined, color: accent, size: 20),
+            ),
           ),
           const SizedBox(height: 16),
           _fieldLabel('Passwort'),
@@ -808,18 +888,24 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             controller: _pwCtrl,
             obscureText: _obscurePw,
             inputFormatters: [
-              LengthLimitingTextInputFormatter(AppInputLimits.passwordMaxLength),
+              LengthLimitingTextInputFormatter(
+                AppInputLimits.passwordMaxLength,
+              ),
             ],
             style: const TextStyle(color: Colors.white, fontSize: 16),
-            decoration: _fieldDeco(accent,
-                hint: 'Mindestens 6 Zeichen',
-                prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
-                suffix: IconButton(
-                  icon: Icon(
-                      _obscurePw ? Icons.visibility_off : Icons.visibility,
-                      color: _muted, size: 20),
-                  onPressed: () => setState(() => _obscurePw = !_obscurePw),
-                )),
+            decoration: _fieldDeco(
+              accent,
+              hint: 'Mindestens 6 Zeichen',
+              prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
+              suffix: IconButton(
+                icon: Icon(
+                  _obscurePw ? Icons.visibility_off : Icons.visibility,
+                  color: _muted,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _obscurePw = !_obscurePw),
+              ),
+            ),
           ),
           const SizedBox(height: 16),
           _fieldLabel('Passwort bestätigen'),
@@ -827,24 +913,29 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             controller: _confirmCtrl,
             obscureText: _obscureConf,
             inputFormatters: [
-              LengthLimitingTextInputFormatter(AppInputLimits.passwordMaxLength),
+              LengthLimitingTextInputFormatter(
+                AppInputLimits.passwordMaxLength,
+              ),
             ],
             style: const TextStyle(color: Colors.white, fontSize: 16),
-            decoration: _fieldDeco(accent,
-                hint: 'Passwort wiederholen',
-                prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
-                suffix: IconButton(
-                  icon: Icon(
-                      _obscureConf ? Icons.visibility_off : Icons.visibility,
-                      color: _muted, size: 20),
-                  onPressed: () => setState(() => _obscureConf = !_obscureConf),
-                )),
+            decoration: _fieldDeco(
+              accent,
+              hint: 'Passwort wiederholen',
+              prefixIcon: Icon(Icons.lock_outline, color: accent, size: 20),
+              suffix: IconButton(
+                icon: Icon(
+                  _obscureConf ? Icons.visibility_off : Icons.visibility,
+                  color: _muted,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _obscureConf = !_obscureConf),
+              ),
+            ),
           ),
           if (_accountErr != null) ...[
             const SizedBox(height: 14),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFF331316),
                 borderRadius: BorderRadius.circular(10),
@@ -855,9 +946,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                   const Icon(Icons.error_outline, color: _err, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(_accountErr!,
-                        style: const TextStyle(
-                            color: Color(0xFFFFB4B4), fontSize: 13)),
+                    child: Text(
+                      _accountErr!,
+                      style: const TextStyle(
+                        color: Color(0xFFFFB4B4),
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -885,17 +980,21 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             autocorrect: false,
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_]')),
-              LengthLimitingTextInputFormatter(AppInputLimits.usernameMaxLength),
+              LengthLimitingTextInputFormatter(
+                AppInputLimits.usernameMaxLength,
+              ),
             ],
             style: const TextStyle(
-                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
             decoration: _fieldDeco(
               accent,
               hint: 'deinname',
               prefixIcon: Padding(
                 padding: const EdgeInsets.only(left: 14, right: 2),
-                child: Text('@',
-                    style: TextStyle(color: accent, fontSize: 20)),
+                child: Text('@', style: TextStyle(color: accent, fontSize: 20)),
               ),
               prefixTight: true,
               suffix: _uStatusIcon(),
@@ -905,34 +1004,46 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           _uStatusLine(),
           if (_suggestions.isNotEmpty) ...[
             const SizedBox(height: 14),
-            const Text('Vorschläge:',
-                style: TextStyle(color: _muted, fontSize: 13)),
+            const Text(
+              'Vorschläge:',
+              style: TextStyle(color: _muted, fontSize: 13),
+            ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: _suggestions
-                  .map((s) => GestureDetector(
-                        onTap: () {
-                          _usernameCtrl.text = s;
-                          _usernameCtrl.selection =
-                              TextSelection.collapsed(offset: s.length);
-                          _onUsernameChanged(s);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 9),
-                          decoration: BoxDecoration(
-                            color: _card,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                                color: accent.withValues(alpha: 0.4)),
-                          ),
-                          child: Text('@$s',
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 14)),
+                  .map(
+                    (s) => GestureDetector(
+                      onTap: () {
+                        _usernameCtrl.text = s;
+                        _usernameCtrl.selection = TextSelection.collapsed(
+                          offset: s.length,
+                        );
+                        _onUsernameChanged(s);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 9,
                         ),
-                      ))
+                        decoration: BoxDecoration(
+                          color: _card,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: accent.withValues(alpha: 0.4),
+                          ),
+                        ),
+                        child: Text(
+                          '@$s',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
           ],
@@ -947,9 +1058,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         return const Padding(
           padding: EdgeInsets.all(14),
           child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _muted)),
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _muted),
+          ),
         );
       case _UNameState.available:
         return const Icon(Icons.check_circle, color: _ok);
@@ -964,12 +1076,17 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
 
   Widget _uStatusLine() {
     final (String text, Color color) = switch (_uState) {
-      _UNameState.available =>
-        ('@${_usernameCtrl.text.trim()} ist frei 🎉', _ok),
+      _UNameState.available => (
+        '@${_usernameCtrl.text.trim()} ist frei 🎉',
+        _ok,
+      ),
       _UNameState.taken => ('Schon vergeben, probier einen Vorschlag.', _err),
       _UNameState.reserved => ('Dieser Name ist reserviert.', _err),
-      _UNameState.invalid => ('3 bis 20 Zeichen: Buchstaben, Zahlen, _ '
-          '(kein __, nicht mit _ beginnen oder enden).', _muted),
+      _UNameState.invalid => (
+        '3 bis 20 Zeichen: Buchstaben, Zahlen, _ '
+            '(kein __, nicht mit _ beginnen oder enden).',
+        _muted,
+      ),
       _UNameState.checking => ('Prüfe Verfügbarkeit…', _muted),
       _UNameState.error => ('Konnte gerade nicht prüfen.', _muted),
       _UNameState.idle => ('', _muted),
@@ -991,7 +1108,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         textCapitalization: TextCapitalization.words,
         inputFormatters: [LengthLimitingTextInputFormatter(40)],
         style: const TextStyle(
-            color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+        ),
         decoration: _fieldDeco(accent, hint: 'Max Mustermann'),
       ),
     );
@@ -1012,8 +1132,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
               onTap: () => setState(() => _country = c.$1),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
                 decoration: BoxDecoration(
                   color: selected ? accent.withValues(alpha: 0.14) : _card,
                   borderRadius: BorderRadius.circular(14),
@@ -1024,11 +1146,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                 ),
                 child: Row(
                   children: [
-                    Text(c.$2,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600)),
+                    Text(
+                      c.$2,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     const Spacer(),
                     if (selected)
                       Icon(Icons.check_circle, color: accent, size: 22),
@@ -1062,17 +1187,24 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                   border: Border.all(color: accent.withValues(alpha: 0.4)),
                   image: _avatarBytes != null
                       ? DecorationImage(
-                          image: MemoryImage(_avatarBytes!), fit: BoxFit.cover)
+                          image: MemoryImage(_avatarBytes!),
+                          fit: BoxFit.cover,
+                        )
                       : null,
                 ),
                 child: _avatarBytes == null
-                    ? const Icon(Icons.add_a_photo_outlined,
-                        color: _muted, size: 40)
+                    ? const Icon(
+                        Icons.add_a_photo_outlined,
+                        color: _muted,
+                        size: 40,
+                      )
                     : null,
               ),
               const SizedBox(height: 16),
-              Text(_avatarBytes == null ? 'Foto auswählen' : 'Foto ändern',
-                  style: TextStyle(color: accent, fontSize: 15)),
+              Text(
+                _avatarBytes == null ? 'Foto auswählen' : 'Foto ändern',
+                style: TextStyle(color: accent, fontSize: 15),
+              ),
             ],
           ),
         ),
@@ -1139,12 +1271,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             ),
           ),
           const SizedBox(height: 28),
-          const Text('Alles bereit!',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800)),
+          const Text(
+            'Alles bereit!',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           const SizedBox(height: 12),
           const Text(
             'Dein Profil steht. Finde Freunde in der Community, plane deine '
@@ -1180,15 +1315,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             child: Icon(icon, color: accent, size: 26),
           ),
           const SizedBox(height: 18),
-          Text(title,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  height: 1.15)),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              height: 1.15,
+            ),
+          ),
           const SizedBox(height: 8),
-          Text(subtitle,
-              style: const TextStyle(color: _muted, fontSize: 15, height: 1.4)),
+          Text(
+            subtitle,
+            style: const TextStyle(color: _muted, fontSize: 15, height: 1.4),
+          ),
           const SizedBox(height: 26),
           child,
         ],
@@ -1197,11 +1337,16 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   }
 
   Widget _fieldLabel(String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 6, left: 2),
-        child: Text(text,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-      );
+    padding: const EdgeInsets.only(bottom: 6, left: 2),
+    child: Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
 
   InputDecoration _fieldDeco(
     Color accent, {
@@ -1220,8 +1365,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           ? const BoxConstraints(minWidth: 0, minHeight: 0)
           : null,
       suffixIcon: suffix,
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide.none,
