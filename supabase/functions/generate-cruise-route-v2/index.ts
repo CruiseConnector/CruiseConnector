@@ -2648,14 +2648,29 @@ async function handler(req: Request): Promise<Response> {
   }
   const url = new URL(req.url);
   if (url.pathname.endsWith('/health')) {
-    // Probe upstream GH health
-    try {
-      const r = await fetch(`${GRAPHHOPPER_URL}/health`);
-      const ok = r.ok;
-      return jsonResponse({ ok, graphhopper: ok ? 'up' : 'down' }, ok ? 200 : 503);
-    } catch (_) {
-      return jsonResponse({ ok: false, graphhopper: 'unreachable' }, 503);
-    }
+    // 2026-06-29 (vucko): Prueft ALLE distinct Server parallel, nicht nur den
+    // Primaer — sonst zeigt /health rot, obwohl ueber Failover (PC1) sauber
+    // geroutet wird. ok=true sobald IRGENDEIN Server antwortet.
+    const targets: Array<[string, string]> = [
+      ['primary', GRAPHHOPPER_URL],
+      ['de', GRAPHHOPPER_DE_URL],
+      ['eu', GRAPHHOPPER_EU_URL],
+    ];
+    const servers: Record<string, string> = {};
+    let anyUp = false;
+    await Promise.all(targets.map(async ([name, base]) => {
+      try {
+        const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4000) });
+        servers[name] = r.ok ? 'up' : 'down';
+        if (r.ok) anyUp = true;
+      } catch (_) {
+        servers[name] = 'unreachable';
+      }
+    }));
+    return jsonResponse(
+      { ok: anyUp, graphhopper: anyUp ? 'up' : 'down', servers },
+      anyUp ? 200 : 503,
+    );
   }
   if (req.method !== 'POST') {
     return jsonResponse({ error: 'method_not_allowed' }, 405);
