@@ -1481,6 +1481,46 @@ void main() {
   );
 
   test(
+    'GH-Totalausfall: Rundkurs liefert nächstgelegenen Pool-Loop OHNE Anfahrts-Leg',
+    () async {
+      // 2026-06-28 (vucko): Reproduziert den Produktions-Bug „alle paar Tage
+      // keine Route / Temporärer Serverfehler". Pool-Loop liegt ~1.5km vom
+      // User (also Anfahrts-Leg nötig) UND GraphHopper ist KOMPLETT tot
+      // (_AlwaysFailingInvoker wirft auch den Access-Leg).
+      // Vor dem Fix: access_leg_unusable -> Treffer verworfen -> Serverfehler.
+      // Nach dem Fix (_isBackendDownError + backendUnavailable): der Loop wird
+      // geometrisch rebasiert (Start am nächsten Loop-Punkt) OHNE GH geliefert.
+      final offsetLoop = _closedLoopResponseAt(
+        latitude: 47.5162 + 0.014, // ~1.5km noerdlich -> Anfahrts-Leg noetig
+        longitude: 9.7471,
+      );
+      final poolMatch = _poolMatchWithResponse(
+        response: offsetLoop,
+        id: 'pool-backend-down-offset-loop',
+        cityCluster: 'Dornbirn',
+        startDistanceKm: 1.5,
+      );
+      final poolService = _FakeRoutePoolService(poolMatch);
+      final invoker = _AlwaysFailingInvoker();
+      service = RouteService(invoker: invoker, routePoolService: poolService);
+
+      final route = await service.generateRoundTrip(
+        startPosition: _start(),
+        targetDistanceKm: 50,
+        mode: 'Sport Mode',
+        planningType: 'Zufall',
+        avoidHighways: true,
+      );
+
+      // Trotz totem GraphHopper: eine fahrbare Pool-Route, KEIN Serverfehler.
+      expect(invoker.callCount, greaterThan(0)); // GH wurde versucht (+ schlug fehl)
+      expect(route.coordinates, isNotEmpty);
+      expect(route.edgeMeta['route_source'], 'pool');
+      expect(route.edgeMeta['pool_match_id'], poolMatch.route.id);
+    },
+  );
+
+  test(
     'Search-Again nutzt Candidate-Reserve neben verified Pool-Duplikat',
     () async {
       final reserveMatch = _poolMatchWithResponse(

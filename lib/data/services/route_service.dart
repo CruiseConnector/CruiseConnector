@@ -6715,16 +6715,24 @@ class RouteService {
       // gerade abgelehnt würden dürfen über den Pool nicht durch die
       // Hintertür reinkommen. Andere Stile (Kurvenjagd/Entdecker/Abendrunde)
       // sind toleranter und behalten den relaxed-Pfad.
+      // 2026-06-28 (vucko): Bei GH-Totalausfall (offline_backend_fallback) ist
+      // der Pool-Loop bereits beim Seeden verifiziert — die Re-Qualitaets- und
+      // Novelty-Gates duerfen ihn NICHT verwerfen, sonst „Serverfehler" trotz
+      // fahrbarer Route (genau der strikte Sport-Mode-Default-Fall). Sonst
+      // unveraendert streng.
+      final offlineBackendFallback =
+          candidateRoute.edgeMeta['offline_backend_fallback'] == true;
       final isSportLikePool = styleConfig.profileKey == 'sport';
       final candidate = _evaluateCandidate(
         scenario: scenario,
         styleConfig: styleConfig,
         route: candidateRoute,
         variant: _poolRouteVariant(scenario, match),
-        relaxedRoundTrip: !isSportLikePool,
+        relaxedRoundTrip: offlineBackendFallback ? true : !isSportLikePool,
         directDistanceKm: directDistanceKm,
       );
-      if (!candidate.accepted || candidate.hardRejected) {
+      if (!offlineBackendFallback &&
+          (!candidate.accepted || candidate.hardRejected)) {
         _debugRouteSearch(
           '[PoolFallback] poolHit=true poolUsed=false reason=quality_rejected '
           'poolMatchId=${match.route.id} tier=${candidate.tier.name} '
@@ -6732,7 +6740,7 @@ class RouteService {
         );
         continue;
       }
-      if (!candidate.novelEnough) {
+      if (!offlineBackendFallback && !candidate.novelEnough) {
         lastRouteDuplicateSkipped = true;
         lastRoutePoolSeenCandidateCount += 1;
         _debugRouteSearch(
@@ -7673,12 +7681,21 @@ class RouteService {
             ),
             'route_source': 'pool',
             'source': 'pool',
+            // Markiert eine GH-unabhaengige Notfall-Auslieferung (Backend down):
+            // der Loop ist bereits beim Seeden qualitaetsgeprueft (verified) —
+            // die Re-Qualitaets-Gates werden hier bewusst uebersprungen, damit
+            // bei totem GraphHopper eine fahrbare Route statt „Serverfehler"
+            // kommt. Greift NUR wenn backendUnavailable.
+            'offline_backend_fallback': backendUnavailable,
           });
-          if (!_isPreliminarilyUsablePoolAccessRoute(
-            scenario: scenario,
-            styleConfig: styleConfig,
-            route: routedPlan,
-          )) {
+          // Bei Backend-down NICHT am Preview-Qualitaetsgate verwerfen — der
+          // verifizierte Pool-Loop ist besser als gar keine Route.
+          if (!backendUnavailable &&
+              !_isPreliminarilyUsablePoolAccessRoute(
+                scenario: scenario,
+                styleConfig: styleConfig,
+                route: routedPlan,
+              )) {
             _debugRouteSearch(
               '[PoolFallback] poolHit=true poolUsed=false reason=access_leg_preview_rejected '
               'poolMatchId=${match.route.id} joinIndex=${joinPoint.index} '
