@@ -263,14 +263,23 @@ function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }
   // Alle Punkte in DACH → DACH-Server primary (PC1 ist schneller, weniger
   // Daten zu durchsuchen)
   if (regions.size === 1 && regions.has(GeoRegion.dach)) {
-    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_EU_URL };
+    // 2026-06-28 (vucko Failover-Fix): Fallback MUSS die ANDERE physische
+    // Maschine sein (PC1 = GRAPHHOPPER_DE_URL), nicht GRAPHHOPPER_EU_URL — denn
+    // URL (PC2-DACH) UND EU_URL (PC2-EU) liegen auf DEMSELBEN PC2. Lag PC2 aus,
+    // fiel das „Failover" auf die tote Maschine -> Serverfehler. Mit DE_URL
+    // uebernimmt bei PC2-Ausfall echt der zweite PC (PC1). Voraussetzung:
+    // Supabase-Secret GRAPHHOPPER_DE_URL zeigt auf PC1 (siehe INFRA_NEVER_DOWN.md).
+    return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
   // 2026-05-27 (vucko v3): PC2 hat jetzt MIT dach-italy-balkan.osm.pbf
   // (DE+AT+CH+IT+SI+HR+FR-Süd in einer einzigen dedupzierten PBF aus
   // europe-latest.osm.pbf bbox-extract). Damit kann PC2 BEIDE Regionen
   // routen. Cross-Border und reine EU-Routen → PC2 primary, PC1 als
   // Fallback wenn PC2 offline.
-  return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_URL };
+  // 2026-06-28 (vucko Failover-Fix): Fallback = PC1 (GRAPHHOPPER_DE_URL), die
+  // andere physische Maschine — NICHT GRAPHHOPPER_URL, das ebenfalls auf PC2
+  // liegt. So uebernimmt bei PC2-Ausfall wirklich der zweite PC.
+  return { primary: GRAPHHOPPER_EU_URL, fallback: GRAPHHOPPER_DE_URL };
 }
 
 // ─────────────────────────── Types ────────────────────────────────────────
