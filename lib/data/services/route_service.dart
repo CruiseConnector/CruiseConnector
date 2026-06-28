@@ -4341,6 +4341,42 @@ class RouteService {
         error.type == RouteErrorType.parsing;
   }
 
+  // 2026-06-28 (vucko Rundkurs-„Serverfehler"-Root-Cause): Erkennt, ob ein
+  // Fehler vom kompletten Ausfall des Routing-Backends (GraphHopper-Mini-PC /
+  // Tailscale-Funnel unerreichbar) stammt — NICHT von Qualität/Start-Offset.
+  // Genutzt, um den Pool-Fallback GH-unabhängig zu machen: bei Backend-down
+  // liefern wir den nächstgelegenen Pool-Loop OHNE Live-Anfahrtsleg aus,
+  // statt den Treffer zu verwerfen (= zahlende Nutzer sahen „Serverfehler"
+  // obwohl 100+ Pool-Routen in der Nähe lagen).
+  static bool _isBackendDownError(Object error) {
+    if (error is RouteServiceException) {
+      if (error.type == RouteErrorType.server) return true;
+      final sc = error.statusCode;
+      if (sc != null && sc >= 500) return true;
+      return _looksLikeConnectivityMessage(error.debugMessage);
+    }
+    return _looksLikeConnectivityMessage(error.toString());
+  }
+
+  static bool _looksLikeConnectivityMessage(String? message) {
+    if (message == null) return false;
+    final l = message.toLowerCase();
+    return l.contains('failed host lookup') ||
+        l.contains('socketexception') ||
+        l.contains('connection closed') ||
+        l.contains('connection refused') ||
+        l.contains('connection reset') ||
+        l.contains('connection error') ||
+        l.contains('unreachable') ||
+        l.contains('timed out') ||
+        l.contains('timeout') ||
+        l.contains('graphhopper') ||
+        l.contains(' 500') ||
+        l.contains(' 502') ||
+        l.contains(' 503') ||
+        l.contains(' 504');
+  }
+
   static bool _isStructuredFallbackError(RouteServiceException error) {
     if (_isStartOffsetStructuredError(error)) return false;
     if (_isFatalStructuredError(error)) return false;
@@ -7497,38 +7533,66 @@ class RouteService {
         );
         if (rotatedLoop.coordinates.length < 4) continue;
 
-        final accessLeg = joinPoint.distanceFromCurrentMeters <= 60.0
-            ? null
-            : await _requestAccessLegToJoin(
-                currentPosition: currentPosition,
-                joinPoint: joinPoint,
-                mode: scenario.style,
-                avoidHighways: scenario.avoidHighways,
+        // 2026-06-28 (vucko Rundkurs-„Serverfehler"-Root-Cause): Der Anfahrts-
+        // Leg ist die EINZIGE GraphHopper-Abhängigkeit des Pool-Fallbacks.
+        // War GH komplett weg, warf er → ganzer Pool-Treffer verworfen → trotz
+        // 100+ Pool-Routen in der Nähe „Temporärer Serverfehler". Jetzt: bei
+        // Backend-down KEIN Verwurf — wir liefern den nächstgelegenen Loop
+        // geometrisch rebasiert OHNE Anfahrts-/Rückkehr-Leg aus (Start am
+        // nächsten Loop-Punkt, ≤3km vom User). Fahrbare Route > Serverfehler.
+        RouteResult? accessLeg;
+        var backendUnavailable = false;
+        if (joinPoint.distanceFromCurrentMeters > 60.0) {
+          try {
+            accessLeg = await _requestAccessLegToJoin(
+              currentPosition: currentPosition,
+              joinPoint: joinPoint,
+              mode: scenario.style,
+              avoidHighways: scenario.avoidHighways,
+            );
+          } catch (e) {
+            if (_isBackendDownError(e)) {
+              backendUnavailable = true;
+              accessLeg = null;
+              _debugRouteSearch(
+                '[PoolFallback] backendDown=true offlineLoopFallback=true '
+                'poolMatchId=${match.route.id} joinIndex=${joinPoint.index}',
               );
+            } else {
+              rethrow;
+            }
+          }
+        }
         final accessDistanceKm =
             accessLeg?.distanceKm ??
             ((accessLeg?.distanceMeters ?? 0.0) / 1000.0);
         // 2026-05-28 (vucko Task #67): 2 → 1 exit. Halbiert nochmal Edge-
         // Calls pro Join-Point. Worst-case jetzt: 3 pool × 2 join × 1 exit ×
         // 2 calls = 12 Edge-Calls statt 75+ wie im User-Log.
-        final exitIndices = _suggestRoundTripPoolExitIndices(
-          route: rotatedLoop,
-          targetDistanceKm: targetDistanceKm,
-          accessLegDistanceKm: accessDistanceKm,
-          sessionOrigin: sessionOrigin,
-          maxCandidates: 1,
-        );
+        // Bei Backend-down: vollen geschlossenen Loop ausliefern (kein Exit-
+        // Slicing → braucht keinen GH-Rückkehr-Leg, schließt sich selbst).
+        final exitIndices = backendUnavailable
+            ? <int>[rotatedLoop.coordinates.length - 1]
+            : _suggestRoundTripPoolExitIndices(
+                route: rotatedLoop,
+                targetDistanceKm: targetDistanceKm,
+                accessLegDistanceKm: accessDistanceKm,
+                sessionOrigin: sessionOrigin,
+                maxCandidates: 1,
+              );
 
         for (final exitIndex in exitIndices) {
           final loopSegment = _sliceRouteRange(rotatedLoop, 0, exitIndex);
           if (loopSegment.coordinates.length < 4) continue;
-          final returnLeg = await _buildReturnLegIfNeeded(
-            sessionOrigin: sessionOrigin,
-            followOnRoute: loopSegment,
-            mode: scenario.style,
-            avoidHighways: scenario.avoidHighways,
-            enabled: true,
-          );
+          final returnLeg = backendUnavailable
+              ? null
+              : await _buildReturnLegIfNeeded(
+                  sessionOrigin: sessionOrigin,
+                  followOnRoute: loopSegment,
+                  mode: scenario.style,
+                  avoidHighways: scenario.avoidHighways,
+                  enabled: true,
+                );
           final sessionRoute = returnLeg == null
               ? loopSegment
               : _mergeRouteSegments([loopSegment, returnLeg]);
