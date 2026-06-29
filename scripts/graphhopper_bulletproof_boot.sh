@@ -26,6 +26,15 @@ warn(){ printf '\033[1;33m[bulletproof]\033[0m %s\n' "$*"; }
 
 if [[ $EUID -ne 0 ]]; then echo "Bitte mit sudo ausfuehren: sudo bash $0"; exit 1; fi
 
+# 2026-06-29 (vucko): Falls der no-sudo-Keepalive-Cron aktiv ist, ENTFERNEN —
+# sonst kaempfen Cron-GH und systemd-GH um denselben Port (8989/8991). systemd
+# uebernimmt ab hier die Verwaltung. (Cron des aufrufenden Users + GH_USER.)
+for u in "${SUDO_USER:-}" "${GH_USER}"; do
+  [ -z "$u" ] && continue
+  ( crontab -u "$u" -l 2>/dev/null | grep -v 'graphhopper/keepalive.sh' || true ) | crontab -u "$u" - 2>/dev/null || true
+done
+log "Keepalive-Cron entfernt (systemd uebernimmt)."
+
 # ---------------------------------------------------------------------------
 # 1) systemd-Units schreiben (DACH 8989 + DE 8991) — nur fuer vorhandene Configs
 # ---------------------------------------------------------------------------
