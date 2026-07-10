@@ -17,7 +17,6 @@ import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/route_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
@@ -395,8 +394,6 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
-        // 2026-07-10 (vucko): Abo-Status (Free/Basic/Premium) + Feature-Gating.
-        ChangeNotifierProvider(create: (_) => SubscriptionProvider()..init()),
         // 2026-05-23 (vucko): Notification-Service als Provider —
         // Realtime-Subscription wird in HomePage initState gestartet.
         ChangeNotifierProvider<NotificationService>.value(
