@@ -8659,6 +8659,27 @@ class _CruiseModePageState extends State<CruiseModePage>
           countryPreference: effectiveCountryPreference,
           homeCountryCode: effectiveHomeCountryCode,
         );
+        // 2026-07-10 (vucko Gruppen-Rundkurs-Resume): Auch Gruppen-RUNDFAHRTEN
+        // als Trip persistieren — vorher tat das NUR der A→B-Zweig oben, sodass
+        // eine Gruppen-Rundfahrt nach App-Kill/Neustart KEIN Resume hatte. Der
+        // Trip (mit group_id) ist der Rejoin-Anker: er erscheint als Home-Card
+        // und führt per pendingGroupView zurück in die Lobby → „Zur laufenden
+        // Route". Best-effort, fail silent.
+        if (widget.groupId != null &&
+            result.distanceMeters != null &&
+            result.distanceMeters! > 0) {
+          unawaited(
+            _createTripInDb(
+              startLat: startPosition.latitude,
+              startLng: startPosition.longitude,
+              waypoints: waypointSnapshot,
+              style: _selectedStyle,
+              avoidHighways: _avoidHighways,
+              distanceKm: (result.distanceMeters! / 1000),
+              durationSeconds: result.durationSeconds?.round() ?? 0,
+            ),
+          );
+        }
       }
 
       if (_isRouteGenerationCancelled(generationId)) {

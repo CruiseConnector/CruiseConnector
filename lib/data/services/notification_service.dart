@@ -109,15 +109,30 @@ class NotificationService extends ChangeNotifier {
 
   void _handleRealtimeUpdate(PostgresChangePayload payload) {
     try {
-      final updated = AppNotification.fromMap(payload.newRecord);
-      final idx = _items.indexWhere((n) => n.id == updated.id);
-      if (idx >= 0) {
-        _items[idx] = updated;
-        notifyListeners();
-        // Aggregierte Likes triggern auch ein UI-Refresh
-        if (updated.aggregateCount > 1) {
-          onNew?.call(updated);
-        }
+      final rec = payload.newRecord;
+      final id = rec['id'] as String?;
+      if (id == null) return;
+      final idx = _items.indexWhere((n) => n.id == id);
+      if (idx < 0) return;
+      // 2026-07-10 (vucko Avatar-Fix): Das Realtime-WAL-Payload ist single-table
+      // und enthält NICHT das in loadInitial gejointe from_profile
+      // (username/avatar_url). Würde man das Item komplett aus fromMap(newRecord)
+      // neu bauen, wäre fromAvatarUrl=null → der Avatar fällt beim „Alle gelesen"
+      // /Öffnen bis zum App-Neustart auf das Platzhalter-Symbol zurück. Deshalb
+      // NUR die tatsächlich geänderten Felder (read/aggregate) auf das bestehende
+      // Item mergen und Avatar + Name behalten.
+      final merged = _items[idx].copyWith(
+        read: rec['read'] as bool?,
+        aggregateCount: (rec['aggregate_count'] as num?)?.toInt(),
+        aggregateUntil: rec['aggregate_until'] == null
+            ? null
+            : DateTime.tryParse(rec['aggregate_until'] as String),
+      );
+      _items[idx] = merged;
+      notifyListeners();
+      // Aggregierte Likes triggern auch ein UI-Refresh
+      if (merged.aggregateCount > 1) {
+        onNew?.call(merged);
       }
     } catch (e) {
       debugPrint('[NotificationService] realtime update parse failed: $e');
@@ -197,7 +212,12 @@ class AppNotification {
     required this.fromAvatarUrl,
   });
 
-  AppNotification copyWith({bool? read}) => AppNotification(
+  AppNotification copyWith({
+    bool? read,
+    int? aggregateCount,
+    DateTime? aggregateUntil,
+  }) =>
+      AppNotification(
         id: id,
         createdAt: createdAt,
         userId: userId,
@@ -206,8 +226,8 @@ class AppNotification {
         read: read ?? this.read,
         referenceId: referenceId,
         payload: payload,
-        aggregateCount: aggregateCount,
-        aggregateUntil: aggregateUntil,
+        aggregateCount: aggregateCount ?? this.aggregateCount,
+        aggregateUntil: aggregateUntil ?? this.aggregateUntil,
         fromUsername: fromUsername,
         fromAvatarUrl: fromAvatarUrl,
       );

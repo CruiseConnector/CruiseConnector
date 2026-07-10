@@ -1007,15 +1007,11 @@ class SocialService {
       rethrow;
     }
 
-    try {
-      await _db.from('notifications').insert({
-        'user_id': targetUserId,
-        'from_user_id': uid,
-        'type': isPrivate ? 'follow_request' : 'follow',
-      });
-    } catch (e) {
-      debugPrint('[Social] Follow-Notification fehlgeschlagen: $e');
-    }
+    // 2026-07-10 (vucko Doppel-Benachrichtigung-Fix): KEIN Client-Insert mehr.
+    // Der DB-Trigger notify_on_follow() ist die EINZIGE Quelle für die
+    // Follow-Benachrichtigung (statusbewusst: 'friend_request' bei pending,
+    // sonst 'follow'). Der frühere Client-Insert hier erzeugte pro Follow eine
+    // ZWEITE notifications-Zeile → doppelte Benachrichtigung/Push.
     return status;
   }
 
