@@ -265,6 +265,10 @@ class SocialService {
     required String postId,
     required String type,
   }) async {
+    // 2026-07-10 (vucko Doppel-Fix): Likes NICHT client-seitig einfügen — der
+    // DB-Trigger notify_on_like() ist die EINZIGE Quelle (inkl. Aggregation
+    // „X neue Likes"). Sonst entstehen zwei Like-Benachrichtigungen pro Like.
+    if (type == 'like') return;
     final uid = _userId;
     if (uid == null) return;
 
@@ -1369,27 +1373,65 @@ class SocialService {
       ...following.map((r) => (r as Map)['following_id'] as String),
     };
 
-    // 1) Freunde-von-Freunden
+    // 1) Freunde-von-Freunden. Die Zwischenperson (follower_id) ist genau der
+    //    GEMEINSAME Follower — jemand, dem ich folge und der auch dem
+    //    Vorschlag folgt. Damit bauen wir „@a, @b … folgen diesem Account".
     if (excluded.length > 1) {
       final myFollowingIds = acceptedFollowing.toList();
       final fof = await _db
           .from('follows')
           .select(
-            'following_id, profiles!follows_following_id_profiles_fkey(id, username, avatar_url, is_private)',
+            'follower_id, profiles!follows_following_id_profiles_fkey(id, username, avatar_url, is_private)',
           )
           .inFilter('follower_id', myFollowingIds)
           .eq('status', 'accepted')
-          .limit(50);
+          .limit(200);
 
       final suggestions = <String, Map<String, dynamic>>{};
+      // Vorschlags-ID -> Liste der gemeinsamen-Follower-IDs (meine Freunde).
+      final mutualIds = <String, List<String>>{};
       for (final row in fof as List) {
         final p = (row as Map)['profiles'] as Map<String, dynamic>?;
         final id = p?['id'] as String?;
+        final followerId = row['follower_id'] as String?;
         if (p == null || id == null || excluded.contains(id)) continue;
-        suggestions.putIfAbsent(id, () => p);
-        if (suggestions.length >= limit) break;
+        suggestions.putIfAbsent(id, () => Map<String, dynamic>.from(p));
+        if (followerId != null) {
+          (mutualIds[id] ??= <String>[]).add(followerId);
+        }
       }
-      if (suggestions.isNotEmpty) return suggestions.values.toList();
+      if (suggestions.isNotEmpty) {
+        final taken = suggestions.keys.take(limit).toList();
+        // Usernames aller benötigten gemeinsamen Follower in EINER Query holen.
+        final neededFollowerIds = <String>{};
+        for (final sid in taken) {
+          neededFollowerIds.addAll(mutualIds[sid] ?? const []);
+        }
+        final nameById = <String, String>{};
+        if (neededFollowerIds.isNotEmpty) {
+          final profs = await _db
+              .from('profiles')
+              .select('id, username')
+              .inFilter('id', neededFollowerIds.toList());
+          for (final r in profs as List) {
+            final m = r as Map;
+            final rid = m['id'] as String?;
+            final uname = (m['username'] as String?)?.trim();
+            if (rid != null && uname != null && uname.isNotEmpty) {
+              nameById[rid] = uname;
+            }
+          }
+        }
+        for (final sid in taken) {
+          final names = (mutualIds[sid] ?? const [])
+              .map((fid) => nameById[fid])
+              .whereType<String>()
+              .toList();
+          suggestions[sid]!['mutual_names'] = names;
+          suggestions[sid]!['mutual_count'] = names.length;
+        }
+        return taken.map((sid) => suggestions[sid]!).toList();
+      }
     }
 
     // 2) Fallback: neueste Profile (nicht-private)
@@ -1404,6 +1446,23 @@ class SocialService {
         .where((p) => !excluded.contains(p['id']))
         .take(limit)
         .toList();
+  }
+
+  /// Baut die „gemeinsame Follower"-Zeile für Vorschlags-Karten (Instagram-
+  /// Style) aus den mutual_names/mutual_count-Feldern von [getSuggestedUsers].
+  /// Beispiele: „@a folgt diesem Account", „@a und @b folgen diesem Account",
+  /// „@a, @b und weitere Personen folgen diesem Account". Null wenn keine.
+  static String? mutualFollowersLine(Map<String, dynamic> user) {
+    final names =
+        (user['mutual_names'] as List?)?.whereType<String>().toList() ??
+            const <String>[];
+    final count = (user['mutual_count'] as int?) ?? names.length;
+    if (count <= 0 || names.isEmpty) return null;
+    final a = '@${names[0]}';
+    if (count == 1) return '$a folgt diesem Account';
+    final b = names.length > 1 ? '@${names[1]}' : a;
+    if (count == 2) return '$a und $b folgen diesem Account';
+    return '$a, $b und weitere Personen folgen diesem Account';
   }
 
   // ── Groups ────────────────────────────────────────────────────────────

@@ -273,16 +273,15 @@ class AppNotification {
 
     switch (type) {
       case 'follow':
+        // 2026-07-10 (vucko): immer der echte @Name, nie „Cruiser"/„Jemand".
         return (
           pick(const [
             'Neuer Follower',
             'Du hast einen Follower',
-            'Cruiser folgt dir',
           ]),
           pick([
             '$name folgt dir jetzt',
             '$name ist jetzt einer deiner Follower',
-            '$name will deine Touren sehen',
           ]),
         );
       case 'like':
@@ -296,7 +295,7 @@ class AppNotification {
           );
         }
         return (
-          pick(const ['Neuer Like', 'Jemand mag deinen Post', 'Post gefällt']),
+          pick(const ['Neuer Like', 'Post gefällt']),
           pick([
             '$name gefällt dein Post',
             '$name hat dir ein Herz gegeben',
@@ -305,7 +304,7 @@ class AppNotification {
         );
       case 'comment':
         return (
-          pick(const ['Neuer Kommentar', 'Jemand antwortet dir', 'Comment-Drop']),
+          pick(const ['Neuer Kommentar', 'Comment-Drop']),
           pick([
             '$name hat kommentiert',
             '$name antwortet auf deinen Post',

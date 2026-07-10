@@ -1278,6 +1278,8 @@ class _CommunityPageState extends State<CommunityPage>
       fallbackUserId: user['id'] as String?,
     );
     final avatar = user['avatar_url'] as String?;
+    // 2026-07-10 (vucko): „@a, @b … folgen diesem Account" (gemeinsame Follower).
+    final mutualLine = SocialService.mutualFollowersLine(user);
     return Container(
       width: 140,
       margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -1303,6 +1305,18 @@ class _CommunityPageState extends State<CommunityPage>
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Colors.white, fontSize: 13),
           ),
+          if (mutualLine != null)
+            Text(
+              mutualLine,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 9.5,
+                height: 1.15,
+              ),
+            ),
           GestureDetector(
             onTap: () async {
               final next = await context.read<CommunityProvider>().followUser(
