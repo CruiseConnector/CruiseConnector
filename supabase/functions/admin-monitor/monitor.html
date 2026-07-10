@@ -1,0 +1,292 @@
+<!doctype html><html lang="de"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>CruiseConnect · Monitoring</title>
+<style>
+  :root{
+    --bg:#0e1116;--surface:#161b22;--surface2:#1c232c;--line:#242c37;
+    --txt:#e9edf2;--muted:#8b95a3;--dim:#5b6675;
+    --accent:#ff7a1a;--accent-dim:#3a2416;
+    --ok:#3fb950;--ok-dim:#12261a;--bad:#f85149;--bad-dim:#2a1516;--warn:#d29922;
+    --blue:#4d9fff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1160px;margin:0 auto;padding:20px 18px 70px}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:6px 2px 18px}
+  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#ffb066);display:grid;place-items:center;font-size:17px}
+  h1{font-size:17px;font-weight:680;margin:0;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:12.5px}
+  .live{margin-left:auto;display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(63,185,80,.5);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  @media (prefers-reduced-motion){.dot{animation:none}}
+  h2{font-size:12px;font-weight:640;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin:26px 2px 11px;display:flex;align-items:center;gap:8px}
+  h2 .hint{font-weight:500;letter-spacing:0;text-transform:none;color:var(--dim);font-size:11px}
+  .grid{display:grid;gap:11px}
+  .g5{grid-template-columns:repeat(5,1fr)} .g4{grid-template-columns:repeat(4,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media (max-width:900px){.g5{grid-template-columns:repeat(3,1fr)}}
+  @media (max-width:760px){.g5,.g4,.g3{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}}
+  @media (max-width:430px){.g5,.g4,.g3{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:14px 15px}
+  .kpi .label{color:var(--muted);font-size:12px;font-weight:520;margin-bottom:7px}
+  .kpi .val{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.4px}
+  .kpi .val small{font-size:13px;color:var(--muted);font-weight:600;margin-left:3px}
+  .kpi .foot{margin-top:8px;font-size:12px;color:var(--muted)}
+  .up{color:var(--ok)} .down{color:var(--bad)} .accent{color:var(--accent)}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;font-size:12.5px;font-weight:600}
+  .pill.ok{background:var(--ok-dim);color:var(--ok)} .pill.bad{background:var(--bad-dim);color:var(--bad)}
+  .infra-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 3px;border-bottom:1px solid var(--line)}
+  .infra-row:last-child{border-bottom:none}
+  .infra-row .n{font-weight:600} .infra-row .m{color:var(--dim);font-size:12px}
+  .spark{display:flex;align-items:flex-end;gap:4px;height:80px;padding-top:6px}
+  .bar{flex:1;background:var(--accent-dim);border-radius:3px 3px 0 0;position:relative;min-height:2px}
+  .bar>span{position:absolute;inset:0 0 auto 0;background:linear-gradient(180deg,var(--accent),#c85e10);border-radius:3px 3px 0 0}
+  .bar b{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--muted);opacity:0;transition:.15s;white-space:nowrap}
+  .bar:hover b{opacity:1}
+  .axis{display:flex;gap:4px;margin-top:6px}.axis span{flex:1;text-align:center;font-size:9.5px;color:var(--dim)}
+  .legend{display:flex;gap:16px;margin-top:10px;font-size:11.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td{padding:8px 4px;border-bottom:1px solid var(--line)} tr:last-child td{border-bottom:none}
+  td.r{text-align:right;color:var(--muted)}
+  .u{font-weight:600} .rank{color:var(--dim);width:22px}
+  .tag{font-size:11px;color:var(--muted);background:var(--surface2);padding:2px 7px;border-radius:6px}
+  .bl{display:flex;flex-direction:column;gap:9px;margin-top:4px}
+  .blrow{display:flex;align-items:center;gap:10px;font-size:13px}
+  .blk{width:34%;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .blbar{flex:1;height:8px;background:var(--surface2);border-radius:5px;overflow:hidden}
+  .blbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#ffb066);border-radius:5px}
+  .blbar i.b{background:linear-gradient(90deg,var(--blue),#8ec5ff)}
+  .blc{width:52px;text-align:right;color:var(--muted);font-weight:600}
+  .empty{color:var(--dim);font-size:12.5px;padding:8px 2px}
+  .soon{border-style:dashed;opacity:.85}.soon .val{color:var(--dim)}
+  .banner{display:flex;gap:10px;align-items:flex-start;background:var(--accent-dim);border:1px solid #4a3016;border-radius:11px;padding:11px 14px;color:#ffcf9e;font-size:12.5px;margin-bottom:11px}
+  .err{background:var(--bad-dim);border:1px solid #4a1c1a;color:#ff9b95;padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13px;display:none}
+  footer{color:var(--dim);font-size:11.5px;text-align:center;margin-top:34px;line-height:1.6}
+</style></head>
+<body><div class="wrap">
+  <header>
+    <div class="logo">🛣️</div>
+    <div><h1>CruiseConnect · Monitoring</h1><div class="sub">Live · Nutzung · Geografie · Routing · Infrastruktur · Monetarisierung</div></div>
+    <div class="live"><span id="stamp">lädt…</span><span class="dot" id="livedot"></span><span>LIVE</span></div>
+  </header>
+  <div class="err" id="err"></div>
+
+  <h2>Überblick</h2>
+  <div class="grid g5" id="overview"></div>
+
+  <h2>Wachstum <span class="hint">— Fahrten &amp; neue Nutzer, letzte 14 Tage</span></h2>
+  <div class="card"><div class="spark" id="spark"></div><div class="axis" id="axis"></div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>Fahrten/Tag</span><span><i style="background:var(--blue)"></i>neue Nutzer/Tag</span></div></div>
+
+  <h2>Plattform &amp; Sprachen</h2>
+  <div class="grid g3">
+    <div class="card"><div class="kpi"><div class="label">Geräte-Plattform</div></div><div id="platforms" style="margin-top:8px"></div></div>
+    <div class="card"><div class="kpi"><div class="label">App-Sprache</div></div><div id="languages" style="margin-top:6px"></div></div>
+    <div class="card"><div class="kpi"><div class="label">Push-Reichweite</div></div><div id="reach" style="margin-top:6px"></div></div>
+  </div>
+
+  <h2>Wo die Nutzer sind <span class="hint">— anonym aggregiert, keine Einzeldaten</span></h2>
+  <div class="grid g3">
+    <div class="card"><div class="kpi"><div class="label">Länder (Nutzer)</div></div><div id="geo_countries" style="margin-top:6px"></div></div>
+    <div class="card"><div class="kpi"><div class="label">Aktive Regionen (Städte, 30 T.)</div></div><div id="geo_cities" style="margin-top:6px"></div></div>
+    <div class="card"><div class="kpi"><div class="label">Regionen</div></div><div id="geo_regions" style="margin-top:6px"></div></div>
+  </div>
+
+  <h2>Fahrten &amp; Fahrstile</h2>
+  <div class="grid g2">
+    <div class="card"><div class="kpi"><div class="label">Beliebteste Fahrstile</div></div><div id="styles" style="margin-top:6px"></div></div>
+    <div class="grid g2" id="ridestats" style="align-content:start"></div>
+  </div>
+
+  <h2>Garage</h2>
+  <div class="grid g2">
+    <div class="grid g2" id="garagestats" style="align-content:start"></div>
+    <div class="card"><div class="kpi"><div class="label">Top-Marken</div></div><div id="brands" style="margin-top:6px"></div></div>
+  </div>
+
+  <h2>Routing &amp; Infrastruktur</h2>
+  <div class="grid g2">
+    <div class="grid g2" id="routing" style="align-content:start"></div>
+    <div class="card"><div class="kpi"><div class="label">GraphHopper-Server</div></div><div id="infra" style="margin-top:6px"></div></div>
+  </div>
+
+  <h2>Community</h2>
+  <div class="grid g5" id="community"></div>
+
+  <h2>Stabilität &amp; Crashes</h2>
+  <div id="stabilityslot"></div>
+
+  <h2>Downloads</h2>
+  <div id="downloadslot"></div>
+
+  <h2>Werbung &amp; Abo</h2>
+  <div id="monetslot"></div>
+
+  <h2>Aktivität</h2>
+  <div class="grid g2">
+    <div class="card"><div class="kpi"><div class="label">Letzte Fahrten</div></div><table id="recent"></table></div>
+    <div class="card"><div class="kpi"><div class="label">Top-Fahrer (km gesamt)</div></div><table id="topkm"></table></div>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+<script>
+  var API='https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/admin-monitor';
+  var TOKEN=new URLSearchParams(location.search).get('token')||'';
+  function num(n){if(n===null||n===undefined)return '–';return Number(n).toLocaleString('de-DE');}
+  function set(id,h){var el=document.getElementById(id);if(el)el.innerHTML=h;}
+  function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function ago(min){if(min==null)return'';if(min<60)return min+' min';if(min<1440)return Math.round(min/60)+' h';return Math.round(min/1440)+' T';}
+  function kpi(label,val,unit,foot,cls){
+    return '<div class="card kpi'+(cls?' '+cls:'')+'"><div class="label">'+label+'</div><div class="val">'+val+(unit?'<small>'+unit+'</small>':'')+'</div>'+(foot?'<div class="foot">'+foot+'</div>':'')+'</div>';
+  }
+  function barlist(items,opts){
+    opts=opts||{};items=items||[];
+    if(!items.length)return '<div class="empty">Noch keine Daten</div>';
+    var max=1;items.forEach(function(x){if(x.c>max)max=x.c;});
+    return '<div class="bl">'+items.map(function(x){
+      var w=Math.max(3,Math.round(x.c/max*100));
+      return '<div class="blrow"><span class="blk">'+esc(x.k)+'</span><span class="blbar"><i class="'+(opts.blue?'b':'')+'" style="width:'+w+'%"></i></span><span class="blc">'+num(x.c)+'</span></div>';
+    }).join('')+'</div>';
+  }
+  function platformBars(p){
+    p=p||{};var order=['ios','android','web','macos','unknown'];var names={ios:'iOS',android:'Android',web:'Web',macos:'macOS',unknown:'Unbekannt'};
+    var items=order.filter(function(k){return p[k];}).map(function(k){return {k:names[k],c:p[k]};});
+    Object.keys(p).forEach(function(k){if(order.indexOf(k)<0)items.push({k:k,c:p[k]});});
+    return barlist(items,{blue:true});
+  }
+
+  function render(d){
+    var m=d.metrics||{},inf=d.infra||{};
+    var u=m.users||{},a=m.activity||{},r=m.rides||{},ro=m.routing||{},s=m.social||{},mo=m.monetization||{},md=m.moderation||{},
+        dl=m.downloads||{},st=m.stability||{},geo=m.geo||{},ga=m.garage||{};
+
+    set('overview',
+      kpi('Nutzer gesamt',num(u.total),'','<span class="up">+'+num(u.new_7d)+'</span> in 7 T. · '+num(u.onboarded)+' onboarded')+
+      kpi('Downloads', dl.connected?num(dl.total):'–','', dl.connected?(num(dl.d7)+' in 7 T.'):'Store-API nicht angebunden', dl.connected?'':'soon')+
+      kpi('Aktiv (DAU/WAU/MAU)',num(a.dau)+' <small>/</small> '+num(a.wau)+' <small>/</small> '+num(a.mau),'','eindeutige Fahrer')+
+      kpi('Fahrten gesamt',num(r.total),'',num(r.today)+' heute · '+num(r.d7)+' in 7 T.')+
+      kpi('Distanz gesamt',num(r.km_total),'km',num(r.km_7d)+' km 7 T. · ⌀ '+num(r.avg_min)+' min')
+    );
+
+    var t=m.trend_14d||[];var mx=1;t.forEach(function(x){if(x.rides>mx)mx=x.rides;if(x.users>mx)mx=x.users;});
+    set('spark',t.map(function(x){
+      var hr=Math.round(x.rides/mx*100),hu=Math.round(x.users/mx*100);
+      return '<div class="bar" title="'+x.day+'"><span style="height:'+hr+'%"></span><i style="position:absolute;bottom:0;left:50%;width:3px;height:'+hu+'%;background:var(--blue);border-radius:2px"></i><b>'+x.rides+' F · '+x.users+' N</b></div>';
+    }).join(''));
+    set('axis',t.map(function(x,i){return '<span>'+(i%2===0?x.day:'')+'</span>';}).join(''));
+
+    set('platforms',platformBars(m.platforms));
+    set('languages',barlist((m.languages||[]).map(function(x){return {k:x.k==='—'?'(nicht gesetzt)':x.k,c:x.c};})));
+    set('reach',
+      '<div class="val" style="font-size:26px;font-weight:700">'+num(s.tokens_active)+'<small style="font-size:13px;color:var(--muted);font-weight:600"> aktiv</small></div>'+
+      '<div class="foot" style="margin-top:8px">von '+num(s.tokens_total)+' registrierten Geräten</div>');
+
+    set('geo_countries',barlist(geo.countries));
+    set('geo_cities',barlist(geo.cities));
+    set('geo_regions',barlist(geo.regions));
+
+    set('styles',barlist(m.styles));
+    set('ridestats',
+      kpi('Top-Speed max','<span class="accent">'+num(r.top_speed_max)+'</span>','km/h','⌀ '+num(r.top_speed_avg)+' km/h (30 T.)')+
+      kpi('Fahrt-Fotos',num(r.photos),'','geteilte Erinnerungen')
+    );
+
+    set('garagestats',
+      kpi('Fahrzeuge',num(ga.vehicles),'','in den Garagen')+
+      kpi('Marken',num((ga.brands||[]).length),'+','verschiedene')
+    );
+    set('brands',barlist(ga.brands));
+
+    set('routing',
+      kpi('Routen-Pool',num(ro.pool_size),'',num(ro.pool_cities)+' Städte · ⌀ Q '+num(ro.avg_quality))+
+      kpi('Generierungen 24h',num(ro.gen_24h),'',num(ro.gen_7d)+' in 7 Tagen')
+    );
+    function irow(name,label,p){var up=p&&p.up;return '<div class="infra-row"><div><div class="n">'+name+'</div><div class="m">'+label+'</div></div><span class="pill '+(up?'ok':'bad')+'">'+(up?'●':'○')+' '+(up?('OK · '+(p.ms!=null?p.ms+' ms':'')):'OFFLINE')+'</span></div>';}
+    set('infra',irow('PC2 · vucko2','Primär (car + 4 Profile)',inf.pc2)+irow('PC1 · vucko','Fallback (Vollgraph)',inf.pc1));
+
+    set('community',
+      kpi('Posts',num(s.posts_total),'',num(s.posts_24h)+' in 24h')+
+      kpi('Follows',num(s.follows),'','akzeptiert')+
+      kpi('Gruppen',num(s.groups_total),'',num(s.groups_7d)+' neu 7 T.')+
+      kpi('Communities',num(s.communities),'',num(s.comm_msgs_24h)+' Nachr. 24h')+
+      kpi('Moderation',num(md.reports_open),'','Meldungen offen')
+    );
+
+    // Stabilität
+    if(st.connected){
+      set('stabilityslot','<div class="grid g4">'+
+        kpi('Fatale Crashes 24h',num(st.fatal_24h),'',num(st.fatal_7d)+' in 7 T.', st.fatal_24h>0?'':'')+
+        kpi('Fehler 24h',num(st.errors_24h),'','alle Schweregrade')+
+        kpi('Betroffene Nutzer 7 T.',num(st.affected_7d),'','eindeutig')+
+        kpi('Crash-freie Rate','—','','Crashlytics für Details')+
+      '</div>');
+    } else {
+      set('stabilityslot',
+        '<div class="banner">🛡️ <div><b>Crash-Log vorbereitet.</b> Die App kann gefangene Fehler/Crashes in <span class="tag">app_error_log</span> schreiben (leichter Hook) → dann erscheinen hier Live-Zahlen. Vollständige Stacktraces &amp; crash-freie Rate weiterhin in <b>Firebase Crashlytics</b>.</div></div>'+
+        '<div class="grid g4">'+
+        '<div class="card kpi soon"><div class="label">Fatale Crashes 24h</div><div class="val">–</div><div class="foot">app_error_log leer</div></div>'+
+        '<div class="card kpi soon"><div class="label">Fehler 24h</div><div class="val">–</div><div class="foot">App-Hook nötig</div></div>'+
+        '<div class="card kpi soon"><div class="label">Betroffene Nutzer</div><div class="val">–</div></div>'+
+        '<div class="card kpi soon"><div class="label">Crash-freie Rate</div><div class="val">–</div><div class="foot">Firebase Crashlytics</div></div>'+
+        '</div>');
+    }
+
+    // Downloads
+    if(dl.connected){
+      set('downloadslot','<div class="grid g4">'+
+        kpi('Downloads gesamt',num(dl.total),'','')+
+        kpi('Letzte 7 Tage',num(dl.d7),'',num(dl.d30)+' in 30 T.')+
+        kpi('iOS',num(dl.ios),'','App Store')+
+        kpi('Android',num(dl.android),'','Play Store')+
+      '</div>');
+    } else {
+      set('downloadslot',
+        '<div class="banner">📲 <div><b>Download-Zahlen vorbereitet.</b> Tabelle <span class="tag">app_downloads_daily</span> ist da — sobald ein kleiner Cron die <b>App-Store-Connect</b>- &amp; <b>Play-Console</b>-API (oder manuelle Einträge) hineinschreibt, erscheinen hier iOS/Android-Downloads pro Tag.</div></div>'+
+        '<div class="grid g4">'+
+        '<div class="card kpi soon"><div class="label">Downloads gesamt</div><div class="val">–</div><div class="foot">Store-API nötig</div></div>'+
+        '<div class="card kpi soon"><div class="label">Letzte 7 Tage</div><div class="val">–</div></div>'+
+        '<div class="card kpi soon"><div class="label">iOS</div><div class="val">–</div><div class="foot">App Store Connect</div></div>'+
+        '<div class="card kpi soon"><div class="label">Android</div><div class="val">–</div><div class="foot">Play Console</div></div>'+
+        '</div>');
+    }
+
+    // Werbung & Abo
+    if(mo.connected){
+      set('monetslot','<div class="grid g4">'+
+        kpi('MRR',num(mo.mrr_eur),'€','monatl. wiederkehrend')+
+        kpi('Zahlende Abos',num(mo.subs_paying),'','von '+num(mo.subs_total)+' gesamt')+
+        kpi('Ad-Umsatz 7 T.',num(mo.ad_rev_7d),'€',num(mo.ad_impr_7d)+' Impressions · '+num(mo.ad_rev_30d)+'€ 30T')+
+        kpi('ARPU (7 T.)',(u.total?(((Number(mo.ad_rev_7d)+0)/u.total).toFixed(2)):'0'),'€','Umsatz / Nutzer')+
+      '</div>');
+    } else {
+      set('monetslot',
+        '<div class="banner">💡 <div><b>Werbung &amp; Abos vorbereitet, noch nicht angebunden.</b> Sobald AdMob / RevenueCat (o.ä.) in <span class="tag">subscriptions</span> und <span class="tag">ad_revenue_daily</span> schreibt, füllt sich dieses Fenster automatisch: MRR, zahlende Abos, Ad-Umsatz, Impressions, ARPU.</div></div>'+
+        '<div class="grid g4">'+
+        '<div class="card kpi soon"><div class="label">MRR</div><div class="val">– €</div><div class="foot">RevenueCat / Stripe / IAP</div></div>'+
+        '<div class="card kpi soon"><div class="label">Zahlende Abos</div><div class="val">–</div></div>'+
+        '<div class="card kpi soon"><div class="label">Ad-Umsatz 7 T.</div><div class="val">– €</div><div class="foot">AdMob</div></div>'+
+        '<div class="card kpi soon"><div class="label">ARPU</div><div class="val">– €</div></div>'+
+        '</div>');
+    }
+
+    var rec=m.recent||[];
+    set('recent',rec.length?rec.map(function(x){return '<tr><td class="u">'+esc(x.username)+'</td><td><span class="tag">'+esc(x.style)+'</span></td><td class="r">'+x.km+' km</td><td class="r">'+ago(x.ago_min)+'</td></tr>';}).join(''):'<tr><td class="empty">Keine Fahrten</td></tr>');
+    set('topkm',(m.top_km||[]).map(function(x,i){return '<tr><td class="rank">'+(i+1)+'</td><td class="u">'+esc(x.username)+'</td><td class="r">'+num(x.km)+' km</td></tr>';}).join(''));
+
+    document.getElementById('stamp').textContent=new Date(m.generated_at||Date.now()).toLocaleTimeString('de-DE');
+    document.getElementById('foot').innerHTML='Auto-Refresh alle 30 s · Geo-Daten anonym aggregiert (nur Zählungen, keine Einzelstandorte) · CruiseConnect Admin-Monitoring';
+    var e=document.getElementById('err');if(d.error){e.style.display='block';e.textContent='DB-Fehler: '+d.error;}else{e.style.display='none';}
+  }
+
+  function load(){
+    document.getElementById('livedot').style.background='var(--warn)';
+    fetch(API+'?data=1&token='+encodeURIComponent(TOKEN),{cache:'no-store'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+(r.status===401?' — Token ungültig':''));return r.json();})
+      .then(function(d){render(d);document.getElementById('livedot').style.background='var(--ok)';})
+      .catch(function(e){var el=document.getElementById('err');el.style.display='block';el.textContent='Verbindungsfehler: '+e.message;document.getElementById('livedot').style.background='var(--bad)';});
+  }
+  load();setInterval(load,30000);
+</script></body></html>
