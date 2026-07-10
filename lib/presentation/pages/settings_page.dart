@@ -11,6 +11,7 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
@@ -270,7 +271,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted || ok) return;
     TopToast.show(
       context,
-      message: '${document.title} konnte nicht geoeffnet werden.',
+      message: '${document.title} konnte nicht geöffnet werden.',
       icon: Icons.open_in_new_off_rounded,
       isError: true,
       duration: const Duration(seconds: 3),
@@ -412,9 +413,9 @@ class _SettingsPageState extends State<SettingsPage> {
       return 'RPC-Rechte fehlen. Migration bitte nochmal ausführen.';
     }
     if (lower.contains('delete_current_user')) {
-      return 'Account-Loeschfunktion ist noch nicht in Supabase deployed.';
+      return 'Account-Löschfunktion ist noch nicht in Supabase deployed.';
     }
-    return 'Konto konnte nicht geloescht werden. Bitte erneut versuchen.';
+    return 'Konto konnte nicht gelöscht werden. Bitte erneut versuchen.';
   }
 
   @override
@@ -453,6 +454,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile('Passwort ändern', Icons.lock_outline),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Abonnement verwalten',
+                    Icons.workspace_premium_outlined,
+                    subtitle: 'Free · Basic · Premium',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SubscriptionTierPage(),
+                      ),
+                    ),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
@@ -710,7 +722,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     subtitle: Text(
                       _deletingAccount
-                          ? 'Account wird geloescht...'
+                          ? 'Account wird gelöscht...'
                           : 'Profil, Routen, Posts und Medien entfernen',
                       style: const TextStyle(color: Colors.grey, fontSize: 12),
                     ),

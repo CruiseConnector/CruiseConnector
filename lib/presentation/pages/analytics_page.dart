@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
+import 'package:provider/provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
@@ -1468,19 +1471,73 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   }
 
   Widget _buildSelectedTabContent() {
+    // Free-Tier: eigene Fahr-Statistiken (Distanz/Zeit/XP/Routen) gesperrt.
+    // Rangliste + Badges bleiben für alle sichtbar.
+    final canSeeStats = context.watch<SubscriptionProvider>().canSeeDrivingStats;
     switch (_tabController.index) {
       case 0:
-        return _buildOverviewTab();
+        return canSeeStats ? _buildOverviewTab() : _buildStatsLockedCard('Deine Wochen-Statistik');
       case 1:
-        return _buildMonthlyTab();
+        return canSeeStats ? _buildMonthlyTab() : _buildStatsLockedCard('Deine Monats-Statistik');
       case 2:
         return _buildLeaderboardTab();
       case 3:
-        return _buildRoutesTab();
+        return canSeeStats ? _buildRoutesTab() : _buildStatsLockedCard('Deine Routen-Statistik');
       case 4:
       default:
         return _buildBadgesTab();
     }
+  }
+
+  /// Sperr-Karte für Free-Tier (statt der Fahr-Statistiken) — mit Upgrade-CTA.
+  Widget _buildStatsLockedCard(String what) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF202733), Color(0xFF151A23)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
+          const SizedBox(height: 14),
+          Text(
+            '$what ist Basic & Premium',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Rangliste und Badges bleiben für dich frei — deine gefahrenen Kilometer, Fahrzeit und XP schaltest du mit Basic frei.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13.5, height: 1.4),
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
+              ),
+              icon: const Icon(Icons.workspace_premium, size: 20),
+              label: const Text('Jetzt freischalten', style: TextStyle(fontWeight: FontWeight.w700)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppAccentColors.accent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildOverviewTab() {

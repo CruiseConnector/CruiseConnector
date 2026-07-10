@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart'
     show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
@@ -16,10 +17,12 @@ import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/route_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
+import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
@@ -30,6 +33,7 @@ import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
+import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
 
@@ -100,6 +104,28 @@ void main() {
           (defaultTargetPlatform == TargetPlatform.android ||
               defaultTargetPlatform == TargetPlatform.iOS)) {
         await PushNotificationService.instance.ensureFirebaseInitialized();
+
+        // 2026-07-02 (vucko Monitoring): Crashlytics fängt ab hier ZUSÄTZLICH
+        // zu den obigen debugPrint-Handlern jeden Flutter- und Plattform-Fehler
+        // ein und schickt ihn an Firebase (Crashlytics-Dashboard) — Analytics
+        // trackt Nutzerzahlen/Sitzungsdauer automatisch (siehe navigatorObservers
+        // unten) + gezielte Funnel-Events (AnalyticsService).
+        FlutterError.onError = (FlutterErrorDetails details) {
+          FlutterError.presentError(details);
+          FirebaseCrashlytics.instance.recordFlutterFatalError(details);
+          if (kDebugMode) {
+            debugPrint('[GlobalError] ${details.exceptionAsString()}');
+          }
+        };
+        WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+          FirebaseCrashlytics.instance.recordError(
+            error,
+            stack,
+            fatal: true,
+          );
+          debugPrint('[GlobalError/platform] $error');
+          return true;
+        };
       }
 
       runApp(const MyApp());
@@ -188,6 +214,22 @@ class _MyAppState extends State<MyApp> {
       unawaited(launchLegalDocument(legalDocument));
       return;
     }
+    // 2026-07-03 (vucko Gruppen-Share): Gruppen-Deeplink (?group=<id>) öffnet die
+    // Lobby (Beitreten respektiert dort can_join_group). Vor der Post-Prüfung,
+    // da spezifischer Query.
+    final groupId = _groupIdFromDeepLink(uri);
+    if (groupId != null) {
+      await Future.delayed(const Duration(milliseconds: 400));
+      final exists = await SocialService.groupExists(groupId);
+      final nav = rootNavigatorKey.currentState;
+      if (!exists || nav == null) return;
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => GroupLobbyPage(groupId: groupId),
+        ),
+      );
+      return;
+    }
     final postId = _postIdFromDeepLink(uri);
     if (postId != null) {
       await Future.delayed(const Duration(milliseconds: 400));
@@ -212,6 +254,7 @@ class _MyAppState extends State<MyApp> {
             content: (post['content'] ?? '') as String,
             time: '',
             sharedRouteId: post['shared_route_id'] as String?,
+            sharedGroupId: post['shared_group_id'] as String?,
             avatarUrl: profile?['avatar_url'] as String?,
           ),
         ),
@@ -263,7 +306,7 @@ class _MyAppState extends State<MyApp> {
       );
       if (context != null && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Anmeldung bestaetigt. Willkommen!')),
+          const SnackBar(content: Text('Anmeldung bestätigt. Willkommen!')),
         );
       }
       return;
@@ -306,6 +349,36 @@ class _MyAppState extends State<MyApp> {
     return null;
   }
 
+  // 2026-07-03 (vucko Gruppen-Share): Gruppen-ID aus Deeplink, gespiegelt von
+  // _postIdFromDeepLink. Akzeptiert ?group=<id>, /group/<id> und
+  // cruiseconnect://group/<id>.
+  String? _groupIdFromDeepLink(Uri uri) {
+    final queryGroupId =
+        uri.queryParameters['group'] ?? uri.queryParameters['g'];
+    if (queryGroupId != null && queryGroupId.trim().isNotEmpty) {
+      return queryGroupId.trim();
+    }
+
+    final segments = uri.pathSegments;
+    if (segments.length >= 2 && segments[0] == 'group') {
+      return segments[1];
+    }
+
+    if (uri.scheme == 'cruiseconnect' &&
+        uri.host == 'group' &&
+        segments.isNotEmpty) {
+      return segments.first;
+    }
+
+    if (uri.host == CruiseDeepLinks.host &&
+        segments.length >= 2 &&
+        segments[0] == 'group') {
+      return segments[1];
+    }
+
+    return null;
+  }
+
   @override
   void dispose() {
     _linkSub?.cancel();
@@ -322,6 +395,8 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
+        // 2026-07-10 (vucko): Abo-Status (Free/Basic/Premium) + Feature-Gating.
+        ChangeNotifierProvider(create: (_) => SubscriptionProvider()..init()),
         // 2026-05-23 (vucko): Notification-Service als Provider —
         // Realtime-Subscription wird in HomePage initState gestartet.
         ChangeNotifierProvider<NotificationService>.value(
@@ -333,6 +408,11 @@ class _MyAppState extends State<MyApp> {
           final accent = accentProvider.color;
           return MaterialApp(
             navigatorKey: rootNavigatorKey,
+            // Trackt jeden Seitenwechsel automatisch als "screen_view"
+            // (Basis für Sitzungsdauer/Screen-Nutzung in Firebase Analytics).
+            navigatorObservers: kIsWeb
+                ? const []
+                : [AnalyticsService.instance.observer],
             debugShowCheckedModeBanner: false,
             title: 'Cruise Connector',
             theme: ThemeData.dark().copyWith(

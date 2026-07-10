@@ -20,6 +20,7 @@ import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
@@ -261,7 +262,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     if (!mounted || legalAcceptance == null) {
       setState(
         () => _accountErr =
-            'Bitte AGB und Datenschutzerklaerung bestaetigen, um dein Konto zu erstellen.',
+            'Bitte AGB und Datenschutzerklärung bestätigen, um dein Konto zu erstellen.',
       );
       return false;
     }
@@ -470,6 +471,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         reason: 'post_registration',
       );
     }
+    if (!mounted) return;
+    // Nach dem Onboarding: ästhetische Abo-Auswahl (Free/Basic/Premium),
+    // danach in die App. Whatever gewählt wird — es geht immer weiter zu Home.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const SubscriptionTierPage(isOnboarding: true),
+      ),
+    );
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const HomePage()),
