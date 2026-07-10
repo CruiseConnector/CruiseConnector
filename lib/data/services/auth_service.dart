@@ -87,6 +87,37 @@ class AuthService {
     );
   }
 
+  /// Bestätigt die Registrierung per 6-stelligem Code aus der E-Mail und meldet
+  /// den Nutzer damit SOFORT an (Session wird gesetzt) — kein App-Verlassen,
+  /// kein Neu-Login. Das ersetzt den zerbrechlichen Magic-Link-Rückweg im
+  /// Onboarding (Nutzer blieben hängen / mussten sich komplett neu anmelden).
+  static Future<void> verifyEmailCode({
+    required String email,
+    required String token,
+    LegalAcceptanceSnapshot? legalAcceptance,
+  }) async {
+    await _db.auth.verifyOTP(
+      email: email.trim(),
+      token: token.trim(),
+      type: OtpType.signup,
+    );
+    await ensureCurrentUserProfile();
+    // Rechts-Zustimmung erst NACH bestätigter Session persistieren (bei Signup
+    // mit Bestätigungspflicht gibt es beim reinen signUp() noch keine Session).
+    if (legalAcceptance != null && currentUser != null) {
+      try {
+        await LegalAcceptanceService.recordCurrentAcceptance(
+          source: legalAcceptance.legalSource,
+          snapshot: legalAcceptance,
+        );
+        await LegalAcceptanceService.clearPendingPreAuthAcceptance();
+      } catch (e) {
+        debugPrint('[AuthService] Rechts-Zustimmung nicht gespeichert: $e');
+      }
+    }
+    unawaited(AnalyticsService.instance.logSignUp('email'));
+  }
+
   /// Native Google-Anmeldung auf Android/iOS. Auf Web/Desktop fällt es auf
   /// Supabase OAuth mit Redirect zurück.
   static Future<void> signInWithGoogle() async {

@@ -17,6 +17,7 @@ import 'dart:async';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
@@ -39,6 +40,7 @@ enum _UNameState { idle, checking, available, taken, reserved, invalid, error }
 enum _Step {
   welcome,
   account,
+  verifyEmail,
   username,
   displayName,
   region,
@@ -81,6 +83,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   bool _obscureConf = true;
   String? _accountErr;
 
+  // E-Mail-Bestätigung per 6-stelligem Code (In-App, kein Neu-Login)
+  final _codeCtrl = TextEditingController();
+  bool _emailConfirmPending = false;
+  String _pendingEmail = '';
+  LegalAcceptanceSnapshot? _pendingLegal;
+  String? _codeErr;
+  Timer? _resendTimer;
+  int _resendIn = 0;
+
   // Profil-Schritte
   final _usernameCtrl = TextEditingController();
   final _displayCtrl = TextEditingController();
@@ -116,6 +127,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     _steps = <_Step>[
       _Step.welcome,
       if (_needsAccount) _Step.account,
+      if (_needsAccount) _Step.verifyEmail,
       _Step.username,
       _Step.displayName,
       _Step.region,
@@ -136,9 +148,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _resendTimer?.cancel();
     _emailCtrl.dispose();
     _pwCtrl.dispose();
     _confirmCtrl.dispose();
+    _codeCtrl.dispose();
     _usernameCtrl.dispose();
     _displayCtrl.dispose();
     _carBrandCtrl.dispose();
@@ -277,14 +291,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         legalAcceptance: legalAcceptance,
       );
       if (AuthService.currentUser == null) {
-        // E-Mail-Bestätigung nötig (Autoconfirm aus): hier kann der Wizard nicht
-        // live weiterschreiben → ehrlich hinweisen.
-        setState(
-          () => _accountErr =
-              'Bitte bestätige deine E-Mail und melde dich anschließend an.',
-        );
-        return false;
+        // E-Mail-Bestätigung nötig (Autoconfirm aus): NICHT hängen bleiben und
+        // NICHT zum Neu-Login zwingen. Stattdessen in den In-App-Code-Schritt
+        // wechseln — der Nutzer tippt den 6-stelligen Code aus der Mail ein und
+        // ist danach SOFORT angemeldet und macht direkt im Onboarding weiter.
+        _pendingEmail = email;
+        _pendingLegal = legalAcceptance;
+        _emailConfirmPending = true;
+        _codeCtrl.clear();
+        _codeErr = null;
+        _startResendCooldown();
+        return true;
       }
+      // Session sofort da (Bestätigung deaktiviert) → kein Code-Schritt nötig.
+      _emailConfirmPending = false;
       _accountCreated = true;
       return true;
     } on AuthException catch (e) {
@@ -319,6 +339,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     switch (_current) {
       case _Step.account:
         if (!await _createAccount()) return;
+        if (!_emailConfirmPending) {
+          // Bestätigung deaktiviert → Code-Schritt überspringen, direkt zum @-Namen.
+          _goToStep(_Step.username);
+          return;
+        }
+      case _Step.verifyEmail:
+        if (!await _verifyCode()) return;
       case _Step.username:
         if (!_canLeaveUsernamePage) return;
         if (!await _commitUsername()) return;
@@ -355,6 +382,100 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       _forward = forward;
       _page = p;
     });
+  }
+
+  void _goToStep(_Step s) {
+    final idx = _steps.indexOf(s);
+    if (idx >= 0) _goTo(idx, forward: true);
+  }
+
+  // ── E-Mail-Code bestätigen (In-App, sofort angemeldet) ───────────────────
+  Future<bool> _verifyCode() async {
+    final code = _codeCtrl.text.trim();
+    if (code.length < 6) {
+      setState(() => _codeErr = 'Bitte gib den 6-stelligen Code ein.');
+      return false;
+    }
+    setState(() {
+      _busy = true;
+      _codeErr = null;
+    });
+    try {
+      await AuthService.verifyEmailCode(
+        email: _pendingEmail,
+        token: code,
+        legalAcceptance: _pendingLegal,
+      );
+      if (AuthService.currentUser == null) {
+        setState(() => _codeErr = 'Code ungültig oder abgelaufen.');
+        return false;
+      }
+      // Konto ist jetzt bestätigt UND angemeldet → ab hier kein Zurück mehr.
+      _accountCreated = true;
+      _emailConfirmPending = false;
+      _cancelResendTimer();
+      return true;
+    } on AuthException catch (e) {
+      setState(() => _codeErr = _translateOtpError(e.message));
+      return false;
+    } catch (e) {
+      debugPrint('[Onboarding] verifyCode Fehler: $e');
+      setState(
+        () => _codeErr = 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.',
+      );
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _translateOtpError(String msg) {
+    final m = msg.toLowerCase();
+    if (m.contains('expired')) {
+      return 'Der Code ist abgelaufen. Fordere einen neuen an.';
+    }
+    if (m.contains('invalid') || m.contains('incorrect')) {
+      return 'Der Code stimmt nicht. Bitte prüfe die Ziffern.';
+    }
+    return 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.';
+  }
+
+  void _startResendCooldown([int seconds = 45]) {
+    _cancelResendTimer();
+    setState(() => _resendIn = seconds);
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() => _resendIn = _resendIn <= 0 ? 0 : _resendIn - 1);
+      if (_resendIn <= 0) t.cancel();
+    });
+  }
+
+  void _cancelResendTimer() {
+    _resendTimer?.cancel();
+    _resendTimer = null;
+  }
+
+  Future<void> _resendCode() async {
+    if (_resendIn > 0 || _busy || _pendingEmail.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await AuthService.resendVerificationEmail(_pendingEmail);
+      _startResendCooldown();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Neuer Code gesendet. Schau in dein Postfach.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _showError('Konnte gerade keinen neuen Code senden. Bitte kurz warten.');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   // Erste Seite, hinter die man nicht zurück kann. Nach Konto-Erstellung ist das
@@ -702,6 +823,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         return 'Los geht\'s';
       case _Step.account:
         return 'Konto erstellen';
+      case _Step.verifyEmail:
+        return 'Bestätigen';
       case _Step.finish:
         return 'App starten';
       default:
@@ -715,6 +838,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         return _welcomeStep(accent);
       case _Step.account:
         return _accountStep(accent);
+      case _Step.verifyEmail:
+        return _verifyEmailStep(accent);
       case _Step.username:
         return _usernameStep(accent);
       case _Step.displayName:
@@ -948,6 +1073,116 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                   Expanded(
                     child: Text(
                       _accountErr!,
+                      style: const TextStyle(
+                        color: Color(0xFFFFB4B4),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _verifyEmailStep(Color accent) {
+    return _stepShell(
+      accent: accent,
+      icon: Icons.mark_email_read_rounded,
+      title: 'Bestätige deine E-Mail',
+      subtitle:
+          'Wir haben dir einen 6-stelligen Code an $_pendingEmail geschickt. '
+          'Gib ihn hier ein — du bleibst angemeldet und machst direkt weiter.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _fieldLabel('6-stelliger Code'),
+          TextField(
+            controller: _codeCtrl,
+            keyboardType: TextInputType.number,
+            autofocus: true,
+            textAlign: TextAlign.center,
+            maxLength: 6,
+            enableSuggestions: false,
+            autofillHints: const [AutofillHints.oneTimeCode],
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(6),
+            ],
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 14,
+            ),
+            decoration: _fieldDeco(
+              accent,
+              hint: '••••••',
+            ).copyWith(counterText: ''),
+            onChanged: (v) {
+              if (_codeErr != null) setState(() => _codeErr = null);
+              // Auto-Bestätigung, sobald 6 Ziffern da sind — kein Extra-Tap.
+              if (v.trim().length == 6 && !_busy) _next();
+            },
+            onSubmitted: (_) {
+              if (!_busy) _next();
+            },
+          ),
+          const SizedBox(height: 12),
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, color: _muted, size: 16),
+              SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Keine Mail erhalten? Sieh auch im Spam-Ordner nach.',
+                  style: TextStyle(color: _muted, fontSize: 12.5, height: 1.35),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: (_resendIn > 0 || _busy) ? null : _resendCode,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                _resendIn > 0
+                    ? 'Code erneut senden ($_resendIn s)'
+                    : 'Code erneut senden',
+                style: TextStyle(
+                  color: _resendIn > 0 ? _muted : accent,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+          if (_codeErr != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF331316),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _err.withValues(alpha: 0.42)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: _err, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _codeErr!,
                       style: const TextStyle(
                         color: Color(0xFFFFB4B4),
                         fontSize: 13,
