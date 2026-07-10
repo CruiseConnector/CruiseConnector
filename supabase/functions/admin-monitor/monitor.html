@@ -64,6 +64,14 @@
   .banner{display:flex;gap:10px;align-items:flex-start;background:var(--accent-dim);border:1px solid #4a3016;border-radius:11px;padding:11px 14px;color:#ffcf9e;font-size:12.5px;margin-bottom:11px}
   .err{background:var(--bad-dim);border:1px solid #4a1c1a;color:#ff9b95;padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13px;display:none}
   footer{color:var(--dim);font-size:11.5px;text-align:center;margin-top:34px;line-height:1.6}
+  /* Hover/Klick-Historie (12-Wochen-Kurve) */
+  .card[data-hk]{cursor:pointer;position:relative}
+  .card[data-hk]:hover{border-color:rgba(255,122,26,.45)}
+  .card[data-hk]::after{content:'⌄';position:absolute;top:10px;right:12px;color:var(--dim);font-size:12px}
+  #histpop{position:absolute;z-index:50;display:none;width:min(340px,88vw);background:#10151c;border:1px solid rgba(255,122,26,.4);border-radius:14px;padding:14px 15px 12px;box-shadow:0 14px 40px rgba(0,0,0,.55)}
+  #histpop .t{font-size:12.5px;font-weight:700;color:var(--txt);margin-bottom:2px}
+  #histpop .s{font-size:11px;color:var(--muted);margin-bottom:8px}
+  #histpop .mm{display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim);margin-top:5px}
 </style></head>
 <body><div class="wrap">
   <header>
@@ -132,16 +140,82 @@
 
   <footer id="foot"></footer>
 </div>
+<div id="histpop"></div>
 <script>
   var API='https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/admin-monitor';
   var TOKEN=new URLSearchParams(location.search).get('token')||'';
+  var HIST=null; // 12-Wochen-Serien vom Server
   function num(n){if(n===null||n===undefined)return '–';return Number(n).toLocaleString('de-DE');}
   function set(id,h){var el=document.getElementById(id);if(el)el.innerHTML=h;}
   function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
   function ago(min){if(min==null)return'';if(min<60)return min+' min';if(min<1440)return Math.round(min/60)+' h';return Math.round(min/1440)+' T';}
-  function kpi(label,val,unit,foot,cls){
-    return '<div class="card kpi'+(cls?' '+cls:'')+'"><div class="label">'+label+'</div><div class="val">'+val+(unit?'<small>'+unit+'</small>':'')+'</div>'+(foot?'<div class="foot">'+foot+'</div>':'')+'</div>';
+  // hk = Serien-Key: Karte zeigt bei Hover/Klick die 12-Wochen-Kurve
+  function kpi(label,val,unit,foot,cls,hk){
+    return '<div class="card kpi'+(cls?' '+cls:'')+'"'+(hk?' data-hk="'+hk+'" data-hl="'+esc(label)+'"':'')+'><div class="label">'+label+'</div><div class="val">'+val+(unit?'<small>'+unit+'</small>':'')+'</div>'+(foot?'<div class="foot">'+foot+'</div>':'')+'</div>';
   }
+
+  // ── Historien-Popover: SVG-Kurve über die letzten 12 Wochen ───────────────
+  var pop=null;
+  function curveSvg(vals){
+    var W=310,H=96,P=8;
+    var max=Math.max.apply(null,vals.concat([1])), min=Math.min.apply(null,vals.concat([0]));
+    var span=(max-min)||1;
+    var pts=vals.map(function(v,i){
+      var x=P+i*(W-2*P)/Math.max(vals.length-1,1);
+      var y=H-P-(v-min)/span*(H-2*P);
+      return [x,y];
+    });
+    var line=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
+    var area=line+' L'+pts[pts.length-1][0].toFixed(1)+' '+(H-2)+' L'+pts[0][0].toFixed(1)+' '+(H-2)+' Z';
+    var last=pts[pts.length-1];
+    return '<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="display:block">'+
+      '<path d="'+area+'" fill="rgba(255,122,26,.14)"/>'+
+      '<path d="'+line+'" fill="none" stroke="#ff7a1a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'+
+      '<circle cx="'+last[0]+'" cy="'+last[1]+'" r="3.4" fill="#ff7a1a"/></svg>';
+  }
+  function showHist(card){
+    if(!HIST||!pop) return;
+    var key=card.getAttribute('data-hk');
+    var vals=HIST[key];
+    if(!vals||!vals.length){ pop.style.display='none'; return; }
+    vals=vals.map(Number);
+    var labels=HIST.labels||[];
+    var max=Math.max.apply(null,vals), min=Math.min.apply(null,vals);
+    pop.innerHTML='<div class="t">'+esc(card.getAttribute('data-hl'))+' — letzte 12 Wochen</div>'+
+      '<div class="s">aktuell: <b style="color:#ff7a1a">'+num(vals[vals.length-1])+'</b> · min '+num(min)+' · max '+num(max)+'</div>'+
+      curveSvg(vals)+
+      '<div class="mm"><span>'+esc(labels[0]||'')+'</span><span>wöchentlich</span><span>'+esc(labels[labels.length-1]||'')+'</span></div>';
+    pop.setAttribute('data-for',key);
+    var r=card.getBoundingClientRect();
+    pop.style.display='block';
+    var pw=pop.offsetWidth, ph=pop.offsetHeight;
+    var left=Math.max(8,Math.min(window.scrollX+r.left, window.scrollX+document.documentElement.clientWidth-pw-8));
+    var top=window.scrollY+r.bottom+8;
+    if(r.bottom+ph+16>window.innerHeight) top=window.scrollY+r.top-ph-8;
+    pop.style.left=left+'px'; pop.style.top=Math.max(8,top)+'px';
+  }
+  function initHistEvents(){
+    pop=document.getElementById('histpop');
+    var hoverable=window.matchMedia('(hover: hover)').matches;
+    if(hoverable){
+      document.addEventListener('mouseover',function(e){
+        var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
+        if(c) showHist(c);
+      });
+      document.addEventListener('mouseout',function(e){
+        var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
+        if(c && !(e.relatedTarget && (c.contains(e.relatedTarget)||pop.contains(e.relatedTarget)))) pop.style.display='none';
+      });
+    }
+    document.addEventListener('click',function(e){
+      var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
+      if(c){
+        if(pop.style.display==='block' && pop.getAttribute('data-for')===c.getAttribute('data-hk')){pop.style.display='none';}
+        else showHist(c);
+      } else if(!pop.contains(e.target)) pop.style.display='none';
+    });
+  }
+  initHistEvents();
   function barlist(items,opts){
     opts=opts||{};items=items||[];
     if(!items.length)return '<div class="empty">Noch keine Daten</div>';
@@ -160,15 +234,16 @@
 
   function render(d){
     var m=d.metrics||{},inf=d.infra||{};
+    HIST=d.history||HIST;
     var u=m.users||{},a=m.activity||{},r=m.rides||{},ro=m.routing||{},s=m.social||{},mo=m.monetization||{},md=m.moderation||{},
         dl=m.downloads||{},st=m.stability||{},geo=m.geo||{},ga=m.garage||{};
 
     set('overview',
-      kpi('Nutzer gesamt',num(u.total),'','<span class="up">+'+num(u.new_7d)+'</span> in 7 T. · '+num(u.onboarded)+' onboarded')+
+      kpi('Nutzer gesamt',num(u.total),'','<span class="up">+'+num(u.new_7d)+'</span> in 7 T. · '+num(u.onboarded)+' onboarded','','users_total')+
       kpi('Downloads', dl.connected?num(dl.total):'–','', dl.connected?(num(dl.d7)+' in 7 T.'):'Store-API nicht angebunden', dl.connected?'':'soon')+
-      kpi('Aktiv (DAU/WAU/MAU)',num(a.dau)+' <small>/</small> '+num(a.wau)+' <small>/</small> '+num(a.mau),'','eindeutige Fahrer')+
-      kpi('Fahrten gesamt',num(r.total),'',num(r.today)+' heute · '+num(r.d7)+' in 7 T.')+
-      kpi('Distanz gesamt',num(r.km_total),'km',num(r.km_7d)+' km 7 T. · ⌀ '+num(r.avg_min)+' min')
+      kpi('Aktiv (DAU/WAU/MAU)',num(a.dau)+' <small>/</small> '+num(a.wau)+' <small>/</small> '+num(a.mau),'','eindeutige Fahrer','','active')+
+      kpi('Fahrten gesamt',num(r.total),'',num(r.today)+' heute · '+num(r.d7)+' in 7 T.','','rides')+
+      kpi('Distanz gesamt',num(r.km_total),'km',num(r.km_7d)+' km 7 T. · ⌀ '+num(r.avg_min)+' min','','km')
     );
 
     var t=m.trend_14d||[];var mx=1;t.forEach(function(x){if(x.rides>mx)mx=x.rides;if(x.users>mx)mx=x.users;});
@@ -190,27 +265,27 @@
 
     set('styles',barlist(m.styles));
     set('ridestats',
-      kpi('Top-Speed max','<span class="accent">'+num(r.top_speed_max)+'</span>','km/h','⌀ '+num(r.top_speed_avg)+' km/h (30 T.)')+
+      kpi('Top-Speed max','<span class="accent">'+num(r.top_speed_max)+'</span>','km/h','⌀ '+num(r.top_speed_avg)+' km/h (30 T.)','','top_speed')+
       kpi('Fahrt-Fotos',num(r.photos),'','geteilte Erinnerungen')
     );
 
     set('garagestats',
-      kpi('Fahrzeuge',num(ga.vehicles),'','in den Garagen')+
+      kpi('Fahrzeuge',num(ga.vehicles),'','in den Garagen','','vehicles')+
       kpi('Marken',num((ga.brands||[]).length),'+','verschiedene')
     );
     set('brands',barlist(ga.brands));
 
     set('routing',
-      kpi('Routen-Pool',num(ro.pool_size),'',num(ro.pool_cities)+' Städte · ⌀ Q '+num(ro.avg_quality))+
-      kpi('Generierungen 24h',num(ro.gen_24h),'',num(ro.gen_7d)+' in 7 Tagen')
+      kpi('Routen-Pool',num(ro.pool_size),'',num(ro.pool_cities)+' Städte · ⌀ Q '+num(ro.avg_quality),'','pool')+
+      kpi('Generierungen 24h',num(ro.gen_24h),'',num(ro.gen_7d)+' in 7 Tagen','','generations')
     );
     function irow(name,label,p){var up=p&&p.up;return '<div class="infra-row"><div><div class="n">'+name+'</div><div class="m">'+label+'</div></div><span class="pill '+(up?'ok':'bad')+'">'+(up?'●':'○')+' '+(up?('OK · '+(p.ms!=null?p.ms+' ms':'')):'OFFLINE')+'</span></div>';}
     set('infra',irow('PC2 · vucko2','Primär (car + 4 Profile)',inf.pc2)+irow('PC1 · vucko','Fallback (Vollgraph)',inf.pc1));
 
     set('community',
-      kpi('Posts',num(s.posts_total),'',num(s.posts_24h)+' in 24h')+
-      kpi('Follows',num(s.follows),'','akzeptiert')+
-      kpi('Gruppen',num(s.groups_total),'',num(s.groups_7d)+' neu 7 T.')+
+      kpi('Posts',num(s.posts_total),'',num(s.posts_24h)+' in 24h','','posts')+
+      kpi('Follows',num(s.follows),'','akzeptiert','','follows')+
+      kpi('Gruppen',num(s.groups_total),'',num(s.groups_7d)+' neu 7 T.','','groups_new')+
       kpi('Communities',num(s.communities),'',num(s.comm_msgs_24h)+' Nachr. 24h')+
       kpi('Moderation',num(md.reports_open),'','Meldungen offen')
     );
@@ -257,8 +332,8 @@
     if(mo.connected){
       set('monetslot','<div class="grid g4">'+
         kpi('MRR',num(mo.mrr_eur),'€','monatl. wiederkehrend')+
-        kpi('Zahlende Abos',num(mo.subs_paying),'','von '+num(mo.subs_total)+' gesamt')+
-        kpi('Ad-Umsatz 7 T.',num(mo.ad_rev_7d),'€',num(mo.ad_impr_7d)+' Impressions · '+num(mo.ad_rev_30d)+'€ 30T')+
+        kpi('Zahlende Abos',num(mo.subs_paying),'','von '+num(mo.subs_total)+' gesamt','','subs_paying')+
+        kpi('Ad-Umsatz 7 T.',num(mo.ad_rev_7d),'€',num(mo.ad_impr_7d)+' Impressions · '+num(mo.ad_rev_30d)+'€ 30T','','ad_rev')+
         kpi('ARPU (7 T.)',(u.total?(((Number(mo.ad_rev_7d)+0)/u.total).toFixed(2)):'0'),'€','Umsatz / Nutzer')+
       '</div>');
     } else {

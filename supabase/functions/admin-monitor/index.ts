@@ -43,13 +43,19 @@ Deno.serve(async (req) => {
 
   if (url.searchParams.get('data') === '1') {
     const supa = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
-    const [{ data, error }, pc2, pc1] = await Promise.all([
+    const [{ data, error }, hist, pc2, pc1] = await Promise.all([
       supa.rpc('admin_monitor_metrics'),
+      supa.rpc('admin_monitor_history'),
       ping(PC2_HEALTH),
       ping(PC1_HEALTH),
     ]);
     return new Response(
-      JSON.stringify({ metrics: error ? null : data, error: error?.message ?? null, infra: { pc2, pc1 } }),
+      JSON.stringify({
+        metrics: error ? null : data,
+        history: hist.error ? null : hist.data,
+        error: error?.message ?? null,
+        infra: { pc2, pc1 },
+      }),
       { headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } },
     );
   }
