@@ -65,6 +65,19 @@ class AuthService {
         if (legalAcceptance != null) ...legalAcceptance.toAuthMetadata(),
       },
     );
+    // 2026-07-10 (vucko): E-Mail existiert bereits (bestätigtes Konto) →
+    // GoTrue wirft aus Anti-Enumeration-Gründen KEINEN Fehler, sondern liefert
+    // einen obfuskierten User OHNE identities und verschickt KEINE Mail.
+    // Ohne diesen Check sprang der Wizard in den Code-Schritt („wir haben dir
+    // einen Code geschickt"), obwohl nie eine Mail rausging.
+    final signedUpUser = response.user;
+    if (response.session == null &&
+        signedUpUser != null &&
+        (signedUpUser.identities?.isEmpty ?? true)) {
+      throw const AuthException(
+        'Diese E-Mail ist bereits registriert. Melde dich stattdessen an.',
+      );
+    }
     if (response.session != null) {
       await ensureCurrentUserProfile();
       if (legalAcceptance != null) {

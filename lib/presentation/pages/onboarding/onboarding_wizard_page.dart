@@ -330,8 +330,12 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
 
   String _translateAuthError(String msg) {
     final m = msg.toLowerCase();
+    if (m.contains('bereits registriert')) return msg;
     if (m.contains('already registered') || m.contains('already exists')) {
-      return 'Diese E-Mail ist bereits registriert.';
+      return 'Diese E-Mail ist bereits registriert. Melde dich stattdessen an.';
+    }
+    if (m.contains('rate limit') || m.contains('security purposes')) {
+      return 'Zu viele Versuche in kurzer Zeit. Bitte warte ein paar Minuten.';
     }
     if (m.contains('password should be')) {
       return 'Passwort zu schwach. Mindestens 6 Zeichen.';
@@ -474,6 +478,24 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Neuer Code gesendet. Schau in dein Postfach.')),
         );
+      }
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      final m = e.message.toLowerCase();
+      final rateLimited =
+          e.statusCode == '429' ||
+          m.contains('rate limit') ||
+          m.contains('security purposes');
+      if (rateLimited) {
+        // E-Mail-Versandlimit erreicht → ehrlich sagen + längeren Cooldown,
+        // damit nicht weiter dagegen getippt wird.
+        _showError(
+          'Zu viele E-Mails in kurzer Zeit. Bitte warte ein paar Minuten und '
+          'versuche es dann erneut.',
+        );
+        _startResendCooldown(180);
+      } else {
+        _showError('Konnte keinen neuen Code senden. Bitte kurz warten.');
       }
     } catch (_) {
       if (mounted) {
@@ -1152,26 +1174,45 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             ],
           ),
           const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: (_resendIn > 0 || _busy) ? null : _resendCode,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                _resendIn > 0
-                    ? 'Code erneut senden ($_resendIn s)'
-                    : 'Code erneut senden',
-                style: TextStyle(
-                  color: _resendIn > 0 ? _muted : accent,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
+          Row(
+            children: [
+              TextButton(
+                onPressed: (_resendIn > 0 || _busy) ? null : _resendCode,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  _resendIn > 0
+                      ? 'Code erneut senden ($_resendIn s)'
+                      : 'Code erneut senden',
+                  style: TextStyle(
+                    color: _resendIn > 0 ? _muted : accent,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
                 ),
               ),
-            ),
+              const Spacer(),
+              // Tippfehler in der Adresse? Direkt zurück zum Account-Schritt.
+              TextButton(
+                onPressed: _busy ? null : _handleBack,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'E-Mail-Adresse ändern',
+                  style: TextStyle(
+                    color: _muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
           ),
           if (_codeErr != null) ...[
             const SizedBox(height: 8),
