@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
+import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
@@ -105,7 +106,12 @@ class _LoginPageState extends State<LoginPage> {
     required ValueChanged<bool> setLoading,
     required Future<void> Function() action,
   }) async {
-    final accepted = await LegalAcceptancePage.requestPreAuth(
+    // 2026-07-10 (vucko): Bereits bestätigte Rechtstexte (Pre-Auth-Pending,
+    // z. B. vom abgebrochenen ersten Versuch oder aus dem Wizard) nicht
+    // ERNEUT abfragen — sonst kommt das AGB-Fenster zweimal.
+    var accepted = await LegalAcceptanceService.pendingPreAuthAcceptance();
+    if (!mounted) return;
+    accepted ??= await LegalAcceptancePage.requestPreAuth(
       context,
       source: 'app_onboarding',
     );

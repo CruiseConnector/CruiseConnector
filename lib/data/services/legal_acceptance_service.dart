@@ -98,6 +98,70 @@ class LegalAcceptanceService {
   static const _pendingKey = 'pending_legal_acceptance_v1';
   static SupabaseClient get _db => Supabase.instance.client;
 
+  // ── Prozessweiter Dedup-Guard („AGB-Fenster kam zweimal") ────────────────
+  // 2026-07-10 (vucko): Beim Login entstehen mehrere LegalGatePage-Instanzen
+  // fast gleichzeitig (AuthPage-StreamBuilder rebuildet bei signedIn UND
+  // login/welcome/main pushen ihr eigenes Gate). Beide prüften PARALLEL:
+  // Instanz A recordete das Pending in die DB und löschte es, Instanz B sah
+  // weder DB-Row (Insert noch nicht sichtbar) noch Pending (schon gelöscht)
+  // → zeigte das Fenster ERNEUT. Ein geteiltes Future + In-Memory-Marker
+  // machen den Check prozessweit deterministisch: alle Gates teilen sich
+  // EIN Ergebnis. Der Key enthält die User-ID + Versionen → invalidiert
+  // sich bei Logout/User-Wechsel/Versions-Bump von selbst.
+  static Future<bool>? _ensureFuture;
+  static String? _ensureKey;
+
+  static String get _acceptanceKey =>
+      '${_db.auth.currentUser?.id}'
+      '|${LegalDocuments.termsVersion}'
+      '|${LegalDocuments.privacyVersion}';
+
+  static void _markAcceptedInMemory() {
+    _ensureKey = _acceptanceKey;
+    _ensureFuture = Future<bool>.value(true);
+  }
+
+  /// Einziger Einstieg für Post-Login-Gates: true = aktuell akzeptiert
+  /// (direkt oder via Pre-Auth-Pending, das dabei in die DB übernommen wird),
+  /// false = Fenster nötig. Parallele Aufrufer teilen sich dasselbe Future.
+  static Future<bool> ensureAcceptedOrPending({required String source}) {
+    final key = _acceptanceKey;
+    final existing = _ensureFuture;
+    if (existing != null && _ensureKey == key) return existing;
+    _ensureKey = key;
+    late final Future<bool> future;
+    future = () async {
+      try {
+        final ok = await _ensureUncached(source: source);
+        // false/Fehler nicht cachen — nach Accept im Fenster oder Retry
+        // muss frisch geprüft werden. true bleibt gecacht.
+        if (!ok && identical(_ensureFuture, future)) _ensureFuture = null;
+        return ok;
+      } catch (_) {
+        if (identical(_ensureFuture, future)) _ensureFuture = null;
+        rethrow;
+      }
+    }();
+    _ensureFuture = future;
+    return future;
+  }
+
+  static Future<bool> _ensureUncached({required String source}) async {
+    if (await hasCurrentAcceptance()) {
+      await clearPendingPreAuthAcceptance();
+      return true;
+    }
+    final pending = await pendingPreAuthAcceptance();
+    if (pending != null) {
+      // Wirft bei DB-Fehler → Gate zeigt den Fehler-Screen mit „Erneut
+      // versuchen" statt das bereits bestätigte Fenster ein zweites Mal.
+      await recordCurrentAcceptance(source: source, snapshot: pending);
+      await clearPendingPreAuthAcceptance();
+      return true;
+    }
+    return false;
+  }
+
   static String get platformLabel {
     if (kIsWeb) return 'web';
     return switch (defaultTargetPlatform) {
@@ -123,6 +187,7 @@ class LegalAcceptanceService {
         .limit(1)
         .maybeSingle();
 
+    if (row != null) _markAcceptedInMemory();
     return row != null;
   }
 
@@ -144,6 +209,7 @@ class LegalAcceptanceService {
     await _db
         .from('legal_acceptances')
         .insert(acceptance.toInsertPayload(user));
+    _markAcceptedInMemory();
   }
 
   static Future<void> savePendingPreAuthAcceptance(

@@ -27,27 +27,16 @@ class _LegalGatePageState extends State<LegalGatePage> {
     _acceptedFuture = _loadAcceptanceState();
   }
 
-  Future<bool> _loadAcceptanceState() async {
-    if (await LegalAcceptanceService.hasCurrentAcceptance()) {
-      await LegalAcceptanceService.clearPendingPreAuthAcceptance();
-      return true;
-    }
-
-    final pending = await LegalAcceptanceService.pendingPreAuthAcceptance();
-    if (pending != null) {
-      try {
-        await LegalAcceptanceService.recordCurrentAcceptance(
-          source: widget.source,
-          snapshot: pending,
-        );
-        await LegalAcceptanceService.clearPendingPreAuthAcceptance();
-        return true;
-      } catch (e) {
-        debugPrint('[LegalGate] Pending Acceptance konnte nicht speichern: $e');
-      }
-    }
-
-    return false;
+  Future<bool> _loadAcceptanceState() {
+    // 2026-07-10 (vucko „AGB-Fenster kam zweimal"): Der Check läuft jetzt
+    // zentral + prozessweit dedupliziert im Service. Mehrere gleichzeitig
+    // entstehende Gates (AuthPage-StreamBuilder + pushAndRemoveUntil aus
+    // login/welcome/main) teilen sich EIN Ergebnis, statt sich gegenseitig
+    // das Pre-Auth-Pending wegzuräumen und das Fenster erneut zu zeigen.
+    // DB-Fehler landen im Fehler-Screen mit Retry statt im Doppel-Fenster.
+    return LegalAcceptanceService.ensureAcceptedOrPending(
+      source: widget.source,
+    );
   }
 
   void _markAccepted() {

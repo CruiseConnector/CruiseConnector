@@ -268,7 +268,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       setState(() => _accountErr = 'Passwörter stimmen nicht überein.');
       return false;
     }
-    final legalAcceptance = await LegalAcceptancePage.requestPreAuth(
+    // 2026-07-10 (vucko): Schon bestätigte Rechtstexte (Pre-Auth-Pending, z. B.
+    // vom vorherigen Versuch „E-Mail bereits registriert") nicht ERNEUT
+    // abfragen — sonst kommt das AGB-Fenster zweimal.
+    var legalAcceptance =
+        await LegalAcceptanceService.pendingPreAuthAcceptance();
+    if (!mounted) return false;
+    legalAcceptance ??= await LegalAcceptancePage.requestPreAuth(
       context,
       source: 'app_onboarding',
     );
