@@ -768,7 +768,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // line-gradient-Textur auf langen Routen entstand). Der abgefahrene Teil ist
       // der graue Hintergrund (Gesamt-Route) aus _buildMapLibreLines.
       // 2026-06-10 (vucko 3km-Sichtdesign, FINAL): line-gradient ist auf iOS
-      // ueber setLayerProperties IMMER kaputt (Layer wird unsichtbar — egal
+      // über setLayerProperties IMMER kaputt (Layer wird unsichtbar — egal
       // welches Format; darum wurde es am 06-08 nach Stunden durch
       // Geometrie-Slice ersetzt). Deshalb GEOMETRIE-Design ohne jeden
       // Gradient-Update: Diese beiden Layer zeigen NUR das helle 3-km-Fenster
@@ -1281,7 +1281,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       return;
     }
     // 2026-06-10 (vucko Design-Wechsel v2): Der Trail ist jetzt der
-    // "VERSCHWINDE"-Layer — Map-Hintergrundfarbe statt grau. Er uebermalt die
+    // "VERSCHWINDE"-Layer — Map-Hintergrundfarbe statt grau. Er übermalt die
     // dezente Voll-Route hinter dem Puck, sodass Abgefahrenes optisch
     // verschwindet (Wunsch: hinten keine nachgezogene Linie).
     final pts = widget.drivenTrailPoints;

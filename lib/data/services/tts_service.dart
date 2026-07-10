@@ -18,6 +18,18 @@ class TtsService {
   String? _lastSpoken;
   DateTime? _lastSpokenAt;
 
+  // 2026-07-02 (vucko Geräte-Video Voice-Chaos): iOS-AVSpeech QUEUED jede
+  // Ansage (nie unterbrechen) → beim Fahrt-Start stauten sich ~5 Sätze und
+  // spielten nacheinander ab; eine gequeue-te Alt-Ansage („rechts abbiegen")
+  // lief noch, als das Banner längst den Kreisverkehr zeigte. Deshalb: jede
+  // Manöver-Ansage trägt einen Tag (= Manöver-Index). Wechselt der Tag, wird
+  // die alte Ansage HART gestoppt — die neueste Information gewinnt immer
+  // (Google/Apple-Verhalten). Zusätzlich unterdrückt navSuppressed alle
+  // Navigations-Ansagen, solange das Lautstärke-Sheet offen ist (dessen
+  // Test-Stimme kollidierte sonst mit echten Ansagen).
+  Object? _lastNavTag;
+  bool navSuppressed = false;
+
   Future<void> _initIfNeeded() async {
     if (_initialized) return;
     final runningInit = _initFuture;
@@ -118,22 +130,52 @@ class TtsService {
   /// Interrupts (Reroute, Ziel erreicht). Für normale Manöver-Ansagen `false`
   /// (Default) → aufeinanderfolgende Ansagen queuen/laufen aus, statt sich
   /// gegenseitig mitten im Satz abzuwürgen (das war das hörbare „Abhacken").
-  Future<void> speakImportant(String text, {bool interrupt = false}) async {
+  Future<void> speakImportant(
+    String text, {
+    bool interrupt = false,
+    Object? navTag,
+  }) async {
     if (!_shouldSpeak(isImportant: true)) return;
+    if (navTag != null && navSuppressed) return;
     if (_isDuplicate(text)) return;
-    final epoch = interrupt ? ++_speechEpoch : _speechEpoch;
+    // Manöver-Wechsel: eine noch laufende/gequeue-te Ansage des ALTEN Manövers
+    // darf nie zu Ende spielen — sie wäre inhaltlich falsch.
+    final staleNav =
+        navTag != null && _lastNavTag != null && navTag != _lastNavTag;
+    final needsStop = interrupt || staleNav;
+    final epoch = needsStop ? ++_speechEpoch : _speechEpoch;
+    if (navTag != null) _lastNavTag = navTag;
     await _initIfNeeded();
     if (epoch != _speechEpoch) return;
     try {
-      if (interrupt) {
+      if (needsStop) {
         await _tts.stop();
       }
       _lastSpoken = text;
       _lastSpokenAt = DateTime.now();
+      if (kDebugMode) {
+        debugPrint(
+          '[TtsService] speak tag=$navTag stop=$needsStop text="$text"',
+        );
+      }
       await _tts.speak(text);
     } catch (e) {
       debugPrint('[TtsService] speak failed: $e');
     }
+  }
+
+  /// Stoppt eine laufende/gequeue-te Manöver-Ansage, wenn sie zu einem
+  /// ANDEREN Manöver gehört als [currentTag] (Aufruf beim Manöver-Advance).
+  Future<void> stopIfStaleFor(Object currentTag) async {
+    if (_lastNavTag == null || _lastNavTag == currentTag) return;
+    _lastNavTag = currentTag;
+    await stop();
+  }
+
+  /// Beim Fahrt-Start/Reroute: Tag-Gedächtnis leeren, damit die erste Ansage
+  /// der neuen Manöverliste nicht als „stale" gestoppt wird.
+  void resetNavTag() {
+    _lastNavTag = null;
   }
 
   /// Optionale Ansagen (Status, Speed, etc.) — nur im "all" Modus.

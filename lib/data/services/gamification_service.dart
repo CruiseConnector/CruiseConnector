@@ -859,7 +859,7 @@ class GamificationService {
           .limit(2);
       return (rows as List).length;
     } catch (e) {
-      debugPrint('[Gamification] Gruppen-Zaehler fehlgeschlagen: $e');
+      debugPrint('[Gamification] Gruppen-Zähler fehlgeschlagen: $e');
       return 0;
     }
   }
@@ -875,7 +875,7 @@ class GamificationService {
           .where((row) => row['shared_route_id'] != null)
           .length;
     } catch (e) {
-      debugPrint('[Gamification] Routenpost-Zaehler fehlgeschlagen: $e');
+      debugPrint('[Gamification] Routenpost-Zähler fehlgeschlagen: $e');
       return 0;
     }
   }
@@ -899,7 +899,7 @@ class GamificationService {
       }
     } catch (e) {
       debugPrint(
-        '[Gamification] Gespeicherte Routen-Zaehler fehlgeschlagen: $e',
+        '[Gamification] Gespeicherte Routen-Zähler fehlgeschlagen: $e',
       );
     }
 
@@ -915,7 +915,7 @@ class GamificationService {
         }
       }
     } catch (e) {
-      debugPrint('[Gamification] Routen-Speicher-Zaehler fehlgeschlagen: $e');
+      debugPrint('[Gamification] Routen-Speicher-Zähler fehlgeschlagen: $e');
     }
 
     return routeIds.length;

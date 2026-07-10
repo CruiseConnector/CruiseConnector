@@ -32,7 +32,7 @@ class LegalDocuments {
   );
 
   static const privacy = LegalDocument(
-    title: 'Datenschutzerklaerung',
+    title: 'Datenschutzerklärung',
     url: '$baseUrl/privacy',
     deepLinkPath: '/privacy',
   );

@@ -18,8 +18,10 @@ Future<bool> showNotificationPermissionNoticeSheet(
   final accepted = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
-    isDismissible: true,
-    enableDrag: true,
+    // Apple 5.1.1(iv): Kein Ausweg vor der System-Permission-Anfrage — der
+    // Nutzer muss nach dieser Erklärung immer bei der echten Anfrage landen.
+    isDismissible: false,
+    enableDrag: false,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.70),
@@ -162,68 +164,29 @@ class _NotificationPermissionNoticeSheetState
                               ),
                             ),
                             const SizedBox(height: 14),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 52,
-                                    child: OutlinedButton(
-                                      onPressed: _busy
-                                          ? null
-                                          : () => _close(false),
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: Colors.white,
-                                        side: BorderSide(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.18,
-                                          ),
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                        ),
-                                      ),
-                                      child: const Text(
-                                        'Später',
+                            SizedBox(
+                              width: double.infinity,
+                              height: 52,
+                              child: FilledButton(
+                                onPressed: _busy ? null : () => _close(true),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: accent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                child: _busy
+                                    ? const CupertinoActivityIndicator(
+                                        color: Colors.white,
+                                      )
+                                    : const Text(
+                                        'Weiter',
                                         style: TextStyle(
-                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w900,
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: SizedBox(
-                                    height: 52,
-                                    child: FilledButton(
-                                      onPressed: _busy
-                                          ? null
-                                          : () => _close(true),
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: accent,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                        ),
-                                      ),
-                                      child: _busy
-                                          ? const CupertinoActivityIndicator(
-                                              color: Colors.white,
-                                            )
-                                          : const Text(
-                                              'Annehmen',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.w900,
-                                              ),
-                                            ),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ],
                         ),

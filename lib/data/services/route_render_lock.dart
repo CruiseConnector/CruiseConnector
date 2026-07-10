@@ -79,7 +79,7 @@ class RouteRenderLock {
 
   final double lateralMaxMeters;
 
-  /// 2026-06-12 (vucko Geraete-Video Autobahn): Hysterese. GPS driftet auf
+  /// 2026-06-12 (vucko Geräte-Video Autobahn): Hysterese. GPS driftet auf
   /// Autobahnen 15-30m lateral (+ Parallelfahrbahn) — ein einzelnes hartes
   /// Gate liess den Lock dort staendig abreissen: der Puck sprang sichtbar
   /// zwischen "auf der Linie" und "frei daneben". Akquise bleibt streng
@@ -100,11 +100,11 @@ class RouteRenderLock {
   String _routeSignature = '';
   int _segmentIndex = 0;
   double _distanceM = -1.0;
-  // 2026-06-12 (vucko Geraete-Video Stop-and-Go): Glide-Distanz. Das
+  // 2026-06-12 (vucko Geräte-Video Stop-and-Go): Glide-Distanz. Das
   // Projektions-ZIEL springt am echten 1Hz-GPS pro Fix (Kalman-Retarget) —
   // direkt gerendert ergibt das "rast kurz, steht dann" im Sekundentakt.
   // Google-Architektur: die RENDER-Distanz gleitet pro Frame mit
-  // kontinuierlicher Geschwindigkeit aufs Ziel zu; Aufholfehler wird ueber
+  // kontinuierlicher Geschwindigkeit aufs Ziel zu; Aufholfehler wird über
   // ~1,2s abgebaut, leichtes Vorauslaufen (max ~0,5s Fahrweg) statt
   // Stehenbleiben am Ziel, nie rueckwaerts.
   double _renderDistM = -1.0;
@@ -186,7 +186,7 @@ class RouteRenderLock {
     _headingDivergenceSince = null;
   }
 
-  /// 2026-06-14 (vucko Re-Dock-Trim, Geraete-Screenshot „Strecke vor UND hinter
+  /// 2026-06-14 (vucko Re-Dock-Trim, Geräte-Screenshot „Strecke vor UND hinter
   /// mir"): Ankert den Lock nach einem Wieder-Andocken auf die re-gesnappte
   /// Routen-Distanz [distanceM]. Der Lock ist sonst MONOTON und friert bei
   /// Off-Route ein (project() liefert null, kein Rueckwaerts) — der Linien-
@@ -379,14 +379,14 @@ class RouteRenderLock {
       bestSegment = previousSegmentIndex;
     }
     final speed = speedMps.isFinite ? speedMps.clamp(0.0, 60.0) : 0.0;
-    // Anti-Teleport fuer das Projektions-ZIEL. Der externe Matcher
+    // Anti-Teleport für das Projektions-ZIEL. Der externe Matcher
     // (currentRouteIndex) ist nur noch eine enge Plausibilitaetsstuetze, kein
-    // Freifahrtschein bis zum naechsten Vertex. Auf langen GraphHopper-Segmenten
+    // Freifahrtschein bis zum nächsten Vertex. Auf langen GraphHopper-Segmenten
     // kann currentRouteIndex+1 naemlich 100-300 m voraus liegen; genau dort zog
-    // der sichtbare Puck im Geraetevideo kurz nach vorne und wartete dann.
+    // der sichtbare Puck im Gerätevideo kurz nach vorne und wartete dann.
     // Darum wird jeder Vorwaertssprung mit bekanntem Frame-Timing zeitbasiert
     // gedeckelt. Explizite Re-Dock-Korrekturen nutzen reanchorToDistance() und
-    // bleiben weiterhin als schneller, animierter Catch-up moeglich.
+    // bleiben weiterhin als schneller, animierter Catch-up möglich.
     // 2026-06-12: frueher "+2.0m PRO AUFRUF" — bei 60fps entsprach das
     // 120 m/s Drift-Budget, bei 1Hz nur 2 m/s: frameraten-abhaengig und
     // damit gleichzeitig zu lasch (Frames) und zu streng (Fixe).
@@ -418,7 +418,7 @@ class RouteRenderLock {
 
     // Glide: Render-Distanz pro Frame mit kontinuierlicher Geschwindigkeit
     // Richtung Ziel bewegen. v = Fahrgeschwindigkeit + Aufholterm (Fehler
-    // ueber ~1,2s abbauen), gedeckelt auf das 1,6-fache (+8 m/s Reserve fuer
+    // über ~1,2s abbauen), gedeckelt auf das 1,6-fache (+8 m/s Reserve für
     // Stand-Anfahrt). Leichtes Vorauslaufen bis ~0,5s Fahrweg ist erlaubt
     // (kein sichtbarer Stopp am Ziel zwischen zwei Fixes), rueckwaerts nie.
     var dtSeconds = 1.0 / 60.0;
@@ -434,7 +434,7 @@ class RouteRenderLock {
       _renderDistM = bestDistanceM;
     } else {
       final err = bestDistanceM - _renderDistM;
-      // Frame-Kette = die Projektion laeuft kontinuierlich (Timing bekannt,
+      // Frame-Kette = die Projektion läuft kontinuierlich (Timing bekannt,
       // Abstand <=0,3s, also Kamera-Frames). Nur OHNE Frame-Kette war kein
       // Gleiten sichtbar — dann ist Direkt-Aufschliessen unsichtbar/richtig.
       final hasFrameChain = hasFrameTiming && rawGapSeconds <= 0.3;

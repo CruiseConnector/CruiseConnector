@@ -3,6 +3,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,6 +15,7 @@ class PostDetailPage extends StatefulWidget {
   final String content;
   final String time;
   final String? sharedRouteId;
+  final String? sharedGroupId;
   final String? avatarUrl;
 
   const PostDetailPage({
@@ -24,6 +26,7 @@ class PostDetailPage extends StatefulWidget {
     required this.content,
     required this.time,
     this.sharedRouteId,
+    this.sharedGroupId,
     this.avatarUrl,
   });
 
@@ -178,6 +181,14 @@ class _PostDetailPageState extends State<PostDetailPage> {
                           const SizedBox(height: 12),
                           RouteAttachmentCard(
                             routeId: widget.sharedRouteId!,
+                            compact: true,
+                          ),
+                        ],
+                        // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog.
+                        if (widget.sharedGroupId != null) ...[
+                          const SizedBox(height: 12),
+                          GroupAttachmentCard(
+                            groupId: widget.sharedGroupId!,
                             compact: true,
                           ),
                         ],

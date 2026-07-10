@@ -72,7 +72,7 @@ class _WelcomePageState extends State<WelcomePage> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Anmeldung geoeffnet. Kehre danach zur App zurueck.'),
+            content: Text('Anmeldung geöffnet. Kehre danach zur App zurück.'),
           ),
         );
       }
@@ -98,8 +98,8 @@ class _WelcomePageState extends State<WelcomePage> {
     if (lower.contains('google login ist noch nicht konfiguriert')) {
       return 'Google Login ist noch nicht fertig konfiguriert.';
     }
-    if (lower.contains('apple') && lower.contains('nicht verfuegbar')) {
-      return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
+    if (lower.contains('apple') && lower.contains('nicht verfügbar')) {
+      return 'Apple Anmeldung ist auf diesem Gerät nicht verfügbar.';
     }
     return message;
   }
@@ -208,7 +208,7 @@ class _WelcomePageState extends State<WelcomePage> {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'Willkommen zurueck!',
+                        'Willkommen zurück!',
                         style: TextStyle(
                           fontSize: 18,
                           color: _authTextMuted,

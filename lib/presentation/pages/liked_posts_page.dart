@@ -9,6 +9,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -105,6 +106,7 @@ class _LikedPostsPageState extends State<LikedPostsPage> {
           content: (post['content'] ?? '').toString(),
           time: _formatTimeAgo(post['created_at']),
           sharedRouteId: post['shared_route_id'] as String?,
+          sharedGroupId: post['shared_group_id'] as String?,
           avatarUrl: author?['avatar_url'] as String?,
         ),
       ),
@@ -371,6 +373,14 @@ class _LikedPostCard extends StatelessWidget {
                         const SizedBox(height: 10),
                         RouteAttachmentCard(
                           routeId: post['shared_route_id'] as String,
+                          compact: true,
+                        ),
+                      ],
+                      // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog.
+                      if (post['shared_group_id'] != null) ...[
+                        const SizedBox(height: 10),
+                        GroupAttachmentCard(
+                          groupId: post['shared_group_id'] as String,
                           compact: true,
                         ),
                       ],

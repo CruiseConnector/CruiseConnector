@@ -37,10 +37,12 @@ import 'package:cruise_connect/data/services/road_hazard_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
+import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
+import 'package:cruise_connect/data/services/navigation_android_notification_service.dart';
 import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
 import 'package:cruise_connect/data/services/navigation_reroute_decision.dart';
 import 'package:cruise_connect/data/services/navigation_progress_socket_service.dart';
@@ -53,6 +55,8 @@ import 'package:cruise_connect/data/services/cruise_dark_map_style.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/frame_timing_utils.dart';
 import 'package:cruise_connect/data/services/group_route_data_builder.dart';
+import 'package:cruise_connect/data/services/analytics_service.dart';
+import 'package:cruise_connect/data/services/location_permission_helper.dart';
 import 'package:cruise_connect/data/services/route_access_plan.dart';
 import 'package:cruise_connect/data/services/roundabout_topology_service.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
@@ -236,7 +240,46 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (Sperrbildschirm/Dynamic-Island ohne sichtbare In-App-Zahl). Im Vordergrund
     // exakt senden, damit Dynamic Island und In-App-Banner dieselbe Zahl zeigen.
     _appInForeground = state == AppLifecycleState.resumed;
+    // 2026-07-06 (vucko Fahrt-Resume): Beim Backgrounding SOFORT einen
+    // Snapshot der laufenden Fahrt sichern — genau jetzt kann iOS die App
+    // jederzeit beenden (der Bug: pausierte Fahrt war nach App-Kill komplett
+    // weg, nirgends auffindbar, nicht fortsetzbar).
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _persistActiveRideSnapshot(force: true, paused: _isPaused);
+    }
     if (state != AppLifecycleState.resumed || !mounted || _disposed) return;
+
+    // 2026-07-03 (vucko Async-nach-Resume, Geräte-Video 07-03): Der Kamera-/
+    // Render-Ticker (AnimationController mit vsync) wird von Flutter GEMUTET,
+    // sobald die App nicht sichtbar ist (Sperrbildschirm/Live-Preview). Kamera,
+    // Puck-Render und Linien-Trim frieren also am letzten Frame ein, WÄHREND der
+    // GPS-Stream im Hintergrund weiterläuft und den Smoother (_lastTimestamp,
+    // _lat/_lng) fortschreibt. Beim Resume liefert predict() dann die volle
+    // 1,5-s-Dead-Reckoning-Extrapolation ab dem eingefrorenen Render-Stand →
+    // Puck/Linie springen und „rennen nach" (genau das beobachtete Asynchrone).
+    // Gegenmittel: VOR dem ersten Render-Frame hart re-synchronisieren — in
+    // ALLEN Fahrmodi, nicht nur wenn zentriert. rebaseToNow() setzt die
+    // Prediction-Baseline auf jetzt (kein Extrapolations-Sprung), _resetPuckBlend
+    // killt den alten Interpolationsrest, und Render-Lock + Linie werden auf den
+    // aktuellen Standort verankert → sofort synchron.
+    _nativeSmoother.rebaseToNow();
+    _resetPuckBlend();
+    final resumeLoc = _userLocation;
+    if (resumeLoc != null &&
+        _isRouteConfirmed &&
+        _fullRouteCoordinates.length >= 2) {
+      final resumeDist = _projectDistOnRoute(
+        resumeLoc.latitude,
+        resumeLoc.longitude,
+        DateTime.now(),
+      );
+      if (resumeDist != null) {
+        _reanchorRenderLockToDistance(resumeDist);
+        final match = _lastWindowMatch;
+        if (match != null) _trimVisibleRouteToProjection(match);
+      }
+    }
 
     // 2026-06-24 (vucko Geräte-Video): Nach Hintergrund (Lock/Anruf/App-Switch/
     // Vollbild-Werbung) blieb die Navi-Kamera im Free-Cam hängen — Puck UND
@@ -348,6 +391,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   String? _lastGeneratedSelectedStyle;
   bool? _lastGeneratedAvoidHighways;
   String? _lastGeneratedWaypointSignature;
+  // 2026-07-06 (vucko Routen-Wiederholung): Umweg-Level („Direkt/Klein/
+  // Mittel/Groß") wurde in settingsChanged NICHT verglichen → ein Wechsel
+  // von „kleiner Umweg" auf „mittlerer Umweg" wurde als searchAgain statt
+  // settingsChanged behandelt und konnte die alte Route wieder zeigen.
+  String? _lastGeneratedDetour;
+  // 2026-07-06 (vucko Routen-Wiederholung): monotoner Salt pro Suche.
+  // Vorher floss forceFreshVariant als BOOL in den p2pDiversitySeed —
+  // ab der 2. Generierung war der Seed damit für immer identisch
+  // (1. Suche: false, jede weitere: true) → Versuch 3+ lieferte immer
+  // wieder die Route aus Versuch 2.
+  int _p2pSearchSalt = 0;
   // Defensive Layer gegen den Duplikat-Bug: wenn die Edge-Function trotz
   // forceFreshVariant + previousFingerprints aus Race-Conditions oder
   // Pool-Engpass die GLEICHE Route zurückliefert, fängt das die UI hier ab.
@@ -502,6 +556,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-22 (vucko Autobahn-Ausfahrt): welcher Manöver-Index schon eine
   // (geschwindigkeitsabhängige) Voice-Vorankündigung bekommen hat.
   int? _voicePreAnnouncedManeuverIndex;
+  // 2026-07-02 (vucko Geräte-Video Voice-Chaos): Beim Start-Snap kriecht der
+  // Routen-Index über mehrere Ticks nach vorn und „überrollt" Manöver — jedes
+  // bekam eine Vorankündigung (Ansagen-Stau). Vorankündigung erst, wenn der
+  // sichtbare Manöver-Index kurz STABIL blieb. Zusätzlich merken wir den
+  // vorangekündigten TEXT: die „Jetzt"-Ansage nutzt denselben Wortlaut, damit
+  // nicht zwei Formulierungen/Straßennamen fürs selbe Manöver zu hören sind
+  // (GH-/Mapbox-/Kreisel-Promotion-Texte unterscheiden sich).
+  int? _voiceStableManeuverIndex;
+  DateTime? _voiceManeuverStableSince;
+  String? _voicePreAnnouncedText;
   bool _hapticStage300m = false;
   bool _hapticStage150m = false;
   bool _hapticStage50m = false;
@@ -596,6 +660,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Monotone Banner-Distanz liegt jetzt im CruiseNavigationController.
   String? _lastLiveActivitySignature;
   DateTime? _lastLiveActivitySentAt;
+  String? _lastLiveActivityCoreKey;
 
   // 2026-06-16 (vucko O4): Post-Reroute-Lock-Grace. Nach einem Reroute wird die
   // Lock-On-Grace neu gestartet (Lock zurückgesetzt) und für dieses Fenster die
@@ -658,7 +723,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // bei Tempo); Google/Apple springen quasi sofort. 220ms ist gerade noch
   // weich, aber unter der Wahrnehmungsschwelle für „Puck hinkt nach".
   static const Duration _puckBlendDuration = Duration(milliseconds: 220);
-  // 2026-06-12 (vucko): Manoever-Ueberfahren-Tracking fuer den Sofort-Reroute.
+  // 2026-06-12 (vucko): Manöver-Ueberfahren-Tracking für den Sofort-Reroute.
   int? _overshootManeuverIndex;
   double _overshootMinDistM = double.infinity;
   bool _isExistingRouteSession =
@@ -674,8 +739,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-07 (vucko P-reroute): _offRouteCountThreshold (Tick-Count) entfernt —
   // durch zeit-basierte Hysterese (_offRouteSince, ≥3s/≥1.5s) ersetzt.
   // 2026-06-12 (vucko Video): 12s -> 6s. Wer den frischen Reroute sofort
-  // wieder verlaesst (haeufig beim Verfahren), wartete sonst sichtbar lange
-  // auf den naechsten Versuch. Fehlschlaege behalten ihren eigenen Cooldown.
+  // wieder verlässt (haeufig beim Verfahren), wartete sonst sichtbar lange
+  // auf den nächsten Versuch. Fehlschlaege behalten ihren eigenen Cooldown.
   // 2026-06-16 (Codex Video-Befund): Reroute muss nach echtem Verfahren
   // innerhalb von ca. 4s sichtbar aktiv sein. Die Hysterese unten erkennt
   // schneller; der Cooldown darf danach nicht wieder 3-4s blockieren.
@@ -767,8 +832,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-10 (vucko Gruppen-Reroute-Regel): true, sobald ICH der aktiven
   // (Gruppen-)Route real gefolgt bin (on-route <80m). Nur dann darf mein
   // Reroute die GRUPPEN-Route ersetzen — ein Late-Joiner, der noch nie auf
-  // der Route war, loest fuer die Gruppe KEIN Reroute aus und sieht die
-  // KOMPLETTE Route kraeftig, bis er selbst drauf faehrt.
+  // der Route war, loest für die Gruppe KEIN Reroute aus und sieht die
+  // KOMPLETTE Route kraeftig, bis er selbst drauf fährt.
   bool _everOnActiveRoute = false;
   bool _applyingGroupRouteUpdate = false;
   int _groupRouteRevision = 0;
@@ -1200,16 +1265,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   // ── Route-Lock: EINE Quelle für Puck, Kamera und Linien-Schnitt ──────────
-  // 2026-06-11 (vucko Video-Befund vom Geraet): Puck (freier Kalman) und
+  // 2026-06-11 (vucko Video-Befund vom Gerät): Puck (freier Kalman) und
   // Linien-Schnitt (Fix-Match + Gates) waren ZWEI unabhaengige Systeme — am
   // echten 1Hz-GPS liefen sie sichtbar auseinander (Linie ragte hinter den
-  // Puck, Puck "schwamm" neben der Linie). Industrie-Loesung (Google/Mapbox
-  // Navigation): waehrend der Fahrt wird der GERENDERTE Puck auf die Route
+  // Puck, Puck "schwamm" neben der Linie). Industrie-Lösung (Google/Mapbox
+  // Navigation): während der Fahrt wird der GERENDERTE Puck auf die Route
   // GESNAPPT und gleitet monoton ENTLANG der Geometrie; der Linien-Schnitt
-  // nutzt DIESELBE Distanz → Puck und Linie koennen konstruktiv nicht mehr
+  // nutzt DIESELBE Distanz → Puck und Linie können konstruktiv nicht mehr
   // auseinanderlaufen. Kurze GPS-Ausreisser werden visuell auf dem letzten
   // Lock gehalten; echte Off-route-Fahrten fallen nach kurzer Hysterese auf
-  // den freien Puck zurueck. Reroute/Off-route-Pruefung nutzt weiter die echte
+  // den freien Puck zurück. Reroute/Off-route-Prüfung nutzt weiter die echte
   // GPS-Position und wird dadurch nicht maskiert.
   RouteWindowMatch? _lastWindowMatch;
   final RouteRenderLock _routeRenderLock = RouteRenderLock();
@@ -1286,7 +1351,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// 2026-06-14 (vucko Re-Dock-Trim): Ankert den Render-Lock nach einem
   /// Wieder-Andocken (globaler Re-Snap im Korridor) auf den re-gesnappten
-  /// Routen-[index]. Gibt true zurueck, wenn wirklich neu geankert wurde
+  /// Routen-[index]. Gibt true zurück, wenn wirklich neu geankert wurde
   /// (Versatz > 20 m oder Lock war freigegeben) — sonst false: Mini-Jitter
   /// bleibt auf dem monotonen Glide, damit ein einzelner Seiten-Fix keinen
   /// sichtbaren Schnitt-Ruecksprung erzeugt.
@@ -1394,7 +1459,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// 2026-06-13 (vucko Verfahren-„kracht"): Wechselt die Puck-Quelle zwischen
   /// „auf der Route gesnappt" und „frei (echtes GPS)", wird NICHT mehr hart
-  /// gesprungen, sondern ~600ms weich uebergeblendet (smoothstep auf das pro
+  /// gesprungen, sondern ~600ms weich übergeblendet (smoothstep auf das pro
   /// Frame weiterwandernde Ziel). Betrifft Lock-Release beim Verfahren,
   /// Hold-Ablauf UND Re-Acquire nach dem Reroute.
   LatLng _blendPuckTransition(
@@ -1484,7 +1549,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  /// Render-Position fuer Puck UND Kamera: on-route = auf die Linie gesnappt.
+  /// Render-Position für Puck UND Kamera: on-route = auf die Linie gesnappt.
   /// 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust"): Während eines
   /// BESTÄTIGTEN GPS-Stalls (Stream liefert >1,8s nichts, Wagen fuhr zuletzt
   /// klar, sicher route-locked) den Render-Lock entlang der Route weiterschieben
@@ -1660,7 +1725,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     return locked;
   }
 
-  /// Read-only Render-Position fuer das Map-Overlay. Wichtig: Das Map-Widget
+  /// Read-only Render-Position für das Map-Overlay. Wichtig: Das Map-Widget
   /// projiziert Marker bei jedem CameraMove; dieser Callback darf den Route-Lock
   /// nicht fortschreiben, sonst kann der Puck einen Frame neuer sein als der
   /// GeoJSON-Linienkopf.
@@ -1675,9 +1740,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     int aheadStart;
     // 2026-06-11 (vucko Route-Lock): Ist der Render-Lock aktiv, ist SEINE
     // monotone Distanz die Quelle des Schnitts — exakt dieselbe Position, an
-    // der der Puck gerendert wird. Das alte 18m-Fix-Gate entfaellt in diesem
+    // der der Puck gerendert wird. Das alte 18m-Fix-Gate entfällt in diesem
     // Pfad (der Lock garantiert on-route); es friert den Schnitt damit auch
-    // bei GPS-Jitter nicht mehr ein (Geraete-Video-Befund).
+    // bei GPS-Jitter nicht mehr ein (Geräte-Video-Befund).
     _ensureRouteCumDist();
     final lockDist = _renderLockDistM;
     if (lockDist >= 0 && _routeCumDistM != null) {
@@ -1763,10 +1828,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     var headLng = projHead[0];
     var headLat = projHead[1];
     var headIdx = clampedAhead;
-    // 2026-06-12 (vucko Geraete-Screenshots): Schnitt und Puck teilen exakt
+    // 2026-06-12 (vucko Geräte-Screenshots): Schnitt und Puck teilen exakt
     // dieselbe Distanz. Der fruehere 6m-Vorhalt war als Naht-Verdeckung gedacht,
     // erzeugte in echten Fahrbildern aber wieder den Eindruck, dass Route und
-    // Standort nicht zusammenkleben. Die Marker-Groesse verdeckt die GeoJSON-
+    // Standort nicht zusammenkleben. Die Marker-Größe verdeckt die GeoJSON-
     // Push-Kadenz ausreichend; wichtiger ist ein identischer Geo-Anker.
     var lead = _routeTrimLeadM;
     while (lead > 0 && headIdx < coords.length) {
@@ -1796,7 +1861,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       aheadEnd++;
     }
     // On-route-Erkennung: Abstand GERENDERTER Puck -> Projektion. Roh-GPS kann
-    // kurz seitlich ausreissen, waehrend der Route-Lock den sichtbaren Puck
+    // kurz seitlich ausreissen, während der Route-Lock den sichtbaren Puck
     // korrekt auf der Linie haelt. Dieser Guard darf dann nicht gegen eine
     // andere Quelle entscheiden und die rote Vorwaerts-Linie ausblenden.
     final visualPuck =
@@ -1820,7 +1885,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       // 2026-06-10 (vucko Anti-Haenger, Screenshot-Bug): Haengt die
       // Projektion >120m hinter/neben dem Puck (Match-Haenger nach Reroute,
-      // Off-Route-Phase), waere das 3km-Fenster an der FALSCHEN Stelle und
+      // Off-Route-Phase), wäre das 3km-Fenster an der FALSCHEN Stelle und
       // vor dem Fahrer nur die dezente Linie ("Route wirkt ausgefallen").
       // Dann lieber: Fenster aus -> die VOLLE Route kraeftig (Fallback) —
       // niemals duenn/falsch vor dem Fahrer.
@@ -2040,8 +2105,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _fullRouteCoordinates = route.coordinates;
       _remainingRouteCoordinates = route.coordinates;
       // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
-      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
-      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      // bright fällt auf die volle Route zurück (nie unsichtbar), dim wird
+      // beim nächsten Tick sofort neu gesetzt (dimHead == null).
       _brightAheadLatLngs = const [];
       _dimRemainingLatLngs = const [];
       _lastDimHead = null;
@@ -2264,8 +2329,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         _remainingRouteCoordinates =
             resumeState?.remainingCoordinates ?? activeResult.coordinates;
         // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
-        // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
-        // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+        // bright fällt auf die volle Route zurück (nie unsichtbar), dim wird
+        // beim nächsten Tick sofort neu gesetzt (dimHead == null).
         _brightAheadLatLngs = const [];
         _dimRemainingLatLngs = const [];
         _lastDimHead = null;
@@ -2670,7 +2735,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         !wasLeadingBeforeCommit ||
         !_canPublishGroupRoute ||
         // 2026-06-10 (vucko Gruppen-Reroute-Regel): Nur wer der Route real
-        // gefolgt ist, darf sie fuer die GRUPPE ersetzen (Late-Join-Schutz).
+        // gefolgt ist, darf sie für die GRUPPE ersetzen (Late-Join-Schutz).
         !_everOnActiveRoute ||
         _applyingGroupRouteUpdate ||
         _groupRouteRevision <= 0) {
@@ -2681,7 +2746,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final publisherProgressMeters = _currentRouteProgressMetersFallback();
     if (publisherProgressMeters == null || !publisherProgressMeters.isFinite) {
       debugPrint(
-        '[CruiseMode] Gruppenroute nicht geschrieben: kein Fortschritt fuer Publish-Guard',
+        '[CruiseMode] Gruppenroute nicht geschrieben: kein Fortschritt für Publish-Guard',
       );
       return false;
     }
@@ -3569,6 +3634,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Idle-Stop — verhindert Ticker-Pause bei kurzen Speed-Dips.
   int _freeCamIdleTicks = 0;
 
+  // 2026-07-03 (vucko Linien-Versatz-Milderung, Geräte-Video 07-03): Die
+  // Routenlinie ist geo-exakt; der sichtbare Versatz zur Straße entsteht, weil
+  // die Basiskarten-PMTiles (dach.pmtiles max_zoom 14) beim Fahr-Zoom 16.5 um
+  // 2,5 Stufen ÜBERZOOMT werden — dabei ist die Straßengeometrie beim Tile-Build
+  // auf das z14-Raster generalisiert (Sehnen statt Kurven), während die rote
+  // Linie voll aufgelöst ist → in Kurven liegt die Linie neben der groben
+  // Straße. Fahr-Zoom von 16.5 auf 15.0 senken reduziert den Überzoom auf 1,0
+  // Stufe → der sichtbare Versatz schrumpft ~2,8×. DAUERHAFTER Fix = den
+  // roads-Layer der PMTiles bis z15/16 ohne Maxzoom-Simplify neu bauen
+  // (Tile-Pipeline auf dem Tile-Server) — dann kann der Zoom wieder höher.
+  static const double _kNavFollowZoom = 15.0;
+
   void _onCameraAnimationTick() {
     if (!_mapReady || _isOverviewActive) {
       _cameraAnimController?.stop();
@@ -3586,12 +3663,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Optik/Framing (Zoom, Offset, Dämpfung, Heading-Dead-Zone unverändert) —
     // nur kontinuierlich statt pulsierend. Web behält den Event-Pfad.
     //
-    // 2026-06-13 (vucko Free-Cam-/Off-Route-Ruckeln, Geraete-Videos): Der
+    // 2026-06-13 (vucko Free-Cam-/Off-Route-Ruckeln, Geräte-Videos): Der
     // Puck-Glide + Linien-Schnitt laufen jetzt in JEDEM Kameramodus pro
     // Frame. Vorher stoppte der Ticker beim Verlassen der Zentrierung
     // komplett → die Render-Position wurde nur noch pro GPS-Fix (1Hz)
     // fortgeschrieben und der Puck teleportierte sekuendlich (~19m bei
-    // 70 km/h). Kamera-Bewegung bleibt natuerlich an _isCameraLocked
+    // 70 km/h). Kamera-Bewegung bleibt natürlich an _isCameraLocked
     // gebunden; bei stehender Kamera stossen wir die Marker-Projektion
     // selbst an (sonst projiziert nur onCameraMove).
     if (!kIsWeb) {
@@ -3627,7 +3704,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!_isCameraLocked) {
         // Freie Kamera: Puck-Overlay pro Frame reprojizieren.
         _mlController?.reprojectMarkers();
-        // 2026-06-13 (vucko Free-Cam-Ruckeln, Geraete-Video): Idle-Stop mit
+        // 2026-06-13 (vucko Free-Cam-Ruckeln, Geräte-Video): Idle-Stop mit
         // HYSTERESE. Vorher stoppte der Ticker bei einem EINZELNEN Frame
         // <0,3 m/s — ein kurzer Smoother-Speed-Dip (nach Reroute, GPS-Glitch)
         // hielt den Puck dann bis zum nächsten 1Hz-Fix an (Mikro-Ruckeln).
@@ -3635,8 +3712,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         // pausieren; jeder Speed-Pickup setzt den Zähler zurück.
         // 2026-06-15 (vucko M4 „Puck IMMER fluessig"): Auch das ROHE GPS-Tempo
         // prüfen. Bei einem fehlerhaften Reroute kann die Smoother-Geschwindigkeit
-        // kurz auf ~0 einfrieren, OBWOHL der Wagen faehrt — dann darf der Ticker
-        // NICHT pausieren, sonst klebt der Puck bis zum naechsten 1Hz-Fix.
+        // kurz auf ~0 einfrieren, OBWOHL der Wagen fährt — dann darf der Ticker
+        // NICHT pausieren, sonst klebt der Puck bis zum nächsten 1Hz-Fix.
         final movingByGps = (_userLocation?.speed ?? 0) > 0.6;
         if (_nativeSmoother.speed < 0.15 && !movingByGps) {
           _freeCamIdleTicks++;
@@ -3742,7 +3819,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final offLng = _camCurLng + GeoBearing.forwardOffsetLng(_camCurHeading);
     _camMoveInFlight = true;
     ctrl
-        .moveTo(lat: offLat, lng: offLng, zoom: 16.5, bearing: _camCurHeading)
+        .moveTo(
+          lat: offLat,
+          lng: offLng,
+          zoom: _kNavFollowZoom,
+          bearing: _camCurHeading,
+        )
         .whenComplete(() => _camMoveInFlight = false);
   }
 
@@ -6353,6 +6435,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                     // sichtbar, statt ihn offline aussehen zu lassen).
                     _setGroupPaused(true);
                     _stopNavigationTracking();
+                    // 2026-07-06 (vucko Fahrt-Resume): Pause = wahrscheinlichster
+                    // Moment vor einem späteren App-Kill → sofort sichern.
+                    _persistActiveRideSnapshot(force: true, paused: true);
                   },
                   onStop: () {
                     _setGroupPaused(false);
@@ -6506,8 +6591,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-06-09 (vucko Reveal-Fix): die _isRouteConfirmed-Bedingung fiel weg —
     // sie unterdrückte in der Preview die Animation.
     _ensureRouteMetrics();
-    // 2026-06-10/19 (vucko 3km-Sichtdesign): Waehrend der bestaetigten Fahrt
-    // zeigt die aktive (voll rote) Quelle fuer Rundkurs/Umweg/Trip nur das
+    // 2026-06-10/19 (vucko 3km-Sichtdesign): Während der bestätigten Fahrt
+    // zeigt die aktive (voll rote) Quelle für Rundkurs/Umweg/Trip nur das
     // 3km-Fenster ab Puck; die dezente Rest-Preview kommt aus
     // _buildMapLibreLines. Nur direkte A→B-Navigation darf die volle aktive
     // Reststrecke zeigen.
@@ -6569,7 +6654,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // glättet der WebPositionSmoother den Event-Pfad wie bisher).
       // 2026-06-11 (vucko Route-Lock): Der Puck folgt pro Frame der auf die
       // ROUTE gesnappten Render-Position (eine Quelle mit Linien-Schnitt +
-      // Kamera) — Puck faehrt sichtbar AUF der Linie, kein Auseinanderlaufen.
+      // Kamera) — Puck fährt sichtbar AUF der Linie, kein Auseinanderlaufen.
       liveSmoothedPosition: kIsWeb ? null : _readRouteLockedRenderPosition,
       // 2026-06-25 (vucko Marker-Swim): POIs/Baustellen als NATIVE Symbole.
       poiFeatures: _buildPoiFeatures(),
@@ -6677,9 +6762,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   List<CruiseMapLine> _buildMapLibreLines() {
-    // 2026-06-10 (vucko 3km-Sichtdesign v2): Waehrend der bestaetigten Fahrt
+    // 2026-06-10 (vucko 3km-Sichtdesign v2): Während der bestätigten Fahrt
     // liegt hier die DEZENTE Reststrecke ab Puck (Opacity 0.30) — sie deutet
-    // „es geht weiter" an, waehrend die aktive Quelle nur das volle
+    // „es geht weiter" an, während die aktive Quelle nur das volle
     // 3km-Fenster zeigt. 200m-Gate: ihr Anfang liegt unter dem bright-Fenster
     // und ist unsichtbar, darum sind seltene Pushes voellig ausreichend.
     // 2026-06-21 (vucko Reroute-Luftlinie): auch die dezente Vorschau-Linie
@@ -7946,28 +8031,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       return true;
     }
 
-    if (Platform.isIOS || Platform.isMacOS) {
-      unawaited(geo.Geolocator.openAppSettings());
-      return false;
-    }
-
-    var permission = await geo.Geolocator.requestPermission();
+    // 2026-07-03 (vucko „Standort immer / direkt in Einstellungen"): Einheitlich
+    // über den Helper — fragt an, stuft (so weit per Dialog möglich) auf „Immer"
+    // hoch und leitet sonst DIREKT in die App-Einstellungen. Kein Plattform-Split
+    // mehr; iOS versucht jetzt auch erst die Hochstufung statt sofort Settings.
+    final permission = await LocationPermissionHelper.requestAlways();
     if (!mounted || _disposed) return false;
     if (permission == geo.LocationPermission.always) return true;
-
-    final openSettings = await _showLocationPermissionDialog(
-      title: '"Immer erlauben" fehlt noch',
-      message:
-          'Falls Android keinen passenden Dialog gezeigt hat, setze den Standortzugriff in den App-Einstellungen auf "Immer erlauben".',
-      confirmLabel: 'Einstellungen öffnen',
-      cancelLabel: 'Nur in App',
-    );
-    if (!mounted || _disposed) return false;
-
-    if (openSettings) {
-      unawaited(geo.Geolocator.openAppSettings());
-      return false;
-    }
 
     _showNavigationPermissionSnack(
       'Gruppenfahrt startet. Im Hintergrund läuft Tracking erst mit "Immer erlauben".',
@@ -8285,7 +8355,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                       _lastGeneratedWaypointSignature != waypointSignature)) ||
               (!_isRoundTrip &&
                   (_lastGeneratedSelectedStyle != _selectedStyle ||
-                      _lastGeneratedAvoidHighways != _avoidHighways)));
+                      _lastGeneratedAvoidHighways != _avoidHighways ||
+                      // 2026-07-06 (vucko Routen-Wiederholung): Umweg-Level
+                      // („Direkt/Klein/Mittel/Groß") ist eine echte Settings-
+                      // Änderung — vorher wurde sie ignoriert.
+                      _lastGeneratedDetour != _selectedDetour)));
       final routeDebugTrigger = previousUiState.lastRouteResult == null
           ? 'firstSearch'
           : settingsChanged
@@ -8402,12 +8476,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activePointToPointMode = scenicMode ? _selectedStyle : 'Standard';
         _activeAvoidHighways = _avoidHighways;
         _recentDestinationDistances = [];
+        // 2026-07-06 (vucko Routen-Wiederholung): Seed pro Suche monoton
+        // verschieben. Vorher: forceFreshVariant (bool) + auf GANZE Grad
+        // gerundete Zielkoordinaten → ab der 2. Generierung war der Seed
+        // für immer identisch und Versuch 3+ zeigte immer wieder Route 2.
+        _p2pSearchSalt += 1;
         final p2pDiversitySeed = Object.hash(
-          destLat.round(),
-          destLng.round(),
+          (destLat * 1000).round(),
+          (destLng * 1000).round(),
           detourVariant,
           _avoidHighways,
-          forceFreshVariant,
+          _p2pSearchSalt,
         );
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
@@ -8778,7 +8857,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     String? homeCountryCode,
   }) async {
     // 2026-05-25 (vucko): Polling beschleunigt — vorher 30 × 3s = 90s (User
-    // hat in Feldkirch/Götzis bis zu mehrere Minuten warten muessen).
+    // hat in Feldkirch/Götzis bis zu mehrere Minuten warten müssen).
     // Neu: progressiv kürzere Polls, max 18 × 2s = 36s. Wenn dann nicht da,
     // fällt RouteService auf Pool-Fallback (`tryPoolFallbackForFailedRoundTrip`).
     const maxPolls = 18;
@@ -9074,6 +9153,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastGeneratedSelectedKm = _isRoundTrip ? distance : null;
     _lastGeneratedSelectedStyle = _selectedStyle;
     _lastGeneratedAvoidHighways = _avoidHighways;
+    _lastGeneratedDetour = _selectedDetour;
     _lastGeneratedWaypointSignature = deliveredWaypoints.isNotEmpty
         ? _roundTripWaypointSignature(deliveredWaypoints)
         : waypointSignature;
@@ -9172,8 +9252,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
       // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
-      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
-      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      // bright fällt auf die volle Route zurück (nie unsichtbar), dim wird
+      // beim nächsten Tick sofort neu gesetzt (dimHead == null).
       _brightAheadLatLngs = const [];
       _dimRemainingLatLngs = const [];
       _lastDimHead = null;
@@ -9388,7 +9468,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? speedMps
         : 0.0;
     // 2026-06-12 (vucko Reroute-zu-spaet, Video-Befund): Der Korridor wuchs am
-    // Geraet auf ~80-100m (accuracy*0.8 bis 48 + speedBuffer bis 35) — eine
+    // Gerät auf ~80-100m (accuracy*0.8 bis 48 + speedBuffer bis 35) — eine
     // Parallelstrasse 40m daneben galt als "on-route", das Banner fror bei 0m
     // ein und der Reroute kam minutenlang nicht. Gestrafft auf Google-Niveau;
     // Fehl-Reroutes verhindert weiterhin die Zeit-Hysterese + das
@@ -9398,8 +9478,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   /// 2026-06-12 (vucko): Stimmt der GPS-Kurs grob mit der Routen-Tangente am
-  /// Match ueberein? Nur aussagekraeftig bei echter Fahrt (>4 m/s) und
-  /// gueltigem Kurs — sonst konservativ true.
+  /// Match überein? Nur aussagekraeftig bei echter Fahrt (>4 m/s) und
+  /// gültigem Kurs — sonst konservativ true.
   bool _gpsHeadingAlignedWithRoute(
     geo.Position position,
     RouteWindowMatch match,
@@ -9708,6 +9788,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     String message, {
     Object? error,
   }) {
+    // 2026-07-02 (vucko Monitoring): EINE zentrale Stelle für alle
+    // Routen-Fehlschläge (initial + Reroute + Zusatzsuche) — zeigt in Firebase
+    // Analytics, wie oft und warum Nutzer beim Kernfeature hängen bleiben.
+    unawaited(
+      AnalyticsService.instance.logRouteGenerationFailed(
+        _isRoundTrip ? 'roundtrip' : 'point_to_point',
+        message,
+      ),
+    );
     _restoreGeneratedRouteUiState(previousUiState);
     if (!_snapshotHasVisibleRoute(previousUiState) && mounted && !_disposed) {
       setState(() {
@@ -10019,6 +10108,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _lastGeneratedSelectedKm = null;
     _lastGeneratedSelectedStyle = null;
     _lastGeneratedAvoidHighways = null;
+    _lastGeneratedDetour = null;
     _lastGeneratedWaypointSignature = null;
     _recentDestinationDistances = [];
     _activeSpeedLimits = [];
@@ -10350,6 +10440,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
+
+    // 2026-07-02 (vucko Geräte-Video): Voice-State der letzten Fahrt darf die
+    // neue nicht beeinflussen (Index-Kollision → verschluckte/doppelte Ansage).
+    _voicePreAnnouncedManeuverIndex = null;
+    _voicePreAnnouncedText = null;
+    _voiceStableManeuverIndex = null;
+    _voiceManeuverStableSince = null;
+    TtsService.instance.resetNavTag();
 
     await _prepareAccessLegForOffRouteStart();
     await _prepareXpStreakContext();
@@ -10833,7 +10931,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _markCurrentRouteWithRerouteMeta(meta);
     _logRerouteMeta(meta);
     // Fehlgeschlagene Reroutes sollen nicht spammen, aber auch nicht 12s lang
-    // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafuer den
+    // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafür den
     // kurzen Failure-Cooldown.
     _lastRerouteTime = DateTime.now();
     _lastRerouteFailed =
@@ -10867,7 +10965,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       return results.any((result) => result != ConnectivityResult.none);
     } catch (error) {
       debugPrint(
-        '[CruiseMode] Connectivity-Check fuer Reroute fehlgeschlagen: $error',
+        '[CruiseMode] Connectivity-Check für Reroute fehlgeschlagen: $error',
       );
       return true;
     }
@@ -10991,9 +11089,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         'reroute_failed=${result.edgeMeta['reroute_failed']}',
       );
     }
-    // 2026-06-13 (vucko Reroute-Videos): Beim Commit zaehlt die JETZT-Position
+    // 2026-06-13 (vucko Reroute-Videos): Beim Commit zählt die JETZT-Position
     // (Smoother-Prediction), nicht die bis zu mehrere Sekunden alte Request-
-    // Position — fuer Wenden-Check, Re-Anchor und den Stale-Check unten.
+    // Position — für Wenden-Check, Re-Anchor und den Stale-Check unten.
     final commitPos = _freshRerouteStartPosition(position, lead: Duration.zero);
     if (!allowStaleReanchor &&
         _rejectsProtectedShortReroute(
@@ -11087,8 +11185,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             result.maneuvers.first.icon == Icons.u_turn_right);
 
     // 2026-06-12 (vucko Video: "sagt rechts, meint wenden"): Startet die neue
-    // Route >120 Grad GEGEN die aktuelle Fahrtrichtung, faehrt der User von
-    // ihr weg — die erste regulaere Instruktion ("rechts abbiegen") waere
+    // Route >120 Grad GEGEN die aktuelle Fahrtrichtung, fährt der User von
+    // ihr weg — die erste regulaere Instruktion ("rechts abbiegen") wäre
     // irrefuehrend. Dann zuerst EXPLIZIT zum Wenden auffordern.
     // 2026-06-13 (G5/F5-Review): Schwelle 135→120° (Industriestandard, fängt
     // Wenden-Fälle 2-3s früher).
@@ -11137,8 +11235,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _fullRouteCoordinates = result.coordinates;
       _remainingRouteCoordinates = result.coordinates;
       // 2026-06-10 (3km-Design v2): Fenster-Caches bei neuer Route leeren —
-      // bright faellt auf die volle Route zurueck (nie unsichtbar), dim wird
-      // beim naechsten Tick sofort neu gesetzt (dimHead == null).
+      // bright fällt auf die volle Route zurück (nie unsichtbar), dim wird
+      // beim nächsten Tick sofort neu gesetzt (dimHead == null).
       _brightAheadLatLngs = const [];
       _dimRemainingLatLngs = const [];
       _lastDimHead = null;
@@ -11159,6 +11257,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       _hapticStage150m = false;
       _hapticStage50m = false;
       _lastHapticManeuverIndex = null;
+      // 2026-07-02 (vucko Geräte-Video): Voice-Vorankündigungs-State gehört
+      // zur ALTEN Manöverliste — ohne Reset kollidiert der Index mit der neuen
+      // Liste (Ansage verschluckt oder doppelt) und der Text-Cache nennt die
+      // falsche Straße.
+      _voicePreAnnouncedManeuverIndex = null;
+      _voicePreAnnouncedText = null;
+      _voiceStableManeuverIndex = null;
+      _voiceManeuverStableSince = null;
+      TtsService.instance.resetNavTag();
       _offRouteCount = 0;
       _consecutiveOffRouteFixes = 0;
       // 2026-06-16 (vucko O4): Lock-On-Grace nach Reroute neu starten — der Puck
@@ -11696,6 +11803,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _navigationController.clearManeuverDistanceSmoothing();
     }
     _navigationStartTime ??= DateTime.now();
+    // 2026-07-06 (vucko Fahrt-Resume): Fahrtstart sofort persistieren, damit
+    // die Strecke einen App-Kill überlebt (vorher lebte sie nur im RAM).
+    _persistActiveRideSnapshot(force: true);
     _driveSessionRecordedForCompletion = false;
     final currentLocation = _userLocation;
     if (startsNewDriveSession && currentLocation != null) {
@@ -11762,6 +11872,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
+    // 2026-07-06 (vucko Fahrt-Resume): Fortschritt gedrosselt (max. alle 20s)
+    // mitschreiben — nach App-Kill kennt der Resume-Snapshot so die bereits
+    // gefahrenen Kilometer und die letzte Position.
+    _persistActiveRideSnapshot(
+      lat: position.latitude,
+      lng: position.longitude,
+    );
     if (result == DrivenTrackSampleResult.newSegment) {
       debugPrint(
         '[CruiseMode] GPS-Luecke erkannt, Track-Segment getrennt gespeichert.',
@@ -12008,7 +12125,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
     }
 
-    // 2026-06-13 (vucko Free-Cam-Ruckeln): Render-Ticker laeuft in JEDEM
+    // 2026-06-13 (vucko Free-Cam-Ruckeln): Render-Ticker läuft in JEDEM
     // Kameramodus, solange Fixes kommen — er treibt Puck-Glide, Linien-
     // Schnitt und (bei stehender Kamera) die Marker-Projektion. Der Idle-
     // Stop im Tick pausiert ihn im Stand; hier wird er wiederbelebt.
@@ -12084,7 +12201,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final previousVisibleManeuverIndex = _activeVisibleManeuverIndex();
 
     var isOutsideCorridor = match.distanceMeters > offRouteCorridor;
-    // 2026-06-13 (vucko Geraete-Video „Reroute greift nicht nahe Ziel"):
+    // 2026-06-13 (vucko Geräte-Video „Reroute greift nicht nahe Ziel"):
     // `approachingDestination` soll NUR die letzten Meter vor der Ankunft das
     // Reroute unterdrücken (GPS-Rauschen am Ziel). Die alte Definition war
     // aber „macht Fortschritt Richtung Ziel" und feuerte schon bei 2,2 km
@@ -12109,17 +12226,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Apple/Google-Regel: ein VORWÄRTS-laufender Puck fährt die Route — auch wenn
     // ein einzelner Fix seitlich zappelt. Dann niemals reroute.
     // 2026-06-12 (vucko Reroute-zu-spaet, Video): Das Veto gilt nur noch, wenn
-    // der GPS-KURS zur Route passt. Beim ueberfahrenen Abbiege-Manoever oder
+    // der GPS-KURS zur Route passt. Beim überfahrenen Abbiege-Manöver oder
     // auf der Parallelstrasse kriecht der Match-Index naemlich WEITER vorwaerts
     // (die Projektion wandert mit) — das alte Veto blockierte den Reroute
-    // damit minutenlang ("0 m"-Banner-Freeze im Geraete-Video).
+    // damit minutenlang ("0 m"-Banner-Freeze im Geräte-Video).
     var makingForwardProgress =
         match.index > prevRouteIndex &&
         _gpsHeadingAlignedWithRoute(position, match);
 
-    // 2026-06-12 (vucko): Manoever-UEBERFAHREN-Trigger. War der Fahrer schon
-    // <35m am aktiven Manoever und entfernt sich wieder >60m davon, ist das
-    // Manoever verpasst — Off-Route-Verfahren sofort starten, auch wenn die
+    // 2026-06-12 (vucko): Manöver-UEBERFAHREN-Trigger. War der Fahrer schon
+    // <35m am aktiven Manöver und entfernt sich wieder >60m davon, ist das
+    // Manöver verpasst — Off-Route-Verfahren sofort starten, auch wenn die
     // Position noch im (breiten) Korridor liegt. Exakt der Video-Fall.
     final distToManeuverNow = _calculateDistanceToManeuver();
     final visibleIdxForOvershoot = _activeVisibleManeuverIndex();
@@ -12147,7 +12264,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Fenster-Verzug → re-ankern + NICHT off-route. Nur wirklich-daneben (auch
     // global > Korridor) zählt. Läuft nur wenn das Fenster off-route meldet →
     // kein Overhead im Normalbetrieb.
-    // 2026-06-13 (vucko Geraete-Video): Re-Snap läuft jetzt AUCH nahe dem Ziel
+    // 2026-06-13 (vucko Geräte-Video): Re-Snap läuft jetzt AUCH nahe dem Ziel
     // (kein `!approachingDestination`-Gate mehr) — er ist immer sicher (re-
     // ankert nur den Index) und hält currentRouteIndex/Restdistanz/3km-Fenster
     // aktuell, statt sie einzufrieren wenn man sich nahe dem Ziel verfährt.
@@ -12192,7 +12309,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
         isOutsideCorridor =
             false; // doch auf der Route — nur Fenster nachgehinkt
-        // 2026-06-14 (vucko Re-Dock-Trim, Geraete-Screenshot „Strecke vor UND
+        // 2026-06-14 (vucko Re-Dock-Trim, Geräte-Screenshot „Strecke vor UND
         // hinter mir"): Beim Wieder-Andocken nach kurzer Abweichung rueckte der
         // Re-Snap zwar _currentRouteIndex vor, aber der Render-Lock (= Quelle
         // des Linien-Schnitts UND des Pucks) ist monoton und blieb hinter der
@@ -12222,7 +12339,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       makingForwardProgress = false;
     }
 
-    // Manoever-Overshoot zaehlt wie "klar daneben" — aber NUR im breiten
+    // Manöver-Overshoot zählt wie "klar daneben" — aber NUR im breiten
     // Point-to-Point-Korridor (300-800 m), wo ein verpasster Turn sonst
     // distanz-technisch unentdeckt bliebe. Bei Rundkursen (50 m Korridor) ist
     // ein verpasster Turn ohnehin sofort >Korridor → der Overshoot-Zwang löste
@@ -12604,14 +12721,25 @@ class _CruiseModePageState extends State<CruiseModePage>
         _hapticStage300m = false;
         _hapticStage150m = false;
         _hapticStage50m = false;
+        // 2026-07-02 (vucko Geräte-Video): eine noch laufende/gequeue-te
+        // Ansage des VORHERIGEN Manövers sofort stoppen — sonst spielt sie
+        // verspätet ab, während das Banner längst das nächste Manöver zeigt
+        // („rechts abbiegen" hörbar, Kreisverkehr sichtbar).
+        unawaited(TtsService.instance.stopIfStaleFor(visibleManeuverIndex));
+        _voicePreAnnouncedText = null;
+      }
+      // Stabilitäts-Tracking für die Vorankündigung (siehe Felddeklaration).
+      if (_voiceStableManeuverIndex != visibleManeuverIndex) {
+        _voiceStableManeuverIndex = visibleManeuverIndex;
+        _voiceManeuverStableSince = DateTime.now();
       }
       // 2026-06-11 (vucko 1Hz-GPS-Fix): Stufen KASKADIEREND ohne Band-
       // Untergrenze. Die alten Baender ((150,300], (50,150]) waren unter dem
-      // 20-Hz-Sim nicht ueberspringbar — echtes GPS mit 3-5s-Fix-Luecke
-      // (Tunnel/Empfangsloch) sprang bei Landstrassentempo ueber ein ganzes
+      // 20-Hz-Sim nicht überspringbar — echtes GPS mit 3-5s-Fix-Luecke
+      // (Tunnel/Empfangsloch) sprang bei Landstrassentempo über ein ganzes
       // Band, und die EINZIGE Voice-Vorankuendigung (300m) entfiel. Jetzt
       // feuert immer die hoechste noch offene Stufe <= aktueller Distanz;
-      // tiefere Stufen markieren die hoeheren als verbraucht.
+      // tiefere Stufen markieren die höheren als verbraucht.
       // 2026-06-22 (vucko Geräte-Video „Autobahn-Ausfahrt zu spät"): Voice-
       // Vorankündigung GESCHWINDIGKEITSABHÄNGIG vorziehen — bei Autobahntempo
       // ~780 m statt fix 300 m (sonst kam „in 200 m raus" erst auf der Rampe).
@@ -12619,9 +12747,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       final preAnnounceDist = maneuverPreAnnounceDistanceMeters(
         _nativeSmoother.speed,
       );
+      // 2026-07-02 (vucko Geräte-Video): erst ansagen, wenn der Index ≥1,2 s
+      // stabil ist — beim Start-Snap überrollte Manöver bekommen so KEINE
+      // eigene Ansage mehr (das war der „5 Ansagen nach Start"-Stau).
+      final maneuverStableMs = _voiceManeuverStableSince == null
+          ? 0
+          : DateTime.now().difference(_voiceManeuverStableSince!).inMilliseconds;
       if (_voicePreAnnouncedManeuverIndex != visibleManeuverIndex &&
           distToManeuver <= preAnnounceDist &&
-          distToManeuver > 60) {
+          distToManeuver > 60 &&
+          maneuverStableMs >= 1200) {
         _voicePreAnnouncedManeuverIndex = visibleManeuverIndex;
         _speakManeuverAnnouncement(distToManeuver.round(), important: true);
       }
@@ -13769,7 +13904,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     String? overrideText,
   }) {
     // 2026-06-12 (vucko): Fester Ansagetext (z. B. "Bitte wenden") — die
-    // regulaere Instruktion waere in dem Moment irrefuehrend.
+    // regulaere Instruktion wäre in dem Moment irrefuehrend.
     if (overrideText != null) {
       if (important) {
         unawaited(
@@ -13785,12 +13920,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     final maneuver = _activeVisibleManeuver();
     if (maneuver == null) return;
+    final maneuverIndex = _activeVisibleManeuverIndex();
     // 2026-06-05 (vucko Task #6): NUR die reine instruction (ohne Distanz) als
     // Voice-Quelle. maneuver.announcement enthält bereits eine Distanz → der alte
     // Fallback doppelte sie zu „In 287m In 300m rechts abbiegen". Ist instruction
     // leer, gar nicht ansagen.
-    final raw = maneuver.instruction.trim();
+    // 2026-07-02 (vucko Geräte-Video): Die „Jetzt"-Ansage nutzt denselben
+    // Wortlaut wie die Vorankündigung desselben Manövers — Kreisel-Promotion/
+    // Reroute dazwischen wechselte sonst hörbar Straße/Formulierung.
+    var raw = maneuver.instruction.trim();
+    if (distMeters <= 30 &&
+        maneuverIndex != null &&
+        maneuverIndex == _voicePreAnnouncedManeuverIndex &&
+        _voicePreAnnouncedText != null) {
+      raw = _voicePreAnnouncedText!;
+    }
     if (raw.isEmpty) return;
+    if (distMeters > 30) _voicePreAnnouncedText = raw;
     // Distanz auf SAUBERE Stufen runden statt krummer Live-Werte („In 287m" →
     // „In 300 Metern"). „Metern" ausgeschrieben für klare TTS-Aussprache.
     final String text;
@@ -13801,7 +13947,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       text = 'In $rounded Metern $raw';
     }
     if (important) {
-      unawaited(TtsService.instance.speakImportant(text, interrupt: interrupt));
+      unawaited(
+        TtsService.instance.speakImportant(
+          text,
+          interrupt: interrupt,
+          navTag: maneuverIndex,
+        ),
+      );
     } else {
       unawaited(TtsService.instance.speakOptional(text));
     }
@@ -15266,31 +15418,68 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _startNavigationLiveActivity() {
     _lastLiveActivitySignature = null;
     _lastLiveActivitySentAt = null;
+    _lastLiveActivityCoreKey = null;
     final snapshot = _navigationLiveActivitySnapshot();
     _lastLiveActivitySignature = snapshot.signature();
     _lastLiveActivitySentAt = DateTime.now();
+    _lastLiveActivityCoreKey = _liveActivityCoreKey(snapshot);
     unawaited(NavigationLiveActivityService.instance.start(snapshot));
+    // 2026-07-03 (vucko): Android-Live-Preview parallel — laufende
+    // Benachrichtigung (Sperrbildschirm/Shade), gleiche Daten, eigenes Gate.
+    unawaited(NavigationAndroidNotificationService.instance.start(snapshot));
+  }
+
+  // 2026-07-02 (vucko Geräte-Video Live-Activity-Freeze): „Kern" eines
+  // Snapshots = das Manöver selbst. Nur bei Kern-Wechsel darf ein Update das
+  // 5-s-Distanz-Throttle umgehen.
+  String _liveActivityCoreKey(NavigationLiveActivitySnapshot s) {
+    return '${s.instruction}|${s.maneuverType}|${s.isRerouting}';
   }
 
   void _updateNavigationLiveActivity({bool force = false}) {
     final snapshot = _navigationLiveActivitySnapshot();
     final signature = snapshot.signature();
     final now = DateTime.now();
-    if (!force &&
-        signature == _lastLiveActivitySignature &&
-        _lastLiveActivitySentAt != null &&
-        now.difference(_lastLiveActivitySentAt!) < const Duration(seconds: 8)) {
-      return;
+    // 2026-07-02 (vucko Geräte-Video Live-Activity-Freeze): iOS drosselt Live
+    // Activities über ein Update-BUDGET. Die alten 10-m-Buckets + 8-s-Keep-alive
+    // ergaben bei Fahrtempo ~1 Update/s — nach ~1 Minute stellte iOS das Rendern
+    // KOMPLETT ein (Sperrbildschirm fror bei „Churer Straße / Jetzt" ein, obwohl
+    // die App weiter sendete). Deshalb hart limitieren: Manöver-/Reroute-Wechsel
+    // nach frühestens 1 s, reine Distanz-Fortschritte nach frühestens 5 s,
+    // unveränderter Inhalt nur als 45-s-Keep-alive.
+    if (!force && _lastLiveActivitySentAt != null) {
+      final sinceLast = now.difference(_lastLiveActivitySentAt!);
+      final coreChanged =
+          _liveActivityCoreKey(snapshot) != _lastLiveActivityCoreKey;
+      final Duration minGap;
+      if (coreChanged) {
+        minGap = const Duration(seconds: 1);
+      } else if (signature != _lastLiveActivitySignature) {
+        minGap = const Duration(seconds: 5);
+      } else {
+        minGap = const Duration(seconds: 45);
+      }
+      if (sinceLast < minGap) return;
     }
     _lastLiveActivitySignature = signature;
     _lastLiveActivitySentAt = now;
+    _lastLiveActivityCoreKey = _liveActivityCoreKey(snapshot);
+    if (kDebugMode) {
+      debugPrint(
+        '[LiveActivity] send dist=${snapshot.distanceToManeuverMeters?.toStringAsFixed(0)} '
+        '"${snapshot.instruction}"',
+      );
+    }
     unawaited(NavigationLiveActivityService.instance.update(snapshot));
+    unawaited(NavigationAndroidNotificationService.instance.update(snapshot));
   }
 
   void _endNavigationLiveActivity() {
     _lastLiveActivitySignature = null;
     _lastLiveActivitySentAt = null;
+    _lastLiveActivityCoreKey = null;
     unawaited(NavigationLiveActivityService.instance.end());
+    unawaited(NavigationAndroidNotificationService.instance.end());
   }
 
   void _updateActiveManeuver() {
@@ -16218,10 +16407,52 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  /// 2026-07-06 (vucko Fahrt-Resume): Snapshot der laufenden SOLO-Fahrt
+  /// persistieren. Gruppen (Lobby-Rejoin) und Trips (trips-Tabelle) haben
+  /// eigene Resume-Mechanismen und werden bewusst übersprungen.
+  void _persistActiveRideSnapshot({
+    bool force = false,
+    bool paused = false,
+    double? lat,
+    double? lng,
+  }) {
+    if (widget.groupId != null || _tripModeEnabled) return;
+    final startedAt = _navigationStartTime;
+    if (!_isRouteConfirmed || startedAt == null) return;
+    final route = _sessionRouteResult ?? _lastRouteResult;
+    if (route == null || route.coordinates.length < 2) return;
+    final distanceKm =
+        route.distanceKm ?? ((route.distanceMeters ?? 0) / 1000.0);
+    if (distanceKm <= 0) return;
+    final snapshot = ActiveRideSnapshot(
+      savedAt: DateTime.now(),
+      startedAt: startedAt,
+      style: _selectedStyle,
+      distanceKm: distanceKm,
+      geometry: route.geometry,
+      isRoundTrip: _isRoundTrip,
+      durationSeconds: route.durationSeconds,
+      drivenKm: _totalDistanceDriven / 1000.0,
+      elapsedSeconds: DateTime.now().difference(startedAt).inSeconds,
+      wasPaused: paused,
+      lastLat: lat,
+      lastLng: lng,
+    );
+    unawaited(
+      force
+          ? ActiveRideSnapshotService.save(snapshot)
+          : ActiveRideSnapshotService.saveThrottled(snapshot),
+    );
+  }
+
   Future<void> _recordDriveSessionForCurrentRoute({
     required bool completed,
     String? photoUrl,
   }) async {
+    // 2026-07-06 (vucko Fahrt-Resume): Die Fahrt endet hier durch bewusste
+    // User-Aktion (Beenden/Verwerfen/Speichern) — Resume-Snapshot entfernen,
+    // sonst bietet der Homescreen eine bereits abgeschlossene Fahrt an.
+    unawaited(ActiveRideSnapshotService.clear());
     if (_driveSessionRecordedForCompletion) {
       // Session wurde bereits (über einen anderen Pfad) aufgenommen — ein Foto,
       // das der User erst im Abschluss-Sheet hinzufügt, nachtragen (greift dank
@@ -16358,7 +16589,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeTripId = null;
       // 2026-06-10 (vucko Gruppen-Trip-Regel): Ein Trip endet NUR, wenn das
       // Ziel erreicht wurde. Vorzeitiges Beenden (Early-Stop-Sheet) =
-      // ZWISCHENSPEICHERN: Trip wird pausiert und kann spaeter von der
+      // ZWISCHENSPEICHERN: Trip wird pausiert und kann später von der
       // aktuellen Position fortgesetzt werden (Resume-Card). Gruppen-Trips
       // enden zusaetzlich erst, wenn alle die Gruppe verlassen haben
       // (leaveGroup-Pfad).

@@ -424,7 +424,7 @@ class SavedRoutesService {
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
       } else if (e.code == '23505') {
-        // Unique constraint: diese Route ist fuer den User bereits gespeichert.
+        // Unique constraint: diese Route ist für den User bereits gespeichert.
         debugPrint(
           '[SavedRoutes] Duplicate Save durch DB verhindert: id=${route.id}',
         );
@@ -800,7 +800,7 @@ class SavedRoutesService {
           .inFilter('shared_route_id', ids);
     } on PostgrestException catch (e) {
       if (_isMissingColumnError(e)) {
-        debugPrint('[SavedRoutes] shared_route_id fehlt, Posts uebersprungen.');
+        debugPrint('[SavedRoutes] shared_route_id fehlt, Posts übersprungen.');
       } else {
         rethrow;
       }
@@ -839,7 +839,7 @@ class SavedRoutesService {
     } on PostgrestException catch (e) {
       if (_isMissingColumnError(e)) {
         debugPrint(
-          '[SavedRoutes] route_attachment fehlt, Chat-Routen uebersprungen.',
+          '[SavedRoutes] route_attachment fehlt, Chat-Routen übersprungen.',
         );
       } else {
         rethrow;

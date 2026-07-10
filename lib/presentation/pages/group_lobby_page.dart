@@ -6,13 +6,16 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/deep_links.dart';
 import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
 import '../../data/services/group_leaderboard_service.dart';
 import '../../data/services/social_service.dart';
 import '../../domain/models/cruise_group.dart';
 import '../../domain/models/group_member.dart';
+import '../utils/share_helper.dart';
 import '../widgets/user_avatar.dart';
+import 'create_post_page.dart';
 import 'cruise_mode_page.dart';
 import 'group_chat_page.dart';
 import 'user_profile_page.dart';
@@ -79,6 +82,12 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
   bool get _amCreator => _group?.ownerId == _myId;
 
   bool get _hasOwnerPower => _amOwner || _amCreator;
+
+  // 2026-07-03 (vucko Gruppen-Share): bin ich Mitglied der Gruppe? Steuert die
+  // Sichtbarkeit der „In Community teilen"-Karte.
+  bool get _amMember =>
+      _amCreator ||
+      (_group?.members.any((m) => m.userId == _myId) ?? false);
 
   RideRole get _myRideRole =>
       _group?.members
@@ -652,6 +661,13 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           const SizedBox(height: 16),
           _buildInviteCodeCard(),
         ],
+        // 2026-07-03 (vucko Gruppen-Share): Mitglieder können die Gruppe in die
+        // Community posten (→ Feed-Karte mit Beitreten) oder extern per Deeplink
+        // teilen.
+        if (_amMember && !g.isActive) ...[
+          const SizedBox(height: 16),
+          _buildShareToCommunityCard(),
+        ],
         if (_hasOwnerPower && _pendingRequests.isNotEmpty) ...[
           const SizedBox(height: 16),
           _buildPendingRequestsCard(),
@@ -998,6 +1014,90 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           ),
         ],
       ),
+    );
+  }
+
+  // 2026-07-03 (vucko Gruppen-Share): Karte mit zwei Wegen, die Gruppe zu
+  // verbreiten — als Community-Post (Feed-Karte mit Beitreten) oder extern per
+  // Deeplink (?group=<id>). Gespiegelt vom Routen-Share-Einstieg.
+  Widget _buildShareToCommunityCard() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppAccentColors.accent.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.campaign_rounded, color: AppAccentColors.accent, size: 22),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Gruppe teilen',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'In die Community posten oder Link versenden',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Link teilen',
+            icon: Icon(Icons.ios_share, color: AppAccentColors.accent),
+            onPressed: _shareGroupLink,
+          ),
+          const SizedBox(width: 4),
+          ElevatedButton(
+            onPressed: _openShareToCommunity,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppAccentColors.accent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+            ),
+            child: const Text(
+              'Posten',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openShareToCommunity() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CreatePostPage(sharedGroupId: widget.groupId),
+      ),
+    );
+  }
+
+  Future<void> _shareGroupLink() async {
+    final g = _group;
+    final name = (g?.name.trim().isNotEmpty ?? false) ? g!.name.trim() : 'Gruppe';
+    final link = CruiseDeepLinks.groupUri(widget.groupId).toString();
+    await shareText(
+      context,
+      text: 'Komm in meine Gruppe „$name" bei CruiseConnect: $link',
+      subject: name,
     );
   }
 

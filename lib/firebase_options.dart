@@ -20,7 +20,7 @@ class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
       throw UnsupportedError(
-        'Push/FCM ist auf Web nicht konfiguriert (nur Android/iOS).',
+        'Push/FCM ist auf Web nicht konfiguriert.',
       );
     }
     switch (defaultTargetPlatform) {

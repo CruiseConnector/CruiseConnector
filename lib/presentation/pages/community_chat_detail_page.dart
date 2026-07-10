@@ -654,8 +654,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         ),
         content: Text(
           isAdmin
-              ? 'Wenn du gehst, wird automatisch das Mitglied Admin, das als naechstes beigetreten ist.'
-              : 'Du verlaesst diese Community und kannst danach nicht mehr mitschreiben.',
+              ? 'Wenn du gehst, wird automatisch das Mitglied Admin, das als nächstes beigetreten ist.'
+              : 'Du verlässt diese Community und kannst danach nicht mehr mitschreiben.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -690,11 +690,11 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: const Color(0xFF151821),
         title: const Text(
-          'Community loeschen?',
+          'Community löschen?',
           style: TextStyle(color: Colors.white),
         ),
         content: const Text(
-          'Diese Community, alle Mitglieder und Nachrichten werden dauerhaft geloescht.',
+          'Diese Community, alle Mitglieder und Nachrichten werden dauerhaft gelöscht.',
           style: TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -705,7 +705,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text(
-              'Loeschen',
+              'Löschen',
               style: TextStyle(color: Colors.redAccent),
             ),
           ),
@@ -833,7 +833,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                       ),
                       SizedBox(width: 10),
                       Text(
-                        'Community loeschen',
+                        'Community löschen',
                         style: TextStyle(color: Colors.redAccent),
                       ),
                     ],

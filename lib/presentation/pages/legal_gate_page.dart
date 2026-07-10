@@ -119,7 +119,7 @@ class _LegalGateError extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 const Text(
-                  'Rechtliches konnte nicht geprueft werden.',
+                  'Rechtliches konnte nicht geprüft werden.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
@@ -129,7 +129,7 @@ class _LegalGateError extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Bitte pruefe die Verbindung oder ob die Legal-Migration bereits in Supabase deployed ist.',
+                  'Bitte prüfe die Verbindung oder ob die Legal-Migration bereits in Supabase deployed ist.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0xFFB6BECC), height: 1.35),
                 ),

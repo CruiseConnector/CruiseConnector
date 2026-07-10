@@ -7,7 +7,7 @@ Future<bool> launchLegalDocument(LegalDocument document) async {
   try {
     return await launchUrl(document.uri, mode: LaunchMode.externalApplication);
   } catch (e) {
-    debugPrint('[LegalLink] ${document.url} konnte nicht geoeffnet werden: $e');
+    debugPrint('[LegalLink] ${document.url} konnte nicht geöffnet werden: $e');
     return false;
   }
 }

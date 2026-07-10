@@ -1205,11 +1205,16 @@ class RouteService {
           'scenarioKey=${scenario.scenarioKey} routeVariantHint=${duplicate.variant.variantHint} '
           'fingerprintHint=${duplicate.variant.fingerprintHint}',
         );
+        duplicate.route.edgeMeta['diversity_exhausted'] = true;
         return _finalizeAndRemember(
           scenario: scenario,
           route: duplicate.route,
           sampledCoordinates: duplicate.sampledCoordinates,
           fingerprint: duplicate.fingerprint,
+          // Wiederholung NICHT erneut registrieren — sonst vergiftet der
+          // Fallback die SeenRouteRegistry unter dem aktuellen (ggf. neuen)
+          // Settings-Key und jede echte neue Route gilt als „zu ähnlich".
+          rememberInRegistry: false,
         );
       }
       if (bestDuplicateCandidate?.accepted == true) {
@@ -1250,6 +1255,8 @@ class RouteService {
           scenario: scenario,
           route: recentDuplicate,
           fromCache: true,
+          // Bereits gezeigte Route — Registry nicht erneut auffrischen.
+          rememberInRegistry: false,
         );
       }
 
@@ -1276,6 +1283,8 @@ class RouteService {
           scenario: scenario,
           route: recent,
           fromCache: true,
+          // Bereits gezeigte Route — Registry nicht erneut auffrischen.
+          rememberInRegistry: false,
         );
       }
 
@@ -1302,6 +1311,9 @@ class RouteService {
           scenario: scenario,
           route: cached,
           fromCache: true,
+          // Persistenter Cache-Treffer war schon mal zu sehen — Registry
+          // nicht erneut auffrischen.
+          rememberInRegistry: false,
         );
       }
 
@@ -2014,6 +2026,12 @@ class RouteService {
       _RouteCandidate? spareCandidate;
       _RouteCandidate? duplicateFallbackCandidate;
       _RouteCandidate? bestRejectedCandidate;
+      // 2026-07-09 (vucko Routen-Wiederholung, User-Kriterium „jede erneute
+      // Generierung sieht anders aus"): NEUE, fahrbare Kandidaten, die nur am
+      // Style-Feinschliff scheitern (tier=rejected wegen styleFit/shape),
+      // separat merken — bei explizitem „neu berechnen" schlägt Neuheit den
+      // Feinschliff, statt dieselbe Route erneut zu servieren.
+      _RouteCandidate? bestNovelRejectedCandidate;
       // 2026-06-10 (vucko Start-Versatz-Gate): Kandidaten mit zu großem Start-
       // Versatz NIE als Notnagel verwenden — nur für die präzise Fehlermeldung
       // merken.
@@ -2080,9 +2098,16 @@ class RouteService {
               worstStartOffsetMeters,
               candidate.startOffsetMeters ?? 0.0,
             );
-          } else if (bestRejectedCandidate == null ||
-              candidate.score < bestRejectedCandidate.score) {
-            bestRejectedCandidate = candidate;
+          } else {
+            if (bestRejectedCandidate == null ||
+                candidate.score < bestRejectedCandidate.score) {
+              bestRejectedCandidate = candidate;
+            }
+            if (candidate.novelEnough &&
+                (bestNovelRejectedCandidate == null ||
+                    candidate.score < bestNovelRejectedCandidate.score)) {
+              bestNovelRejectedCandidate = candidate;
+            }
           }
           if (candidate.accepted &&
               (candidate.isIdeal ||
@@ -2116,14 +2141,117 @@ class RouteService {
         }
       }
 
-      final allowDuplicateFallback =
-          !forceFreshVariant || !shouldDiversify || navigationReroute;
-      final acceptedCandidate =
-          bestCandidate ??
-          (allowDuplicateFallback ? duplicateFallbackCandidate : null);
-      if (acceptedCandidate != null && acceptedCandidate.accepted) {
-        if (bestCandidate == null && duplicateFallbackCandidate != null) {
+      // 2026-07-06 (vucko Routen-Wiederholung): Wenn die normalen Versuche nur
+      // Wiederholungen geliefert haben, EINEN aggressiv perturbierten Korridor
+      // probieren (Seite geflippt, Winkel + Radius deutlich verschoben), bevor
+      // wir eine Wiederholung akzeptieren oder scheitern. In Bergregionen
+      // (Entdecker/Bergstrecke) liefert GraphHopper sonst für alle milden
+      // Varianten immer wieder dieselbe beste Geometrie.
+      if (bestCandidate == null &&
+          duplicateFallbackCandidate != null &&
+          shouldDiversify &&
+          !navigationReroute &&
+          !_isInWorkerLimitCooldown()) {
+        final dupVariant = duplicateFallbackCandidate.variant;
+        final flippedSide = (dupVariant.offsetSide ?? 1) >= 0 ? -1 : 1;
+        final aggressiveIndex = dupVariant.index + 101;
+        final aggressiveVariant = RouteVariant(
+          index: aggressiveIndex,
+          seed: _nextRandomSeed() + aggressiveIndex * 71,
+          angleOffset: dupVariant.angleOffset + 52.0,
+          radiusJitter: dupVariant.radiusJitter + 0.22,
+          offsetSide: flippedSide,
+          offsetBearing: dupVariant.offsetBearing + 52.0,
+          fingerprintHint:
+              '${scenario.scenarioKey}|ab-aggressive|$aggressiveIndex|$flippedSide',
+          variantHint: 'ab-aggressive-${scenario.detourLevel}-$flippedSide',
+          styleBias: scenario.style,
+        );
+        try {
+          final aggressive = await _requestPointToPointVariant(
+            scenario: scenario,
+            styleConfig: styleConfig,
+            startPosition: startPosition,
+            destinationLat: destinationLat,
+            destinationLng: destinationLng,
+            scenic: scenic,
+            normalizedVariant: normalizedVariant,
+            avoidHighways: avoidHighways,
+            directDistanceKm: directDistanceKm,
+            targetDistanceKm: targetDistanceKm,
+            detourFactor: detourFactor,
+            variant: aggressiveVariant,
+            candidateBudget: candidateBudgetOverride ?? 7,
+            previousFingerprints: previousFingerprints,
+            navigationReroute: navigationReroute,
+            maxSearchMsOverride: maxSearchMsOverride,
+            currentHeadingDegrees: currentHeadingDegrees,
+            currentSpeedMetersPerSecond: currentSpeedMetersPerSecond,
+            locationAccuracyMeters: locationAccuracyMeters,
+            intermediateWaypoints: intermediateWaypoints,
+            forceAcceptDirect: forceAcceptDirect,
+            forceFreshVariant: forceFreshVariant,
+          );
+          if (aggressive.accepted && aggressive.novelEnough) {
+            bestCandidate = aggressive;
+            _debugRouteSearch(
+              '[P2P] aggressiveCorridorRescue=true scenarioKey=${scenario.scenarioKey} '
+              'variant=${aggressiveVariant.variantHint}',
+            );
+          } else if (aggressive.accepted &&
+              _isBetterCandidate(aggressive, duplicateFallbackCandidate)) {
+            duplicateFallbackCandidate = aggressive;
+          }
+        } catch (e) {
+          debugPrint(
+            '[RouteService][P2PDiag] aggressiveCorridorRescue failed: $e',
+          );
+        }
+      }
+
+      // 2026-07-09 (vucko User-Kriterium „jede erneute Generierung sieht
+      // anders aus"): Bei explizitem „neu berechnen" schlägt eine NEUE,
+      // fahrbare Route den Style-Feinschliff. Vorher lehnte der Quality-Gate
+      // echte Alternativen ab (tier=rejected wegen styleFit) und der User
+      // bekam dieselbe Route wieder (Duplicate-Rescue) — jetzt wird die beste
+      // neuartige Alternative serviert, ehrlich markiert.
+      var servedRelaxedNovelCandidate = false;
+      if (bestCandidate == null &&
+          forceFreshVariant &&
+          bestNovelRejectedCandidate != null) {
+        final relaxedKm =
+            bestNovelRejectedCandidate.route.distanceKm ?? 0.0;
+        final plausibleKm =
+            relaxedKm >= directDistanceKm * 0.85 &&
+            relaxedKm <=
+                math.max(targetDistanceKm * 2.2, directDistanceKm * 3.0);
+        if (plausibleKm) {
+          bestNovelRejectedCandidate.route.edgeMeta[
+                  'quality_relaxed_for_variety'] =
+              true;
+          bestCandidate = bestNovelRejectedCandidate;
+          servedRelaxedNovelCandidate = true;
+          _debugRouteSearch(
+            '[P2P] noveltyOverQuality=true scenarioKey=${scenario.scenarioKey} '
+            'distanceKm=${relaxedKm.toStringAsFixed(1)}',
+          );
+        }
+      }
+
+      // 2026-07-06 (vucko Routen-Wiederholung): Eine brauchbare Wiederholung
+      // ist IMMER besser als ein harter Fehler — vorher scheiterte Versuch 3
+      // („keine neue Variante") und ab dann servierten Pool-/Recent-Fallbacks
+      // still für immer Route 2. Jetzt: Wiederholung ehrlich als
+      // diversity_exhausted markieren; die UI kann den User informieren.
+      final usedDuplicateFallback =
+          bestCandidate == null && duplicateFallbackCandidate != null;
+      final acceptedCandidate = bestCandidate ?? duplicateFallbackCandidate;
+      if (acceptedCandidate != null &&
+          (acceptedCandidate.accepted || servedRelaxedNovelCandidate)) {
+        if (usedDuplicateFallback) {
           lastRouteDuplicateFallbackUsed = true;
+          lastRouteEmergencyFallbackUsed = true;
+          acceptedCandidate.route.edgeMeta['diversity_exhausted'] = true;
         }
         if (_needsStrongerPointToPointDetour(
           scenario: scenario,
@@ -2161,15 +2289,21 @@ class RouteService {
           route: acceptedCandidate.route,
           sampledCoordinates: acceptedCandidate.sampledCoordinates,
           fingerprint: acceptedCandidate.fingerprint,
+          // Wiederholungen nicht erneut registrieren (Registry-Vergiftung).
+          rememberInRegistry: !usedDuplicateFallback,
         );
-        await _maybeRecordRoutePoolCandidate(
-          scenario: scenario,
-          route: acceptedCandidate.route,
-          fingerprint: acceptedCandidate.fingerprint,
-          tier: acceptedCandidate.tier,
-          qualityScore: acceptedCandidate.score,
-          subscriptionTier: lastRouteSubscriptionTier,
-        );
+        if (!usedDuplicateFallback && !servedRelaxedNovelCandidate) {
+          // Relaxed-Kandidaten NICHT in den Pool schreiben — der Pool soll
+          // nur Routen enthalten, die den vollen Quality-Gate bestehen.
+          await _maybeRecordRoutePoolCandidate(
+            scenario: scenario,
+            route: acceptedCandidate.route,
+            fingerprint: acceptedCandidate.fingerprint,
+            tier: acceptedCandidate.tier,
+            qualityScore: acceptedCandidate.score,
+            subscriptionTier: lastRouteSubscriptionTier,
+          );
+        }
         if (spareCandidate != null) {
           PreparedRouteBuffer.store(
             scenario.scenarioKey,
@@ -2196,7 +2330,7 @@ class RouteService {
       }
 
       // Start-Snap-Fehler duerfen nicht durch Pool/Direct/Cache-Fallbacks
-      // verdeckt werden. Besonders Reroute braucht diesen Code fuer den
+      // verdeckt werden. Besonders Reroute braucht diesen Code für den
       // frischen-Fix-Retry statt eine beliebige Ersatzroute.
       if (sawStartOffsetRejected) {
         lastError = RouteServiceException(
@@ -2898,10 +3032,15 @@ class RouteService {
     }
 
     const minPointDistanceKm = 0.20;
-    final maxWaypointDistanceKm = math.max(
-      12.0,
-      math.min(220.0, targetDistanceKm * 0.75),
-    );
+    // 2026-07-03 (vucko Wegpunkte-jede-Distanz, Geräte-Video 07-03): Die alte
+    // Sperre `targetDistanceKm * 0.75` (Cap 220 km) warf schon VOR dem Routing
+    // „keine Route", sobald ein Stopp weiter als 75 % der Rundkurs-Zieldistanz
+    // weg lag — bei einer echten Punktkette ist die Zieldistanz aber
+    // bedeutungslos (die Distanz ergibt sich aus den Punkten). Der Edge routet
+    // die Kette jetzt als car/fastest bei JEDER Distanz durch. Nur noch ein
+    // fester Sanity-Cap (weit über der DACH-Graph-Reichweite) fängt echten
+    // Unsinn (z. B. ein Punkt auf einem anderen Kontinent) mit klarer Meldung ab.
+    const maxWaypointDistanceKm = 500.0;
     for (var i = 0; i < waypoints.length; i += 1) {
       final point = waypoints[i];
       final lat = point['latitude']!;
@@ -2925,7 +3064,7 @@ class RouteService {
       if (fromStartKm > maxWaypointDistanceKm) {
         return failure(
           'waypoint_too_far',
-          'Ein Stopp liegt zu weit weg für diesen Rundkurs.',
+          'Ein Stopp liegt zu weit entfernt.',
           'Required waypoint $i is ${fromStartKm.toStringAsFixed(1)}km from start.',
           meta: {
             'failed_waypoint_index': i,
@@ -3780,7 +3919,7 @@ class RouteService {
     int? statusCode;
     RouteServiceException? lastMappedError;
     // Exponential Backoff: nur bei HTTP 429/5xx.
-    // Normale Planung darf laenger rechnen; Live-Navi-Reroutes muessen aber
+    // Normale Planung darf laenger rechnen; Live-Navi-Reroutes müssen aber
     // schnell scheitern/fallen backen, sonst steht der Fahrer sekundenlang nur
     // mit "Neuberechnung" da (Video 2026-06-16).
     final requestedMaxSearchMs = body['max_search_ms'];
@@ -6428,6 +6567,13 @@ class RouteService {
     required List<List<double>> sampledCoordinates,
     required String fingerprint,
     bool fromCache = false,
+    // 2026-07-06 (vucko Routen-Wiederholung): Duplicate-/Emergency-Fallbacks
+    // dürfen die wiederholte Route NICHT erneut in die SeenRouteRegistry
+    // schreiben. Vorher wurde die alte Route beim Fallback unter dem NEUEN
+    // scenarioKey (nach Settings-Wechsel) re-registriert → die Registry war
+    // für die neuen Settings sofort „vergiftet", jede frische Route galt als
+    // „zu ähnlich" und der Fallback lieferte für immer dieselbe Route 2.
+    bool rememberInRegistry = true,
   }) {
     _guardRoundTripOvershoot(scenario, route);
     _guardRoundTripCountry(scenario, route);
@@ -6462,11 +6608,13 @@ class RouteService {
     _recentSuccessfulRoutes[scenario.scenarioKey] = finalized;
     _recentDisplayedRoutes[_recentDisplayedKeyForScenario(scenario)] =
         finalized;
-    SeenRouteRegistry.rememberAll(
-      _seenHistoryKeysForScenario(scenario),
-      fingerprint: fingerprint,
-      sampledCoordinates: sampledCoordinates,
-    );
+    if (rememberInRegistry) {
+      SeenRouteRegistry.rememberAll(
+        _seenHistoryKeysForScenario(scenario),
+        fingerprint: fingerprint,
+        sampledCoordinates: sampledCoordinates,
+      );
+    }
     _debugRouteSearch(
       '[Result] scenarioKey=${scenario.scenarioKey} '
       'routeFingerprint=$fingerprint '
@@ -6495,6 +6643,7 @@ class RouteService {
     required RouteScenario scenario,
     required RouteResult route,
     bool fromCache = false,
+    bool rememberInRegistry = true,
   }) {
     _guardRoundTripOvershoot(scenario, route);
     _guardRoundTripCountry(scenario, route);
@@ -6510,6 +6659,7 @@ class RouteService {
       sampledCoordinates: sampledCoordinates,
       fingerprint: fingerprint,
       fromCache: fromCache,
+      rememberInRegistry: rememberInRegistry,
     );
   }
 
@@ -7206,14 +7356,14 @@ class RouteService {
       case 'hard_region_thin':
         return 'In $clusterText gibt es erst wenige gute Varianten. Wir suchen weiter nach passenden Vorschlägen.';
       case 'bootstrap_limited':
-        return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es spaeter erneut.';
+        return 'In $clusterText sind die automatischen Aufbauversuche aktuell begrenzt. Bitte versuche es später erneut.';
       case 'cooldown':
         return 'In $clusterText bauen wir gerade erste Routen auf. Bitte versuche es in einigen Minuten erneut.';
       case 'thin':
       case 'warming_up':
       case 'empty':
       default:
-        return 'Fuer diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gute Varianten. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
+        return 'Für diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gute Varianten. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
     }
   }
 
@@ -7682,8 +7832,8 @@ class RouteService {
             'route_source': 'pool',
             'source': 'pool',
             // Markiert eine GH-unabhaengige Notfall-Auslieferung (Backend down):
-            // der Loop ist bereits beim Seeden qualitaetsgeprueft (verified) —
-            // die Re-Qualitaets-Gates werden hier bewusst uebersprungen, damit
+            // der Loop ist bereits beim Seeden qualitätsgeprüft (verified) —
+            // die Re-Qualitaets-Gates werden hier bewusst übersprungen, damit
             // bei totem GraphHopper eine fahrbare Route statt „Serverfehler"
             // kommt. Greift NUR wenn backendUnavailable.
             'offline_backend_fallback': backendUnavailable,
@@ -8527,6 +8677,9 @@ class RouteService {
     double? currentSpeedMetersPerSecond,
     double? locationAccuracyMeters,
   }) async {
+    // 2026-07-06 (vucko Routen-Wiederholung): akzeptierte, aber nicht-neue
+    // Kandidaten als ehrliche letzte Reserve sammeln statt wegzuwerfen.
+    _RouteCandidate? duplicateRescue;
     try {
       if (scenario.detourLevel > 0) {
         final fallbackLevels = scenario.detourLevel >= 3
@@ -8630,14 +8783,27 @@ class RouteService {
               fingerprint: scenicCandidate.fingerprint,
             );
           }
+          // 2026-07-06 (vucko Routen-Wiederholung): Akzeptierte Wiederholung
+          // NICHT wegwerfen — als ehrliche letzte Reserve merken. Vorher
+          // wurde sie verworfen und der Aufrufer warf danach „Pool coverage
+          // warming up" — der User sah einen Fehler, obwohl eine fahrbare
+          // Route existierte.
+          if (scenicCandidate.accepted &&
+              _isBetterCandidate(scenicCandidate, duplicateRescue)) {
+            duplicateRescue = scenicCandidate;
+          }
           debugPrint(
             '[RouteService] Vereinfachter Scenic-Fallback level=$fallbackDetourLevel verworfen: ${scenicCandidate.route.distanceKm?.toStringAsFixed(1)}km',
           );
         }
-        if (!allowDirectFallback) return null;
+        if (!allowDirectFallback) {
+          return _finalizeDuplicateRescue(scenario, duplicateRescue);
+        }
       }
 
-      if (!allowDirectFallback) return null;
+      if (!allowDirectFallback) {
+        return _finalizeDuplicateRescue(scenario, duplicateRescue);
+      }
 
       final variant = _nextPointToPointVariant(
         scenario,
@@ -8685,7 +8851,11 @@ class RouteService {
         directDistanceKm: directDistanceKm,
       );
       if (!directCandidate.accepted || !directCandidate.novelEnough) {
-        return null;
+        if (directCandidate.accepted &&
+            _isBetterCandidate(directCandidate, duplicateRescue)) {
+          duplicateRescue = directCandidate;
+        }
+        return _finalizeDuplicateRescue(scenario, duplicateRescue);
       }
       return _finalizeAndRemember(
         scenario: scenario,
@@ -8695,8 +8865,33 @@ class RouteService {
       );
     } catch (e) {
       debugPrint('[RouteService] A→B-Fallback fehlgeschlagen: $e');
-      return null;
+      return _finalizeDuplicateRescue(scenario, duplicateRescue);
     }
+  }
+
+  /// 2026-07-06 (vucko Routen-Wiederholung): Eine akzeptierte, aber bereits
+  /// gesehene Route ist IMMER besser als ein harter „keine Route"-Fehler.
+  /// Ehrlich als diversity_exhausted markieren und NICHT erneut in die
+  /// Registry schreiben (sonst Vergiftung unter neuem Settings-Key).
+  RouteResult? _finalizeDuplicateRescue(
+    RouteScenario scenario,
+    _RouteCandidate? candidate,
+  ) {
+    if (candidate == null || !candidate.accepted) return null;
+    lastRouteDuplicateFallbackUsed = true;
+    lastRouteEmergencyFallbackUsed = true;
+    candidate.route.edgeMeta['diversity_exhausted'] = true;
+    _debugRouteSearch(
+      '[Fallback] p2pDuplicateRescueUsed=true scenarioKey=${scenario.scenarioKey} '
+      'distanceKm=${candidate.route.distanceKm?.toStringAsFixed(1)}',
+    );
+    return _finalizeAndRemember(
+      scenario: scenario,
+      route: candidate.route,
+      sampledCoordinates: candidate.sampledCoordinates,
+      fingerprint: candidate.fingerprint,
+      rememberInRegistry: false,
+    );
   }
 
   bool _needsStrongerPointToPointDetour({
@@ -9543,13 +9738,13 @@ class RouteService {
           ? ((ins['exit_number'] as num?)?.toInt() ??
                 _roundaboutExitNumberFromText(text))
           : null;
-      // 2026-06-14 (vucko L3, Geraete-Screenshot „Ausfahrt 1" falsch):
-      // GraphHoppers `turn_angle` ist fuer DACH (Rechtsverkehr) im Vorzeichen/
+      // 2026-06-14 (vucko L3, Geräte-Screenshot „Ausfahrt 1" falsch):
+      // GraphHoppers `turn_angle` ist für DACH (Rechtsverkehr) im Vorzeichen/
       // in der Semantik mehrdeutig (swept arc vs. Orientierungsaenderung). Statt
       // ihm blind zu vertrauen, berechnen wir den Austritts-Drehwinkel aus der
       // GEFAHRENEN Geometrie (Bodenwahrheit): Einfahrts-Kurs vs. Ausfahrts-Kurs,
-      // rechts positiv (passt zur Painter-Formel −pi/2 + angle). Faellt das auf
-      // GHs turn_angle zurueck, wenn zu wenig Stuetzpunkte da sind.
+      // rechts positiv (passt zur Painter-Formel −pi/2 + angle). Fällt das auf
+      // GHs turn_angle zurück, wenn zu wenig Stuetzpunkte da sind.
       int? exitIdx;
       if (interval is List && interval.length >= 2) {
         exitIdx = (interval[1] as num?)?.toInt();
@@ -9726,7 +9921,7 @@ class RouteService {
       2: ['2.', '2 ', 'zweite', 'zweiten', 'second'],
       3: ['3.', '3 ', 'dritte', 'dritten', 'third'],
       4: ['4.', '4 ', 'vierte', 'vierten', 'fourth'],
-      5: ['5.', '5 ', 'fuenfte', 'fuenften', 'fünfte', 'fünften', 'fifth'],
+      5: ['5.', '5 ', 'fünfte', 'fünften', 'fünfte', 'fünften', 'fifth'],
       6: ['6.', '6 ', 'sechste', 'sechsten', 'sixth'],
       7: ['7.', '7 ', 'siebte', 'siebten', 'seventh'],
       8: ['8.', '8 ', 'achte', 'achten', 'eighth'],
@@ -11173,7 +11368,7 @@ int? roundaboutExitNumberFromTopologyBearings({
   }
   if (!entryBearing.isFinite || !exitBearing.isFinite) return null;
 
-  // DACH/Rechtsverkehr: Im Kreisverkehr faehrt man gegen den Uhrzeigersinn.
+  // DACH/Rechtsverkehr: Im Kreisverkehr fährt man gegen den Uhrzeigersinn.
   // Bearings sind Kompasswinkel vom Kreiselzentrum nach aussen. Bei Einfahrt
   // von Sueden (180°) ist die erste Ausfahrt typischerweise Osten (90°), also
   // absteigende Bearings: delta = entry - arm.
@@ -11253,7 +11448,7 @@ bool turnSignsContradict(int ghSign, int geomSign) {
   return (ghSign > 0) != (geomSign > 0);
 }
 
-/// 2026-06-13 (vucko Manöver-26km-Bug, Geraete-Screenshot): Globaler Re-Snap
+/// 2026-06-13 (vucko Manöver-26km-Bug, Geräte-Screenshot): Globaler Re-Snap
 /// für SELBSTÜBERLAPPENDE Routen (Rundkurse: Start==Ende, dieselbe Straße auf
 /// Hin- und Rückweg). Findet unter ALLEN Routenpunkten innerhalb
 /// [corridorMeters] denjenigen, der dem [referenceIndex] am NÄCHSTEN im
@@ -11285,12 +11480,12 @@ RouteWindowMatch findNearestOnRoutePreferIndex({
   }
   // 2026-06-15 (vucko M1 Phantom-Reroute): SENKRECHTE Punkt-zu-SEGMENT-Distanz
   // statt Vertex-Distanz. Auf duennen GraphHopper-Segmenten (lange Landstrassen
-  // zwischen Kreiseln) kann der naechste VERTEX 55-70m weg sein, obwohl die
+  // zwischen Kreiseln) kann der nächste VERTEX 55-70m weg sein, obwohl die
   // Senkrechte auf die LINIE nur 12-20m ist → der alte Vertex-Check meldete
   // faelschlich „kein Punkt im 50m-Korridor" = Off-Route, obwohl der Puck exakt
-  // auf der Linie fuhr → Phantom-„Neuberechnung" (Geraete-Video A_04). Mit der
+  // auf der Linie fuhr → Phantom-„Neuberechnung" (Geräte-Video A_04). Mit der
   // Segment-Projektion verschwindet das; die Index-Naehe-Praeferenz (Selbst-
-  // ueberlapp-Schutz bei Rundkursen) bleibt unveraendert.
+  // überlapp-Schutz bei Rundkursen) bleibt unveraendert.
   var bestInCorridorIdx = -1;
   var bestInCorridorGap = 1 << 30;
   var bestInCorridorDist = double.infinity;

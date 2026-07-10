@@ -226,7 +226,7 @@ class CommunityChatService {
     if (cleanName.isEmpty ||
         cleanName.length > AppInputLimits.communityNameMaxLength) {
       throw const CommunityChatServiceException(
-        'Community-Name ist ungueltig.',
+        'Community-Name ist ungültig.',
       );
     }
     if ((cleanDescription?.length ?? 0) >
@@ -313,7 +313,7 @@ class CommunityChatService {
   static Future<String> joinCommunityWithCode(String rawCode) async {
     final code = normalizeInviteCode(rawCode);
     if (code == null) {
-      throw const CommunityChatServiceException('Code ungueltig.');
+      throw const CommunityChatServiceException('Code ungültig.');
     }
 
     try {

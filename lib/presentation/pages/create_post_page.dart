@@ -4,12 +4,19 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 
 class CreatePostPage extends StatefulWidget {
   final String? initialText;
   final String? sharedRouteId;
-  const CreatePostPage({super.key, this.initialText, this.sharedRouteId});
+  final String? sharedGroupId;
+  const CreatePostPage({
+    super.key,
+    this.initialText,
+    this.sharedRouteId,
+    this.sharedGroupId,
+  });
 
   @override
   State<CreatePostPage> createState() => _CreatePostPageState();
@@ -20,6 +27,9 @@ class _CreatePostPageState extends State<CreatePostPage> {
   bool _posting = false;
   bool _checkingRoutePost = false;
   bool _routeAlreadyPosted = false;
+  // 2026-07-03 (vucko Gruppen-Share): Dubletten-Flags gespiegelt vom Routen-Share.
+  bool _checkingGroupPost = false;
+  bool _groupAlreadyPosted = false;
   String _visibility = 'public'; // 'public' oder 'followers'
 
   @override
@@ -33,6 +43,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
           : initialText.substring(0, AppInputLimits.postContentMaxLength);
     }
     _checkRoutePostAvailability();
+    _checkGroupPostAvailability();
   }
 
   @override
@@ -43,7 +54,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
 
   Future<void> _submitPost() async {
     final content = _controller.text.trim();
-    if (content.isEmpty || _routeAlreadyPosted) return;
+    if (content.isEmpty || _routeAlreadyPosted || _groupAlreadyPosted) return;
 
     setState(() => _posting = true);
     try {
@@ -51,6 +62,7 @@ class _CreatePostPageState extends State<CreatePostPage> {
         content,
         visibility: _visibility,
         sharedRouteId: widget.sharedRouteId,
+        sharedGroupId: widget.sharedGroupId,
       );
       if (!mounted) return;
       final gamResult = await GamificationService.calculateAndSync();
@@ -67,6 +79,19 @@ class _CreatePostPageState extends State<CreatePostPage> {
         setState(() {
           _posting = false;
           _routeAlreadyPosted = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: const Color(0xFF1C1F26),
+          ),
+        );
+      }
+    } on DuplicateSharedGroupPostException catch (e) {
+      if (mounted) {
+        setState(() {
+          _posting = false;
+          _groupAlreadyPosted = true;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -108,6 +133,27 @@ class _CreatePostPageState extends State<CreatePostPage> {
     }
   }
 
+  // 2026-07-03 (vucko Gruppen-Share): Dubletten-Check gespiegelt vom Routen-Share.
+  Future<void> _checkGroupPostAvailability() async {
+    final groupId = widget.sharedGroupId;
+    if (groupId == null || groupId.trim().isEmpty) return;
+
+    setState(() => _checkingGroupPost = true);
+    try {
+      final alreadyPosted = await SocialService.hasOwnPostForSharedGroup(
+        groupId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _groupAlreadyPosted = alreadyPosted;
+        _checkingGroupPost = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _checkingGroupPost = false);
+    }
+  }
+
   Widget _buildVisibilityChip(String value, IconData icon, String label) {
     final selected = _visibility == value;
     return GestureDetector(
@@ -144,7 +190,12 @@ class _CreatePostPageState extends State<CreatePostPage> {
   Widget build(BuildContext context) {
     final hasContent = _controller.text.trim().isNotEmpty;
     final canPost =
-        hasContent && !_posting && !_checkingRoutePost && !_routeAlreadyPosted;
+        hasContent &&
+        !_posting &&
+        !_checkingRoutePost &&
+        !_routeAlreadyPosted &&
+        !_checkingGroupPost &&
+        !_groupAlreadyPosted;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -246,6 +297,38 @@ class _CreatePostPageState extends State<CreatePostPage> {
                     Expanded(
                       child: Text(
                         SocialService.duplicateSharedRoutePostMessage,
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+          // 2026-07-03 (vucko Gruppen-Share): Gruppen-Vorschau analog zur Route,
+          // ohne Beitreten-Button (nur Vorschau im Composer).
+          if (widget.sharedGroupId != null) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: GroupAttachmentCard(
+                groupId: widget.sharedGroupId!,
+                compact: true,
+                showJoinButton: false,
+              ),
+            ),
+            if (_groupAlreadyPosted)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.info_outline,
+                      color: Color(0xFFFFD166),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        SocialService.duplicateSharedGroupPostMessage,
                         style: TextStyle(color: Colors.grey[400], fontSize: 13),
                       ),
                     ),

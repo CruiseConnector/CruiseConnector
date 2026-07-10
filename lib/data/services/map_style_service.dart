@@ -225,15 +225,15 @@ class MapStyleService {
 
   /// 2026-06-11 (vucko Karten-Selbstheilung): EINMALIGER Integritäts-Check der
   /// lokalen dach.pmtiles. Problem: [isDachDownloaded] prüft nur die GRÖSSE —
-  /// eine korrupt heruntergeladene Datei (Resume-Lücke, Server-Wechsel waehrend
+  /// eine korrupt heruntergeladene Datei (Resume-Lücke, Server-Wechsel während
   /// des Downloads, defekter Block) gilt als „fertig", die Karte rendert dann
-  /// dauerhaft fehlerhaft bzw. faellt auf den alten Mapbox-Raster-Look zurueck.
-  /// Heilung: (1) PMTiles-Magic-Header pruefen, (2) wenn Netz da: lokale Groesse
+  /// dauerhaft fehlerhaft bzw. fällt auf den alten Mapbox-Raster-Look zurück.
+  /// Heilung: (1) PMTiles-Magic-Header prüfen, (2) wenn Netz da: lokale Größe
   /// gegen die Server-Datei (HEAD Content-Length) — kleiner = unvollstaendig.
-  /// Bei Defekt wird die Datei geloescht und der bewaehrte Auto-Download
+  /// Bei Defekt wird die Datei gelöscht und der bewaehrte Auto-Download
   /// (NUR WLAN, resumierbar, graceful) laedt sie automatisch EINMALIG neu.
-  /// Das Erledigt-Flag wird nur gesetzt, wenn die Pruefung lief — so heilt ein
-  /// Offline-Start sich beim naechsten Start mit Netz selbst.
+  /// Das Erledigt-Flag wird nur gesetzt, wenn die Prüfung lief — so heilt ein
+  /// Offline-Start sich beim nächsten Start mit Netz selbst.
   Future<void> verifyLocalDachIntegrityOnce() async {
     const flagKey = 'dach_pmtiles_integrity_v1_done';
     try {
@@ -241,7 +241,7 @@ class MapStyleService {
       if (prefs.getBool(flagKey) == true) return;
       final f = await _localFile();
       if (!await f.exists()) {
-        // Nichts zu heilen — der normale Download-Pfad uebernimmt.
+        // Nichts zu heilen — der normale Download-Pfad übernimmt.
         await prefs.setBool(flagKey, true);
         return;
       }
@@ -271,15 +271,15 @@ class MapStyleService {
             if (localLen < remoteLen) healthy = false;
           }
         } catch (_) {
-          // Kein Netz: Magic-+Groessen-Check muessen reichen; Flag bleibt
-          // ungesetzt, damit der naechste Start mit Netz voll prueft.
+          // Kein Netz: Magic-+Größen-Check müssen reichen; Flag bleibt
+          // ungesetzt, damit der nächste Start mit Netz voll prüft.
         }
       }
       if (!healthy) {
         await f.delete();
         debugPrint(
           '[MapStyle] Integritaets-Check: defekte/unvollstaendige dach.pmtiles '
-          'geloescht — automatischer Neu-Download startet (WLAN)',
+          'gelöscht — automatischer Neu-Download startet (WLAN)',
         );
         // Kein eigener Download-Anstoss: der Pre-Warm ruft direkt nach diesem
         // Check maybeAutoDownloadDach() — ein zweiter Aufruf hier erzeugte
@@ -289,7 +289,7 @@ class MapStyleService {
         await prefs.setBool(flagKey, true);
       }
     } catch (e) {
-      debugPrint('[MapStyle] Integritaets-Check uebersprungen: $e');
+      debugPrint('[MapStyle] Integritaets-Check übersprungen: $e');
     }
   }
 

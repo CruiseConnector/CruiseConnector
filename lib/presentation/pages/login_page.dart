@@ -129,7 +129,7 @@ class _LoginPageState extends State<LoginPage> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Anmeldung geoeffnet. Kehre danach zur App zurueck.'),
+            content: Text('Anmeldung geöffnet. Kehre danach zur App zurück.'),
           ),
         );
       }
@@ -160,7 +160,7 @@ class _LoginPageState extends State<LoginPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Bestaetigungs-E-Mail an $email erneut gesendet.'),
+          content: Text('Bestätigungs-E-Mail an $email erneut gesendet.'),
         ),
       );
     } on AuthException catch (e) {
@@ -192,8 +192,8 @@ class _LoginPageState extends State<LoginPage> {
     if (m.contains('google login ist noch nicht konfiguriert')) {
       return 'Google Login ist noch nicht fertig konfiguriert.';
     }
-    if (m.contains('apple') && m.contains('nicht verfuegbar')) {
-      return 'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.';
+    if (m.contains('apple') && m.contains('nicht verfügbar')) {
+      return 'Apple Anmeldung ist auf diesem Gerät nicht verfügbar.';
     }
     if (m.contains('too many requests')) {
       return 'Zu viele Versuche. Bitte kurz warten.';

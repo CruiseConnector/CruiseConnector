@@ -24,6 +24,7 @@ import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
+import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
@@ -261,6 +262,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   String? _selectedBadgeHuntId;
   int _streakDays = 0;
   TripSummary? _activeTrip; // 2026-05-24 (vucko Task #53): Resume-Card
+  // 2026-07-06 (vucko Fahrt-Resume): unterbrochene Solo-Fahrt (App wurde vom
+  // System beendet) → „Fahrt fortsetzen"-Card.
+  ActiveRideSnapshot? _resumableRide;
   HomeRouteRecommendation? _todayRecommendation;
   bool _isRouteSaved = false;
   // 2026-06-09 (vucko Audit T3-B): Re-Entry-Guard gegen Doppel-Tap auf Speichern
@@ -1331,6 +1335,16 @@ class _HomeContentPageState extends State<HomeContentPage>
         debugPrint('[Home] Trip-Status laden fehlgeschlagen: $e');
       }
 
+      // 2026-07-06 (vucko Fahrt-Resume): Unterbrochene Solo-Fahrt checken —
+      // existiert ein lokaler Snapshot (App wurde mitten in der Fahrt vom
+      // System beendet), bieten wir „Fahrt fortsetzen" als Home-Card an.
+      ActiveRideSnapshot? resumableRide;
+      try {
+        resumableRide = await ActiveRideSnapshotService.load();
+      } catch (e) {
+        debugPrint('[Home] Fahrt-Snapshot laden fehlgeschlagen: $e');
+      }
+
       if (mounted) {
         setState(() {
           userLevel = result.level.level;
@@ -1354,6 +1368,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           _monthActiveDays = monthActiveDays.length;
           _streakDays = streak;
           _activeTrip = activeTrip;
+          _resumableRide = resumableRide;
           _todayRecommendation = recommendation;
           _isRouteSaved = routeSaved;
           _loading = false;
@@ -5007,21 +5022,27 @@ class _HomeContentPageState extends State<HomeContentPage>
   Widget _buildSuggestedRouteSection() {
     final recommendation = _todayRecommendation;
     final trip = _activeTrip;
+    final resumableRide = _resumableRide;
 
-    // 2026-05-24 (vucko): Beides vorhanden → swipeable Carousel mit Trip zuerst.
-    // Nur Trip → nur Trip-Card. Nur Recommendation → nur diese.
-    if (trip != null && recommendation != null) {
-      return _buildHomeCarousel(
-        cards: [
-          _buildTripResumeCarouselCard(trip),
-          // Heute-für-dich-Card auf gleiche Carousel-Höhe wrappen damit
-          // PageView nichts streckt. Original-Card hat intrinsisch < 180px.
-          SizedBox(
-            height: _carouselCardHeight,
-            child: _buildSuggestedRouteCard(recommendation),
-          ),
-        ],
-      );
+    // 2026-05-24 (vucko): Mehrere Cards → swipeable Carousel.
+    // 2026-07-06 (vucko Fahrt-Resume): Unterbrochene Fahrt kommt ZUERST —
+    // das ist die dringendste Aktion (App wurde mitten in der Fahrt beendet).
+    final cards = <Widget>[
+      if (resumableRide != null) _buildRideResumeCarouselCard(resumableRide),
+      if (trip != null) _buildTripResumeCarouselCard(trip),
+      if (recommendation != null)
+        // Heute-für-dich-Card auf gleiche Carousel-Höhe wrappen damit
+        // PageView nichts streckt. Original-Card hat intrinsisch < 180px.
+        SizedBox(
+          height: _carouselCardHeight,
+          child: _buildSuggestedRouteCard(recommendation),
+        ),
+    ];
+    if (cards.length > 1) {
+      return _buildHomeCarousel(cards: cards);
+    }
+    if (resumableRide != null) {
+      return _buildRideResumeCarouselCard(resumableRide);
     }
     if (trip != null) {
       return _buildTripResumeCarouselCard(trip);
@@ -5033,6 +5054,189 @@ class _HomeContentPageState extends State<HomeContentPage>
       return _buildSuggestedRouteSkeleton();
     }
     return _buildEmptyRecommendation();
+  }
+
+  /// 2026-07-06 (vucko Fahrt-Resume): Card für eine unterbrochene Solo-Fahrt.
+  /// Tap = Route über den bewährten pendingRoute-Pfad erneut laden; der
+  /// joinNearestForward-Mechanismus schließt automatisch am nächsten
+  /// Routenpunkt an — auch wenn der User inzwischen weitergefahren ist.
+  Widget _buildRideResumeCarouselCard(ActiveRideSnapshot ride) {
+    const statusColor = Color(0xFFFFB347);
+    final ageMinutes = DateTime.now().difference(ride.savedAt).inMinutes;
+    final ageLabel = ageMinutes < 60
+        ? 'vor $ageMinutes Min'
+        : 'vor ${(ageMinutes / 60).floor()} Std';
+    final remainingKm = (ride.distanceKm - ride.drivenKm).clamp(
+      0.0,
+      ride.distanceKm,
+    );
+    final metricsLine =
+        '${ride.distanceKm.toStringAsFixed(0)} km Route • '
+        '${ride.drivenKm.toStringAsFixed(0)} km gefahren • ${ride.style}';
+    return SizedBox(
+      height: _carouselCardHeight,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: const Color(0xFFFFFFFF).withValues(alpha: 0.06),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: statusColor.withValues(alpha: 0.45),
+                          blurRadius: 10,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    'FAHRT UNTERBROCHEN',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.66),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.35,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      '· $ageLabel',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.42),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                ride.isRoundTrip ? 'Rundkurs fortsetzen' : 'Fahrt fortsetzen',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.25,
+                  height: 1.08,
+                ),
+                maxLines: 2,
+              ),
+              const SizedBox(height: 5),
+              Text(
+                metricsLine,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.64),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 2,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Noch ~${remainingKm.toStringAsFixed(0)} km offen — die Route '
+                'wird an deiner Position wieder aufgenommen.',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 11.5,
+                ),
+                maxLines: 2,
+              ),
+              const Spacer(),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 44,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppAccentColors.accent,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          elevation: 0,
+                        ),
+                        onPressed: () => _resumeInterruptedRide(ride),
+                        child: const Text(
+                          'Fortsetzen',
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 44,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white.withValues(alpha: 0.55),
+                      ),
+                      onPressed: _dismissInterruptedRide,
+                      child: const Text(
+                        'Verwerfen',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _resumeInterruptedRide(ActiveRideSnapshot ride) {
+    final route = SavedRoute(
+      id: 'local-resume-${ride.startedAt.millisecondsSinceEpoch}',
+      createdAt: ride.startedAt,
+      style: ride.style,
+      distanceKm: ride.distanceKm,
+      geometry: ride.geometry,
+      durationSeconds: ride.durationSeconds,
+      routeType: ride.isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
+      routeSource: 'resume',
+    );
+    CruiseModePage.pendingRoute.value = route;
+    widget.onTabChange?.call(2);
+  }
+
+  void _dismissInterruptedRide() {
+    unawaited(ActiveRideSnapshotService.clear());
+    if (mounted) setState(() => _resumableRide = null);
   }
 
   // 2026-05-24 (vucko): Carousel-State für Trip+Heute-Slides.

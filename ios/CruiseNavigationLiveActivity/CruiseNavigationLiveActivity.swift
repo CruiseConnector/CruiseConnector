@@ -66,6 +66,10 @@ struct CruiseNavigationLiveActivity: Widget {
 struct NavigationLiveActivityView: View {
     let state: CruiseNavigationAttributes.ContentState
 
+    // 2026-07-02 (vucko Geräte-Video): Das NÄCHSTE Manöver + seine Distanz sind
+    // beim Fahren die entscheidende Information — sie stehen jetzt groß (Distanz
+    // als großes Trailing-Element statt der Restzeit). Reststrecke + Restzeit
+    // rutschen klein in die Caption-Zeile.
     var body: some View {
         HStack(spacing: 14) {
             ManeuverBadge(state: state, compact: false)
@@ -75,19 +79,19 @@ struct NavigationLiveActivityView: View {
                     .lineLimit(2)
                     .foregroundStyle(.white)
                 HStack(spacing: 10) {
-                    Label(formatDistance(state.distanceToManeuverMeters), systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                     Label(formatRemaining(state.remainingDistanceMeters), systemImage: "road.lanes")
+                    if let seconds = state.remainingDurationSeconds {
+                        Label(formatDuration(seconds), systemImage: "clock")
+                    }
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.70))
             }
             Spacer(minLength: 4)
-            if let seconds = state.remainingDurationSeconds {
-                Text(formatDuration(seconds))
-                    .font(.subheadline.weight(.heavy))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-            }
+            Text(formatDistance(state.distanceToManeuverMeters))
+                .font(.title2.weight(.heavy))
+                .monospacedDigit()
+                .foregroundStyle(.white)
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 16)

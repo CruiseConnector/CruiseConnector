@@ -26,10 +26,10 @@ import 'package:cruise_connect/presentation/pages/liked_posts_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
-import 'package:cruise_connect/presentation/widgets/cruiser_dna_card.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -721,14 +721,6 @@ class _ProfilePageState extends State<ProfilePage>
               ),
             ),
 
-            // 2026-05-24 (vucko Task #40): Kurven-DNA Profil-Card.
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 16),
-                child: CruiserDnaCard(),
-              ),
-            ),
-
             // Garage — mehrere Autos/Motorräder, horizontal swipebar.
             if (_vehicles.isNotEmpty)
               SliverToBoxAdapter(
@@ -804,6 +796,7 @@ class _ProfilePageState extends State<ProfilePage>
                               commentsCount: post['comments_count'] ?? 0,
                               repostsCount: post['reposts_count'] ?? 0,
                               sharedRouteId: post['shared_route_id'] as String?,
+                              sharedGroupId: post['shared_group_id'] as String?,
                             );
                           },
                         ),
@@ -959,6 +952,15 @@ class _ProfilePageState extends State<ProfilePage>
                                         compact: true,
                                       ),
                                     ],
+                                    // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog.
+                                    if (post['shared_group_id'] != null) ...[
+                                      const SizedBox(height: 10),
+                                      GroupAttachmentCard(
+                                        groupId:
+                                            post['shared_group_id'] as String,
+                                        compact: true,
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -1037,6 +1039,7 @@ class _ProfilePageState extends State<ProfilePage>
     required int commentsCount,
     required int repostsCount,
     String? sharedRouteId,
+    String? sharedGroupId,
   }) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final liveAvatarUrl = uid == null
@@ -1151,6 +1154,11 @@ class _ProfilePageState extends State<ProfilePage>
             const SizedBox(height: 10),
             RouteAttachmentCard(routeId: sharedRouteId, compact: true),
           ],
+          // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog zur Route.
+          if (sharedGroupId != null) ...[
+            const SizedBox(height: 10),
+            GroupAttachmentCard(groupId: sharedGroupId, compact: true),
+          ],
           const SizedBox(height: 16),
           Align(
             alignment: Alignment.centerLeft,
@@ -1163,6 +1171,7 @@ class _ProfilePageState extends State<ProfilePage>
                 content: content,
                 time: time,
                 sharedRouteId: sharedRouteId,
+                sharedGroupId: sharedGroupId,
                 avatarUrl: _avatarUrl,
               ),
               child: Padding(
@@ -1430,6 +1439,7 @@ class _ProfilePageState extends State<ProfilePage>
       content: (post['content'] ?? '').toString(),
       time: _formatTimeAgo(post['created_at']),
       sharedRouteId: post['shared_route_id'] as String?,
+      sharedGroupId: post['shared_group_id'] as String?,
       avatarUrl: profile?['avatar_url'] as String?,
     );
   }
@@ -1441,6 +1451,7 @@ class _ProfilePageState extends State<ProfilePage>
     required String content,
     required String time,
     String? sharedRouteId,
+    String? sharedGroupId,
     String? avatarUrl,
   }) {
     Navigator.push(
@@ -1453,6 +1464,7 @@ class _ProfilePageState extends State<ProfilePage>
           content: content,
           time: time,
           sharedRouteId: sharedRouteId,
+          sharedGroupId: sharedGroupId,
           avatarUrl: avatarUrl,
         ),
       ),

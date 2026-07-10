@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -12,8 +13,10 @@ import '../../data/services/gamification_service.dart';
 import '../../data/services/geocoding_service.dart';
 import '../../data/services/group_route_data_builder.dart';
 import '../../data/services/route_service.dart';
+import '../../data/services/saved_routes_service.dart';
 import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
+import '../../domain/models/saved_route.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import '../widgets/group_safety_notice_sheet.dart';
@@ -390,6 +393,120 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       });
     }
     _fitRouteBounds(coords);
+  }
+
+  // 2026-07-03 (vucko Gruppe-mit-gespeicherter-Route, Geräte-Video 07-03): Statt
+  // jedes Mal neu zu generieren, kann der Ersteller eine bereits GESPEICHERTE
+  // eigene Route als Gruppen-Route übernehmen. Die SavedRoute wird 1:1 in ein
+  // RouteResult konvertiert (identische Geometrie) und über denselben Pfad wie
+  // eine frisch generierte Route akzeptiert → landet unverändert im
+  // GroupRouteDataBuilder, kein Eingriff in den Gruppen-Erstell-Pfad nötig.
+  Future<void> _useSavedRoute() async {
+    if (_isGenerating) return;
+    List<SavedRoute> library;
+    try {
+      library = await SavedRoutesService.getSavedRouteLibrary();
+    } catch (_) {
+      _showError('Gespeicherte Routen konnten nicht geladen werden.');
+      return;
+    }
+    if (!mounted) return;
+    if (library.isEmpty) {
+      _showError('Du hast noch keine gespeicherte Route.');
+      return;
+    }
+    final picked = await showModalBottomSheet<SavedRoute>(
+      context: context,
+      backgroundColor: const Color(0xFF15181F),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) => _SavedRoutePickerSheet(routes: library),
+    );
+    if (picked == null || !mounted) return;
+
+    final result = _savedRouteToResult(picked);
+    if (result == null) {
+      _showError('Diese Route hat zu wenige Punkte.');
+      return;
+    }
+    setState(() {
+      _isRoundTrip = picked.isRoundTrip;
+      _selectedStyle = picked.style;
+    });
+    try {
+      await _acceptGeneratedRoute(
+        result,
+        targetKm: picked.distanceKm.round(),
+        waypointSignature: null,
+      );
+      if (mounted) {
+        setState(() => _routeStatusText = 'Gespeicherte Route übernommen');
+      }
+    } catch (e) {
+      _showError(
+        e is RouteServiceException
+            ? e.userMessage
+            : 'Route konnte nicht übernommen werden.',
+      );
+    }
+  }
+
+  RouteResult? _savedRouteToResult(SavedRoute route) {
+    final geometry = route.geometry;
+    final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
+    final coordinates = coordsRaw
+        .whereType<List>()
+        .where((c) => c.length >= 2)
+        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+        .toList();
+    if (coordinates.length < 2) return null;
+    return RouteResult(
+      geoJson: json.encode(geometry),
+      geometry: geometry,
+      coordinates: coordinates,
+      maneuvers: const [],
+      distanceMeters: route.distanceKm * 1000,
+      durationSeconds: route.durationSeconds,
+      distanceKm: route.distanceKm,
+      edgeMeta: {
+        'route_source': 'saved',
+        'source': 'saved',
+        'saved_route_id': route.id,
+        'explicit_route_handoff': true,
+      },
+    );
+  }
+
+  Widget _buildUseSavedRouteButton() {
+    // 2026-07-03 (vucko): Solide, klar sichtbare Karte statt fast transparentem
+    // OutlinedButton. Der Button sitzt im scrollbaren Formular-Body (nicht in der
+    // transparenten Bottom-Bar) → garantiert gelayoutet + sichtbar auf jedem
+    // Gerät. Nutzer kann statt „neu generieren" eine gespeicherte Route übernehmen.
+    final accent = AppAccentColors.accent;
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: ElevatedButton.icon(
+        onPressed: _isGenerating ? null : _useSavedRoute,
+        style: ElevatedButton.styleFrom(
+          foregroundColor: Colors.white,
+          backgroundColor: const Color(0xFF1C1F26),
+          disabledBackgroundColor: const Color(0xFF14161C),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: accent.withValues(alpha: 0.55)),
+          ),
+        ),
+        icon: Icon(Icons.bookmark_rounded, size: 20, color: accent),
+        label: const Text(
+          'Gespeicherte Route verwenden',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+        ),
+      ),
+    );
   }
 
   Future<RouteResult?> _pollRoundTripSearchSession(
@@ -1057,6 +1174,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         onClearWaypoints: _clearWaypoints,
                       ),
                       const SizedBox(height: 16),
+                      _buildUseSavedRouteButton(),
+                      const SizedBox(height: 16),
                       _buildStartAddressHelper(),
                       if (_selectedLocation == 'Adresse') ...[
                         const SizedBox(height: 12),
@@ -1699,7 +1818,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           ),
         ),
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
           children: [
             Expanded(
               child: SizedBox(
@@ -1781,6 +1903,8 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               ),
             ),
           ],
+            ),
+          ],
         ),
       ),
     );
@@ -1845,5 +1969,130 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     final t =
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
     return '$d $t';
+  }
+}
+
+/// 2026-07-03 (vucko Gruppe-mit-gespeicherter-Route): Auswahl-Sheet für die
+/// gespeicherten Routen des Users. Tap → gibt die SavedRoute zurück.
+class _SavedRoutePickerSheet extends StatelessWidget {
+  const _SavedRoutePickerSheet({required this.routes});
+
+  final List<SavedRoute> routes;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = AppAccentColors.accent;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Gespeicherte Route wählen',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: routes.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, i) {
+                  final r = routes[i];
+                  final title = (r.name != null && r.name!.trim().isNotEmpty)
+                      ? r.name!.trim()
+                      : (r.isRoundTrip ? 'Rundkurs' : 'A → B');
+                  final subtitle =
+                      '${r.distanceKm.toStringAsFixed(1)} km · ${r.isRoundTrip ? 'Rundkurs' : 'A → B'} · ${r.style}';
+                  return Material(
+                    color: const Color(0xFF1C2028),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.of(context).pop(r),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: accent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(11),
+                              ),
+                              child: Icon(
+                                Icons.route_rounded,
+                                color: accent,
+                                size: 21,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    subtitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.6),
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Icon(
+                              Icons.chevron_right_rounded,
+                              color: Colors.white.withValues(alpha: 0.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

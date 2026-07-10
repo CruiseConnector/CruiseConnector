@@ -37,6 +37,27 @@ void main() {
     expect(createButton.onPressed, isNull);
   });
 
+  testWidgets(
+    'zeigt den „Gespeicherte Route verwenden"-Button und er ist tappbar',
+    (tester) async {
+      // 2026-07-03 (vucko): Regressionsschutz. Der Button war im (veralteten)
+      // Worktree-Build gar nicht vorhanden und lag im Haupt-Checkout in der
+      // transparenten Bottom-Bar. Jetzt im scrollbaren Formular-Body → muss
+      // sichtbar UND als aktiver ElevatedButton rendern.
+      await tester.pumpWidget(buildPage());
+      await tester.pump();
+
+      final button = find.widgetWithText(
+        ElevatedButton,
+        'Gespeicherte Route verwenden',
+      );
+      expect(button, findsOneWidget);
+
+      // Aktiv (nicht generierend) → onPressed gesetzt, also wirklich tappbar.
+      expect(tester.widget<ElevatedButton>(button).onPressed, isNotNull);
+    },
+  );
+
   testWidgets('zeigt Umweg-Auswahl erst im A-nach-B-Modus', (tester) async {
     await tester.pumpWidget(buildPage());
     await tester.pump();

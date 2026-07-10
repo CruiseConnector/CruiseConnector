@@ -123,8 +123,8 @@ class _HomePageState extends State<HomePage> {
     // über WLAN, resumierbar, im Hintergrund. Sobald lokal, rendert MapLibre die
     // ganze DACH-Karte ohne Netz. Deaktivieren via MapStyleService.autoDownloadEnabled.
     // 2026-06-11 (vucko Karten-Selbstheilung): EINMALIG die lokale
-    // dach.pmtiles auf Defekte pruefen (Magic-Header + Groesse vs. Server) —
-    // eine fehlerhaft geladene Karte wird geloescht und automatisch neu
+    // dach.pmtiles auf Defekte prüfen (Magic-Header + Größe vs. Server) —
+    // eine fehlerhaft geladene Karte wird gelöscht und automatisch neu
     // heruntergeladen.
     MapStyleService.instance.ensureAutoDownloadScheduled(
       reason: 'home_prewarm',

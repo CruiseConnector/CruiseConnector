@@ -12,12 +12,16 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 /// kalibrieren kann (vorher fix + zu leise). Schließt sich nicht von selbst,
 /// stört also nicht — der Nutzer tippt „Fertig".
 Future<void> showVoiceVolumeSheet(BuildContext context) {
+  // 2026-07-02 (vucko Geräte-Video Voice-Chaos): Solange das Sheet offen ist,
+  // keine Navigations-Ansagen — die Test-Stimme und echte Manöver-Ansagen
+  // queuten sich sonst gegenseitig („fünf verschiedene Sachen nach Start").
+  TtsService.instance.navSuppressed = true;
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
     builder: (_) => const _VoiceVolumeSheet(),
-  );
+  ).whenComplete(() => TtsService.instance.navSuppressed = false);
 }
 
 /// Untergrenze des Reglers — selbst „leise" bleibt klar hörbar (der Nutzer fand

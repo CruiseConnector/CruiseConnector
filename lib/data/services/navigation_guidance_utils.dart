@@ -731,7 +731,7 @@ bool isImplausibleGpsJump({
 /// Kontinuierliche Routenmeter eines Matches. Wenn der Matcher auf ein Segment
 /// projiziert hat, gewinnt die echte Segment-Fraktion gegenüber dem diskreten
 /// Vertex-Index. Genau dort entstehen sonst sichtbare "Vorsprünge" auf langen
-/// GraphHopper-Segmenten: fraction 0.51 würde bereits den naechsten Vertex als
+/// GraphHopper-Segmenten: fraction 0.51 würde bereits den nächsten Vertex als
 /// Index setzen, obwohl der Puck erst knapp über die Segmentmitte gefahren ist.
 double routeDistanceForMatchMeters({
   required List<double> cumulativeDistances,
@@ -759,7 +759,7 @@ double routeDistanceForMatchMeters({
 /// Der bisherige repIdx (`fraction >= 0.5 ? i+1 : i`) war für "welcher Vertex ist
 /// naeher" sinnvoll, aber als Navigations-Fortschritt zu aggressiv: Auf einem
 /// 180-m-Segment lag der Index bis zu ~90 m vor dem Fahrzeug. Darum wird der
-/// naechste Vertex erst kurz vor Segmentende committed.
+/// nächste Vertex erst kurz vor Segmentende committed.
 int stableRouteIndexForMatch({
   required RouteWindowMatch match,
   required int currentIndex,
@@ -799,12 +799,12 @@ double plausibleRouteAdvanceLimitMeters({
   );
 }
 
-/// Plausibilitaets-Gate fuer Fortschritt entlang der Route.
+/// Plausibilitaets-Gate für Fortschritt entlang der Route.
 ///
 /// Wichtig: Das ist NICHT Off-Route/Reroute-Logik. Es verhindert nur, dass ein
 /// nahe liegender Zukunfts-Ast oder ein langer Segment-Vertex den
 /// Navigationsfortschritt schneller vorzieht als das Fahrzeug physisch dort sein
-/// kann. Weil [elapsedSeconds] seit dem letzten akzeptierten Index laeuft, bleibt
+/// kann. Weil [elapsedSeconds] seit dem letzten akzeptierten Index läuft, bleibt
 /// Sparse-Geometrie beweglich: echte Fahrt wird nach ausreichender realer Zeit
 /// akzeptiert, ein 200-m-Teleport nach zwei GPS-Fixes aber nicht.
 bool isPlausibleRouteAdvance({

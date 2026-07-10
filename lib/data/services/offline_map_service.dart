@@ -237,12 +237,12 @@ class OfflineMapService {
   }
 
   /// 2026-06-11 (vucko Karten-Selbstheilung): Einmalige Cache-Migration beim
-  /// App-Start. Bestands-User koennen noch ALTE Mapbox-Tiles im Cache haben
+  /// App-Start. Bestands-User können noch ALTE Mapbox-Tiles im Cache haben
   /// (Quelle vor dem Wechsel auf unsere eigene Karte) oder fehlerhaft
   /// geladene Kacheln (0-Byte-/Mini-Dateien von abgebrochenen Downloads).
-  /// Ablauf: (1) alten mapbox_dark_v11-Ordner restlos loeschen, (2) eigenen
+  /// Ablauf: (1) alten mapbox_dark_v11-Ordner restlos löschen, (2) eigenen
   /// Cache von korrupten Kacheln befreien (<=128 Bytes, gleiche Schwelle wie
-  /// der Health-Check), (3) DACH-Uebersichts-Flag zuruecksetzen, damit der
+  /// der Health-Check), (3) DACH-Uebersichts-Flag zurücksetzen, damit der
   /// regulaere Pre-Warm direkt danach ALLES frisch von unserer Quelle laedt.
   /// Das Erledigt-Flag wird gesetzt, sobald der alte Kosten-Cache entfernt und
   /// der eigene Cache bereinigt wurde.
@@ -259,7 +259,7 @@ class OfflineMapService {
       if (await legacyDir.exists()) {
         await legacyDir.delete(recursive: true);
         cleaned = true;
-        debugPrint('[OfflineMap] Migration: alter Tile-Cache geloescht');
+        debugPrint('[OfflineMap] Migration: alter Tile-Cache gelöscht');
       }
       // 2. Korrupte Kacheln (0-Byte-/Mini-Dateien von abgebrochenen
       //    Downloads) im AKTIVEN Cache-Ordner aufraeumen — der laufende
@@ -291,14 +291,14 @@ class OfflineMapService {
         );
       }
       // 3. Wurde aufgeraeumt: DACH-Uebersicht neu laden lassen (deren
-      //    Einmal-Flag zeigt sonst auf geloeschte/alte Kacheln).
+      //    Einmal-Flag zeigt sonst auf gelöschte/alte Kacheln).
       if (cleaned) {
         await prefs.remove('offline_map_dach_overview_v1');
       }
       await prefs.setBool(flagKey, true);
       debugPrint('[OfflineMap] Migration abgeschlossen (cleaned=$cleaned)');
     } catch (e) {
-      debugPrint('[OfflineMap] Cache-Migration uebersprungen: $e');
+      debugPrint('[OfflineMap] Cache-Migration übersprungen: $e');
     }
   }
 

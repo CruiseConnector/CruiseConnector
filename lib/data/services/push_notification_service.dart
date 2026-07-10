@@ -119,7 +119,7 @@ class PushNotificationService {
         final androidImpl = _local.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
         final granted = await androidImpl?.requestNotificationsPermission();
-        debugPrint('[Push] Android POST_NOTIFICATIONS granted: $granted');
+        debugPrint('[Push] POST_NOTIFICATIONS granted: $granted');
       }
 
       // Foreground zeigen WIR selbst (lokale Notification + In-App-Toast),

@@ -79,9 +79,12 @@ final class NavigationLiveActivityPlugin: NSObject, FlutterPlugin {
                 let attributes = CruiseNavigationAttributes(routeName: "Cruise läuft")
                 let activity: Activity<CruiseNavigationAttributes>
                 if #available(iOS 16.2, *) {
+                    // staleDate: bleibt ein Update aus (z. B. weil iOS das
+                    // Update-Budget drosselt), markiert das System den Inhalt
+                    // als veraltet, statt ihn als frisch anzuzeigen.
                     activity = try Activity.request(
                         attributes: attributes,
-                        content: ActivityContent(state: state, staleDate: nil),
+                        content: ActivityContent(state: state, staleDate: Date().addingTimeInterval(180)),
                         pushType: nil
                     )
                 } else {
@@ -166,7 +169,7 @@ final class NavigationLiveActivityPlugin: NSObject, FlutterPlugin {
         state: CruiseNavigationAttributes.ContentState
     ) async {
         if #available(iOS 16.2, *) {
-            await activity.update(ActivityContent(state: state, staleDate: nil))
+            await activity.update(ActivityContent(state: state, staleDate: Date().addingTimeInterval(180)))
         } else {
             await activity.update(using: state)
         }

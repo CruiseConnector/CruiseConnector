@@ -61,7 +61,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
     if (!ok) {
       setState(
         () => _error =
-            '${document.title} konnte nicht geoeffnet werden. Bitte pruefe die Verbindung.',
+            '${document.title} konnte nicht geöffnet werden. Bitte prüfe die Verbindung.',
       );
       return;
     }
@@ -98,7 +98,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
       if (!mounted) return;
       setState(
         () => _error =
-            'Legal-Bestaetigung konnte nicht gespeichert werden. Bitte erneut versuchen.',
+            'Legal-Bestätigung konnte nicht gespeichert werden. Bitte erneut versuchen.',
       );
       debugPrint('[LegalAcceptance] Speichern fehlgeschlagen: $e');
     } finally {
@@ -109,7 +109,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
   void _showReadFirstMessage(String label) {
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text('Bitte zuerst $label oeffnen.')));
+    ).showSnackBar(SnackBar(content: Text('Bitte zuerst $label öffnen.')));
   }
 
   @override
@@ -139,7 +139,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
                   Icon(Icons.verified_user_outlined, color: accent, size: 46),
                   const SizedBox(height: 18),
                   const Text(
-                    'Bitte bestaetige die aktuellen Rechtstexte.',
+                    'Bitte bestätige die aktuellen Rechtstexte.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
@@ -177,7 +177,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
                     opened: _privacyOpened,
                     checked: _privacyAcknowledged,
                     checkboxText:
-                        'Ich habe die Datenschutzerklaerung gelesen und zur Kenntnis genommen.',
+                        'Ich habe die Datenschutzerklärung gelesen und zur Kenntnis genommen.',
                     onOpen: () => _openDocument(LegalDocuments.privacy),
                     onChanged: _privacyOpened
                         ? (value) => setState(
@@ -185,7 +185,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
                           )
                         : null,
                     onDisabledTap: () =>
-                        _showReadFirstMessage('die Datenschutzerklaerung'),
+                        _showReadFirstMessage('die Datenschutzerklärung'),
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 16),
@@ -233,7 +233,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
                           : Text(
                               widget.persistAcceptance
                                   ? 'Weiter'
-                                  : 'Bestaetigen und fortfahren',
+                                  : 'Bestätigen und fortfahren',
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 16,

@@ -20,6 +20,7 @@ import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/post_skeleton.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
@@ -201,7 +202,7 @@ class _CommunityPageState extends State<CommunityPage>
         )
         .subscribe();
 
-    // Echtzeit-Updates fuer Gruppen-Listen.
+    // Echtzeit-Updates für Gruppen-Listen.
     _groupsChannel = db
         .channel('public:groups_overview')
         .onPostgresChanges(
@@ -1520,6 +1521,14 @@ class _CommunityPageState extends State<CommunityPage>
                   const SizedBox(height: 10),
                   RouteAttachmentCard(
                     routeId: post['shared_route_id'] as String,
+                    compact: true,
+                  ),
+                ],
+                // 2026-07-03 (vucko Gruppen-Share): Gruppen-Chip analog zur Route.
+                if (post['shared_group_id'] != null) ...[
+                  const SizedBox(height: 10),
+                  GroupAttachmentCard(
+                    groupId: post['shared_group_id'] as String,
                     compact: true,
                   ),
                 ],
@@ -2926,7 +2935,7 @@ class _CommunityPageState extends State<CommunityPage>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Beitreten nicht moeglich: $e'),
+            content: Text('Beitreten nicht möglich: $e'),
             backgroundColor: const Color(0xFF1C1F26),
           ),
         );
@@ -2945,7 +2954,7 @@ class _CommunityPageState extends State<CommunityPage>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Beitreten nicht moeglich: $e'),
+            content: Text('Beitreten nicht möglich: $e'),
             backgroundColor: const Color(0xFF1C1F26),
           ),
         );

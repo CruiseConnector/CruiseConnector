@@ -8,6 +8,13 @@ class CruiseDeepLinks {
     return Uri.https(host, '/', {'post': postId});
   }
 
+  // 2026-07-03 (vucko Gruppen-Share): Deeplink zum Beitreten/Öffnen einer Gruppe,
+  // gespiegelt von postUri. Gleicher Host/Scheme wie Posts → keine
+  // Manifest-Änderung nötig.
+  static Uri groupUri(String groupId) {
+    return Uri.https(host, '/', {'group': groupId});
+  }
+
   /// 2026-06-25 (vucko): Generischer Share-Deeplink fürs externe Teilen einer
   /// Route. Im geteilten Text mitgeschickt → tippt der Empfänger ihn an, öffnet
   /// sich die App (Android App-Link ist im Manifest `autoVerify`); ohne App

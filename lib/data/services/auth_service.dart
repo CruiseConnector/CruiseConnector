@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_cache_service.dart';
 
@@ -24,7 +25,7 @@ class AuthService {
   /// Der aktuell eingeloggte User (null = nicht eingeloggt).
   static User? get currentUser => _db.auth.currentUser;
 
-  /// Stream fuer Auth-State-Aenderungen (Login / Logout).
+  /// Stream für Auth-State-Aenderungen (Login / Logout).
   static Stream<AuthState> get authStateChanges => _db.auth.onAuthStateChange;
 
   /// E-Mail + Passwort Login.
@@ -35,6 +36,7 @@ class AuthService {
   }) async {
     await _db.auth.signInWithPassword(email: email, password: password);
     await ensureCurrentUserProfile();
+    unawaited(AnalyticsService.instance.logLogin('email'));
   }
 
   /// Neuen Account anlegen. Supabase sendet dabei die Verification-Mail.
@@ -72,10 +74,11 @@ class AuthService {
         );
         await LegalAcceptanceService.clearPendingPreAuthAcceptance();
       }
+      unawaited(AnalyticsService.instance.logSignUp('email'));
     }
   }
 
-  /// Sendet die Signup-Bestaetigung erneut.
+  /// Sendet die Signup-Bestätigung erneut.
   static Future<void> resendVerificationEmail(String email) async {
     await _db.auth.resend(
       email: email.trim(),
@@ -84,8 +87,8 @@ class AuthService {
     );
   }
 
-  /// Native Google-Anmeldung auf Android/iOS. Auf Web/Desktop faellt es auf
-  /// Supabase OAuth mit Redirect zurueck.
+  /// Native Google-Anmeldung auf Android/iOS. Auf Web/Desktop fällt es auf
+  /// Supabase OAuth mit Redirect zurück.
   static Future<void> signInWithGoogle() async {
     final webClientId = AppConstants.googleWebClientId.trim();
     final iosClientId = AppConstants.googleIosClientId.trim();
@@ -137,6 +140,7 @@ class AuthService {
         nonce: googleRawNonce,
       );
       await ensureCurrentUserProfile();
+      unawaited(AnalyticsService.instance.logLogin('google'));
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled ||
           e.code == GoogleSignInExceptionCode.interrupted) {
@@ -147,7 +151,7 @@ class AuthService {
   }
 
   /// Native Apple-Anmeldung auf iOS/macOS. Andere Plattformen nutzen Supabase
-  /// OAuth und kommen ueber den Auth-Deep-Link zurueck in die App.
+  /// OAuth und kommen über den Auth-Deep-Link zurück in die App.
   static Future<void> signInWithApple() async {
     final isApplePlatform =
         !kIsWeb &&
@@ -162,7 +166,7 @@ class AuthService {
     final isAvailable = await SignInWithApple.isAvailable();
     if (!isAvailable) {
       throw const AuthException(
-        'Apple Anmeldung ist auf diesem Geraet nicht verfuegbar.',
+        'Apple Anmeldung ist auf diesem Gerät nicht verfügbar.',
       );
     }
 
@@ -190,6 +194,7 @@ class AuthService {
       );
       await _saveAppleDisplayName(credential);
       await ensureCurrentUserProfile();
+      unawaited(AnalyticsService.instance.logLogin('apple'));
     } on SignInWithAppleAuthorizationException catch (e) {
       if (e.code == AuthorizationErrorCode.canceled) {
         throw const AuthException('Apple Anmeldung abgebrochen.');
@@ -378,7 +383,7 @@ class AuthService {
   }
 
   /// Laedt den Benutzernamen aus der `profiles` Tabelle.
-  /// Gibt null zurueck wenn kein User eingeloggt oder DB-Fehler.
+  /// Gibt null zurück wenn kein User eingeloggt oder DB-Fehler.
   static Future<String?> getUsername() async {
     final userId = currentUser?.id;
     if (userId == null) return null;
@@ -452,7 +457,7 @@ class AuthService {
     );
     if (!launched) {
       throw const AuthException(
-        'Anmeldung konnte nicht geoeffnet werden. Bitte erneut versuchen.',
+        'Anmeldung konnte nicht geöffnet werden. Bitte erneut versuchen.',
       );
     }
   }

@@ -47,6 +47,31 @@ class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
   bool _saving = false;
 
   @override
+  void initState() {
+    super.initState();
+    // 2026-07-03 (vucko): Defensive Absicherung. Normal hat der Hinweis echten
+    // Overflow (~570 px) → der Nutzer scrollt bis unten und der Gate gibt frei.
+    // ABER falls der Inhalt mal komplett in die (auf 720 geklemmte) Sheet-Hoehe
+    // passt (z. B. sehr kleine System-Schriftgröße), wäre maxScrollExtent 0,
+    // es feuerte nie ein Scroll-Event und der „bis unten scrollen"-Gate liesse
+    // sich nie erfüllen → harter Deadlock bei der Gruppenerstellung. Deshalb:
+    // wenn es nach dem ersten Layout nichts zu scrollen gibt, sofort freigeben.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _markReadIfNoScroll());
+  }
+
+  void _markReadIfNoScroll() {
+    if (!mounted || _readToBottom) return;
+    if (!_controller.hasClients) {
+      // Scroll-View haengt beim ersten Frame evtl. noch nicht → 1× nachfassen.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _markReadIfNoScroll());
+      return;
+    }
+    if (_controller.position.maxScrollExtent <= 0) {
+      setState(() => _readToBottom = true);
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();

@@ -227,6 +227,7 @@ class _NotificationTile extends StatelessWidget {
             content: (post['content'] ?? '').toString(),
             time: '',
             sharedRouteId: post['shared_route_id'] as String?,
+            sharedGroupId: post['shared_group_id'] as String?,
             avatarUrl: profile?['avatar_url'] as String?,
           ),
         ),

@@ -32,17 +32,20 @@ class NavigationLiveActivitySnapshot {
   }
 
   String signature() {
-    // 2026-06-20 (vucko Live-Activity-Sync): feinere Buckets → die Lock-Screen-
-    // Zahl wird viel häufiger nachgezogen (alle ~10 m statt ~25 m Manöver-Distanz,
-    // alle ~50 m statt ~100 m Reststrecke). Zusammen mit der Lead-Kompensation
-    // (siehe cruise_mode_page::_leadCompensatedLiveDistance) hängt sie kaum noch
-    // hinter der In-App-Anzeige.
+    // 2026-07-02 (vucko Live-Activity-Freeze): Buckets bewusst GROB. Die 10-m-
+    // Buckets vom 2026-06-20 erzeugten bei Fahrtempo ~1 Update/s → iOS
+    // erschöpfte das ActivityKit-Update-Budget und fror den Sperrbildschirm
+    // nach ~1 Minute dauerhaft ein (Geräte-Video: Manöver hing 2+ Minuten auf
+    // altem Stand). Lieber eine leicht gröbere, aber LEBENDE Anzeige: 50-m-
+    // Stufen nah am Manöver, 250-m-Stufen darüber, 500-m-Reststrecke.
     final maneuverBucket = distanceToManeuverMeters == null
         ? -1
-        : (distanceToManeuverMeters! / 10).round();
+        : distanceToManeuverMeters! <= 1000
+        ? (distanceToManeuverMeters! / 50).round()
+        : 1000 + (distanceToManeuverMeters! / 250).round();
     final remainingBucket = remainingDistanceMeters == null
         ? -1
-        : (remainingDistanceMeters! / 50).round();
+        : (remainingDistanceMeters! / 500).round();
     return [
       instruction,
       maneuverType,

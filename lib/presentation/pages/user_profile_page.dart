@@ -9,6 +9,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
+import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/moderation_actions.dart';
@@ -962,6 +963,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         content: content.toString(),
         time: time,
         sharedRouteId: post['shared_route_id'] as String?,
+        sharedGroupId: post['shared_group_id'] as String?,
         avatarUrl:
             profile?['avatar_url'] as String? ??
             _stats['avatar_url'] as String?,
@@ -993,6 +995,14 @@ class _UserProfilePageState extends State<UserProfilePage>
               const SizedBox(height: 8),
               RouteAttachmentCard(
                 routeId: post['shared_route_id'] as String,
+                compact: true,
+              ),
+            ],
+            // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog.
+            if (post['shared_group_id'] != null) ...[
+              const SizedBox(height: 8),
+              GroupAttachmentCard(
+                groupId: post['shared_group_id'] as String,
                 compact: true,
               ),
             ],
@@ -1080,6 +1090,7 @@ class _UserProfilePageState extends State<UserProfilePage>
         content: content.toString(),
         time: _formatTimeAgo(post['created_at']),
         sharedRouteId: post['shared_route_id'] as String?,
+        sharedGroupId: post['shared_group_id'] as String?,
         avatarUrl: author?['avatar_url'] as String?,
       ),
       child: Padding(
@@ -1150,6 +1161,14 @@ class _UserProfilePageState extends State<UserProfilePage>
                       compact: true,
                     ),
                   ],
+                  // 2026-07-03 (vucko Gruppen-Share): Gruppen-Karte analog.
+                  if (post['shared_group_id'] != null) ...[
+                    const SizedBox(height: 8),
+                    GroupAttachmentCard(
+                      groupId: post['shared_group_id'] as String,
+                      compact: true,
+                    ),
+                  ],
                   const SizedBox(height: 6),
                   Text(
                     time,
@@ -1196,6 +1215,7 @@ class _UserProfilePageState extends State<UserProfilePage>
     required String content,
     required String time,
     String? sharedRouteId,
+    String? sharedGroupId,
     String? avatarUrl,
   }) {
     Navigator.push(
@@ -1208,6 +1228,7 @@ class _UserProfilePageState extends State<UserProfilePage>
           content: content,
           time: time,
           sharedRouteId: sharedRouteId,
+          sharedGroupId: sharedGroupId,
           avatarUrl: avatarUrl,
         ),
       ),

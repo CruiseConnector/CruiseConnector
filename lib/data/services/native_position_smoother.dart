@@ -65,7 +65,7 @@ class NativePositionSmoother {
 
   // ── Heading State ─────────────────────────────────────────────────────────
   double _smoothedHeading = 0.0;
-  // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln, Geraete-Video): geglättete
+  // 2026-06-13 (vucko Kamera-Abbiege-Ruckeln, Geräte-Video): geglättete
   // Winkelgeschwindigkeit (Grad/s) der Drehung. Damit kann predict() das
   // Heading zwischen den ~1Hz-GPS-Fixes pro Frame EXTRAPOLIEREN (Dead
   // Reckoning wie Position) — sonst sprang das Kamera-Ziel-Heading 1×/s und
@@ -270,6 +270,22 @@ class NativePositionSmoother {
     );
   }
 
+  /// 2026-07-03 (vucko Async-nach-Resume): Setzt die Prediction-Baseline auf
+  /// JETZT und stoppt die Dead-Reckoning-Extrapolation, OHNE Position/Heading zu
+  /// verwerfen. Nötig beim App-Resume: der vsync-Ticker ruht im Hintergrund
+  /// (Render friert ein), während der GPS-Stream weiterläuft und `_lastTimestamp`
+  /// fortschreibt. Ohne Rebase spuckt `predict()` beim ersten Frame nach dem
+  /// Resume die volle 1,5-s-Extrapolation aus → Puck/Linie springen. Nach
+  /// `rebaseToNow()` liefert `predict(now)` exakt die letzte gute Position
+  /// (clampedDt≈0, v=0); der nächste reale Fix übernimmt nahtlos.
+  void rebaseToNow() {
+    if (_lat == null) return;
+    _lastTimestamp = DateTime.now();
+    _vLat = 0.0;
+    _vLng = 0.0;
+    _headingRateDegPerSec = 0.0;
+  }
+
   /// Setzt den Smoother zurück.
   void reset() {
     _lat = null;
@@ -372,7 +388,7 @@ class NativePositionSmoother {
     // UPDATE und waren auf den 20-Hz-Fahrsimulator kalibriert (Konvergenz in
     // ~0,4s). Echtes GPS liefert ~1 Fix/s — gleiche Faktoren ergaben dort eine
     // ~2s-Zeitkonstante: in zuegigen Kurven hing Kamera-/Puck-Heading 20-30
-    // Grad nach ("saegende" Drehung). Zeitnormierung: alphaEff so waehlen,
+    // Grad nach ("saegende" Drehung). Zeitnormierung: alphaEff so wählen,
     // dass die KONVERGENZ PRO ZEIT der 20-Hz-Kalibrierung entspricht
     // (alphaEff = 1-(1-alpha)^(dt/50ms)), gekappt bei 0.85, damit bei langen
     // Fix-Luecken der rohe GPS-Jitter nicht 1:1 durchschlaegt.

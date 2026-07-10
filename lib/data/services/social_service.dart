@@ -71,14 +71,31 @@ class DuplicateSharedRoutePostException implements Exception {
   String toString() => message;
 }
 
+// 2026-07-03 (vucko Gruppen-Share): Dubletten-Schutz gespiegelt vom Routen-Share
+// — eine Gruppe soll pro User nur einmal im Feed landen (Unique-Index
+// posts_user_shared_group_unique_idx).
+class DuplicateSharedGroupPostException implements Exception {
+  const DuplicateSharedGroupPostException();
+
+  String get message => SocialService.duplicateSharedGroupPostMessage;
+
+  @override
+  String toString() => message;
+}
+
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
 
   static const String duplicateSharedRoutePostMessage =
-      'Du hast diese Strecke bereits gepostet. Loesche zuerst den alten Post, '
+      'Du hast diese Strecke bereits gepostet. Lösche zuerst den alten Post, '
       'danach kannst du die Strecke erneut posten.';
+
+  // 2026-07-03 (vucko Gruppen-Share): Text gespiegelt vom Routen-Share.
+  static const String duplicateSharedGroupPostMessage =
+      'Du hast diese Gruppe bereits geteilt. Lösche zuerst den alten Post, '
+      'danach kannst du die Gruppe erneut teilen.';
 
   static const String _profileSelect =
       'id, username, created_at, level, total_km, total_routes, '
@@ -217,6 +234,19 @@ class SocialService {
     return false;
   }
 
+  // 2026-07-03 (vucko Gruppen-Share): gespiegelt vom Routen-Share — fängt den
+  // Unique-Index posts_user_shared_group_unique_idx ab.
+  static bool isDuplicateSharedGroupPostError(Object error) {
+    if (error is DuplicateSharedGroupPostException) return true;
+    if (error is PostgrestException) {
+      final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+      return error.code == '23505' &&
+          (text.contains('posts_user_shared_group_unique_idx') ||
+              text.contains('shared_group_id'));
+    }
+    return false;
+  }
+
   static bool isDuplicateGroupMemberError(Object error) {
     if (error is! PostgrestException) return false;
     final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
@@ -288,8 +318,10 @@ class SocialService {
           .map((r) => (r as Map)['follower_id'] as String)
           .toSet();
 
+      // 2026-07-03 (vucko Gruppen-Share): shared_group_id analog zu shared_route_id
+      // mitgeladen (kommt über `*` ohnehin mit, hier explizit fürs Muster).
       const select =
-          '*, profiles(id, username, avatar_url), shared_route_id';
+          '*, profiles(id, username, avatar_url), shared_route_id, shared_group_id';
 
       // Zwei disjunkte Queries (nach visibility) parallel — Filter auf
       // Query-Ebene verhindert, dass private Posts überhaupt ans Frontend
@@ -415,7 +447,7 @@ class SocialService {
       final posts = await _db
           .from('posts')
           .select(
-            '*, profiles(id, username, avatar_url, is_private), shared_route_id',
+            '*, profiles(id, username, avatar_url, is_private), shared_route_id, shared_group_id',
           )
           .eq('visibility', 'public')
           .neq('is_hidden', true)
@@ -448,6 +480,7 @@ class SocialService {
     String content, {
     String visibility = 'public',
     String? sharedRouteId,
+    String? sharedGroupId,
   }) async {
     final uid = _userId;
     if (uid == null) return null;
@@ -457,12 +490,21 @@ class SocialService {
       throw const SocialServiceException('Post ist zu lang.');
     }
     final cleanedSharedRouteId = sharedRouteId?.trim();
+    final cleanedSharedGroupId = sharedGroupId?.trim();
 
     if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
       final alreadyPosted = await hasOwnPostForSharedRoute(
         cleanedSharedRouteId,
       );
       if (alreadyPosted) throw const DuplicateSharedRoutePostException();
+    }
+
+    // 2026-07-03 (vucko Gruppen-Share): Dubletten-Check gespiegelt vom Routen-Share.
+    if (cleanedSharedGroupId != null && cleanedSharedGroupId.isNotEmpty) {
+      final alreadyPosted = await hasOwnPostForSharedGroup(
+        cleanedSharedGroupId,
+      );
+      if (alreadyPosted) throw const DuplicateSharedGroupPostException();
     }
 
     final row = <String, dynamic>{
@@ -473,6 +515,9 @@ class SocialService {
     if (cleanedSharedRouteId != null && cleanedSharedRouteId.isNotEmpty) {
       row['shared_route_id'] = cleanedSharedRouteId;
     }
+    if (cleanedSharedGroupId != null && cleanedSharedGroupId.isNotEmpty) {
+      row['shared_group_id'] = cleanedSharedGroupId;
+    }
 
     late final dynamic result;
     try {
@@ -480,6 +525,9 @@ class SocialService {
     } on PostgrestException catch (e) {
       if (isDuplicateSharedRoutePostError(e)) {
         throw const DuplicateSharedRoutePostException();
+      }
+      if (isDuplicateSharedGroupPostError(e)) {
+        throw const DuplicateSharedGroupPostException();
       }
       rethrow;
     }
@@ -510,6 +558,22 @@ class SocialService {
     return row != null;
   }
 
+  // 2026-07-03 (vucko Gruppen-Share): gespiegelt vom Routen-Share — hat der User
+  // diese Gruppe schon gepostet?
+  static Future<bool> hasOwnPostForSharedGroup(String groupId) async {
+    final uid = _userId;
+    final cleanedGroupId = groupId.trim();
+    if (uid == null || cleanedGroupId.isEmpty) return false;
+
+    final row = await _db
+        .from('posts')
+        .select('id')
+        .eq('user_id', uid)
+        .eq('shared_group_id', cleanedGroupId)
+        .maybeSingle();
+    return row != null;
+  }
+
   static Future<void> deletePost(String postId) async {
     await _db.from('posts').delete().eq('id', postId);
   }
@@ -519,7 +583,7 @@ class SocialService {
       final result = await _db
           .from('posts')
           .select(
-            '*, profiles(id, username, avatar_url), shared_route_id',
+            '*, profiles(id, username, avatar_url), shared_route_id, shared_group_id',
           )
           .eq('id', postId)
           .maybeSingle();
@@ -1533,11 +1597,11 @@ class SocialService {
     final isAlreadyMember = members.any((m) => (m as Map)['user_id'] == uid);
     final blocked = await getBlockedAndBlockerIds();
     if (creatorId != null && blocked.contains(creatorId)) {
-      throw const SocialServiceException('Diese Gruppe ist nicht verfuegbar.');
+      throw const SocialServiceException('Diese Gruppe ist nicht verfügbar.');
     }
     if (isActive && !isAlreadyMember) {
       throw const SocialServiceException(
-        'Die Session laeuft bereits oder wurde schon beendet.',
+        'Die Session läuft bereits oder wurde schon beendet.',
       );
     }
 
@@ -1553,7 +1617,7 @@ class SocialService {
       }
       if (e.code == '42501') {
         throw const SocialServiceException(
-          'Die Session laeuft bereits oder wurde schon beendet.',
+          'Die Session läuft bereits oder wurde schon beendet.',
         );
       }
       throw SocialServiceException(e.message);
@@ -1572,7 +1636,7 @@ class SocialService {
         .delete()
         .eq('group_id', groupId)
         .eq('user_id', uid);
-    // 2026-06-10 (vucko Gruppen-Trip-Regel): Verlaesst das LETZTE Mitglied die
+    // 2026-06-10 (vucko Gruppen-Trip-Regel): Verlässt das LETZTE Mitglied die
     // Gruppe, endet der Gruppen-Trip (zweite Ende-Bedingung neben
     // Zielerreichung). Best-effort — darf das Verlassen nie blockieren.
     try {
@@ -1699,7 +1763,7 @@ class SocialService {
   static Future<String> joinGroupWithCode(String rawCode) async {
     final code = _normalizeInviteCode(rawCode);
     if (code == null) {
-      throw const SocialServiceException('Code ungueltig.');
+      throw const SocialServiceException('Code ungültig.');
     }
 
     try {
@@ -1737,7 +1801,7 @@ class SocialService {
         .eq('id', groupId)
         .maybeSingle();
     if ((group as Map?)?['is_active'] == true) {
-      throw Exception('Diese Fahrt laeuft bereits.');
+      throw Exception('Diese Fahrt läuft bereits.');
     }
     await _db.from('group_join_requests').upsert({
       'group_id': groupId,
@@ -1874,7 +1938,7 @@ class SocialService {
             .eq('id', userId)
             .maybeSingle();
         debugPrint(
-          '[Social] car_country_code-Spalte fehlt, Legacy-Profil geladen. Migration ausfuehren!',
+          '[Social] car_country_code-Spalte fehlt, Legacy-Profil geladen. Migration ausführen!',
         );
         return profile;
       }
@@ -2250,7 +2314,7 @@ class SocialService {
         if (patch.isEmpty) return;
         await _db.from('profiles').update(patch).eq('id', uid);
         debugPrint(
-          '[Social] updateCarProfile: car_country_code-Spalte fehlt, uebersprungen. Migration ausfuehren!',
+          '[Social] updateCarProfile: car_country_code-Spalte fehlt, übersprungen. Migration ausführen!',
         );
         return;
       }
@@ -2318,7 +2382,7 @@ class SocialService {
         final profile = await getUserProfile(userId);
         final legacy = legacyVehicleFromProfile(profile);
         debugPrint(
-          '[Social] profile_vehicles fehlt, nutze Legacy-Fahrzeug. Migration ausfuehren!',
+          '[Social] profile_vehicles fehlt, nutze Legacy-Fahrzeug. Migration ausführen!',
         );
         return legacy == null ? [] : [legacy];
       }
@@ -2380,7 +2444,7 @@ class SocialService {
           await _db.from('profile_vehicles').insert(compatible);
         }
         debugPrint(
-          '[Social] saveUserVehicles: optionale Fahrzeug-Spalten fehlen, kompatibel gespeichert. Migration ausfuehren!',
+          '[Social] saveUserVehicles: optionale Fahrzeug-Spalten fehlen, kompatibel gespeichert. Migration ausführen!',
         );
         return;
       }

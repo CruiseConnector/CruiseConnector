@@ -101,7 +101,7 @@ Future<void> _openProfileByUsername(
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Profil ist nicht verfuegbar'),
+        content: Text('Profil ist nicht verfügbar'),
         backgroundColor: Color(0xFF1C1F26),
       ),
     );
