@@ -32,7 +32,6 @@ jobs:
           printf '%s\n' \
             'class AppSecrets {' \
             '  AppSecrets._();' \
-            '  static const String mapboxPublicToken = '"'"'${{ secrets.MAPBOX_PUBLIC_TOKEN }}'"'"';' \
             '  static const String supabaseUrl = '"'"'${{ secrets.SUPABASE_URL }}'"'"';' \
             '  static const String supabaseAnonKey = '"'"'${{ secrets.SUPABASE_ANON_KEY }}'"'"';' \
             '}' > lib/config/secrets.dart

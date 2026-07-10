@@ -435,3 +435,10 @@ entrypoint = "./functions/curate-route-pool/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/send-push/index.ts"
+
+# 2026-07-09 (vucko): Live-Monitoring-Dashboard. Öffentlich per Browser aufrufbar
+# (Luca-Sharing), eigene ?token=MONITOR_TOKEN-Prüfung → verify_jwt aus.
+[functions.admin-monitor]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/admin-monitor/index.ts"

@@ -317,6 +317,14 @@ interface RouteRequest {
   detourLevel?: number;
   // 2026-05-22 (Task #42): Explicit user-waypoints (zwischen start + end)
   waypoints?: Array<{ latitude: number; longitude: number }>;
+  // 2026-07-03 (vucko Wegpunkte-jede-Distanz): Pflicht-Stopps. Der Client sendet
+  // sie bisher als ROUND_TRIP mit waypoint_mode='required_stops' — die alte v2
+  // las diese Felder GAR NICHT und lieferte eine round_trip-Zufallsschleife, die
+  // die Stopps ignorierte (+ eine harte Client-Distanzsperre). Jetzt routen wir
+  // sie als echte durchgeroutete Punktkette (car/fastest, jede Distanz).
+  required_waypoints?: Array<{ latitude: number; longitude: number }>;
+  waypoint_mode?: string;
+  close_loop?: boolean;
   // 2026-06-09 (vucko U-Turn-Fix): Reroute während der Fahrt — der Client
   // schickt seine Fahrtrichtung mit. Wird als GraphHopper-`heading` am
   // Startpunkt durchgereicht → die neue Route startet IN Fahrtrichtung,
@@ -616,6 +624,7 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+
 // ─────────────────── Style-Quality Metriken ───────────────────────────────
 //
 // 2026-05-21 (vucko): User-Beschwerde "Sport hat manchmal nur 10 Kurven".
@@ -679,6 +688,13 @@ async function callGraphHopper(opts: {
   // nicht mehr benötigten Verlierer-Calls ab) + optionaler Per-Call-Timeout.
   signal?: AbortSignal;
   timeoutMs?: number;
+  // 2026-06-29 (vucko Config-Drift-Schutz): interner Rekursions-Guard. Wenn ein
+  // angefragtes Profil auf dem GraphHopper-Server fehlt (z.B. weil ein Mini-PC
+  // out-of-sync ist und das 'car'-Profil nicht kennt), retryt callGraphHopper
+  // EINMAL automatisch mit einem garantiert vorhandenen Motorrad-Profil, statt
+  // die ganze Route mit HTTP 400 sterben zu lassen. Dieses Feld merkt sich das
+  // ursprüngliche Profil, damit der Retry nicht endlos läuft.
+  _profileFallbackFrom?: string;
 }): Promise<RouteResult | { error: string }> {
   // 2026-06-03 (vucko ROOT-CAUSE-FIX): GraphHopper wird jetzt per POST mit
   // JSON-Body angesprochen, NICHT mehr per GET-Query. Live-Test an PC1+PC2
@@ -889,7 +905,34 @@ async function callGraphHopper(opts: {
       signal: timeoutCtrl.signal,
     });
     if (!res.ok) {
-      return { error: `GraphHopper HTTP ${res.status}: ${await res.text().then(t => t.slice(0, 200))}` };
+      const bodyText = (await res.text()).slice(0, 300);
+      // 2026-06-29 (vucko Config-Drift-Schutz): Wenn der Server das angefragte
+      // Profil NICHT kennt (typisch nach einem Mini-PC-Config-Drift, bei dem
+      // z.B. 'car' fehlt), liefert GraphHopper HTTP 400 "The requested profile
+      // '…' does not exist". Statt die ganze Route sterben zu lassen, retryen
+      // wir EINMAL mit einem garantiert vorhandenen Motorrad-Profil. Für 'car'
+      // (Direkt-/Schnellste-Intent) ist 'motorcycle_abendrunde' am direktesten
+      // (geringster Kurven-Bonus); sonst der Universal-Default 'motorcycle_scenic'.
+      if (
+        res.status === 400 &&
+        /does not exist/i.test(bodyText) &&
+        !opts._profileFallbackFrom
+      ) {
+        clearTimeout(timeoutId);
+        const fallbackProfile = opts.profile === 'car'
+          ? 'motorcycle_abendrunde'
+          : 'motorcycle_scenic';
+        console.warn(
+          `[PROFILE-FALLBACK] Server kennt Profil '${opts.profile}' nicht — ` +
+          `retry mit '${fallbackProfile}' (Server out-of-sync?). Body: ${bodyText.slice(0, 120)}`,
+        );
+        return await callGraphHopper({
+          ...opts,
+          profile: fallbackProfile,
+          _profileFallbackFrom: opts.profile,
+        });
+      }
+      return { error: `GraphHopper HTTP ${res.status}: ${bodyText.slice(0, 200)}` };
     }
     const data: GraphHopperResponse = await res.json();
     if (!data.paths || data.paths.length === 0) {
@@ -1057,6 +1100,44 @@ async function raceForFirstAcceptable<T>(
 // ─────────────────── Route-Generation mit Retries + Compensation ───────────
 
 async function generateRoute(req: RouteRequest): Promise<Response> {
+  // 2026-07-03 (vucko Wegpunkte-jede-Distanz, Geräte-Video 07-03): Pflicht-
+  // Wegpunkte als echte durchgeroutete Punktkette behandeln — NICHT als
+  // round_trip-Zufallsschleife (die die Stopps komplett ignorierte). Wir
+  // schreiben die Anfrage in eine A→B-Anfrage mit Zwischen-Wegpunkten um:
+  // Start → WP1 → … → (Start bei close_loop, sonst letzter WP). Damit greift die
+  // bereits robuste A→B-Maschinerie inkl. Ultimate-car-Fallback (Zeile ~1836) →
+  // bei JEDER Distanz zwischen den Punkten eine Route (schnellster Weg, car-
+  // Profil), ohne Distanz-/U-Turn-/±12%-Rundkurs-Rejects. Die frühere Client-
+  // Distanzsperre `waypoint_too_far` entfällt separat im route_service.dart.
+  {
+    const reqWps = req.required_waypoints;
+    const startLoc = req.start_location ?? req.startLocation;
+    if (
+      req.waypoint_mode === 'required_stops' &&
+      reqWps &&
+      reqWps.length > 0 &&
+      startLoc
+    ) {
+      const closeLoop = req.close_loop !== false;
+      // Bei geschlossenem Rundkurs sind ALLE Stopps Zwischenpunkte und das Ziel
+      // ist wieder der Start; bei offener Kette wird der letzte Stopp zum Ziel.
+      const chain = closeLoop ? reqWps : reqWps.slice(0, -1);
+      const target = closeLoop ? startLoc : reqWps[reqWps.length - 1];
+      console.log(
+        `[WAYPOINT-CHAIN] required_stops=${reqWps.length} close_loop=${closeLoop} → A→B car/fastest chain`,
+      );
+      req = {
+        ...req,
+        route_type: 'POINT_TO_POINT',
+        waypoints: chain,
+        target_location: target,
+        targetLocation: target,
+        detour_level: 0, // → isDirectFastest → car/fastest, kein Sport-Overlay
+        selected_style: '', // leer = kein STYLE_TO_PROFILE-Treffer → car
+        mode: '',
+      };
+    }
+  }
   const isRoundTrip = req.route_type === 'ROUND_TRIP';
   // 2026-06-09 (vucko Direkt-Fastest-Fix): Eine DIREKTE A→B-Route (Detour 0, Stil
   // 'Standard'/unbekannt) UND jeder Reroute sollen die SCHNELLSTE Strecke fahren
@@ -1108,6 +1189,9 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     startLat: startLocation.latitude,
     startLng: startLocation.longitude,
     targetKm: req.target_distance_km ?? 50,
+    avoidHighways: req.avoid_highways === true,
+    styleKey: _rawStyle,
+    detourLevel: req.detour_level ?? 0,
   });
 
   // PARALLEL Best-of-N statt sequenziell (Latenz-Optimierung 2026-05-21):
@@ -2485,6 +2569,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     userMessage = 'Wir konnten keine Land-Route finden — versuche andere Wegpunkte.';
     errCode = 'no_land_route';
   }
+
+
   return jsonResponse({
     error: errCode,
     user_message: userMessage,
@@ -2501,6 +2587,14 @@ function generateSeeds(opts: {
   startLat: number;
   startLng: number;
   targetKm: number;
+  // 2026-07-06 (vucko Routen-Wiederholung): Settings in den deterministischen
+  // Seed-Hash mischen. Vorher lieferten „Autobahn an" vs. „Autobahn aus" bzw.
+  // Stil-Wechsel bei gleichem Start+Distanz IDENTISCHE Seeds → die Sub-
+  // Waypoints landeten an denselben Stellen → stark korrelierte Geometrie,
+  // gefühlt „immer dieselbe Route trotz geänderter Einstellungen".
+  avoidHighways?: boolean;
+  styleKey?: string;
+  detourLevel?: number;
 }): number[] {
   // Erkenntnis 2026-05-21 (Friedrichshafen-Test): Round-Trip Algorithmus von
   // GraphHopper hat seed-spezifische Failures wenn Sub-Waypoints in Wasser /
@@ -2514,10 +2608,15 @@ function generateSeeds(opts: {
       base + 411, base + 1337, base + 9999, base + 31337, base + 100003,
     ];
   }
+  const settingsSalt =
+    (opts.avoidHighways ? 7919 : 0) +
+    (opts.detourLevel ?? 0) * 2711 +
+    stableHashInt(opts.styleKey ?? '') % 5081;
   const h = Math.abs(
     Math.round(opts.startLat * 1000) * 31 +
     Math.round(opts.startLng * 1000) * 17 +
-    Math.round(opts.targetKm) * 7,
+    Math.round(opts.targetKm) * 7 +
+    settingsSalt,
   );
   // 10 breit gestreute Seeds — Mix von engen und breiten Offsets damit auch
   // alpine Regionen (wo viele Seeds in Berge/Wasser landen) zumindest 1-2
