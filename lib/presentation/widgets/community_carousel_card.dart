@@ -262,28 +262,49 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
   Future<void> _followUser(String userId) async {
     if (_busyUsers.contains(userId)) return;
     Map<String, dynamic>? user;
-    for (final entry in _suggestedUsers) {
-      if (entry['id'] == userId) {
-        user = entry;
+    int removedIndex = 0;
+    for (var i = 0; i < _suggestedUsers.length; i++) {
+      if (_suggestedUsers[i]['id'] == userId) {
+        user = _suggestedUsers[i];
+        removedIndex = i;
         break;
       }
     }
-    setState(() => _busyUsers.add(userId));
+    // 2026-07-10 (vucko Instant-Follow): OPTIMISTIC — Karte SOFORT bestätigen
+    // und entfernen, BEVOR der Server antwortet (Grundsatz: Frontend reagiert
+    // instant, Backend darf 2-3s brauchen). Vorher hing die Karte 2-3s mit
+    // Spinner am await. Bei Fehler wird die Karte zurückgeholt.
+    setState(() {
+      _sessionDismissedUsers.add(userId);
+      _dismissedUsers.add(userId);
+      _suggestedUsers.removeWhere((u) => u['id'] == userId);
+    });
+    _cachedSuggestedUsers?.removeWhere((u) => u['id'] == userId);
+    unawaited(_replenishSuggestedUsers());
     try {
       await context.read<CommunityProvider>().followUser(
         userId,
         targetIsPrivate: user?['is_private'] == true,
       );
+    } catch (e) {
+      debugPrint('[CommunityCarouselCard] Follow fehlgeschlagen: $e');
       if (!mounted) return;
+      // Rollback: Karte wieder anbieten + dezenter Hinweis.
       setState(() {
-        _sessionDismissedUsers.add(userId);
-        _dismissedUsers.add(userId);
-        _suggestedUsers.removeWhere((user) => user['id'] == userId);
+        _sessionDismissedUsers.remove(userId);
+        _dismissedUsers.remove(userId);
+        if (user != null && !_suggestedUsers.any((u) => u['id'] == userId)) {
+          _suggestedUsers.insert(
+            removedIndex.clamp(0, _suggestedUsers.length),
+            user,
+          );
+        }
       });
-      _cachedSuggestedUsers?.removeWhere((user) => user['id'] == userId);
-      await _replenishSuggestedUsers();
-    } finally {
-      if (mounted) setState(() => _busyUsers.remove(userId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Folgen fehlgeschlagen — bitte erneut versuchen.'),
+        ),
+      );
     }
   }
 

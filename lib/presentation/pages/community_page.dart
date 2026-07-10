@@ -234,10 +234,19 @@ class _CommunityPageState extends State<CommunityPage>
       ]);
 
       if (mounted) {
+        // 2026-07-10 (vucko IG-Entdecken): Empfehlungen + Gruppen bei jedem Laden
+        // durchmischen, damit der Entdecken-Feed frisch wirkt (die Backend-Query
+        // liefert sonst immer dieselbe Reihenfolge).
+        final shuffledGroups =
+            List<Map<String, dynamic>>.from(results[2] as List);
+        final shuffledUsers =
+            List<Map<String, dynamic>>.from(results[3] as List);
+        shuffledGroups.shuffle();
+        shuffledUsers.shuffle();
         setState(() {
           _myGroups = results[1] as List<Map<String, dynamic>>;
-          _discoverGroups = results[2] as List<Map<String, dynamic>>;
-          _suggestedUsers = results[3] as List<Map<String, dynamic>>;
+          _discoverGroups = shuffledGroups;
+          _suggestedUsers = shuffledUsers;
           _loading = false;
         });
       }
@@ -780,7 +789,6 @@ class _CommunityPageState extends State<CommunityPage>
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final provider = context.watch<CommunityProvider>();
     final discoverPosts = provider.discoverPosts;
-    final showUserSuggestions = provider.followingCount < 5;
 
     final children = <Widget>[];
 
@@ -797,15 +805,18 @@ class _CommunityPageState extends State<CommunityPage>
         ),
       );
     } else {
-      // Positionierungs-Algo:
-      // - Nie als erstes Item.
-      // - Erstes Karussell nach 10–15 Posts (zufällig).
-      // - Danach jeweils 10–15 Posts Abstand.
-      // - Gruppen & User-Vorschläge abwechselnd (nie direkt nacheinander).
-      final rand = math.Random(discoverPosts.length);
-      int nextInsertAt = 10 + rand.nextInt(6); // 10..15
-      bool nextIsGroups = rand.nextBool();
-      // Bei einer Invite-Kachel pro Galerie-Zyklus zusätzlich ab und zu einblenden.
+      // 2026-07-10 (vucko IG-Entdecken): Instagram-Style-Interleaving.
+      // - Nie als erstes Item (erste Karte nach 4–5 Posts).
+      // - Danach alle ~5–6 Posts eine Karte.
+      // - Rotierend: Personen-Empfehlungen → öffentliche Gruppen → Werbung
+      //   (Werbung erst ab August, bis dahin per Flag übersprungen).
+      // - Personen-Empfehlungen IMMER (früher nur bei <5 Follows).
+      final rand = math.Random(discoverPosts.length * 31 + 7);
+      int nextInsertAt = 4 + rand.nextInt(2); // 4..5
+      // Rotations-Slots: 0=Personen, 1=Gruppen, 2=Werbung (nur wenn aktiv).
+      final slots = <int>[0, 1];
+      if (_discoverAdsEnabled) slots.add(2);
+      int slotCursor = rand.nextInt(slots.length);
       bool inviteShown = false;
 
       for (var i = 0; i < discoverPosts.length; i++) {
@@ -818,30 +829,33 @@ class _CommunityPageState extends State<CommunityPage>
 
         final after = i + 1;
         if (after >= nextInsertAt) {
-          Widget inserted;
-          if (nextIsGroups) {
-            if (_discoverGroups.isNotEmpty) {
-              inserted = _buildGroupsCarousel();
-            } else {
-              inserted = _buildCreateGroupTile();
-            }
-          } else {
-            if (showUserSuggestions && _suggestedUsers.isNotEmpty) {
-              // Gelegentlich Invite-Kachel statt User-Vorschlag (einmal pro Galerie).
-              if (!inviteShown && rand.nextInt(3) == 0) {
+          final slot = slots[slotCursor % slots.length];
+          final Widget inserted;
+          switch (slot) {
+            case 1: // Öffentliche Gruppen von Unbekannten
+              inserted = _discoverGroups.isNotEmpty
+                  ? _buildGroupsCarousel()
+                  : _buildCreateGroupTile();
+              break;
+            case 2: // Werbung (nur Free, ab August)
+              inserted = _buildDiscoverAdCard();
+              break;
+            default: // Personen-Empfehlungen
+              if (_suggestedUsers.isNotEmpty) {
+                if (!inviteShown && rand.nextInt(4) == 0) {
+                  inserted = _buildInviteFriendsTile();
+                  inviteShown = true;
+                } else {
+                  inserted = _buildUsersCarousel();
+                }
+              } else {
                 inserted = _buildInviteFriendsTile();
                 inviteShown = true;
-              } else {
-                inserted = _buildUsersCarousel();
               }
-            } else {
-              inserted = _buildInviteFriendsTile();
-              inviteShown = true;
-            }
           }
           children.add(inserted);
-          nextIsGroups = !nextIsGroups;
-          nextInsertAt = after + 10 + rand.nextInt(6);
+          slotCursor++;
+          nextInsertAt = after + 5 + rand.nextInt(2); // alle 5–6 Posts
         }
       }
     }
@@ -930,6 +944,19 @@ class _CommunityPageState extends State<CommunityPage>
         const SizedBox(height: 10),
       ],
     );
+  }
+
+  // 2026-07-10 (vucko): Werbung im Entdecken-Feed erst ab August (das Ad-System
+  // wurde bis dahin aus main entfernt, git revert f3b56b4). Bis dahin false →
+  // der Werbe-Slot im Rotationszyklus wird übersprungen. Im August: auf true
+  // schalten (idealerweise + Free-Tier-Check) und _buildDiscoverAdCard() mit
+  // einer echten Native-Ad (google_mobile_ads) füllen.
+  bool get _discoverAdsEnabled => false;
+
+  // Werbe-Karte im Entdecken-Feed. Aktuell Platzhalter — wird NICHT angezeigt
+  // (`_discoverAdsEnabled` = false). SizedBox.shrink() = nimmt keinen Platz ein.
+  Widget _buildDiscoverAdCard() {
+    return const SizedBox.shrink();
   }
 
   Widget _buildCreateGroupTile() {
