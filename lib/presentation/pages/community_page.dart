@@ -11,7 +11,9 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/house_ad_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
@@ -59,6 +61,10 @@ class _CommunityPageState extends State<CommunityPage>
   List<Map<String, dynamic>> _myGroups = [];
   List<Map<String, dynamic>> _discoverGroups = [];
   List<Map<String, dynamic>> _suggestedUsers = [];
+  // House-Ads (Eigenvermarktung ohne Drittanbieter) für den Entdecken-Feed.
+  List<HouseAd> _houseAds = [];
+  int _houseAdCursor = 0;
+  final Set<String> _trackedAdImpressions = {};
   List<Map<String, dynamic>> _searchResults = [];
   Map<String, dynamic>? _searchedGroup;
   final _searchController = TextEditingController();
@@ -231,6 +237,7 @@ class _CommunityPageState extends State<CommunityPage>
         SocialService.getMyGroups(),
         SocialService.getDiscoverGroups(),
         SocialService.getSuggestedUsers(),
+        HouseAdService.getAds(),
       ]);
 
       if (mounted) {
@@ -247,6 +254,8 @@ class _CommunityPageState extends State<CommunityPage>
           _myGroups = results[1] as List<Map<String, dynamic>>;
           _discoverGroups = shuffledGroups;
           _suggestedUsers = shuffledUsers;
+          _houseAds = results[4] as List<HouseAd>;
+          _houseAdCursor = 0;
           _loading = false;
         });
       }
@@ -791,6 +800,8 @@ class _CommunityPageState extends State<CommunityPage>
     final discoverPosts = provider.discoverPosts;
 
     final children = <Widget>[];
+    // Merker für die Sichtbarkeits-Garantie unten (rebuild-sicher).
+    final adCursorAtBuildStart = _houseAdCursor;
 
     if (discoverPosts.isEmpty) {
       children.add(
@@ -858,6 +869,13 @@ class _CommunityPageState extends State<CommunityPage>
           nextInsertAt = after + 5 + rand.nextInt(2); // alle 5–6 Posts
         }
       }
+    }
+
+    // 2026-07-13 (vucko House-Ads): Sichtbarkeits-Garantie bei dünnem Feed —
+    // erreicht die Rotation den Werbe-Slot in DIESEM Build nicht (wenige/keine
+    // fremden Posts), hängen wir genau EINE Bild-Anzeige ans Ende.
+    if (_discoverAdsEnabled && _houseAdCursor == adCursorAtBuildStart) {
+      children.add(_buildDiscoverAdCard());
     }
 
     return RefreshIndicator(
@@ -946,17 +964,178 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  // 2026-07-10 (vucko): Werbung im Entdecken-Feed erst ab August (das Ad-System
-  // wurde bis dahin aus main entfernt, git revert f3b56b4). Bis dahin false →
-  // der Werbe-Slot im Rotationszyklus wird übersprungen. Im August: auf true
-  // schalten (idealerweise + Free-Tier-Check) und _buildDiscoverAdCard() mit
-  // einer echten Native-Ad (google_mobile_ads) füllen.
-  bool get _discoverAdsEnabled => false;
+  // 2026-07-13 (vucko House-Ads): Der Werbe-Slot zeigt jetzt echte BILD-
+  // Kampagnen aus der eigenen `house_ads`-Tabelle (Eigen-/Direktvermarktung,
+  // KEIN Drittanbieter/AdMob-SDK nötig). Aktiv nur, wenn Kampagnen geladen
+  // wurden — sonst wird der Slot in der Rotation übersprungen wie bisher.
+  // Ab August kann derselbe Slot zusätzlich AdMob-Native-Ads mischen
+  // (+ Free-Tier-Check über den SubscriptionProvider dieses Branches).
+  bool get _discoverAdsEnabled => _houseAds.isNotEmpty;
 
-  // Werbe-Karte im Entdecken-Feed. Aktuell Platzhalter — wird NICHT angezeigt
-  // (`_discoverAdsEnabled` = false). SizedBox.shrink() = nimmt keinen Platz ein.
+  // Bild-Werbekarte (House-Ad) im Entdecken-Feed: CDN-Bild, „ANZEIGE"-Label,
+  // optional Headline/CTA; Impression einmal pro Feed-Aufbau, Klick öffnet
+  // die Ziel-URL extern. Kampagnen rotieren über den Cursor.
   Widget _buildDiscoverAdCard() {
-    return const SizedBox.shrink();
+    if (_houseAds.isEmpty) return const SizedBox.shrink();
+    final ad = _houseAds[_houseAdCursor % _houseAds.length];
+    _houseAdCursor++;
+    if (_trackedAdImpressions.add(ad.id)) {
+      HouseAdService.track(ad.id, 'impression');
+    }
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        GestureDetector(
+          onTap: () {
+            final url = ad.targetUrl;
+            if (url == null || url.isEmpty) return;
+            HouseAdService.track(ad.id, 'click');
+            launchUrl(
+              Uri.parse(url),
+              mode: LaunchMode.externalApplication,
+            );
+          },
+          child: Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF12151C),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Bild (Querformat ~2:1) mit dezentem ANZEIGE-Badge oben links.
+                Stack(
+                  children: [
+                    AspectRatio(
+                      aspectRatio: 2,
+                      child: Image.network(
+                        ad.imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          color: const Color(0xFF1C1F26),
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.campaign_outlined,
+                            color: AppAccentColors.accent,
+                            size: 34,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 10,
+                      left: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'ANZEIGE',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if ((ad.headline ?? '').isNotEmpty ||
+                    (ad.ctaLabel ?? '').isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if ((ad.headline ?? '').isNotEmpty)
+                                Text(
+                                  ad.headline!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14.5,
+                                  ),
+                                ),
+                              if ((ad.body ?? '').isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    ad.body!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.55,
+                                      ),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              if ((ad.advertiser ?? '').isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 3),
+                                  child: Text(
+                                    ad.advertiser!,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.35,
+                                      ),
+                                      fontSize: 10.5,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        if ((ad.ctaLabel ?? '').isNotEmpty) ...[
+                          const SizedBox(width: 10),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppAccentColors.accent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              ad.ctaLabel!,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        const SizedBox(height: 10),
+      ],
+    );
   }
 
   Widget _buildCreateGroupTile() {
