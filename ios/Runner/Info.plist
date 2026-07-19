@@ -112,5 +112,17 @@
 		<string>instagram-stories</string>
 		<string>instagram</string>
 	</array>
+	<!-- 2026-07-10 (vucko): AdMob-App-ID. PFLICHT mit google_mobile_ads — ohne
+	     GADApplicationIdentifier crasht die App beim Start. Aktuell Google-TEST-ID;
+	     vor Release durch echte AdMob-iOS-App-ID ersetzen (docs/MONETIZATION_SETUP.md). -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<key>SKAdNetworkItems</key>
+	<array>
+		<dict>
+			<key>SKAdNetworkIdentifier</key>
+			<string>cstr6suwn9.skadnetwork</string>
+		</dict>
+	</array>
 </dict>
 </plist>

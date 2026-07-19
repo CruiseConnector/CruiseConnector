@@ -11,6 +11,7 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
@@ -453,6 +454,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile('Passwort ändern', Icons.lock_outline),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Abonnement verwalten',
+                    Icons.workspace_premium_outlined,
+                    subtitle: 'Free · Basic · Premium',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const SubscriptionTierPage(),
+                      ),
+                    ),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
