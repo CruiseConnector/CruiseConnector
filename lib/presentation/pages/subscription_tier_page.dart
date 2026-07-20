@@ -24,11 +24,12 @@ class _TierSpec {
   final List<(bool, String)> features; // (enthalten?, Text)
   final String entitlement; // RevenueCat-Entitlement/Package-Hinweis
   final bool highlight;
-  // Ehrlich als "kommt noch" gekennzeichnete Premium-Extras — NICHT als
-  // bereits aktiv (true) gelistet, weil das Gating dafür noch gebaut wird.
-  // Sobald ein Feature real live ist, wandert es hier raus in die normale
-  // features-Liste (als (true, ...) für Premium, (false, ...) für die
-  // anderen Tiers) — siehe docs/growth/ADS_ANALYSE_2026-07.md.
+  // Ehrlich als "kommt noch" gekennzeichnete Extras (bei Basic: was Premium
+  // draufpackt; bei Premium: was noch niemand hat) — NICHT als bereits aktiv
+  // (true) gelistet, weil das Gating dafür noch gebaut wird. Sobald ein
+  // Feature real live ist, wandert es hier raus in die normale
+  // features-Liste (als (true, ...) für die berechtigten Tiers) — siehe
+  // docs/growth/ADS_ANALYSE_2026-07.md.
   final List<String> comingSoon;
   const _TierSpec(
     this.tier,
@@ -45,36 +46,44 @@ class _TierSpec {
 // unterschiedlicher Texte) — macht den Unterschied zwischen den Stufen auf
 // den ersten Blick vergleichbar: gleiche Zeile, mal grün mit Haken, mal grau
 // mit Schloss. Free zeigt so explizit, was ihr fehlt statt es zu verschweigen.
+// Was Premium on top of Basic noch bringt — auf Basics eigener Karte
+// gezeigt (nicht nur auf Premiums), damit auch Basic-Interessierte den
+// nächsten Schritt sehen und nicht nur Free-Nutzer.
+const _premiumUpgradeTeasers = [
+  'Unbegrenzt gespeicherte Routen',
+  'Jahres-Vergleich & persönliche Bestzeiten',
+  'Größere Gruppen-Fahrten (mehr als 5 Mitglieder)',
+  'Eigene Communities erstellen (nur mit Premium)',
+];
+
 const _tiers = <_TierSpec>[
-  _TierSpec(SubTier.free, 'Free', 'Zum Reinschnuppern', [
+  _TierSpec(SubTier.free, 'Free', 'Zum Reinschnuppern – mit Werbung', [
     (true, 'Routen generieren & cruisen'),
     (true, 'Rangliste & Badges'),
-    (true, 'Community & Gruppen'),
+    (true, 'Gruppen & Communities beitreten'),
+    (false, 'Eigene Gruppen-Fahrten erstellen (bis zu 5 Mitglieder)'),
     (false, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (false, 'Komplett werbefrei'),
     (false, 'Prioritäts-Routing'),
   ], 'free'),
-  _TierSpec(SubTier.basic, 'Basic', 'Für echte Cruiser', [
+  _TierSpec(SubTier.basic, 'Basic', 'Für echte Cruiser – komplett werbefrei', [
     (true, 'Routen generieren & cruisen'),
     (true, 'Rangliste & Badges'),
-    (true, 'Community & Gruppen'),
+    (true, 'Gruppen & Communities beitreten'),
+    (true, 'Eigene Gruppen-Fahrten erstellen (bis zu 5 Mitglieder)'),
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
-  ], 'basic', highlight: true),
+  ], 'basic', highlight: true, comingSoon: _premiumUpgradeTeasers),
   _TierSpec(SubTier.premium, 'Premium', 'Das volle Programm', [
     (true, 'Routen generieren & cruisen'),
     (true, 'Rangliste & Badges'),
-    (true, 'Community & Gruppen'),
+    (true, 'Gruppen & Communities beitreten'),
+    (true, 'Eigene Gruppen-Fahrten erstellen (bis zu 5 Mitglieder)'),
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
-  ], 'premium', comingSoon: [
-    'Unbegrenzt gespeicherte Routen',
-    'Jahres-Vergleich & persönliche Bestzeiten',
-    'Größere Gruppen-Fahrten',
-    'Eigene Communities erstellen',
-  ]),
+  ], 'premium', comingSoon: _premiumUpgradeTeasers),
 ];
 
 enum _Billing { monthly, yearly }
