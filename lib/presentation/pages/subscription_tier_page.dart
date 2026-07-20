@@ -24,13 +24,6 @@ class _TierSpec {
   final List<(bool, String)> features; // (enthalten?, Text)
   final String entitlement; // RevenueCat-Entitlement/Package-Hinweis
   final bool highlight;
-  // Ehrlich als "kommt noch" gekennzeichnete Extras (bei Basic: was Premium
-  // draufpackt; bei Premium: was noch niemand hat) — NICHT als bereits aktiv
-  // (true) gelistet, weil das Gating dafür noch gebaut wird. Sobald ein
-  // Feature real live ist, wandert es hier raus in die normale
-  // features-Liste (als (true, ...) für die berechtigten Tiers) — siehe
-  // docs/growth/ADS_ANALYSE_2026-07.md.
-  final List<String> comingSoon;
   const _TierSpec(
     this.tier,
     this.name,
@@ -38,24 +31,14 @@ class _TierSpec {
     this.features,
     this.entitlement, {
     this.highlight = false,
-    this.comingSoon = const [],
   });
 }
 
 // EINE gemeinsame Feature-Reihenfolge für alle drei Karten (statt pro Tier
 // unterschiedlicher Texte) — macht den Unterschied zwischen den Stufen auf
-// den ersten Blick vergleichbar: gleiche Zeile, mal grün mit Haken, mal grau
-// mit Schloss. Free zeigt so explizit, was ihr fehlt statt es zu verschweigen.
-// Was Premium on top of Basic noch bringt — auf Basics eigener Karte
-// gezeigt (nicht nur auf Premiums), damit auch Basic-Interessierte den
-// nächsten Schritt sehen und nicht nur Free-Nutzer.
-const _premiumUpgradeTeasers = [
-  'Unbegrenzt gespeicherte Routen',
-  'Jahres-Vergleich & persönliche Bestzeiten',
-  'Größere Gruppen-Fahrten (mehr als 5 Mitglieder)',
-  'Eigene Communities erstellen (nur mit Premium)',
-];
-
+// den ersten Blick vergleichbar: gleiche Zeile, mal grüner Haken, mal rotes
+// X. Je höher der Tier, desto länger die grüne Haken-Kette (Value-Stacking) —
+// Premium hat als einziger Tier alle Haken, das ist der eigentliche Kaufanreiz.
 const _tiers = <_TierSpec>[
   _TierSpec(SubTier.free, 'Free', 'Zum Reinschnuppern – mit Werbung', [
     (true, 'Routen generieren & cruisen'),
@@ -65,6 +48,10 @@ const _tiers = <_TierSpec>[
     (false, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (false, 'Komplett werbefrei'),
     (false, 'Prioritäts-Routing'),
+    (false, 'Unbegrenzt gespeicherte Routen'),
+    (false, 'Jahres-Vergleich & persönliche Bestzeiten'),
+    (false, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
+    (false, 'Eigene Communities erstellen'),
   ], 'free'),
   _TierSpec(SubTier.basic, 'Basic', 'Für echte Cruiser – komplett werbefrei', [
     (true, 'Routen generieren & cruisen'),
@@ -74,7 +61,11 @@ const _tiers = <_TierSpec>[
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
-  ], 'basic', highlight: true, comingSoon: _premiumUpgradeTeasers),
+    (false, 'Unbegrenzt gespeicherte Routen'),
+    (false, 'Jahres-Vergleich & persönliche Bestzeiten'),
+    (false, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
+    (false, 'Eigene Communities erstellen'),
+  ], 'basic', highlight: true),
   _TierSpec(SubTier.premium, 'Premium', 'Das volle Programm', [
     (true, 'Routen generieren & cruisen'),
     (true, 'Rangliste & Badges'),
@@ -83,7 +74,11 @@ const _tiers = <_TierSpec>[
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
-  ], 'premium', comingSoon: _premiumUpgradeTeasers),
+    (true, 'Unbegrenzt gespeicherte Routen'),
+    (true, 'Jahres-Vergleich & persönliche Bestzeiten'),
+    (true, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
+    (true, 'Eigene Communities erstellen'),
+  ], 'premium'),
 ];
 
 enum _Billing { monthly, yearly }
@@ -339,6 +334,10 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
             Row(
               children: [
                 Text(spec.name, style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w800)),
+                if (spec.tier == SubTier.premium) ...[
+                  const SizedBox(width: 5),
+                  const Icon(Icons.workspace_premium_rounded, size: 17, color: Color(0xFFFFC94D)),
+                ],
                 const SizedBox(width: 8),
                 if (spec.highlight)
                   Container(
@@ -386,58 +385,25 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Enthalten = grüner Haken; NICHT enthalten = Schloss statt
-                    // neutralem "Entfernen"-Icon — signalisiert klar "hier
-                    // musst du upgraden", statt nur "fehlt halt".
-                    Icon(f.$1 ? Icons.check_circle : Icons.lock_outline,
-                        size: 17, color: f.$1 ? const Color(0xFF3fb950) : Colors.white24),
+                    // Enthalten = grüner Haken; NICHT enthalten = rotes X —
+                    // Verlust-Framing ("das verpasst du") wirkt stärker als
+                    // ein neutrales Schloss-Icon und macht den Unterschied
+                    // zwischen den Karten auf einen Blick lesbar.
+                    Icon(f.$1 ? Icons.check_circle : Icons.cancel,
+                        size: 17, color: f.$1 ? const Color(0xFF3fb950) : Colors.redAccent.withValues(alpha: 0.85)),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(f.$2,
                           style: TextStyle(
-                              color: f.$1 ? Colors.white.withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.4),
+                              color: f.$1 ? Colors.white.withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.38),
                               fontSize: 13.5,
                               height: 1.3,
                               decoration: f.$1 ? null : TextDecoration.lineThrough,
-                              decorationColor: Colors.white24)),
+                              decorationColor: Colors.redAccent.withValues(alpha: 0.5))),
                     ),
                   ],
                 ),
               ),
-            if (spec.comingSoon.isNotEmpty) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 8),
-                child: Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
-              ),
-              for (final soon in spec.comingSoon)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.schedule_rounded, size: 17, color: _accent.withValues(alpha: 0.8)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(soon,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.7),
-                                fontSize: 13.5,
-                                height: 1.3)),
-                      ),
-                      Container(
-                        margin: const EdgeInsets.only(left: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _accent.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text('BALD',
-                            style: TextStyle(color: _accent, fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
           ],
         ),
       ),
