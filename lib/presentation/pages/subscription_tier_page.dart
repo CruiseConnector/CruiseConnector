@@ -51,29 +51,63 @@ const _tiers = <_TierSpec>[
   ], 'premium'),
 ];
 
+enum _Billing { monthly, yearly }
+
 class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
   SubTier _selected = SubTier.basic;
+  _Billing _billing = _Billing.monthly;
   bool _busy = false;
 
   Color get _accent => Theme.of(context).colorScheme.primary;
 
-  Package? _packageFor(SubscriptionProvider sub, String entitlement) {
+  /// Passendes Package für (Tier, Abrechnungszeitraum) finden.
+  ///
+  /// Primär über RevenueCats [Package.packageType] — der wird von RevenueCat
+  /// direkt aus der echten Store-Laufzeit des Produkts abgeleitet, ist also
+  /// unabhängig davon, wie die Produkt-/Package-IDs benannt sind. Fallback:
+  /// Namens-Heuristik (falls RevenueCat den Typ mal nicht erkennt, z.B. bei
+  /// rein custom benannten Packages ohne Store-Metadaten).
+  Package? _packageFor(SubscriptionProvider sub, String entitlement, _Billing billing) {
     final offering = sub.offerings?.current;
     if (offering == null) return null;
-    // Heuristik: passendes Package per Identifier-Namen finden.
+    final wantType = billing == _Billing.yearly ? PackageType.annual : PackageType.monthly;
+    Package? byType;
+    Package? byName;
     for (final p in offering.availablePackages) {
       final id = p.identifier.toLowerCase();
       final prod = p.storeProduct.identifier.toLowerCase();
-      if (id.contains(entitlement) || prod.contains(entitlement)) return p;
+      if (!(id.contains(entitlement) || prod.contains(entitlement))) continue;
+      if (p.packageType == wantType) byType ??= p;
+      final nameMatch = billing == _Billing.yearly
+          ? (id.contains('year') || id.contains('annual') || prod.contains('year') || prod.contains('annual'))
+          : (id.contains('month') || prod.contains('month'));
+      if (nameMatch) byName ??= p;
     }
-    return null;
+    return byType ?? byName;
   }
 
   String _priceFor(SubscriptionProvider sub, _TierSpec spec) {
     if (spec.tier == SubTier.free) return 'Kostenlos';
-    final pkg = _packageFor(sub, spec.entitlement);
-    if (pkg != null) return '${pkg.storeProduct.priceString} / Monat';
+    final pkg = _packageFor(sub, spec.entitlement, _billing);
+    if (pkg != null) {
+      final suffix = _billing == _Billing.yearly ? '/ Jahr' : '/ Monat';
+      return '${pkg.storeProduct.priceString} $suffix';
+    }
     return sub.purchasesAvailable ? '—' : 'Preis im Store';
+  }
+
+  /// Ersparnis-Chip fürs Jahres-Abo (z.B. "−17%"), aus den echten Store-
+  /// Preisen berechnet — null wenn (noch) nicht beide Laufzeiten vorliegen.
+  String? _yearlySavings(SubscriptionProvider sub, _TierSpec spec) {
+    if (_billing != _Billing.yearly) return null;
+    final monthly = _packageFor(sub, spec.entitlement, _Billing.monthly);
+    final yearly = _packageFor(sub, spec.entitlement, _Billing.yearly);
+    if (monthly == null || yearly == null) return null;
+    final monthlyCost = monthly.storeProduct.price * 12;
+    final yearlyCost = yearly.storeProduct.price;
+    if (monthlyCost <= 0 || yearlyCost <= 0 || yearlyCost >= monthlyCost) return null;
+    final pct = ((1 - (yearlyCost / monthlyCost)) * 100).round();
+    return pct > 0 ? '−$pct%' : null;
   }
 
   Future<void> _choose(SubscriptionProvider sub, _TierSpec spec) async {
@@ -81,7 +115,7 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
       _finish(false);
       return;
     }
-    final pkg = _packageFor(sub, spec.entitlement);
+    final pkg = _packageFor(sub, spec.entitlement, _billing);
     if (pkg == null || !sub.purchasesAvailable) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Abos werden gerade eingerichtet — schau gleich nochmal vorbei.'),
@@ -144,6 +178,7 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
                 ],
               ),
             ),
+            _billingSwitch(),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -202,6 +237,50 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
     );
   }
 
+  /// Monatlich/Jährlich-Umschalter — gilt für Basic UND Premium gemeinsam,
+  /// damit immer nur genau 2 Karten sichtbar sind (nicht 4 einzelne Optionen).
+  Widget _billingSwitch() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _billingSegment(_Billing.monthly, 'Monatlich')),
+          Expanded(child: _billingSegment(_Billing.yearly, 'Jährlich')),
+        ],
+      ),
+    );
+  }
+
+  Widget _billingSegment(_Billing value, String label) {
+    final selected = _billing == value;
+    return GestureDetector(
+      onTap: () => setState(() => _billing = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? _accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(11),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.white60,
+            fontWeight: FontWeight.w700,
+            fontSize: 13.5,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _tierCard(SubscriptionProvider sub, _TierSpec spec, ColorScheme cs) {
     final selected = _selected == spec.tier;
     final current = sub.tier == spec.tier;
@@ -247,8 +326,24 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
             const SizedBox(height: 2),
             Text(spec.tagline, style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12.5)),
             const SizedBox(height: 8),
-            Text(_priceFor(sub, spec),
-                style: TextStyle(color: spec.tier == SubTier.free ? Colors.white70 : _accent, fontSize: 17, fontWeight: FontWeight.w800)),
+            Row(
+              children: [
+                Text(_priceFor(sub, spec),
+                    style: TextStyle(color: spec.tier == SubTier.free ? Colors.white70 : _accent, fontSize: 17, fontWeight: FontWeight.w800)),
+                if (_yearlySavings(sub, spec) != null) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3fb950).withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(_yearlySavings(sub, spec)!,
+                        style: const TextStyle(color: Color(0xFF3fb950), fontSize: 11, fontWeight: FontWeight.w800)),
+                  ),
+                ],
+              ],
+            ),
             const SizedBox(height: 12),
             for (final f in spec.features)
               Padding(
