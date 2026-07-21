@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 
 class CommunityChatsTab extends StatefulWidget {
   const CommunityChatsTab({super.key});
@@ -371,7 +374,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       children: [
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: _showCreateCommunitySheet,
+            onPressed: _onCreateTapped,
             icon: const Icon(Icons.add, color: Colors.white, size: 18),
             label: const Text('Erstellen'),
             style: ElevatedButton.styleFrom(
@@ -679,6 +682,75 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           color: color,
           fontSize: 10.5,
           fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  /// Communities erstellen ist Premium-exklusiv (Free/Basic können nur
+  /// beitreten) — Client-seitiges Gate. Serverseitige Durchsetzung folgt
+  /// erst nach App-Rollout (siehe subscription_provider.dart canCreateCommunity).
+  void _onCreateTapped() {
+    if (context.read<SubscriptionProvider>().canCreateCommunity) {
+      _showCreateCommunitySheet();
+    } else {
+      _showCommunityCreationUpsell();
+    }
+  }
+
+  void _showCommunityCreationUpsell() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF202733), Color(0xFF151A23)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
+            const SizedBox(height: 14),
+            const Text(
+              'Eigene Communities sind Premium',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Gruppen und Communities beitreten geht für alle — eine eigene Community erstellen schaltest du mit Premium frei.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13.5, height: 1.4),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
+                  );
+                },
+                icon: const Icon(Icons.workspace_premium, size: 20),
+                label: const Text('Jetzt freischalten', style: TextStyle(fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppAccentColors.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

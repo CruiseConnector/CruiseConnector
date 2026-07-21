@@ -8,6 +8,8 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -229,6 +231,79 @@ class _CommunityPageState extends State<CommunityPage>
     // Community dieselbe Inbox und denselben Badge-State verwenden.
   }
 
+  /// Eigene Gruppen-Fahrten erstellen ist ab Basic verfügbar (bis 5
+  /// Mitglieder), Free kann nur beitreten — Client-seitiges Gate.
+  /// Server-Trigger (Design fertig) folgt erst nach App-Rollout.
+  Future<void> _openCreateGroup() async {
+    if (context.read<SubscriptionProvider>().maxGroupSize <= 0) {
+      _showGroupCreationUpsell();
+      return;
+    }
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CreateGroupPage()),
+    );
+    _loadData();
+  }
+
+  void _showGroupCreationUpsell() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF202733), Color(0xFF151A23)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
+            const SizedBox(height: 14),
+            const Text(
+              'Eigene Gruppen-Fahrten sind ab Basic',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Gruppen beitreten geht für alle — eine eigene Gruppen-Fahrt (bis zu 5 Mitglieder) erstellst du mit Basic.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13.5, height: 1.4),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
+                  );
+                },
+                icon: const Icon(Icons.workspace_premium, size: 20),
+                label: const Text('Jetzt freischalten', style: TextStyle(fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppAccentColors.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _loadData() async {
     try {
       final provider = context.read<CommunityProvider>();
@@ -418,10 +493,7 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               onPressed: () async {
                 if (_tabController.index == 1) {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-                  );
+                  await _openCreateGroup();
                 } else {
                   await Navigator.push(
                     context,
@@ -1186,13 +1258,7 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               const SizedBox(height: 12),
               GestureDetector(
-                onTap: () async {
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-                  );
-                  _loadData();
-                },
+                onTap: _openCreateGroup,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,

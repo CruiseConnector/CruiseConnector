@@ -55,6 +55,19 @@ class SubscriptionProvider extends ChangeNotifier {
   /// Free sieht Rangliste + Badges, aber NICHT die eigenen Fahr-Zahlen.
   bool get canSeeDrivingStats => _tier != SubTier.free;
 
+  /// Eigene Communities erstellen ist Premium-exklusiv — Free/Basic können
+  /// nur beitreten. Server-seitiges Gating (Trigger, Design fertig) folgt
+  /// erst nach Rollout dieser App-Version, das hier ist nur der Client-Teil.
+  bool get canCreateCommunity => _tier == SubTier.premium;
+
+  /// Max. Mitgliederzahl für eigene Gruppen-Fahrten: Free kann keine Gruppe
+  /// erstellen (nur beitreten), Basic bis 5, Premium bis 25.
+  int get maxGroupSize => switch (_tier) {
+        SubTier.free => 0,
+        SubTier.basic => 5,
+        SubTier.premium => 25,
+      };
+
   /// Rangliste ist für alle sichtbar.
   bool get canSeeLeaderboard => true;
 

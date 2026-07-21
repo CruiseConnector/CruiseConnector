@@ -264,6 +264,14 @@ class CommunityChatService {
       }
       return row['id'] as String;
     } on PostgrestException catch (e) {
+      // CC001 = server-seitiges Premium-Gate (Trigger, folgt nach Rollout
+      // dieser App-Version) — eigener Code statt generischem 42501, weil
+      // das für JEDE RLS-Verletzung auf JEDER Tabelle stehen würde.
+      if (e.code == 'CC001') {
+        throw const CommunityChatServiceException(
+          'Communities erstellen ist ab Premium verfügbar. Jetzt upgraden.',
+        );
+      }
       throw CommunityChatServiceException(e.message);
     }
   }

@@ -3,9 +3,12 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/input_limits.dart';
 import '../../data/services/cruise_group_service.dart';
@@ -755,6 +758,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         MaterialPageRoute(builder: (_) => GroupLobbyPage(groupId: groupId)),
       );
       unawaited(GamificationService.calculateAndSync());
+    } on PostgrestException catch (e) {
+      // Server-Trigger für Tier-Limits (Design fertig, folgt nach Rollout)
+      // wirft diese Nachricht statt eines generischen RLS-Fehlers.
+      if (e.message == 'group_size_exceeds_tier_limit') {
+        _showError('Diese Gruppengröße ist mit deinem Abo nicht möglich.');
+      } else {
+        _showError('Gruppe konnte nicht erstellt werden: ${e.message}');
+      }
     } catch (e) {
       _showError('Gruppe konnte nicht erstellt werden: $e');
     } finally {
@@ -1659,6 +1670,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   }
 
   Widget _buildGroupDetailsCard() {
+    // Basic=5, Premium=25 (siehe SubscriptionProvider.maxGroupSize). Free
+    // erreicht diese Seite gar nicht erst (Gate in community_page.dart).
+    final tierCap = context.watch<SubscriptionProvider>().maxGroupSize.clamp(2, 50);
+    if (_maxPeople > tierCap) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _maxPeople = tierCap.toDouble());
+      });
+    }
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
@@ -1736,10 +1755,10 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               trackHeight: 4,
             ),
             child: Slider(
-              value: _maxPeople,
+              value: _maxPeople.clamp(2, tierCap.toDouble()),
               min: 2,
-              max: 50,
-              divisions: 48,
+              max: tierCap.toDouble(),
+              divisions: tierCap - 2,
               onChanged: (v) => setState(() => _maxPeople = v),
             ),
           ),
