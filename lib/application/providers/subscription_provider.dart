@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/monetization_config.dart';
+import '../../data/services/auth_service.dart';
 
 /// Abo-Stufen. Reihenfolge = aufsteigende Berechtigung.
 enum SubTier { free, basic, premium }
@@ -31,6 +34,7 @@ class SubscriptionProvider extends ChangeNotifier {
   bool _purchasesReady = false;
   bool _initialized = false;
   Offerings? _offerings;
+  StreamSubscription<AuthState>? _authSub;
 
   SubTier get tier => _tier;
   bool get isFree => _tier == SubTier.free;
@@ -62,6 +66,16 @@ class SubscriptionProvider extends ChangeNotifier {
     _initialized = true;
     await _readServerTier();
     await _configureRevenueCat();
+    // Ohne das hier bleibt RevenueCat nach einem Login innerhalb derselben
+    // Session auf der anonymen appUserID (vom configure()-Aufruf ganz oben,
+    // als currentUser evtl. noch null war) — Käufe direkt nach Onboarding
+    // würden dann nie dem echten Supabase-User zugeordnet. Nur auf echte
+    // Identitätswechsel reagieren, nicht auf jeden Token-Refresh.
+    _authSub = AuthService.authStateChanges.listen((state) {
+      if (state.event == AuthChangeEvent.signedIn || state.event == AuthChangeEvent.signedOut) {
+        unawaited(refreshForUser());
+      }
+    });
     notifyListeners();
   }
 
@@ -160,6 +174,7 @@ class SubscriptionProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     if (_purchasesReady) {
       Purchases.removeCustomerInfoUpdateListener(_onCustomerInfo);
     }

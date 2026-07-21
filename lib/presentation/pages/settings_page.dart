@@ -11,6 +11,7 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
@@ -25,6 +26,7 @@ import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
+import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -85,6 +87,22 @@ class _SettingsPageState extends State<SettingsPage> {
     final selected = await showMapDownloadPreferenceSheet(context, force: true);
     if (!mounted || selected == null) return;
     setState(() => _mapAutoDownloadPolicy = selected);
+  }
+
+  Future<void> _openCustomerCenter() async {
+    try {
+      await RevenueCatUI.presentCustomerCenter();
+    } catch (e) {
+      debugPrint('[Settings] Customer Center fehlgeschlagen: $e');
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: 'Konnte gerade nicht geöffnet werden. Versuch es später erneut.',
+        icon: Icons.error_outline_rounded,
+        isError: true,
+        duration: const Duration(seconds: 4),
+      );
+    }
   }
 
   Future<void> _togglePrivacy(bool newValue) async {
@@ -465,6 +483,19 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                   ),
+                  // Nur für zahlende Nutzer — Free hat nichts zu kündigen
+                  // oder umzustellen. RevenueCats fertiges Self-Service-UI
+                  // (Kündigen, Zahlungsprobleme, Plan wechseln) statt einer
+                  // eigenen Kündigungs-Seite.
+                  if (context.watch<SubscriptionProvider>().isPaid) ...[
+                    const Divider(color: Colors.white10, height: 1),
+                    _buildNavTile(
+                      'Zahlung & Kündigung',
+                      Icons.receipt_long_outlined,
+                      subtitle: 'Abo-Details, Kündigen, Zahlungsprobleme',
+                      onTap: _openCustomerCenter,
+                    ),
+                  ],
                 ]),
 
                 const SizedBox(height: 24),
