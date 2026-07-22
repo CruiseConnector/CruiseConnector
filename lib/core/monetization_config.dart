@@ -64,4 +64,15 @@ class MonetizationConfig {
   static const int routeSearchInterstitialCooldownSec = 300;
   /// Native-Ad alle N Posts im Community-/Gruppen-Feed.
   static const int feedAdEveryNPosts = 6;
+  // 2026-07-22 (vucko Placements): weitere Frequenzen.
+  /// Globaler Mindestabstand zwischen JEGLICHEN Vollbild-Ads — verhindert
+  /// z.B. Gruppen-Beitritt-Interstitial direkt gefolgt vom Tab-Wechsel-Ad.
+  static const int fullscreenAdMinGapSec = 90;
+  /// Interstitial nach >5 Seitenwechseln höchstens alle N Sekunden.
+  static const int tabSwitchInterstitialCooldownSec = 240;
+  /// Interstitial bei Gruppen-Beitritt höchstens alle N Sekunden.
+  static const int groupJoinInterstitialCooldownSec = 240;
+  /// Vor-Fahrt-Video (Rewarded) höchstens alle N Sekunden — der Fahrt-Start
+  /// nach Pause/kurzem Stopp soll nicht jedes Mal ein Video kosten.
+  static const int preRideRewardedCooldownSec = 900;
 }

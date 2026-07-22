@@ -116,7 +116,12 @@
 	     GADApplicationIdentifier crasht die App beim Start. Aktuell Google-TEST-ID;
 	     vor Release durch echte AdMob-iOS-App-ID ersetzen (docs/MONETIZATION_SETUP.md). -->
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-2489939412353241~8249645783</string>
+	<!-- 2026-07-22 (vucko Werbung): ATT-Begründung — Apples Review prüft die
+	     SDK-Fähigkeit (AdMob kann IDFA anfragen), nicht ob wir es schon tun.
+	     Ohne diesen Text droht eine Ablehnung beim nächsten Submit. -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Deine Erlaubnis ermöglicht relevantere Werbung. Die App bleibt dadurch für Free-Nutzer kostenlos.</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>

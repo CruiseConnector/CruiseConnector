@@ -22,6 +22,7 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
+import 'package:cruise_connect/data/services/ad_service.dart';
 import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
@@ -86,6 +87,11 @@ void main() {
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
       );
+      // 2026-07-22 (vucko Werbung): AdMob-SDK fire-and-forget initialisieren —
+      // bewusst OHNE await, der Kaltstart darf nicht auf einen Netzwerk-Call
+      // des Ad-SDKs warten (Gray-Screen-Fix nicht regressieren). Der erste
+      // Ad-Request passiert ohnehin erst nach Erreichen der HomePage.
+      unawaited(AdService.instance.initializeSdkOnly());
       // Voice-Setting + Notification-Settings beim Start laden
       // (persistiert via SharedPrefs).
       unawaited(VoiceSettingsService.instance.load());

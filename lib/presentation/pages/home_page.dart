@@ -7,6 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
+import 'package:cruise_connect/core/monetization_config.dart';
+import 'package:cruise_connect/data/services/ad_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
@@ -59,6 +62,16 @@ class _HomePageState extends State<HomePage> {
       // 2026-05-23 (vucko): Notification-Service starten + Toast bei
       // neuen Einträgen anzeigen.
       _setupNotificationService();
+      // 2026-07-22 (vucko Werbung): Ad-System scharf schalten — UNBEDINGT
+      // hier als eigener Call (nicht in _runFirstLoginGuidance verkettet,
+      // dort hängt alles hinter Permission-Sheets, die Nutzer ablehnen
+      // können). Übergibt den PROVIDER, nicht einen bool-Snapshot: der Tier
+      // startet als „free", bis der Server geantwortet hat, und kann sich
+      // per Kauf mitten in der Session ändern — der AdService prüft ihn
+      // deshalb bei jedem Zeige-Versuch live.
+      unawaited(
+        AdService.instance.onHomeReached(context.read<SubscriptionProvider>()),
+      );
       unawaited(_runFirstLoginGuidance());
     });
     // 2026-06-05 (vucko Crash-Fix): Pre-Warm NICHT mehr sofort. Die schwere
@@ -329,12 +342,33 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  // 2026-07-22 (vucko Werbung): >5 manuelle Seitenwechsel → schnell
+  // wegdrückbares Interstitial (nur Free-Tier), danach Zähler-Reset.
+  // Automatische Navigationen (_onPendingRoute/_onOpenCruiseTab/
+  // _onPendingGroupView) laufen NICHT über diesen Handler und zählen
+  // deshalb korrekt nicht mit; Tap auf den bereits aktiven Tab auch nicht.
+  int _manualTabSwitchCount = 0;
+
   void _onNavItemTapped(int index) {
+    final isRealSwitch = index != _selectedIndex;
     setState(() {
       _selectedIndex = index;
       _refreshCounter++;
       _visitedTabs.add(index);
     });
+    if (!isRealSwitch) return;
+    _manualTabSwitchCount++;
+    if (_manualTabSwitchCount > 5) {
+      _manualTabSwitchCount = 0;
+      if (context.read<SubscriptionProvider>().showsAds) {
+        unawaited(
+          AdService.instance.showInterstitialIfReady(
+            placement: 'tab_switch',
+            cooldownSec: MonetizationConfig.tabSwitchInterstitialCooldownSec,
+          ),
+        );
+      }
+    }
   }
 
   void _onTutorialCommunitySectionChange(int index) {

@@ -21,6 +21,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
+import 'package:cruise_connect/core/monetization_config.dart';
+import 'package:cruise_connect/data/services/ad_service.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6427,6 +6430,14 @@ class _CruiseModePageState extends State<CruiseModePage>
                 DriveControlPanel(
                   onStart: () async {
                     _setGroupPaused(false);
+                    // 2026-07-22 (vucko Werbung): Vor-Fahrt-Video (Rewarded,
+                    // 30-60s) für Free-Nutzer — best effort: keine geladene
+                    // Ad → Fahrt startet SOFORT, nie blockieren. Cooldown
+                    // verhindert ein Video bei jedem Pause/Weiter.
+                    if (mounted &&
+                        context.read<SubscriptionProvider>().showsAds) {
+                      await AdService.instance.showRewardedBeforeRide();
+                    }
                     await _startNavigationFlow();
                   },
                   onPause: () {
@@ -8252,6 +8263,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _generateRoute({bool startValidatorRetry = false}) async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
+    // 2026-07-22 (vucko Werbung): Such-Trigger auf Funktions-Ebene, damit
+    // auch die Accept-Call-Sites im catch-Block (Poll/Last-Chance) ihn sehen
+    // (routeDebugTrigger selbst lebt im try-Scope).
+    var searchTriggerForAds = 'firstSearch';
 
     // 2026-05-22 (vucko Task #7): Limit-Check vor Routensuche.
     // Normal-Mode: max 3 WPs, Trip-Mode: max 5. UI lässt mehr setzen damit
@@ -8365,6 +8380,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           : settingsChanged
           ? 'settingsChanged'
           : 'searchAgain';
+      searchTriggerForAds = routeDebugTrigger;
       // 2026-05-21 (vucko): Bei settingsChanged (Stil/Distanz/AB-Toggle) muss
       // der Auto-Retry-State resettet werden — sonst meint die Defensive-
       // Logik fälschlich, die neue Route sei eine Wiederholung der alten
@@ -8693,6 +8709,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         startPosition: startPosition,
         distance: distance,
         waypointSignature: waypointSignature,
+        searchTrigger: routeDebugTrigger,
       );
     } catch (e, stack) {
       debugPrint('[CruiseMode] Route generation failed: $e');
@@ -8773,6 +8790,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                 startPosition: await _getStartCoordinates(),
                 distance: requestedDistance,
                 waypointSignature: requestedWaypointSignature,
+                searchTrigger: searchTriggerForAds,
               );
               return;
             }
@@ -8837,6 +8855,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     startPosition: lastChanceStart,
                     distance: requestedDistance,
                     waypointSignature: requestedWaypointSignature,
+                    searchTrigger: searchTriggerForAds,
                   );
                   return;
                 }
@@ -9044,6 +9063,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     required geo.Position startPosition,
     required int distance,
     required String? waypointSignature,
+    // 2026-07-22 (vucko Werbung): 'firstSearch' | 'settingsChanged' |
+    // 'searchAgain' — nur NICHT-Erstsuchen zeigen nach dem Zeichnen ein
+    // Interstitial (siehe Ende der Funktion).
+    String searchTrigger = 'firstSearch',
   }) async {
     if (!mounted || _disposed) return;
     // 2026-05-31 (vucko): UNIVERSELLER Spike-Cleanup vor der Anzeige — greift
@@ -9212,6 +9235,23 @@ class _CruiseModePageState extends State<CruiseModePage>
       debugPrintStack(
         label: '[CruiseMode] Route drawing stacktrace',
         stackTrace: drawStack,
+      );
+    }
+    // 2026-07-22 (vucko Werbung): Nach jeder NEUSUCHE (nicht der Erstsuche)
+    // ein schnell wegdrückbares Interstitial — BEWUSST hier am Funktionsende:
+    // der interne Auto-Retry (canAutoRetry, gleicher Fingerprint) return-t
+    // weiter oben und erreicht diesen Punkt nie → garantiert genau EINE Ad
+    // pro tatsächlich sichtbarem Ergebnis. Fire-and-forget: die Route ist zu
+    // diesem Zeitpunkt bereits gezeichnet und nutzbar.
+    if (mounted &&
+        !_disposed &&
+        searchTrigger != 'firstSearch' &&
+        context.read<SubscriptionProvider>().showsAds) {
+      unawaited(
+        AdService.instance.showInterstitialIfReady(
+          placement: 'search_again',
+          cooldownSec: MonetizationConfig.routeSearchInterstitialCooldownSec,
+        ),
       );
     }
     debugPrint('[CruiseMode] Route generation SUCCESS');
@@ -10461,6 +10501,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
+    // 2026-07-22 (vucko Werbung): Ab hier läuft die Fahrt — ALLE Anzeigen
+    // (App-Open/Interstitial) sind unterdrückt, bis das Tracking endet
+    // (AdMob-Policy + Sicherheit; Rücknahme in _stopNavigationTracking).
+    AdService.instance.navigationActive = true;
 
     // 2026-07-02 (vucko Geräte-Video): Voice-State der letzten Fahrt darf die
     // neue nicht beeinflussen (Index-Kollision → verschluckte/doppelte Ansage).
@@ -11912,6 +11956,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _stopNavigationTracking() {
+    // Fahrt beendet/pausiert den Tracking-Modus → Werbung wieder erlaubt.
+    AdService.instance.navigationActive = false;
     _positionSubscription?.cancel();
     _positionSubscription = null;
     _socketPositionSubscription?.cancel();

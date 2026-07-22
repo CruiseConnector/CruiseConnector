@@ -12,7 +12,9 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/presentation/widgets/ads/ad_post_card.dart';
 import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -1590,6 +1592,16 @@ class _HomeContentPageState extends State<HomeContentPage>
                     const SizedBox(height: 10),
                     _buildDashboardEditHint(),
                     _buildDashboard(),
+                    // 2026-07-22 (vucko Werbung): kompaktes Native-Ad-Widget
+                    // unter dem Dashboard — bewusst AUSSERHALB des Drag&Drop-
+                    // Grids (kein Persistenz-/Reorder-Eingriff), nur Free-Tier.
+                    if (context.watch<SubscriptionProvider>().showsAds) ...[
+                      const SizedBox(height: 12),
+                      const AdPostCard(
+                        placementKey: 'home_dashboard',
+                        compact: true,
+                      ),
+                    ],
                     if (_showLegacyHomeBodyForDebug) ...[
                       // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
                       // wenn 2+ Tage). Prominent, animiert, sofort sichtbar im

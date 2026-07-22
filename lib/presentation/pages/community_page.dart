@@ -1,4 +1,6 @@
+import 'dart:async' show unawaited;
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:geolocator/geolocator.dart';
@@ -12,6 +14,9 @@ import 'package:cruise_connect/application/providers/subscription_provider.dart'
 import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/core/monetization_config.dart';
+import 'package:cruise_connect/data/services/ad_service.dart';
+import 'package:cruise_connect/presentation/widgets/ads/ad_post_card.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/house_ad_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -611,15 +616,37 @@ class _CommunityPageState extends State<CommunityPage>
       );
     }
 
+    // 2026-07-22 (vucko Werbung): Native-Ad als „Post" alle N Posts — LAZY
+    // über Index-Mapping im weiterhin faulen ListView.separated (kein eager
+    // children-Umbau: Ads laden erst, wenn ihr Slot in Sichtweite gebaut
+    // wird — AdMob-konform + kein unnötiger Request beim Tab-Öffnen).
+    final showsAds = context.watch<SubscriptionProvider>().showsAds;
+    const adEvery = MonetizationConfig.feedAdEveryNPosts;
+    final adCount = showsAds ? feedPosts.length ~/ adEvery : 0;
+
+    // Index-Mapping: nach jedem N-ten Post ein Ad-Item einschieben.
+    // Gesamtzahl = Posts + Ads; Item i ist eine Ad, wenn (i+1) % (N+1) == 0.
+    Widget buildInterleaved(BuildContext context, int index) {
+      const block = adEvery + 1;
+      if (showsAds && (index + 1) % block == 0) {
+        return AdPostCard(
+          key: ValueKey('friendfeed_ad_${index ~/ block}'),
+          placementKey: 'friend_feed',
+        );
+      }
+      final postIndex = showsAds ? index - (index + 1) ~/ block : index;
+      return _buildPostItem(feedPosts[postIndex]);
+    }
+
     return RefreshIndicator(
       onRefresh: _loadData,
       color: AppAccentColors.accent,
       child: ListView.separated(
         padding: const EdgeInsets.only(bottom: 80),
-        itemCount: feedPosts.length,
+        itemCount: feedPosts.length + adCount,
         separatorBuilder: (_, _) =>
             const Divider(color: Colors.white10, height: 1),
-        itemBuilder: (context, index) => _buildPostItem(feedPosts[index]),
+        itemBuilder: buildInterleaved,
       ),
     );
   }
@@ -920,8 +947,8 @@ class _CommunityPageState extends State<CommunityPage>
                   ? _buildGroupsCarousel()
                   : _buildCreateGroupTile();
               break;
-            case 2: // Werbung (nur Free, ab August)
-              inserted = _buildDiscoverAdCard();
+            case 2: // Werbung (nur Free): House-Priorität, sonst AdMob-Native
+              inserted = _buildDiscoverAdSlot();
               break;
             default: // Personen-Empfehlungen
               if (_suggestedUsers.isNotEmpty) {
@@ -946,8 +973,10 @@ class _CommunityPageState extends State<CommunityPage>
     // 2026-07-13 (vucko House-Ads): Sichtbarkeits-Garantie bei dünnem Feed —
     // erreicht die Rotation den Werbe-Slot in DIESEM Build nicht (wenige/keine
     // fremden Posts), hängen wir genau EINE Bild-Anzeige ans Ende.
-    if (_discoverAdsEnabled && _houseAdCursor == adCursorAtBuildStart) {
-      children.add(_buildDiscoverAdCard());
+    if (_discoverAdsEnabled &&
+        _houseAds.isNotEmpty &&
+        _houseAdCursor == adCursorAtBuildStart) {
+      children.add(_buildDiscoverAdSlot());
     }
 
     return RefreshIndicator(
@@ -1040,9 +1069,26 @@ class _CommunityPageState extends State<CommunityPage>
   // Kampagnen aus der eigenen `house_ads`-Tabelle (Eigen-/Direktvermarktung,
   // KEIN Drittanbieter/AdMob-SDK nötig). Aktiv nur, wenn Kampagnen geladen
   // wurden — sonst wird der Slot in der Rotation übersprungen wie bisher.
-  // Ab August kann derselbe Slot zusätzlich AdMob-Native-Ads mischen
-  // (+ Free-Tier-Check über den SubscriptionProvider dieses Branches).
-  bool get _discoverAdsEnabled => _houseAds.isNotEmpty;
+  // 2026-07-22 (vucko Werbung): Slot jetzt zweistufig — House-Kampagne hat
+  // Vorrang (Direktvermarktung, höhere Marge), sonst AdMob-Native. BEIDES nur
+  // für Free-Nutzer: Basic/Premium sind laut Paywall „komplett werbefrei",
+  // also verschwinden auch House-Ads für sie (vorher ungegated — Regelbruch).
+  bool get _discoverAdsEnabled =>
+      context.read<SubscriptionProvider>().showsAds &&
+      (_houseAds.isNotEmpty || !kIsWeb);
+
+  int _admobNativeSlotCounter = 0;
+
+  Widget _buildDiscoverAdSlot() {
+    if (!context.read<SubscriptionProvider>().showsAds) {
+      return const SizedBox.shrink();
+    }
+    if (_houseAds.isNotEmpty) return _buildDiscoverAdCard();
+    return AdPostCard(
+      key: ValueKey('discover_admob_${_admobNativeSlotCounter++}'),
+      placementKey: 'discover_feed',
+    );
+  }
 
   // Bild-Werbekarte (House-Ad) im Entdecken-Feed: CDN-Bild, „ANZEIGE"-Label,
   // optional Headline/CTA; Impression einmal pro Feed-Aufbau, Klick öffnet
@@ -3216,6 +3262,18 @@ class _CommunityPageState extends State<CommunityPage>
     try {
       await SocialService.joinGroup(groupId);
       await _loadData();
+      // 2026-07-22 (vucko Werbung): Interstitial NACH erfolgreichem Beitritt
+      // (fire-and-forget, Beitritt ist serverseitig schon durch — Ad kann
+      // nie blockieren). Nur Free-Tier, globale + Placement-Cooldowns im
+      // AdService.
+      if (mounted && context.read<SubscriptionProvider>().showsAds) {
+        unawaited(
+          AdService.instance.showInterstitialIfReady(
+            placement: 'group_join',
+            cooldownSec: MonetizationConfig.groupJoinInterstitialCooldownSec,
+          ),
+        );
+      }
       return true;
     } catch (e) {
       if (mounted) {
@@ -3235,6 +3293,14 @@ class _CommunityPageState extends State<CommunityPage>
     try {
       final groupId = await SocialService.joinGroupWithCode(code);
       await _loadData();
+      if (mounted && context.read<SubscriptionProvider>().showsAds) {
+        unawaited(
+          AdService.instance.showInterstitialIfReady(
+            placement: 'group_join',
+            cooldownSec: MonetizationConfig.groupJoinInterstitialCooldownSec,
+          ),
+        );
+      }
       return groupId;
     } catch (e) {
       if (mounted) {
