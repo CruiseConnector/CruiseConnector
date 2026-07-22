@@ -464,6 +464,56 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         .catchError((_) => _load(scrollToBottom: false));
   }
 
+  /// 2026-07-23 (vucko): eigenes Emoji über die normale System-Emoji-Tastatur
+  /// wählen (nicht auf die 6 Schnell-Emojis beschränkt) — gespiegelt von
+  /// group_chat_panel.dart._openCustomEmojiPicker.
+  Future<void> _openCustomEmojiPicker(String messageId) async {
+    // Bottom-Sheet-Schließ-Animation erst abwarten — ein showDialog() im
+    // selben Tick wie Navigator.pop(sheetContext) kollidiert sonst mit der
+    // laufenden Pop-Transition und der Dialog erscheint gar nicht.
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    if (!mounted) return;
+    final ctrl = TextEditingController();
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF151821),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: const Text(
+          'Eigenes Emoji',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 8,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 32),
+          decoration: const InputDecoration(counterText: '', hintText: '😀'),
+          onSubmitted: (v) => Navigator.pop(dialogContext, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Abbrechen'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, ctrl.text),
+            child: Text(
+              'Reagieren',
+              style: TextStyle(color: AppAccentColors.accent),
+            ),
+          ),
+        ],
+      ),
+    );
+    final emoji = chosen?.trim() ?? '';
+    if (emoji.isEmpty) return;
+    _toggleReaction(messageId, emoji);
+  }
+
   void _showMessageActions(Map<String, dynamic> message) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final isMine = message['user_id'] == uid;
@@ -529,6 +579,32 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                               ),
                             ),
                           ),
+                        // 2026-07-23 (vucko): eigenes Emoji über die normale
+                        // System-Emoji-Tastatur wählen (nicht auf die 6
+                        // Schnell-Emojis beschränkt).
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            unawaited(_openCustomEmojiPicker(messageId));
+                          },
+                          child: Container(
+                            width: 46,
+                            height: 46,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1C1F26),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.06),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.add_rounded,
+                              color: Colors.white70,
+                              size: 22,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
