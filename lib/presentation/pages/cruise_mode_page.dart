@@ -7343,7 +7343,9 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
           child: ElevatedButton(
-            onPressed: _isLoading ? _cancelRouteGeneration : _generateRoute,
+            onPressed: _isLoading
+                ? _cancelRouteGeneration
+                : _onSearchButtonPressed,
             style: ElevatedButton.styleFrom(
               backgroundColor: _isLoading
                   ? const Color(0xFFB9443A)
@@ -8260,13 +8262,27 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE GENERATION ════════════════════════════════
 
+  /// 2026-07-22 (vucko Werbung): Werbung bei der SUCH-AKTION selbst — feuert
+  /// GENAU beim Nutzer-Tap auf „Rundkurs/A-nach-B/Wegpunkt suchen" (auch bei
+  /// der Erstsuche), NICHT bei internen Re-Läufen (Trip-Resume-Auto-Generate,
+  /// Validator-/Auto-Retry, POI-Reroute) — die rufen `_generateRoute` direkt.
+  /// Fire-and-forget: die Suche startet sofort, die Ad legt sich über die
+  /// „Suche läuft"-Anzeige. Cooldown (5min) + globaler 90s-Abstand begrenzen.
+  void _onSearchButtonPressed() {
+    if (context.read<SubscriptionProvider>().showsAds) {
+      unawaited(
+        AdService.instance.showInterstitialIfReady(
+          placement: 'route_search',
+          cooldownSec: MonetizationConfig.routeSearchInterstitialCooldownSec,
+        ),
+      );
+    }
+    unawaited(_generateRoute());
+  }
+
   Future<void> _generateRoute({bool startValidatorRetry = false}) async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
-    // 2026-07-22 (vucko Werbung): Such-Trigger auf Funktions-Ebene, damit
-    // auch die Accept-Call-Sites im catch-Block (Poll/Last-Chance) ihn sehen
-    // (routeDebugTrigger selbst lebt im try-Scope).
-    var searchTriggerForAds = 'firstSearch';
 
     // 2026-05-22 (vucko Task #7): Limit-Check vor Routensuche.
     // Normal-Mode: max 3 WPs, Trip-Mode: max 5. UI lässt mehr setzen damit
@@ -8380,7 +8396,6 @@ class _CruiseModePageState extends State<CruiseModePage>
           : settingsChanged
           ? 'settingsChanged'
           : 'searchAgain';
-      searchTriggerForAds = routeDebugTrigger;
       // 2026-05-21 (vucko): Bei settingsChanged (Stil/Distanz/AB-Toggle) muss
       // der Auto-Retry-State resettet werden — sonst meint die Defensive-
       // Logik fälschlich, die neue Route sei eine Wiederholung der alten
@@ -8709,7 +8724,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         startPosition: startPosition,
         distance: distance,
         waypointSignature: waypointSignature,
-        searchTrigger: routeDebugTrigger,
       );
     } catch (e, stack) {
       debugPrint('[CruiseMode] Route generation failed: $e');
@@ -8790,7 +8804,6 @@ class _CruiseModePageState extends State<CruiseModePage>
                 startPosition: await _getStartCoordinates(),
                 distance: requestedDistance,
                 waypointSignature: requestedWaypointSignature,
-                searchTrigger: searchTriggerForAds,
               );
               return;
             }
@@ -8855,8 +8868,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     startPosition: lastChanceStart,
                     distance: requestedDistance,
                     waypointSignature: requestedWaypointSignature,
-                    searchTrigger: searchTriggerForAds,
-                  );
+                      );
                   return;
                 }
               } catch (lastChanceError, lastChanceStack) {
@@ -9063,10 +9075,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     required geo.Position startPosition,
     required int distance,
     required String? waypointSignature,
-    // 2026-07-22 (vucko Werbung): 'firstSearch' | 'settingsChanged' |
-    // 'searchAgain' — nur NICHT-Erstsuchen zeigen nach dem Zeichnen ein
-    // Interstitial (siehe Ende der Funktion).
-    String searchTrigger = 'firstSearch',
   }) async {
     if (!mounted || _disposed) return;
     // 2026-05-31 (vucko): UNIVERSELLER Spike-Cleanup vor der Anzeige — greift
@@ -9237,23 +9245,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         stackTrace: drawStack,
       );
     }
-    // 2026-07-22 (vucko Werbung): Nach jeder NEUSUCHE (nicht der Erstsuche)
-    // ein schnell wegdrückbares Interstitial — BEWUSST hier am Funktionsende:
-    // der interne Auto-Retry (canAutoRetry, gleicher Fingerprint) return-t
-    // weiter oben und erreicht diesen Punkt nie → garantiert genau EINE Ad
-    // pro tatsächlich sichtbarem Ergebnis. Fire-and-forget: die Route ist zu
-    // diesem Zeitpunkt bereits gezeichnet und nutzbar.
-    if (mounted &&
-        !_disposed &&
-        searchTrigger != 'firstSearch' &&
-        context.read<SubscriptionProvider>().showsAds) {
-      unawaited(
-        AdService.instance.showInterstitialIfReady(
-          placement: 'search_again',
-          cooldownSec: MonetizationConfig.routeSearchInterstitialCooldownSec,
-        ),
-      );
-    }
+    // 2026-07-22 (vucko Werbung): Die Such-Interstitial feuert jetzt beim
+    // KLICK auf den Such-Button (_onSearchButtonPressed), nicht mehr hier nach
+    // dem Ergebnis — so kommt die Werbung genau bei der Aktion (auch bei der
+    // Erstsuche) und legt sich über die „Suche läuft"-Anzeige.
     debugPrint('[CruiseMode] Route generation SUCCESS');
   }
 

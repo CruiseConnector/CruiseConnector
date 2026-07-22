@@ -60,8 +60,18 @@ class AdService with WidgetsBindingObserver {
 
   bool get _showsAds => _subscription?.showsAds ?? false;
 
+  /// Grund-Voraussetzungen für JEDE Vollbild-Ad (ohne den globalen Abstand).
+  bool get _fullscreenBaseAllowed =>
+      _showsAds && !navigationActive && !_fullscreenAdShowingNow;
+
+  /// Wie [_fullscreenBaseAllowed], zusätzlich der globale Mindestabstand
+  /// zwischen JEGLICHEN Vollbild-Ads (App-Open + Interstitials). Das
+  /// Vor-Fahrt-Video ist davon bewusst AUSGENOMMEN (siehe
+  /// [showRewardedBeforeRide]) — es ist das von Vucko priorisierte, vor jeder
+  /// Fahrt erwartete Format und wird nur durch seinen eigenen 15-min-Cooldown
+  /// begrenzt, nicht durch eine kurz zuvor gezeigte Such-Interstitial.
   bool get _fullscreenAllowedNow {
-    if (!_showsAds || navigationActive || _fullscreenAdShowingNow) return false;
+    if (!_fullscreenBaseAllowed) return false;
     final last = _lastFullscreenAdAt;
     if (last != null &&
         DateTime.now().difference(last).inSeconds <
@@ -102,17 +112,24 @@ class AdService with WidgetsBindingObserver {
   /// Einmalig vom ersten HomePage-Aufbau (postFrameCallback, UNBEDINGT — nicht
   /// hinter irgendeinem Permission-Prompt verkettet). Übergibt den Provider
   /// selbst, damit jeder spätere Check den LIVE-Tier sieht.
+  ///
+  /// 2026-07-22 (vucko): Das Consent-Formular kommt GENAU EINMAL — egal ob der
+  /// Nutzer die App zum ersten Mal öffnet, schon eingeloggt ist oder sie
+  /// bereits benutzt hat. Es läuft für JEDEN (auch Paid — es ist eine
+  /// rechtliche Einwilligung, keine Werbung), und ERST DANACH darf überhaupt
+  /// eine Ad geladen/gezeigt werden. UMP selbst merkt sich die Entscheidung
+  /// persistent (`isConsentFormAvailable`/`getConsentStatus`) → beim nächsten
+  /// App-Start erscheint es nicht erneut.
   Future<void> onHomeReached(SubscriptionProvider subscription) async {
     _subscription = subscription;
     if (_homeReached || kIsWeb) return;
     _homeReached = true;
     WidgetsBinding.instance.addObserver(this);
-    if (!_showsAds) {
-      // Paid-Nutzer: nichts laden. Sollte der Tier später auf free wechseln
-      // (Abo ausgelaufen), holt der nächste Resume das Preloading nach.
-      return;
-    }
+    // Consent ZUERST für alle (rechtlich), genau einmal. UMP zeigt das
+    // Formular nur, wenn es erforderlich und noch nicht beantwortet ist.
     await _ensureConsent();
+    // Ab hier ist Werbung freigegeben — aber nur für Free-Tier laden.
+    if (!_showsAds) return;
     if (!await _canRequestAds()) return;
     unawaited(_preloadInterstitial());
     unawaited(_preloadRewarded());
@@ -133,6 +150,10 @@ class AdService with WidgetsBindingObserver {
     unawaited(() async {
       await _ensureConsent();
       if (!await _canRequestAds()) return;
+      // Falls der Nutzer erst in dieser Session zu Free wurde (Abo abgelaufen),
+      // die Interstitial/Rewarded-Vorräte nachladen.
+      unawaited(_preloadInterstitial());
+      unawaited(_preloadRewarded());
       if (_appOpenAd == null) {
         await _loadAppOpenAd();
         return; // dieser Resume geht leer aus, der nächste zeigt.
@@ -327,7 +348,10 @@ class AdService with WidgetsBindingObserver {
   Future<void> showRewardedBeforeRide({
     Duration maxWait = const Duration(minutes: 2),
   }) async {
-    if (!_fullscreenAllowedNow) return;
+    // BEWUSST _fullscreenBaseAllowed (ohne globalen 90s-Abstand): das
+    // Vor-Fahrt-Video soll vor JEDER Fahrt kommen, auch kurz nach einer
+    // Such-Interstitial — begrenzt nur durch seinen eigenen 15-min-Cooldown.
+    if (!_fullscreenBaseAllowed) return;
     if (!_placementCooldownOk(
       'pre_ride',
       MonetizationConfig.preRideRewardedCooldownSec,
