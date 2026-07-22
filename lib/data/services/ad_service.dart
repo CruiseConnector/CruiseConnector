@@ -168,8 +168,20 @@ class AdService with WidgetsBindingObserver {
     if (_consentFlowDone || kIsWeb) return;
     _consentFlowDone = true;
     final completer = Completer<void>();
+    // Debug-Builds erzwingen EWR-Geografie (Googles offizieller Test-Weg,
+    // Simulatoren sind automatisch Testgeräte): so ist das Consent-Formular
+    // beim Entwickeln IMMER prüfbar, unabhängig davon, ob Googles Serving die
+    // veröffentlichte Meldung schon propagiert hat. Release nutzt die echte
+    // Geo-Erkennung.
+    final params = kDebugMode
+        ? ConsentRequestParameters(
+            consentDebugSettings: ConsentDebugSettings(
+              debugGeography: DebugGeography.debugGeographyEea,
+            ),
+          )
+        : ConsentRequestParameters();
     ConsentInformation.instance.requestConsentInfoUpdate(
-      ConsentRequestParameters(),
+      params,
       () async {
         try {
           if (await ConsentInformation.instance.isConsentFormAvailable()) {

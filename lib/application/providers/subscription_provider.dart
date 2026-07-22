@@ -115,6 +115,17 @@ class SubscriptionProvider extends ChangeNotifier {
       final map = res is Map ? res : <String, dynamic>{};
       _tier = subTierFromString(map['tier'] as String?);
     } catch (_) {/* offline / nicht eingeloggt → free */}
+    _applyDebugTierOverride();
+  }
+
+  /// 2026-07-22 (vucko Werbe-Test): NUR Debug-Builds + explizites
+  /// `--dart-define=DEBUG_FORCE_TIER=free|basic|premium` — erzwingt einen
+  /// Tier, ohne echte Accounts/DB anzufassen. Zum Testen von Werbung und
+  /// Abo-Sperren am Simulator/Testgerät. In Release-Builds wirkungslos.
+  void _applyDebugTierOverride() {
+    if (!kDebugMode) return;
+    const forced = String.fromEnvironment('DEBUG_FORCE_TIER');
+    if (forced.isNotEmpty) _tier = subTierFromString(forced);
   }
 
   Future<void> _configureRevenueCat() async {

@@ -83,7 +83,12 @@ class _AdPostCardState extends State<AdPostCard> {
     if (ad == null || !_loaded) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      height: widget.compact ? 120 : 330,
+      // 2026-07-22 (vucko Werbe-Test): AdMob-Native-Validator meldete bei 120pt
+      // "MediaView is too small for video" (Google verlangt >=120x120pt NUR für
+      // die MediaView selbst — bei TemplateType.small frisst Padding/Text um
+      // die MediaView herum vom Gesamt-Container etwas ab). 160pt gibt genug
+      // Reserve, ohne im Dashboard sperrig zu wirken.
+      height: widget.compact ? 160 : 330,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
