@@ -1,4 +1,5 @@
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,8 +12,15 @@ void main() {
   });
 
   Widget buildPage() {
-    return ChangeNotifierProvider(
-      create: (_) => AppAccentProvider(),
+    // 2026-07-25: Seit dem Free-Tier-Gating (Lock-Symbole an Länge/Stil/
+    // Inlandsfilter) liest das Setup den SubscriptionProvider live aus — ohne
+    // ihn wirft der Build eine ProviderNotFoundException. Default = Free,
+    // damit die Tests genau den restriktivsten Fall abdecken.
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AppAccentProvider()),
+        ChangeNotifierProvider(create: (_) => SubscriptionProvider()),
+      ],
       child: const MaterialApp(
         home: CreateGroupPage(disableMapTilesForTesting: true),
       ),

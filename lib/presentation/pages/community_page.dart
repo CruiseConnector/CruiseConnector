@@ -3266,11 +3266,14 @@ class _CommunityPageState extends State<CommunityPage>
       // (fire-and-forget, Beitritt ist serverseitig schon durch — Ad kann
       // nie blockieren). Nur Free-Tier, globale + Placement-Cooldowns im
       // AdService.
+      // 2026-07-23 (vucko Werbung): 30s-Rewarded-Video NACH erfolgreichem
+      // Beitritt (vorher Interstitial) — fire-and-forget, Beitritt ist
+      // serverseitig schon durch, kann durchs Video nie blockiert werden.
       if (mounted && context.read<SubscriptionProvider>().showsAds) {
         unawaited(
-          AdService.instance.showInterstitialIfReady(
+          AdService.instance.showRewardedVideo(
             placement: 'group_join',
-            cooldownSec: MonetizationConfig.groupJoinInterstitialCooldownSec,
+            cooldownSec: MonetizationConfig.groupJoinRewardedCooldownSec,
           ),
         );
       }
@@ -3295,9 +3298,9 @@ class _CommunityPageState extends State<CommunityPage>
       await _loadData();
       if (mounted && context.read<SubscriptionProvider>().showsAds) {
         unawaited(
-          AdService.instance.showInterstitialIfReady(
+          AdService.instance.showRewardedVideo(
             placement: 'group_join',
-            cooldownSec: MonetizationConfig.groupJoinInterstitialCooldownSec,
+            cooldownSec: MonetizationConfig.groupJoinRewardedCooldownSec,
           ),
         );
       }

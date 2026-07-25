@@ -48,6 +48,7 @@ const _tiers = <_TierSpec>[
     (false, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (false, 'Komplett werbefrei'),
     (false, 'Prioritäts-Routing'),
+    (false, 'Home-Dashboard anpassen'),
     (false, 'Unbegrenzt gespeicherte Routen'),
     (false, 'Jahres-Vergleich & persönliche Bestzeiten'),
     (false, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
@@ -61,6 +62,7 @@ const _tiers = <_TierSpec>[
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
+    (true, 'Home-Dashboard anpassen'),
     (false, 'Unbegrenzt gespeicherte Routen'),
     (false, 'Jahres-Vergleich & persönliche Bestzeiten'),
     (false, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
@@ -74,6 +76,7 @@ const _tiers = <_TierSpec>[
     (true, 'Fahr-Statistiken (km, Zeit, XP, Charts)'),
     (true, 'Komplett werbefrei'),
     (true, 'Prioritäts-Routing'),
+    (true, 'Home-Dashboard anpassen'),
     (true, 'Unbegrenzt gespeicherte Routen'),
     (true, 'Jahres-Vergleich & persönliche Bestzeiten'),
     (true, 'Bis zu 25 Mitglieder pro Gruppen-Fahrt'),
@@ -158,6 +161,13 @@ class _SubscriptionTierPageState extends State<SubscriptionTierPage> {
     setState(() => _busy = false);
     if (ok) {
       _finish(true);
+    } else if (sub.lastPurchaseError != null) {
+      // 2026-07-23 (vucko "Kauf funktioniert nicht, keine Fehlermeldung"):
+      // vorher hier still nichts — der Nutzer sah nur den Spinner
+      // verschwinden, ohne jeden Hinweis warum.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(sub.lastPurchaseError!)),
+      );
     }
   }
 

@@ -358,15 +358,28 @@ class _HomePageState extends State<HomePage> {
     });
     if (!isRealSwitch) return;
     _manualTabSwitchCount++;
-    if (_manualTabSwitchCount > 5) {
-      _manualTabSwitchCount = 0;
+    // 2026-07-25 (vucko „beim Seitenwechsel kommt keine Werbung"): Schwelle
+    // von >5 auf >3 gesenkt UND — wichtiger — der Zaehler wird nur noch
+    // zurueckgesetzt, wenn tatsaechlich eine Ad kam. Vorher wurde er auch bei
+    // blockierendem Cooldown/Mindestabstand geleert; der Nutzer musste dann
+    // erneut 6x wechseln und landete oft wieder im selben Cooldown, sodass
+    // praktisch nie eine Seitenwechsel-Ad erschien. Jetzt bleibt der Zaehler
+    // „scharf" und die naechste Gelegenheit wird sofort genutzt.
+    if (_manualTabSwitchCount > 3) {
       if (context.read<SubscriptionProvider>().showsAds) {
         unawaited(
-          AdService.instance.showInterstitialIfReady(
-            placement: 'tab_switch',
-            cooldownSec: MonetizationConfig.tabSwitchInterstitialCooldownSec,
-          ),
+          AdService.instance
+              .showInterstitialIfReady(
+                placement: 'tab_switch',
+                cooldownSec:
+                    MonetizationConfig.tabSwitchInterstitialCooldownSec,
+              )
+              .then((shown) {
+                if (shown) _manualTabSwitchCount = 0;
+              }),
         );
+      } else {
+        _manualTabSwitchCount = 0;
       }
     }
   }

@@ -23,7 +23,9 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true">
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
@@ -78,10 +80,12 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="cruise_default" />
-        <!-- 2026-07-10 (vucko): AdMob-App-ID. PFLICHT sobald google_mobile_ads
-             eingebunden ist — ohne diese meta-data crasht die App beim Start.
-             Aktuell die offizielle Google-TEST-App-ID; vor Release durch die
-             echte AdMob-App-ID ersetzen (docs/MONETIZATION_SETUP.md). -->
+        <!-- AdMob-App-ID. PFLICHT sobald google_mobile_ads eingebunden ist —
+             ohne diese meta-data crasht die App beim Start. Das ist bereits die
+             ECHTE Android-App-ID (Publisher pub-2489939412353241), NICHT die
+             Test-ID. Die Ad-UNIT-IDs kommen dagegen per dart-define aus
+             scripts/build_release.sh — ohne das Script laeuft die App auf
+             Googles Test-Units und verdient nichts. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-2489939412353241~5989962302" />

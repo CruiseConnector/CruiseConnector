@@ -22,6 +22,7 @@ import 'package:cruise_connect/domain/models/badge.dart' as app_badges;
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
@@ -276,6 +277,7 @@ class _HomeContentPageState extends State<HomeContentPage>
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
   late final AnimationController _shimmerController;
+  StreamSubscription<void>? _downgradeSub;
   static const String _dashboardPrefsKey = 'home_dashboard_layout_v1';
   static const String _badgeHuntPrefsKey = 'home_badge_hunt_id_v1';
   static const double _dashboardGap = 12;
@@ -435,11 +437,39 @@ class _HomeContentPageState extends State<HomeContentPage>
     )..repeat();
     unawaited(_loadDashboardLayout());
     unawaited(_loadBadgeHuntPreference());
+    // 2026-07-23 (vucko "Downgrade auf Free setzt Widgets zurück"): Basic/
+    // Premium → Free (Abo abgelaufen/gekündigt) verwirft ein individuell
+    // angepasstes Dashboard-Layout automatisch zurück auf den Standard-Satz.
+    _downgradeSub = context
+        .read<SubscriptionProvider>()
+        .downgradeToFreeEvents
+        .listen((_) => unawaited(_resetDashboardToDefaultOnDowngrade()));
     // 2026-05-28 (vucko Task #68): Cached Home-Snapshot ASYNC laden damit
     // beim App-Start Level + Wochen-Chart + Lite-Recommendation sofort
     // sichtbar sind statt Skeleton — der Refresh läuft im Hintergrund.
     unawaited(_hydrateFromHomeSnapshot());
     _loadStats();
+  }
+
+  bool _initialTierSanitizeDone = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 2026-07-23 (vucko "Free-Reset auch bei bereits gespeichertem
+    // Custom-Layout"): SubscriptionProvider lädt async (init() wird in
+    // main.dart NICHT awaitet) — erst wenn `initialized` true ist, ist der
+    // Tier-Wert vertrauenswürdig. Erst dann EINMALIG prüfen: falls der
+    // Nutzer schon beim allerersten Laden (nicht erst bei einem Downgrade
+    // WÄHREND der Session) Free ist, aber noch ein Custom-Layout aus einer
+    // früheren Basic/Premium-Zeit gespeichert war, wird es hier bereinigt.
+    final subscription = context.watch<SubscriptionProvider>();
+    if (!_initialTierSanitizeDone && subscription.initialized) {
+      _initialTierSanitizeDone = true;
+      if (!subscription.isPaid) {
+        unawaited(_resetDashboardToDefaultOnDowngrade());
+      }
+    }
   }
 
   /// 2026-05-28 (vucko Task #68): Schneller initial-Render aus dem letzten
@@ -1199,7 +1229,23 @@ class _HomeContentPageState extends State<HomeContentPage>
       controller.dispose();
     }
     _folderSlideControllers.clear();
+    _downgradeSub?.cancel();
     super.dispose();
+  }
+
+  /// 2026-07-23 (vucko "Downgrade auf Free setzt Widgets zurück"): Basic/
+  /// Premium → Free — gespeichertes Dashboard-Layout verwerfen, zurück auf
+  /// den Standard-Satz an Widgets (Ads erscheinen automatisch wieder, das
+  /// steuert showsAds live in _buildDashboard() — kein Extra-Code nötig).
+  Future<void> _resetDashboardToDefaultOnDowngrade() async {
+    if (!mounted) return;
+    setState(() => _dashboardItems = _defaultDashboardItems());
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_dashboardPrefsKey);
+    } catch (e) {
+      debugPrint('[Home] Dashboard-Reset bei Downgrade fehlgeschlagen: $e');
+    }
   }
 
   /// 2026-05-22 (vucko): Schneller GPS-Resolve für Home-Recommendation.
@@ -1591,17 +1637,12 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                     const SizedBox(height: 10),
                     _buildDashboardEditHint(),
+                    // 2026-07-23 (vucko „zwei feste Werbe-Widgets"): die
+                    // beiden Ad-Blöcke sitzen jetzt FEST innerhalb von
+                    // _buildDashboard() selbst (oben + an der Lücken-Stelle),
+                    // das vorherige lose Ad-Widget hier drunter ist entfallen
+                    // (sonst wären es drei Ad-Flächen statt zwei).
                     _buildDashboard(),
-                    // 2026-07-22 (vucko Werbung): kompaktes Native-Ad-Widget
-                    // unter dem Dashboard — bewusst AUSSERHALB des Drag&Drop-
-                    // Grids (kein Persistenz-/Reorder-Eingriff), nur Free-Tier.
-                    if (context.watch<SubscriptionProvider>().showsAds) ...[
-                      const SizedBox(height: 12),
-                      const AdPostCard(
-                        placementKey: 'home_dashboard',
-                        compact: true,
-                      ),
-                    ],
                     if (_showLegacyHomeBodyForDebug) ...[
                       // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
                       // wenn 2+ Tage). Prominent, animiert, sofort sichtbar im
@@ -1988,7 +2029,85 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
+  void _showDashboardEditUpsell() {
+    HapticFeedback.selectionClick();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF202733), Color(0xFF151A23)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
+            const SizedBox(height: 14),
+            const Text(
+              'Dashboard anpassen ist ab Basic',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Widgets verschieben, hinzufügen und entfernen geht mit Basic oder Premium.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.6),
+                fontSize: 13.5,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
+                  );
+                },
+                icon: const Icon(Icons.workspace_premium, size: 20),
+                label: const Text(
+                  'Jetzt freischalten',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppAccentColors.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 2026-07-23 (vucko „nur mit Basic bearbeiten"): Dashboard-Anpassung ist
+  /// ab Basic — Free sieht direkt das Abo-Popup statt des Editors.
   void _openDashboardEditor() {
+    if (!context.read<SubscriptionProvider>().isPaid) {
+      _showDashboardEditUpsell();
+      return;
+    }
     HapticFeedback.selectionClick();
     if (!_customizingDashboard) {
       setState(() => _customizingDashboard = true);
@@ -2457,9 +2576,25 @@ class _HomeContentPageState extends State<HomeContentPage>
           return _buildEmptyDashboard();
         }
 
+        // 2026-07-23 (vucko „zwei feste Werbe-Widgets"): NUR Free-Tier sieht
+        // sie, sie liegen AUSSERHALB von _dashboardItems — also nicht
+        // verschiebbar, nicht entfernbar, nicht persistiert.
+        final showAds = context.watch<SubscriptionProvider>().showsAds;
+
         final blocks = <Widget>[];
         final pendingSmall = <_DashboardLayoutEntry>[];
 
+        if (showAds) {
+          // Widget 1: ganz oben, garantiert ohne Scrollen sichtbar.
+          blocks.add(
+            const AdPostCard(
+              placementKey: 'home_dashboard_top',
+              compact: true,
+            ),
+          );
+        }
+
+        var gapAdPlaced = false;
         void flushSmall() {
           if (pendingSmall.isEmpty) return;
           blocks.add(
@@ -2469,6 +2604,17 @@ class _HomeContentPageState extends State<HomeContentPage>
             ),
           );
           pendingSmall.clear();
+          // Widget 2: direkt nach der ersten Small-Cluster-Reihe — genau da,
+          // wo bei ungerader Anzahl sonst die leere Lücken-Kachel wäre.
+          if (showAds && !gapAdPlaced) {
+            blocks.add(
+              const AdPostCard(
+                placementKey: 'home_dashboard_gap',
+                compact: true,
+              ),
+            );
+            gapAdPlaced = true;
+          }
         }
 
         for (final entry in entries) {
@@ -2481,6 +2627,14 @@ class _HomeContentPageState extends State<HomeContentPage>
           pendingSmall.add(entry);
         }
         flushSmall();
+        if (showAds && !gapAdPlaced) {
+          blocks.add(
+            const AdPostCard(
+              placementKey: 'home_dashboard_gap',
+              compact: true,
+            ),
+          );
+        }
 
         return AnimatedSize(
           duration: const Duration(milliseconds: 280),
@@ -3156,9 +3310,15 @@ class _HomeContentPageState extends State<HomeContentPage>
       },
     );
 
+    // 2026-07-23 (vucko „nur mit Basic bearbeiten"): Free-Nutzer können
+    // Widgets nicht per Drag verschieben — maxSimultaneousDrags: 0 verhindert
+    // den Drag komplett (kein Pop-up nötig, es ist einfach kein Ziehen
+    // möglich), das Editor-Pop-up kommt weiterhin über den oberen Button.
+    final canEditDashboard = context.watch<SubscriptionProvider>().isPaid;
     return LongPressDraggable<_HomeWidgetDragPayload>(
       data: _HomeWidgetDragPayload.existing(item.key),
       dragAnchorStrategy: pointerDragAnchorStrategy,
+      maxSimultaneousDrags: canEditDashboard ? null : 0,
       feedback: _buildDragFeedback(_dashboardItemTitle(item), Icons.widgets),
       childWhenDragging: Opacity(opacity: 0.38, child: target),
       onDragStarted: () {
@@ -3699,11 +3859,14 @@ class _HomeContentPageState extends State<HomeContentPage>
       ),
     );
 
+    // 2026-07-23 (vucko „nur mit Basic bearbeiten"): siehe _buildDashboardCell.
+    final canEditDashboard = context.watch<SubscriptionProvider>().isPaid;
     return KeyedSubtree(
       key: ValueKey('folder_content_${item.key}_${id.name}'),
       child: LongPressDraggable<_HomeWidgetDragPayload>(
         data: payload,
         dragAnchorStrategy: pointerDragAnchorStrategy,
+        maxSimultaneousDrags: canEditDashboard ? null : 0,
         feedback: _buildDragFeedback(_metaFor(id).title, _metaFor(id).icon),
         childWhenDragging: Opacity(opacity: 0.36, child: content),
         onDragStarted: () {

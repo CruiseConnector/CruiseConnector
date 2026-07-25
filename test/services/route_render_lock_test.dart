@@ -900,4 +900,192 @@ void main() {
       expect(proj, isNotNull, reason: 'Fix $i darf den Lock nicht verlieren');
     }
   });
+
+  // 2026-07-24 (vucko Autobahn-Dreh-Bug): Rundkurs mit Hin-/Rueckleg auf
+  // derselben Autobahn (Rueckleg ~25m parallel versetzt). Nach einem
+  // Divergenz-Release darf die Neu-Akquise NICHT aufs gegenlaeufige
+  // Rueckleg locken, nur weil es lateral naeher liegt — sonst dreht die
+  // Kamera abrupt weg (real beobachtet: ~5x pro Stunde, je ~4s falsch).
+  group('richtungsbewusste Akquise (Parallelfahrbahn)', () {
+    List<List<double>> outAndBackRoute() {
+      final coords = <List<double>>[];
+      // Hinweg: 0..2000m ostwaerts auf lateral 0.
+      for (var m = 0.0; m <= 2000.0; m += 100.0) {
+        coords.add(pointAt(m));
+      }
+      // Rueckweg: 1900m..0 westwaerts auf lateral +25m (Parallelfahrbahn).
+      for (var m = 1900.0; m >= 0.0; m -= 100.0) {
+        coords.add(pointAt(m, lateralMeters: 25.0));
+      }
+      return coords;
+    }
+
+    test('lockt bei Hinweg-Kurs auf den Hinweg, nicht das naehere Rueckleg',
+        () {
+      final route = outAndBackRoute();
+      final lock = RouteRenderLock();
+
+      // Frische Akquise (wie nach Divergenz-Release): Auto bei Hinweg-1800m,
+      // 15m nach Norden gedriftet -> Rueckleg (25m) ist lateral NAEHER (10m)
+      // als der Hinweg (15m). GPS-Kurs zeigt klar ostwaerts (Hinweg).
+      final drifted = pointAt(1800.0, lateralMeters: 15.0);
+      final projected = lock.project(
+        coordinates: route,
+        latitude: drifted[1],
+        longitude: drifted[0],
+        routeConfirmed: true,
+        currentRouteIndex: 18,
+        speedMps: 36.0,
+        headingDeg: 90.0,
+      );
+
+      expect(projected, isNotNull);
+      // Hinweg-1800m liegt bei Routen-Distanz ~1800; das Rueckleg-Pendant
+      // laege bei ~2200+. Ohne Richtungs-Filter gewann das Rueckleg.
+      expect(projected!.distanceM, lessThan(2000.0));
+      expect(projected.distanceM, closeTo(1800.0, 60.0));
+    });
+
+    test('Fallback: ohne richtungskonformes Segment greift die alte Suche',
+        () {
+      // 2026-07-25 (Review-Fund): Dieser Test war vorher WIRKUNGSLOS. Er lief
+      // auf der Out-and-Back-Route mit headingDeg 0 (Nord); gegen den
+      // Ost-Hinweg (90 Grad) sind das nur 90 Grad Differenz — der Filter
+      // greift aber erst ab >100 Grad. Das Segment kam also durch und der
+      // Fallback-Zweig wurde nie betreten. Jetzt: rein ostwaertige Route
+      // (variableDensityRoute, Bearing 90) + Kurs 220 Grad -> Differenz 130
+      // Grad, ALLE Segmente fallen raus, nur der Fallback kann noch liefern.
+      final route = variableDensityRoute();
+      final lock = RouteRenderLock();
+
+      final p = pointAt(500.0, lateralMeters: 5.0);
+      final projected = lock.project(
+        coordinates: route,
+        latitude: p[1],
+        longitude: p[0],
+        routeConfirmed: true,
+        currentRouteIndex: 5,
+        speedMps: 36.0,
+        headingDeg: 220.0,
+      );
+
+      expect(
+        projected,
+        isNotNull,
+        reason: 'Fallback muss trotz komplett gefilterter Suche akquirieren',
+      );
+      expect(projected!.distanceM, closeTo(500.0, 60.0));
+    });
+
+    // 2026-07-25 (Review-Fund): Der eigentlich gemeldete Ablauf war bisher
+    // NICHT abgedeckt — die Tests riefen project() nur einmal auf einem
+    // frischen Lock auf. Der echte Bug entsteht erst, wenn ein BESTEHENDER
+    // Lock durch die Heading-Divergenz-Freigabe faellt und die darauf
+    // folgende Neu-Akquise neben der Parallelfahrbahn passiert.
+    test('nach Divergenz-Release rastet die Neu-Akquise wieder auf den Hinweg',
+        () {
+      // KURZE Out-and-Back-Route: bei der 2000m-Variante liegt das
+      // Rueckleg-Pendant ausserhalb des Suchfensters (~450m voraus), es
+      // konkurriert also gar nicht — der Test wuerde nichts beweisen. Mit
+      // 400m Hinweg liegt das Rueckleg-Pendant (~500m Routendistanz) im
+      // selben Fenster wie der Hinweg (~300m) und die beiden konkurrieren
+      // wirklich.
+      final route = <List<double>>[
+        for (var m = 0.0; m <= 400.0; m += 50.0) pointAt(m),
+        for (var m = 350.0; m >= 0.0; m -= 50.0)
+          pointAt(m, lateralMeters: 25.0),
+      ];
+      final lock = RouteRenderLock();
+      final t0 = DateTime.utc(2026, 7, 25, 12);
+
+      // 1) Sauberen Lock auf dem Hinweg aufbauen (Ost-Kurs, auf der Linie).
+      for (var i = 0; i < 3; i++) {
+        final p = pointAt(200.0 + i * 30.0);
+        final proj = lock.project(
+          coordinates: route,
+          latitude: p[1],
+          longitude: p[0],
+          routeConfirmed: true,
+          currentRouteIndex: 4 + i,
+          speedMps: 30.0,
+          timestamp: t0.add(Duration(milliseconds: 400 * i)),
+          headingDeg: 90.0,
+        );
+        expect(proj, isNotNull, reason: 'Aufbau-Fix $i muss locken');
+      }
+      expect(lock.distanceM, greaterThan(150.0));
+      expect(lock.distanceM, lessThan(400.0), reason: 'Lock sitzt am Hinweg');
+
+      // 2) Divergenz-Release erzwingen — der Ablauf aus dem Bug-Report. Das
+      //    Auto faehrt ostwaerts (Kurs 90) und driftet 55m nach Norden: der
+      //    Hinweg ist dann 55m weg, das Rueckleg (lateral 25m) nur 30m, also
+      //    gewinnt bei bestehendem Lock (Suche ohne Richtungs-Filter) das
+      //    GEGENLAEUFIGE Rueckleg. 30m > 22m-Gate und sein Kurs (270) weicht
+      //    180 Grad vom GPS-Kurs ab -> nach 700ms gibt der Lock frei.
+      //    (Bei nur 30m Drift waere das Rueckleg 5m entfernt und das
+      //    22m-Gate wuerde nie ausloesen.)
+      final drift = pointAt(300.0, lateralMeters: 55.0);
+      RouteRenderLockProjection? released;
+      for (var i = 0; i < 3; i++) {
+        released = lock.project(
+          coordinates: route,
+          latitude: drift[1],
+          longitude: drift[0],
+          routeConfirmed: true,
+          currentRouteIndex: 6,
+          speedMps: 30.0,
+          timestamp: t0.add(Duration(milliseconds: 2000 + 400 * i)),
+          headingDeg: 90.0,
+        );
+      }
+      expect(released, isNull, reason: 'Divergenz muss den Lock freigeben');
+      expect(lock.distanceM, lessThan(0), reason: 'Lock ist wirklich weg');
+
+      // 3) Neu-Akquise mit wieder sauberem Ost-Kurs, 15m nach Norden
+      //    gedriftet: das Rueckleg (lateral 25m) ist damit lateral NAEHER
+      //    (10m) als der Hinweg (15m) und liegt im Suchfenster. Ohne
+      //    Richtungs-Filter rastete hier das gegenlaeufige Leg ein und die
+      //    Kamera drehte sich weg — genau der gemeldete Fehler.
+      final back = pointAt(300.0, lateralMeters: 15.0);
+      final reacquired = lock.project(
+        coordinates: route,
+        latitude: back[1],
+        longitude: back[0],
+        routeConfirmed: true,
+        currentRouteIndex: 6,
+        speedMps: 30.0,
+        timestamp: t0.add(const Duration(milliseconds: 4000)),
+        headingDeg: 90.0,
+      );
+
+      expect(reacquired, isNotNull, reason: 'Neu-Akquise muss gelingen');
+      // Hinweg-300m liegt bei Routendistanz ~300; das Rueckleg-Pendant erst
+      // jenseits von 400 (Laenge des Hinwegs).
+      expect(
+        reacquired!.distanceM,
+        lessThan(400.0),
+        reason: 'darf NICHT auf dem gegenlaeufigen Rueckleg landen',
+      );
+      expect(reacquired.distanceM, closeTo(300.0, 60.0));
+    });
+
+    test('langsame Fahrt (unzuverlaessiger Kurs) bleibt richtungsblind', () {
+      final route = outAndBackRoute();
+      final lock = RouteRenderLock();
+
+      // <8 m/s: GPS-Kurs unzuverlaessig -> alter Pfad, Akquise klappt.
+      final p = pointAt(300.0, lateralMeters: 2.0);
+      final projected = lock.project(
+        coordinates: route,
+        latitude: p[1],
+        longitude: p[0],
+        routeConfirmed: true,
+        currentRouteIndex: 3,
+        speedMps: 4.0,
+        headingDeg: 270.0,
+      );
+
+      expect(projected, isNotNull);
+    });
+  });
 }

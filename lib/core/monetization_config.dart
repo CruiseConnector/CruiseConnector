@@ -59,19 +59,43 @@ class MonetizationConfig {
       defaultValue: 'ca-app-pub-3940256099942544/2934735716');
   static String get bannerUnit => isIos ? _bannerIos : _bannerAndroid;
 
+  // ── Testgeräte ───────────────────────────────────────────────────────────
+  /// Komma-getrennte AdMob-Testgeräte-Hashes, gesetzt per
+  /// `--dart-define=ADMOB_TEST_DEVICES=...`.
+  ///
+  /// 2026-07-25 (Werbe-Audit): Ein Release-Build traegt die ECHTEN Ad-Units.
+  /// Wird so ein Build zum Ausprobieren aufs eigene Handy installiert, wertet
+  /// Google die eigenen Impressions/Klicks als ungueltigen Traffic — das ist
+  /// laut AdMob-Doku eine der Hauptursachen fuer Konto-Sperren. Als Testgeraet
+  /// registriert liefert dieselbe echte Ad-Unit weiterhin (Test-)Anzeigen, die
+  /// aber nicht abgerechnet werden.
+  ///
+  /// Den Hash gibt das SDK beim ersten Ad-Request selbst im Log aus:
+  /// `Use RequestConfiguration.Builder.setTestDeviceIds(Arrays.asList("ABC…"))`
+  static const _testDevicesRaw =
+      String.fromEnvironment('ADMOB_TEST_DEVICES', defaultValue: '');
+  static List<String> get testDeviceIds => _testDevicesRaw
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList(growable: false);
+
   // ── Werbe-Frequenz (Free-Tier) ───────────────────────────────────────────
-  /// Interstitial vor Routensuche höchstens alle N Sekunden (Mittelweg).
-  static const int routeSearchInterstitialCooldownSec = 300;
+  /// 2026-07-23 (vucko): Routensuche zeigt jetzt ein 30s-Rewarded-Video (vorher
+  /// Interstitial) — Cooldown-Wert unverändert übernommen, nur der Name
+  /// entspricht jetzt dem tatsächlichen Format.
+  static const int routeSearchRewardedCooldownSec = 300;
   /// Native-Ad alle N Posts im Community-/Gruppen-Feed.
   static const int feedAdEveryNPosts = 6;
   // 2026-07-22 (vucko Placements): weitere Frequenzen.
   /// Globaler Mindestabstand zwischen JEGLICHEN Vollbild-Ads — verhindert
-  /// z.B. Gruppen-Beitritt-Interstitial direkt gefolgt vom Tab-Wechsel-Ad.
+  /// z.B. Gruppen-Beitritt-Video direkt gefolgt vom Tab-Wechsel-Interstitial.
   static const int fullscreenAdMinGapSec = 90;
   /// Interstitial nach >5 Seitenwechseln höchstens alle N Sekunden.
-  static const int tabSwitchInterstitialCooldownSec = 240;
-  /// Interstitial bei Gruppen-Beitritt höchstens alle N Sekunden.
-  static const int groupJoinInterstitialCooldownSec = 240;
+  static const int tabSwitchInterstitialCooldownSec = 180;
+  /// 2026-07-23 (vucko): Gruppen-Beitritt zeigt jetzt ein 30s-Rewarded-Video
+  /// (vorher Interstitial) — Cooldown-Wert unverändert übernommen.
+  static const int groupJoinRewardedCooldownSec = 240;
   /// Vor-Fahrt-Video (Rewarded) höchstens alle N Sekunden — der Fahrt-Start
   /// nach Pause/kurzem Stopp soll nicht jedes Mal ein Video kosten.
   static const int preRideRewardedCooldownSec = 900;

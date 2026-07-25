@@ -18,11 +18,20 @@ class VoiceSettingsService extends ChangeNotifier {
   VoiceSettingsService._();
   static final VoiceSettingsService instance = VoiceSettingsService._();
 
-  static const _keyMode = 'voice_navigation_mode_v1';
-  // Nur noch für die Migration alter Installationen gelesen (siehe load()).
+  // 2026-07-25: Der MODUS wird bewusst nicht mehr persistiert (siehe load()) —
+  // die alten Keys werden beim Laden nur noch aufgeräumt.
+  static const _keyModeLegacy = 'voice_navigation_mode_v1';
   static const _keyEnabledLegacy = 'voice_navigation_enabled_v1';
   // 2026-06-23 (vucko Voice-Lautstärke): persistierte Ansage-Lautstärke 0..1.
   static const _keyVolume = 'voice_navigation_volume_v1';
+
+  /// 2026-07-25 (vucko „Navi auch bei leise gestellt laut genug"): Untergrenze
+  /// der Ansage-Lautstärke — Source of Truth für Service UND Regler-UI. Die
+  /// Lautstärke regelt nur die Stimme selbst, nicht die Ducking-Tiefe der
+  /// Musik (die ist systemseitig fix); zu tief eingestellt geht die Ansage im
+  /// Restpegel der Musik unter. Ein bereits gespeicherter kleinerer Wert wird
+  /// beim Laden hochgezogen.
+  static const double minVolume = 0.65;
 
   bool _loaded = false;
   VoiceMode _mode = VoiceMode.off;
@@ -39,27 +48,30 @@ class VoiceSettingsService extends ChangeNotifier {
   double get volume => _volume;
 
   /// Beim App-Start einmal aufrufen.
+  ///
+  /// 2026-07-25 (vucko „vor jedem Start der App soll die Sprachnavigation
+  /// deaktiviert sein"): Der Modus wird BEWUSST NICHT mehr aus den Prefs
+  /// wiederhergestellt — jeder App-Start beginnt stumm, der Nutzer schaltet
+  /// die Ansagen pro Fahrt bewusst ein. Grund: ein von der letzten Nutzung
+  /// „hängengebliebener" An-Zustand führte zu Ansagen, die nicht mehr sauber
+  /// liefen. Die LAUTSTÄRKE bleibt weiterhin gemerkt, damit die einmal
+  /// eingestellte Vorliebe erhalten bleibt.
   Future<void> load() async {
     if (_loaded) return;
     final prefs = await SharedPreferences.getInstance();
-    final modeIdx = prefs.getInt(_keyMode);
-    if (modeIdx != null) {
-      _mode = VoiceMode.values[modeIdx.clamp(0, 2)];
-    } else if (prefs.getBool(_keyEnabledLegacy) ?? false) {
-      // Migration: wer früher den Settings-Schalter „an" hatte → volle Ansagen.
-      _mode = VoiceMode.all;
-    } else {
-      _mode = VoiceMode.off;
-    }
+    _mode = VoiceMode.off;
+    // Altlasten entfernen, damit kein toter Zustand liegen bleibt.
+    await prefs.remove(_keyModeLegacy);
+    await prefs.remove(_keyEnabledLegacy);
     final vol = prefs.getDouble(_keyVolume);
-    if (vol != null && vol.isFinite) _volume = vol.clamp(0.0, 1.0);
+    if (vol != null && vol.isFinite) _volume = vol.clamp(minVolume, 1.0);
     _loaded = true;
     notifyListeners();
   }
 
   /// Setzt die Ansage-Lautstärke (0..1), persistiert + benachrichtigt.
   Future<void> setVolume(double v) async {
-    final clamped = v.isFinite ? v.clamp(0.0, 1.0).toDouble() : _volume;
+    final clamped = v.isFinite ? v.clamp(minVolume, 1.0).toDouble() : _volume;
     if ((clamped - _volume).abs() < 0.001) return;
     _volume = clamped;
     notifyListeners();
@@ -67,12 +79,11 @@ class VoiceSettingsService extends ChangeNotifier {
     await prefs.setDouble(_keyVolume, clamped);
   }
 
+  /// Nur Session-State — bewusst NICHT persistiert (siehe load()).
   Future<void> setMode(VoiceMode m) async {
     if (_mode == m) return;
     _mode = m;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_keyMode, m.index);
   }
 
   /// Master-An/Aus (z. B. Settings-Switch): an → „Alle Ansagen", aus → stumm.

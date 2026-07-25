@@ -6,7 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/group_chat_store.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/data/services/group_chat_service.dart';
+import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -150,59 +152,24 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
   }
 
   void _toggleReaction(String messageId, String emoji) {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Lock gegen
+    // Text/Mehrfach-Emoji-Strings.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
     final uid = _uid;
     if (uid == null) return;
     _store.toggleReaction(_gid, messageId, emoji, uid);
   }
 
-  /// 2026-07-23 (vucko): eigenes Emoji über die normale System-Emoji-Tastatur
-  /// wählen (nicht auf die 6 Schnell-Emojis beschränkt) — einfaches Textfeld,
-  /// der Nutzer wechselt selbst auf die Emoji-Tastatur (Globus-/Smiley-Taste),
-  /// kein Sonder-Keyboard-Erzwingen nötig.
+  /// 2026-07-23 (vucko „wie bei WhatsApp"): echter Emoji-Picker (Raster, kein
+  /// Text-Keyboard) statt der 6 Schnell-Emojis.
   Future<void> _openCustomEmojiPicker(String messageId) async {
-    // Bottom-Sheet-Schließ-Animation erst abwarten — ein showDialog() im
+    // Bottom-Sheet-Schließ-Animation erst abwarten — ein zweites Sheet im
     // selben Tick wie Navigator.pop(sheetContext) kollidiert sonst mit der
-    // laufenden Pop-Transition und der Dialog erscheint gar nicht.
+    // laufenden Pop-Transition und erscheint gar nicht.
     await Future<void>.delayed(const Duration(milliseconds: 260));
     if (!mounted) return;
-    final ctrl = TextEditingController();
-    final chosen = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF151821),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-        ),
-        title: const Text(
-          'Eigenes Emoji',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-        ),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLength: 8,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 32),
-          decoration: const InputDecoration(counterText: '', hintText: '😀'),
-          onSubmitted: (v) => Navigator.pop(dialogContext, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Abbrechen'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, ctrl.text),
-            child: Text(
-              'Reagieren',
-              style: TextStyle(color: AppAccentColors.accent),
-            ),
-          ),
-        ],
-      ),
-    );
-    final emoji = chosen?.trim() ?? '';
-    if (emoji.isEmpty) return;
+    final emoji = await showChatEmojiPicker(context);
+    if (emoji == null || emoji.isEmpty) return;
     _toggleReaction(messageId, emoji);
   }
 

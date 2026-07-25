@@ -23,7 +23,9 @@ import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.da
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
 import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
@@ -49,6 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _loadSettings();
+    unawaited(_refreshAdPrivacyOptions());
   }
 
   Future<void> _loadSettings() async {
@@ -282,6 +285,39 @@ class _SettingsPageState extends State<SettingsPage> {
     await AppTutorialService.requestReplay();
     if (!mounted) return;
     Navigator.pop(context);
+  }
+
+  /// UMP-Datenschutzoptionen (nur EWR — siehe Aufrufstelle in RECHTLICHES).
+  bool _adPrivacyOptionsAvailable = false;
+
+  Future<void> _refreshAdPrivacyOptions() async {
+    if (kIsWeb) return;
+    try {
+      final status =
+          await ConsentInformation.instance.getPrivacyOptionsRequirementStatus();
+      if (!mounted) return;
+      final required =
+          status == PrivacyOptionsRequirementStatus.required;
+      if (required != _adPrivacyOptionsAvailable) {
+        setState(() => _adPrivacyOptionsAvailable = required);
+      }
+    } catch (_) {
+      // Kein UMP verfügbar (z.B. SDK noch nicht initialisiert) → Eintrag bleibt
+      // aus. Werbung ist nie ein Fehlerfall.
+    }
+  }
+
+  Future<void> _openAdPrivacyOptions() async {
+    ConsentForm.showPrivacyOptionsForm((error) {
+      if (error == null || !mounted) return;
+      TopToast.show(
+        context,
+        message: 'Werbe-Einstellungen konnten nicht geöffnet werden.',
+        icon: Icons.ads_click_outlined,
+        isError: true,
+        duration: const Duration(seconds: 3),
+      );
+    });
   }
 
   Future<void> _openLegalDocument(LegalDocument document) async {
@@ -600,6 +636,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     if (document != LegalDocuments.settingsDocuments.last)
                       const Divider(color: Colors.white10, height: 1),
+                  ],
+                  // 2026-07-25 (Werbe-Audit): Googles UMP-Richtlinie verlangt im
+                  // EWR einen dauerhaft erreichbaren Weg, die einmal gegebene
+                  // Werbe-Einwilligung zu ändern. Der Eintrag erscheint nur,
+                  // wenn UMP ihn für diesen Nutzer auch verlangt (außerhalb des
+                  // EWR gibt es kein Formular — dann bliebe ein toter Menüpunkt).
+                  if (_adPrivacyOptionsAvailable) ...[
+                    const Divider(color: Colors.white10, height: 1),
+                    _buildNavTile(
+                      'Werbe-Einstellungen',
+                      Icons.ads_click_outlined,
+                      subtitle: 'Einwilligung für personalisierte Werbung ändern',
+                      onTap: _openAdPrivacyOptions,
+                    ),
                   ],
                 ]),
 

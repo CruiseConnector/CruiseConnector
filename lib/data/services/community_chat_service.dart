@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/community_chat_message.dart';
@@ -623,6 +624,10 @@ class CommunityChatService {
   /// Emoji-Reaktion setzen (idempotent — doppeltes Setzen ist ein No-Op).
   /// Gespiegelt von GroupChatService.addReaction.
   static Future<void> addReaction(String messageId, String emoji) async {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Defense in
+    // Depth auf Service-Ebene — die UI filtert schon, aber falls ein
+    // künftiger Aufrufer diese Prüfung umgeht, greift sie hier nochmal.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
     final uid = _userId;
     if (uid == null) return;
     await _db.from('community_message_reactions').upsert(

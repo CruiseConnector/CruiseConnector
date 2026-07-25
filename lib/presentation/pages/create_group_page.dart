@@ -1746,22 +1746,28 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               ],
             ),
           ),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: AppAccentColors.accent,
-              inactiveTrackColor: Colors.grey[800],
-              thumbColor: Colors.white,
-              overlayColor: AppAccentColors.accent.withValues(alpha: 0.2),
-              trackHeight: 4,
+          // 2026-07-25: Free hat maxGroupSize == 0 → tierCap fällt auf das
+          // Minimum 2, damit wären min == max und divisions == 0. Flutters
+          // Slider bricht dann mit einer Assertion ab (roter Fehlerbildschirm
+          // beim Öffnen der Seite). Bei nur einem möglichen Wert gibt es nichts
+          // zu schieben — die Zahl steht ohnehin schon in der Zeile darüber.
+          if (tierCap > 2)
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: AppAccentColors.accent,
+                inactiveTrackColor: Colors.grey[800],
+                thumbColor: Colors.white,
+                overlayColor: AppAccentColors.accent.withValues(alpha: 0.2),
+                trackHeight: 4,
+              ),
+              child: Slider(
+                value: _maxPeople.clamp(2, tierCap.toDouble()),
+                min: 2,
+                max: tierCap.toDouble(),
+                divisions: tierCap - 2,
+                onChanged: (v) => setState(() => _maxPeople = v),
+              ),
             ),
-            child: Slider(
-              value: _maxPeople.clamp(2, tierCap.toDouble()),
-              min: 2,
-              max: tierCap.toDouble(),
-              divisions: tierCap - 2,
-              onChanged: (v) => setState(() => _maxPeople = v),
-            ),
-          ),
           const Divider(
             color: Colors.white10,
             height: 1,

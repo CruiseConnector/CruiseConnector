@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/data/services/group_chat_service.dart';
 
 /// 2026-06-25 (vucko): Robuster Gruppen-Chat-Speicher.
@@ -164,6 +165,10 @@ class GroupChatStore extends ChangeNotifier {
     String emoji,
     String myUid,
   ) {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): zentraler
+    // Guard hier, da dies der einzige Einstiegspunkt für Gruppen-Reaktionen
+    // aus dem UI ist (group_chat_panel.dart delegiert vollständig hierher).
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
     final list = _server[groupId];
     Map<String, dynamic>? msg;
     if (list != null) {

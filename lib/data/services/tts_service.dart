@@ -99,10 +99,40 @@ class TtsService {
     }
   }
 
+  /// 2026-07-25 (vucko „Musik wird nicht leiser"): Nur die iOS-Audio-Kategorie
+  /// NEU beanspruchen — beliebig oft aufrufbar.
+  ///
+  /// Warum nötig: AdMob übernimmt auf iOS während/nach Vollbild-Ads die
+  /// AVAudioSession und stellt sie auf .ambient (= duckt gar nichts). Da
+  /// [_configure] nur EINMAL pro App-Leben lief (_initialized-Guard), war das
+  /// Ducking nach der ersten Werbung für den Rest der Session tot — und weil
+  /// vor praktisch jeder Fahrt ein Rewarded-Video läuft, betraf das fast jede
+  /// Ansage. Sprache/Rate/Lautstärke bleiben unangetastet, nur die Kategorie
+  /// wird zurückgeholt.
+  Future<void> reclaimAudioSession() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await _tts.setIosAudioCategory(
+        IosTextToSpeechAudioCategory.playback,
+        [
+          IosTextToSpeechAudioCategoryOptions.duckOthers,
+          IosTextToSpeechAudioCategoryOptions
+              .interruptSpokenAudioAndMixWithOthers,
+        ],
+        IosTextToSpeechAudioMode.voicePrompt,
+      );
+      await _tts.setSharedInstance(true);
+    } catch (e) {
+      debugPrint('[TtsService] reclaimAudioSession failed: $e');
+    }
+  }
+
   /// Initialisiert Engine + iOS-Audiosession vor der ersten echten Ansage.
   Future<void> prepare() async {
     if (!_shouldSpeak(isImportant: true)) return;
     await _initIfNeeded();
+    // Jedes Mal zurückholen — falls seit der letzten Fahrt eine Ad lief.
+    await reclaimAudioSession();
   }
 
   bool _shouldSpeak({required bool isImportant}) {
@@ -158,7 +188,7 @@ class TtsService {
           '[TtsService] speak tag=$navTag stop=$needsStop text="$text"',
         );
       }
-      await _tts.speak(text);
+      await _tts.speak(text, focus: true);
     } catch (e) {
       debugPrint('[TtsService] speak failed: $e');
     }
@@ -188,7 +218,7 @@ class TtsService {
     try {
       _lastSpoken = text;
       _lastSpokenAt = DateTime.now();
-      await _tts.speak(text);
+      await _tts.speak(text, focus: true);
     } catch (e) {
       debugPrint('[TtsService] speakOptional failed: $e');
     }
@@ -222,7 +252,7 @@ class TtsService {
       _speechEpoch++; // laufende (Test-)Ansage abbrechen
       await _tts.stop();
       await _tts.setVolume(volume.isFinite ? volume.clamp(0.0, 1.0) : 0.95);
-      await _tts.speak(text);
+      await _tts.speak(text, focus: true);
     } catch (e) {
       debugPrint('[TtsService] speakPreview failed: $e');
     }
