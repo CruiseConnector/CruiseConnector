@@ -6,7 +6,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/group_chat_store.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/data/services/group_chat_service.dart';
+import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -150,9 +152,25 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
   }
 
   void _toggleReaction(String messageId, String emoji) {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Lock gegen
+    // Text/Mehrfach-Emoji-Strings.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
     final uid = _uid;
     if (uid == null) return;
     _store.toggleReaction(_gid, messageId, emoji, uid);
+  }
+
+  /// 2026-07-23 (vucko „wie bei WhatsApp"): echter Emoji-Picker (Raster, kein
+  /// Text-Keyboard) statt der 6 Schnell-Emojis.
+  Future<void> _openCustomEmojiPicker(String messageId) async {
+    // Bottom-Sheet-Schließ-Animation erst abwarten — ein zweites Sheet im
+    // selben Tick wie Navigator.pop(sheetContext) kollidiert sonst mit der
+    // laufenden Pop-Transition und erscheint gar nicht.
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    if (!mounted) return;
+    final emoji = await showChatEmojiPicker(context);
+    if (emoji == null || emoji.isEmpty) return;
+    _toggleReaction(messageId, emoji);
   }
 
   Map<String, dynamic> _myProfile(String uid) {
@@ -239,6 +257,32 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
                               style: const TextStyle(fontSize: 24)),
                         ),
                       ),
+                    // 2026-07-23 (vucko): eigenes Emoji über die normale
+                    // System-Emoji-Tastatur wählen (nicht auf die 6 Schnell-
+                    // Emojis beschränkt).
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        unawaited(_openCustomEmojiPicker(id));
+                      },
+                      child: Container(
+                        width: 46,
+                        height: 46,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1C1F26),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.06),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.add_rounded,
+                          color: Colors.white70,
+                          size: 22,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),

@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 
 /// 2026-06-25 (vucko): Gruppen-Chat. Mitglieder einer Cruise-Gruppe können sich
@@ -102,6 +103,9 @@ class GroupChatService {
 
   /// Emoji-Reaktion setzen (idempotent — doppeltes Setzen ist ein No-Op).
   static Future<void> addReaction(String messageId, String emoji) async {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Defense in
+    // Depth auf Service-Ebene, siehe community_chat_service.dart.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
     final uid = _userId;
     if (uid == null) return;
     await _db.from('group_message_reactions').upsert(

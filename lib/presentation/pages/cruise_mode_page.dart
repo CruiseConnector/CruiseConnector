@@ -14,6 +14,8 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart'
     show HapticFeedback, SystemChrome, DeviceOrientation;
 import 'package:geolocator/geolocator.dart' as geo;
+import 'package:floating/floating.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -87,8 +89,14 @@ import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sh
 import 'package:cruise_connect/presentation/widgets/cruise/construction_alert_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.dart';
 import 'package:cruise_connect/domain/models/construction_report.dart';
+import 'package:cruise_connect/domain/models/road_incident.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/incident_alert_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/incident_report_sheet.dart';
 import 'package:cruise_connect/data/services/construction_geofence.dart';
 import 'package:cruise_connect/data/services/construction_report_service.dart';
+import 'package:cruise_connect/data/services/navigation_pip_service.dart';
+import 'package:cruise_connect/data/services/road_incident_geofence.dart';
+import 'package:cruise_connect/data/services/road_incident_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
@@ -567,6 +575,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<ConstructionReport> _routeConstructions = const [];
   final ConstructionGeofence _constructionGeofence = ConstructionGeofence();
   String? _activeConstructionAlertId;
+  // 2026-07-24 (vucko "+-Button"): Crowd-Verkehrsmeldungen (Unfall/Baustelle/
+  // Stau) — gleiche Architektur wie das Baustellen-System darüber, plus
+  // Realtime-Sync (andere Fahrer sehen Meldungen live) und Stau-Ausdehnungs-
+  // Tracking des Melders.
+  List<RoadIncident> _routeIncidents = const [];
+  final RoadIncidentGeofence _incidentGeofence = RoadIncidentGeofence();
+  String? _activeIncidentAlertId;
+  RealtimeChannel? _incidentChannel;
+  Timer? _incidentRefetchDebounce;
+  String? _jamTrackingIncidentId;
+  DateTime? _jamTrackingStartedAt;
+  DateTime? _jamRecoverySince;
   // 2026-05-23 (vucko): Haptic-Tracking damit jede Stufe (300m/150m/50m)
   // nur 1× pro Manöver feuert statt bei jedem GPS-Tick.
   int? _lastHapticManeuverIndex;
@@ -2085,7 +2105,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     try {
       final prefs = await SharedPreferences.getInstance();
       final stored = prefs.getString(_countryPrefKey);
-      final pref = CountryPreferenceLabel.fromStorage(stored);
+      var pref = CountryPreferenceLabel.fromStorage(stored);
       if (mounted && pref != _countryPreference) {
         setState(() => _countryPreference = pref);
       }
@@ -2106,10 +2126,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool get _countryFilterAppliesToCurrentRoute =>
       _isRoundTrip && !_isWaypointPlanning;
 
-  CountryPreference get _effectiveCountryPreferenceForGeneration =>
-      _countryFilterAppliesToCurrentRoute
-      ? _countryPreference
-      : CountryPreference.any;
+  CountryPreference get _effectiveCountryPreferenceForGeneration {
+    if (!_countryFilterAppliesToCurrentRoute) return CountryPreference.any;
+    return _countryPreference;
+  }
 
   String? get _effectiveHomeCountryCodeForGeneration =>
       _effectiveCountryPreferenceForGeneration == CountryPreference.any
@@ -3579,6 +3599,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
     CruiseModePage.pendingTripResume.removeListener(_onPendingTripResume);
     _stopSimulation(restartLiveTracking: false);
+    // 2026-07-24 (vucko Wakelock): Sicherheitsnetz — dispose() geht NICHT
+    // durch _stopNavigationTracking() (reißt Streams direkt ab), z.B. beim
+    // Verlassen per OS-Geste mitten in der Navigation. Doppeltes Disable
+    // ist ein harmloser No-Op.
+    unawaited(WakelockPlus.disable().catchError((Object _) {}));
+    unawaited(NavigationPipService.instance.disarm());
+    _incidentRefetchDebounce?.cancel();
+    _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
     _positionUploadTimer?.cancel();
@@ -3818,6 +3846,26 @@ class _CruiseModePageState extends State<CruiseModePage>
             remainingForCam <= _arrivalCameraFreezeMeters;
         if (!inArrivalWindow) {
           double? targetHeading = _routeTangentCameraBearing(lockPos);
+          // 2026-07-24 (vucko Autobahn-Dreh-Bug, zweite Verteidigungslinie):
+          // Bei hohem Tempo ist der GPS-Kurs sehr verlässlich — weicht die
+          // Routen-Tangente plötzlich stark davon ab, ist fast sicher der
+          // Render-Lock kurz auf ein falsches Segment gerutscht (Parallel-
+          // fahrbahn/Rampe am Autobahnkreuz), NICHT die Straße. Dann die
+          // Tangente verwerfen → der Fallback unten übernimmt den echten
+          // GPS-Kurs (= tatsächliche Fahrtrichtung), bis Tangente und Kurs
+          // wieder übereinstimmen. 60° lässt jede echte Kurve durch (engste
+          // Autobahnrampe bei >54 km/h bleibt mit 30m-Look-ahead unter ~40°).
+          if (targetHeading != null &&
+              _nativeSmoother.hasValidHeading &&
+              _nativeSmoother.speed > 15.0) {
+            final tangentVsCourse = GeoBearing.angleDiff(
+              targetHeading,
+              _nativeSmoother.heading,
+            ).abs();
+            if (tangentVsCourse > 60.0) {
+              targetHeading = null;
+            }
+          }
           if (targetHeading == null && _nativeSmoother.hasValidHeading) {
             targetHeading = _nativeSmoother
                 .predict(DateTime.now().add(_nativeRenderPredictionLead))
@@ -4716,7 +4764,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (didPop || !blockSystemBack) return;
         _handleActiveRouteBack();
       },
-      child: Scaffold(
+      // 2026-07-25 (vucko „Mini-Bildschirm neben anderen Apps"): Im
+      // Android-PiP-Fenster (wenige Zentimeter gross) waere die volle
+      // Karte samt Panels/Buttons unlesbar — dort zeigen wir stattdessen
+      // eine reduzierte Manoever-Ansicht (Pfeil + Distanz + ETA), wie es
+      // Google Maps macht. Ausserhalb von PiP bleibt alles unveraendert;
+      // auf iOS/Web liefert PiPSwitcher immer childWhenDisabled.
+      child: _pipAware(
+        Scaffold(
         backgroundColor: const Color(0xFF0B0E14),
         body: Stack(
           children: [
@@ -4780,6 +4835,109 @@ class _CruiseModePageState extends State<CruiseModePage>
               _buildRoundTripSearchStatusOverlay(),
           ],
         ),
+        ),
+      ),
+    );
+  }
+
+  /// 2026-07-25 (vucko „Mini-Bildschirm"): PiPSwitcher NUR auf Android
+  /// einhängen. Das floating-Plugin hat keine iOS-Implementierung, und der
+  /// Switcher pollt intern im 100ms-Takt den Method-Channel — auf iOS/Web
+  /// würde das dauerhaft MissingPluginException werfen. Dort wird der
+  /// normale Aufbau unverändert durchgereicht.
+  Widget _pipAware(Widget normal) {
+    if (kIsWeb || !Platform.isAndroid) return normal;
+    return PiPSwitcher(
+      childWhenEnabled: _buildPipView(),
+      childWhenDisabled: normal,
+    );
+  }
+
+  /// 2026-07-25 (vucko „Mini-Bildschirm"): Inhalt des Android-PiP-Fensters.
+  /// Bewusst extrem reduziert — im ~2cm hohen Systemfenster zaehlt nur:
+  /// naechstes Manoever (Pfeil + Text), Distanz dorthin, Rest-ETA. KEINE
+  /// Karte (native Platform-View in einem so kleinen Fenster ist teuer und
+  /// unleserlich), keine Buttons (in PiP nicht bedienbar).
+  Widget _buildPipView() {
+    // Nutzt bewusst denselben Snapshot wie Live Activity + Android-
+    // Benachrichtigung — dort ist die Lead-Kompensation und der
+    // Reroute-Zustand bereits korrekt eingerechnet, kein zweiter Datenpfad.
+    final snap = _navigationLiveActivitySnapshot();
+    final restKm = snap.remainingDistanceMeters;
+    final restSec = snap.remainingDurationSeconds;
+    final rest = <String>[
+      if (restKm != null && restKm.isFinite)
+        '${(restKm / 1000).toStringAsFixed(restKm < 10000 ? 1 : 0)} km',
+      if (restSec != null && restSec > 0) '${(restSec / 60).round()} min',
+    ].join(' · ');
+
+    return Container(
+      color: const Color(0xFF0B0E14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: AppAccentColors.accent.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              snap.isRerouting
+                  ? Icons.autorenew_rounded
+                  : Icons.navigation_rounded,
+              color: AppAccentColors.accent,
+              size: 26,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (snap.distanceToManeuverMeters != null)
+                  Text(
+                    formatNavDistance(snap.distanceToManeuverMeters),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      height: 1.0,
+                    ),
+                  ),
+                Text(
+                  snap.instruction,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (rest.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    rest,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -7249,6 +7407,23 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
             ],
           ),
+        // ── Verkehrsmeldungs-Marker (2026-07-24, "+-Button") ───────────────
+        if (_routeIncidents.isNotEmpty)
+          MarkerLayer(
+            rotate: true,
+            markers: [
+              for (final incident in _routeIncidents)
+                Marker(
+                  point: LatLng(incident.latitude, incident.longitude),
+                  width: 40,
+                  height: 40,
+                  child: GestureDetector(
+                    onTap: () => IncidentAlertSheet.show(context, incident),
+                    child: _buildIncidentMarker(incident),
+                  ),
+                ),
+            ],
+          ),
         // ── User-Position Marker (Live-Navigation) ─────────────────────────
         if (_userPosition != null && _isRouteConfirmed)
           MarkerLayer(
@@ -7412,7 +7587,9 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
           child: ElevatedButton(
-            onPressed: _isLoading ? _cancelRouteGeneration : _generateRoute,
+            onPressed: _isLoading
+                ? _cancelRouteGeneration
+                : _onSearchButtonPressed,
             style: ElevatedButton.styleFrom(
               backgroundColor: _isLoading
                   ? const Color(0xFFB9443A)
@@ -8329,6 +8506,28 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE GENERATION ════════════════════════════════
 
+  /// 2026-07-23 (vucko Werbung): 30s-Rewarded-Video bei der SUCH-AKTION selbst
+  /// (vorher Interstitial) — feuert GENAU beim Nutzer-Tap auf „Rundkurs/
+  /// A-nach-B/Wegpunkt suchen" (auch bei der Erstsuche), NICHT bei internen
+  /// Re-Läufen (Trip-Resume-Auto-Generate, Validator-/Auto-Retry, POI-Reroute)
+  /// — die rufen `_generateRoute` direkt. Fire-and-forget: die Suche selbst
+  /// läuft parallel weiter und wird durchs Video nie blockiert.
+  void _onSearchButtonPressed() {
+    _showRouteSearchRewardedVideoIfDue();
+    unawaited(_generateRoute());
+  }
+
+  /// Gemeinsamer Ad-Hook für JEDEN manuellen "ich will jetzt eine (neue)
+  /// Route" Tap — auch die "Direkte Route nehmen"/"Nochmal suchen"-Buttons
+  /// im Warmup-Dialog (_showRouteWarmupDialog) zählen als solcher Tap, nicht
+  /// nur der Haupt-Such-Button. Cooldown verhindert Spam bei mehreren Taps
+  /// kurz hintereinander.
+  void _showRouteSearchRewardedVideoIfDue() {
+    // Ohne Werbesystem auf main bewusst ein No-Op — die Aufrufstellen (Haupt-
+    // Such-Button, Warmup-Dialog) bleiben erhalten, damit der Hook beim
+    // spaeteren Werbe-Merge nur an EINER Stelle wieder scharf geschaltet wird.
+  }
+
   Future<void> _generateRoute({bool startValidatorRetry = false}) async {
     // Doppelklick-Schutz: Wenn bereits generiert wird, ignorieren
     if (_isLoading) return;
@@ -8917,7 +9116,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     startPosition: lastChanceStart,
                     distance: requestedDistance,
                     waypointSignature: requestedWaypointSignature,
-                  );
+                      );
                   return;
                 }
               } catch (lastChanceError, lastChanceStack) {
@@ -9294,6 +9493,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         stackTrace: drawStack,
       );
     }
+    // 2026-07-22 (vucko Werbung): Die Such-Interstitial feuert jetzt beim
+    // KLICK auf den Such-Button (_onSearchButtonPressed), nicht mehr hier nach
+    // dem Ergebnis — so kommt die Werbung genau bei der Aktion (auch bei der
+    // Erstsuche) und legt sich über die „Suche läuft"-Anzeige.
     debugPrint('[CruiseMode] Route generation SUCCESS');
   }
 
@@ -9324,6 +9527,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     _routeConstructions = const [];
     _constructionGeofence.clear();
     _activeConstructionAlertId = null;
+    // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungen ebenso frisch pro Route.
+    _routeIncidents = const [];
+    _incidentGeofence.clear();
+    _activeIncidentAlertId = null;
     unawaited(_checkHazardsInBackground(result.coordinates));
     // 2026-05-24 (vucko Task #49): POIs auto-laden wenn Settings aktiv
     // (Google-Maps-Style: Tankstellen erscheinen automatisch auf der Map).
@@ -10183,8 +10390,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         // eine direkte Route ohne Quality-Reject statt nur dieselbe Suche zu wiederholen.
         _forceAcceptDirectOnce = true;
         setState(() => _selectedDetour = 'Direkt');
+        // 2026-07-23 (vucko Werbung): echter manueller Tap auf eine neue
+        // Suche — zählt wie der Haupt-Such-Button, nicht wie ein interner
+        // Auto-Retry.
+        _showRouteSearchRewardedVideoIfDue();
         unawaited(Future<void>.delayed(Duration.zero, _generateRoute));
       } else if (action == 'retry') {
+        _showRouteSearchRewardedVideoIfDue();
         unawaited(Future<void>.delayed(Duration.zero, _generateRoute));
       }
     } finally {
@@ -11875,6 +12087,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
+    // 2026-07-24 (vucko "Display ging während Navigation aus"): Bildschirm
+    // bleibt an, solange navigiert wird — wie Google Maps. Fire-and-forget,
+    // ein Wakelock-Fehler darf den Navigations-Start nie blockieren.
+    // Gegenstück: _stopNavigationTracking() + dispose()-Sicherheitsnetz.
+    unawaited(WakelockPlus.enable().catchError((Object e) {
+      debugPrint('[CruiseMode] Wakelock enable fehlgeschlagen: $e');
+    }));
+    // 2026-07-25 (vucko „Mini-Bildschirm wenn man die App verlaesst"):
+    // Android-PiP scharf stellen — verlaesst der Nutzer waehrend der Fahrt die
+    // App, schrumpft die Navigation automatisch in ein kleines Fenster.
+    // Auf iOS ein No-Op (dort deckt die Live Activity den Fall ab).
+    unawaited(NavigationPipService.instance.arm());
+    // 2026-07-24 (vucko "+-Button"): Live-Sync für Verkehrsmeldungen NUR
+    // während aktiver Navigation (kein Dauer-Kanal außerhalb der Fahrt).
+    // Änderung → debounced Refetch der Route-BBox.
+    _incidentChannel ??= RoadIncidentService.instance.subscribeIncidents(() {
+      _incidentRefetchDebounce?.cancel();
+      _incidentRefetchDebounce = Timer(const Duration(seconds: 1), () {
+        if (!mounted || _fullRouteCoordinates.length < 2) return;
+        unawaited(_loadRoadIncidents(_fullRouteCoordinates));
+      });
+    });
     // 2026-06-23 (vucko GPS-Stall-Watchdog): unabhängig vom Standort-Stream.
     _lastLocationFixAt = DateTime.now();
     _gpsStallWatchdog?.cancel();
@@ -11989,9 +12223,33 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Sample-Frequenz ist ~1Hz während aktiver Fahrt — reicht für 200m
     // Trigger bei Geschwindigkeiten bis 200 km/h (= ~55 m/s).
     _processConstructionGeofence(position.latitude, position.longitude);
+    // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungs-Geofence + Stau-
+    // Ausdehnungs-Tracking — gleiche O(n)-Kostenordnung wie die Baustellen.
+    _processIncidentGeofence(position.latitude, position.longitude);
+    _tickJamTracking(position);
   }
 
   void _stopNavigationTracking() {
+    // 2026-07-24 (vucko Wakelock): Display-Sperre wieder freigeben — dieser
+    // Funnel deckt ALLE Stop-Pfade ab (Pause, Beenden, Lobby-Rückkehr,
+    // Setup-Rückkehr, Ankunft, Simulation, Post-Ride-Cleanup).
+    unawaited(WakelockPlus.disable().catchError((Object e) {
+      debugPrint('[CruiseMode] Wakelock disable fehlgeschlagen: $e');
+    }));
+    unawaited(NavigationPipService.instance.disarm());
+    // 2026-07-24 (vucko "+-Button"): Incident-Realtime-Kanal schließen.
+    _incidentRefetchDebounce?.cancel();
+    _incidentRefetchDebounce = null;
+    _incidentChannel?.unsubscribe();
+    _incidentChannel = null;
+    // 2026-07-25 (Review-Fund): Stau-Tracking hier VERWERFEN, nicht
+    // abschließen. Wer mitten im Stau die Fahrt beendet, weiß nicht wo der
+    // Stau endet — ein Ende zu schreiben wäre gelogen. Ohne diesen Reset
+    // hing die ID bis zur NÄCHSTEN Fahrt und deren erste freie Strecke
+    // wurde als Stau-Ende der alten Meldung gespeichert.
+    _jamTrackingIncidentId = null;
+    _jamTrackingStartedAt = null;
+    _jamRecoverySince = null;
     _positionSubscription?.cancel();
     _positionSubscription = null;
     _socketPositionSubscription?.cancel();
@@ -12941,6 +13199,11 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   static const String _constructionIconKey = 'cons';
 
+  // 2026-07-24 (vucko "+-Button"): eigene Icon-Keys pro Meldungs-Typ, damit
+  // jeder Typ seine Farbe/Glyph behält (rot Unfall, orange Baustelle,
+  // gelb Stau).
+  String _incidentIconKey(RoadIncidentType type) => 'inc_${type.name}';
+
   String _poiIconKey(RoutePoi poi) {
     final soon = OpeningHoursParser.parse(poi.openingHours).isClosingSoon;
     return 'poi_${poi.type.name}${soon ? '_soon' : ''}';
@@ -12974,6 +13237,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       keys.add(_poiIconKey(poi));
     }
     if (_routeConstructions.isNotEmpty) keys.add(_constructionIconKey);
+    for (final incident in _routeIncidents) {
+      keys.add(_incidentIconKey(incident.type));
+    }
     return keys;
   }
 
@@ -13014,6 +13280,23 @@ class _CruiseModePageState extends State<CruiseModePage>
         ringWidth: 2.2,
         icon: Icons.construction_rounded,
         glyphColor: const Color(0xFFFF9500),
+        logicalDiameter: 38,
+        glyphSize: 18,
+      );
+    }
+    // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungs-Icons — gleiche
+    // Kreis-Optik wie die Baustellen, Farbe/Glyph pro Typ.
+    if (key.startsWith('inc_')) {
+      final type = RoadIncidentType.values.firstWhere(
+        (t) => t.name == key.substring('inc_'.length),
+        orElse: () => RoadIncidentType.stau,
+      );
+      return _rasterizeCircleIcon(
+        fill: Colors.white,
+        ring: type.color,
+        ringWidth: 2.2,
+        icon: type.icon,
+        glyphColor: type.color,
         logicalDiameter: 38,
         glyphSize: 18,
       );
@@ -13098,7 +13381,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Property `icon` = registriertes Bild). Nur Features mit bereits gerastertem
   /// Icon → nie eine fehlende Bild-Referenz im Layer.
   List<Map<String, dynamic>> _buildPoiFeatures() {
-    if (_routePois.isEmpty && _routeConstructions.isEmpty) return const [];
+    // 2026-07-25 (Review-Fund): _routeIncidents MUSS hier mit rein — sonst
+    // liefert der Early-Return eine leere Liste, sobald eine Route weder POIs
+    // noch Baustellen hat, und Verkehrsmeldungen erscheinen auf der NATIVEN
+    // Karte nie (der Normalfall bei ausgeschaltetem POI-Filter).
+    if (_routePois.isEmpty &&
+        _routeConstructions.isEmpty &&
+        _routeIncidents.isEmpty) {
+      return const [];
+    }
     final features = <Map<String, dynamic>>[];
     for (final poi in _routePois) {
       final key = _poiIconKey(poi);
@@ -13126,6 +13417,22 @@ class _CruiseModePageState extends State<CruiseModePage>
         });
       }
     }
+    // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungen im selben nativen
+    // Symbol-Layer — nur mit bereits gerastertem Icon (nie eine fehlende
+    // Bild-Referenz im Layer, gleiche Regel wie POIs/Baustellen oben).
+    for (final incident in _routeIncidents) {
+      final key = _incidentIconKey(incident.type);
+      if (!_poiIconImages.containsKey(key)) continue;
+      features.add({
+        'type': 'Feature',
+        'id': 'inc-${incident.id}',
+        'properties': {'icon': key},
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [incident.longitude, incident.latitude],
+        },
+      });
+    }
     return features;
   }
 
@@ -13143,6 +13450,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       for (final c in _routeConstructions) {
         if ('cons-${c.latitude},${c.longitude}' == id) {
           ConstructionAlertSheet.show(context, c);
+          return;
+        }
+      }
+    } else if (id.startsWith('inc-')) {
+      for (final incident in _routeIncidents) {
+        if ('inc-${incident.id}' == id) {
+          IncidentAlertSheet.show(context, incident);
           return;
         }
       }
@@ -13514,8 +13828,55 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Task #66: Crowd+OSM Baustellen-Layer als Live-Quelle parallel zum
       // Toast laden. Liefert Marker, Geofence-Trigger und Voting.
       unawaited(_loadConstructionReports(coords));
+      // 2026-07-24 (vucko "+-Button"): Crowd-Verkehrsmeldungen (Unfall/
+      // Baustelle/Stau) für die Route laden — gleiche Kette wie Baustellen.
+      unawaited(_loadRoadIncidents(coords));
     } catch (_) {
       // silent fail
+    }
+  }
+
+  /// 2026-07-24 (vucko "+-Button"): Crowd-Meldungen (road_incidents) für die
+  /// Route laden — Muster wie _loadConstructionReports. Wird zusätzlich vom
+  /// Realtime-Kanal (debounced) erneut angestoßen, wenn andere Fahrer melden.
+  Future<void> _loadRoadIncidents(List<List<double>> coords) async {
+    if (coords.length < 2) return;
+    try {
+      double minLat = coords.first[1], maxLat = coords.first[1];
+      double minLng = coords.first[0], maxLng = coords.first[0];
+      for (final c in coords) {
+        if (c[1] < minLat) minLat = c[1];
+        if (c[1] > maxLat) maxLat = c[1];
+        if (c[0] < minLng) minLng = c[0];
+        if (c[0] > maxLng) maxLng = c[0];
+      }
+      final incidents = await RoadIncidentService.instance.fetchInBbox(
+        southLat: minLat - 0.018,
+        westLng: minLng - 0.018,
+        northLat: maxLat + 0.018,
+        eastLng: maxLng + 0.018,
+      );
+      if (!mounted) return;
+      final onRoute = RoadIncidentService.instance.filterToRoute(
+        incidents: incidents,
+        routeCoordinates: coords,
+        bufferMeters: 200,
+      );
+      setState(() {
+        _routeIncidents = onRoute;
+      });
+      // Eigene Meldungen NICHT in den Geofence — der Melder steht direkt an
+      // der Position und würde sonst sofort sein eigenes "Noch da?" sehen.
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      _incidentGeofence.setIncidents(
+        onRoute.where((i) => i.reportedBy != uid).toList(),
+      );
+      debugPrint(
+        '[CruiseMode] Verkehrsmeldungen geladen: ${incidents.length} bbox, '
+        '${onRoute.length} auf Route.',
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] Incident-Load fehlgeschlagen: $e');
     }
   }
 
@@ -13562,6 +13923,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  /// 2026-07-24 (vucko "+-Button"): Marker-Widget für Verkehrsmeldungen
+  /// (Web-Fallback; nativ läuft es über den Symbol-Layer).
+  Widget _buildIncidentMarker(RoadIncident incident) {
+    final accent = incident.type.color;
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white,
+        border: Border.all(color: accent, width: 2.2),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.6),
+            blurRadius: 12,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Icon(incident.type.icon, size: 18, color: accent),
+    );
+  }
+
   /// 2026-05-28 (vucko Task #66): Marker-Widget — Orange Pulse-Kreis.
   Widget _buildConstructionMarker(ConstructionReport c) {
     const accent = Color(0xFFFF9500);
@@ -13590,6 +13973,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!_isRouteConfirmed) return;
     if (_routeConstructions.isEmpty) return;
     if (_activeConstructionAlertId != null) return;
+    // 2026-07-25 (Review-Fund): auch das Verkehrsmeldungs-Sheet blockt hier —
+    // sonst konnten sich zwei Bottom-Sheets stapeln (die Gegenrichtung war
+    // schon geguarded, diese nicht).
+    if (_activeIncidentAlertId != null) return;
     final entered = _constructionGeofence.processPosition(
       latitude: lat,
       longitude: lng,
@@ -13601,6 +13988,118 @@ class _CruiseModePageState extends State<CruiseModePage>
       ConstructionAlertSheet.show(context, report).then((_) {
         _activeConstructionAlertId = null;
       }),
+    );
+  }
+
+  /// 2026-07-24 (vucko "+-Button"): Geofence-Tick für Verkehrsmeldungen —
+  /// beim Annähern (<200m) EINMAL pro Vorbeifahrt das "Noch da?"-Sheet
+  /// zeigen (Hysterese im Geofence; besser als Google Maps, wo der Prompt
+  /// bei jeder Vorbeifahrt erneut nervt). Nur ein Sheet gleichzeitig, und
+  /// nie parallel zum Baustellen-Sheet.
+  void _processIncidentGeofence(double lat, double lng) {
+    if (!_isRouteConfirmed) return;
+    if (_routeIncidents.isEmpty) return;
+    if (_activeIncidentAlertId != null) return;
+    if (_activeConstructionAlertId != null) return;
+    final entered = _incidentGeofence.processPosition(
+      latitude: lat,
+      longitude: lng,
+    );
+    if (entered.isEmpty || !mounted) return;
+    final incident = entered.first;
+    _activeIncidentAlertId = incident.id;
+    unawaited(
+      IncidentAlertSheet.show(context, incident).then((_) {
+        _activeIncidentAlertId = null;
+      }),
+    );
+  }
+
+  /// 2026-07-24 (vucko "+-Button"): "+"-FAB → Typ wählen → an aktueller
+  /// Position melden. Bei Stau startet zusätzlich das Ausdehnungs-Tracking
+  /// (läuft bis wieder flüssig gefahren wird, siehe _tickJamTracking).
+  Future<void> _openIncidentReportSheet() async {
+    final type = await IncidentReportSheet.show(context);
+    if (type == null || !mounted) return;
+    // _userPosition wird erst im Navigations-Tracking gesetzt — VOR dem
+    // Fahrt-Start (Route-Bestätigungs-Screen) liefert der Idle-Stream die
+    // Position über _userLocation. Beide Quellen zulassen.
+    final lat = _userPosition?.latitude ?? _userLocation?.latitude;
+    final lng = _userPosition?.longitude ?? _userLocation?.longitude;
+    if (lat == null || lng == null) {
+      TopToast.show(
+        context,
+        message: 'Keine GPS-Position — bitte gleich nochmal versuchen.',
+        isError: true,
+      );
+      return;
+    }
+    final incident = await RoadIncidentService.instance.report(
+      type: type,
+      latitude: lat,
+      longitude: lng,
+    );
+    if (!mounted) return;
+    if (incident == null) {
+      TopToast.show(
+        context,
+        message: 'Melden fehlgeschlagen — bitte später erneut versuchen.',
+        isError: true,
+      );
+      return;
+    }
+    setState(() {
+      _routeIncidents = [..._routeIncidents, incident];
+    });
+    TopToast.show(
+      context,
+      message: '${type.label} gemeldet — danke!',
+      icon: type.icon,
+    );
+    if (type == RoadIncidentType.stau) {
+      _jamTrackingIncidentId = incident.id;
+      _jamTrackingStartedAt = DateTime.now();
+      _jamRecoverySince = null;
+    }
+  }
+
+  /// Stau-Ausdehnung: nach einem Stau-Report weiterverfolgen, bis wieder
+  /// >60 km/h für 20s am Stück gefahren wird (oder 10-min-Deckel), dann das
+  /// Stau-Ende in die Meldung schreiben. Nur der Melder trackt.
+  void _tickJamTracking(geo.Position position) {
+    final id = _jamTrackingIncidentId;
+    if (id == null) return;
+    final started = _jamTrackingStartedAt;
+    if (started == null ||
+        DateTime.now().difference(started) > const Duration(minutes: 10)) {
+      _finishJamTracking(position);
+      return;
+    }
+    final speedKmh =
+        (position.speed.isFinite ? position.speed : 0.0) * 3.6;
+    if (speedKmh > 60.0) {
+      _jamRecoverySince ??= DateTime.now();
+      if (DateTime.now().difference(_jamRecoverySince!) >
+          const Duration(seconds: 20)) {
+        _finishJamTracking(position);
+      }
+    } else {
+      _jamRecoverySince = null;
+    }
+  }
+
+  void _finishJamTracking(geo.Position position) {
+    final id = _jamTrackingIncidentId;
+    _jamTrackingIncidentId = null;
+    _jamTrackingStartedAt = null;
+    _jamRecoverySince = null;
+    if (id == null) return;
+    unawaited(
+      RoadIncidentService.instance.updateJamExtent(
+        incidentId: id,
+        endLat: position.latitude,
+        endLng: position.longitude,
+      ),
     );
   }
 
@@ -13734,17 +14233,34 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isWaypointPlanning &&
         !_showRouteInfoBanner &&
         !hasErrorBanner;
-    // 2026-06-02 (vucko): POI-/Config-Button jetzt AUCH vor der Fahrt /
-    // während der Routenplanung erreichbar (User-Wunsch: „über die ganze Karte
-    // einstellen, nicht erst bei bestätigter Route"). Vorher pre-route nur
-    // sichtbar, wenn das Setup-Sheet eingeklappt war (_configCollapsed) — dadurch
-    // wirkte der Button, als käme er erst nach der Routenbestätigung. Jetzt nur
-    // noch im Wegpunkte-Modus ausgeblendet, weil dort die rechte Wegpunkt-Rail
+    // 2026-06-02 (vucko): POI-/Config-Button war zwischenzeitlich AUCH bei
+    // ausgeklapptem Setup-Sheet sichtbar (Wunsch: „über die ganze Karte
+    // einstellen, nicht erst bei bestätigter Route"). Im Wegpunkte-Modus
+    // bleibt die Spalte ausgeblendet, weil dort die rechte Wegpunkt-Rail
     // bereits POI/Voice/Camera zeigt (sonst Doppel-Spalte, Task #80).
-    final hidden = waypointRailActive;
+    //
+    // 2026-07-25 (vucko „wenn ich das hochwische möchte ich die Panels rechts
+    // ausgeblendet haben"): Das kehrt die 2026-06-02-Entscheidung bewusst
+    // wieder um. Bei ausgeklapptem Sheet überdeckt das Panel die Karte und
+    // die FAB-Spalte lag sichtbar DARÜBER (siehe User-Screenshot) — sie fährt
+    // jetzt raus, solange das Sheet oben ist, und kommt zurück, sobald der
+    // Nutzer es runterwischt (_configCollapsed == true). Die Buttons bleiben
+    // damit erreichbar, sobald man die Karte tatsächlich sieht.
+    final hidden = waypointRailActive || !_configCollapsed;
+    final bottomInset = hasRoute ? 260.0 : 240.0;
+    // 2026-07-25 (Review-Fund): Mit dem neuen Melde-FAB sind es bis zu 5
+    // Bubbles (Debug: 6) à 60pt = 300-360pt. Bei bottom:260 ragte die Spalte
+    // auf kleinen Geräten (iPhone SE, 667pt) ins Manöver-Banner. Die Spalte
+    // wird deshalb auf den real verfügbaren Platz gedeckelt und scrollt bei
+    // Bedarf — `reverse: true` hält dabei die UNTEREN (wichtigsten, inkl. "+")
+    // Buttons immer sichtbar, oben wird abgeschnitten statt zu überlappen.
+    final media = MediaQuery.of(context);
+    final maxColumnHeight =
+        (media.size.height - bottomInset - media.padding.top - 168.0)
+            .clamp(120.0, double.infinity);
     return Positioned(
       right: 16,
-      bottom: hasRoute ? 260 : 240,
+      bottom: bottomInset,
       child: IgnorePointer(
         ignoring: hidden,
         child: AnimatedSlide(
@@ -13757,7 +14273,12 @@ class _CruiseModePageState extends State<CruiseModePage>
             // 2026-05-28 (vucko Task #79.1): center-alignment damit alle
             // FABs perfekt auf derselben vertikalen Achse stehen — auch
             // wenn intern verschiedene Bubble-Größen verwendet würden.
-            child: Column(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxColumnHeight),
+              child: SingleChildScrollView(
+                reverse: true,
+                physics: const ClampingScrollPhysics(),
+                child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -13842,7 +14363,22 @@ class _CruiseModePageState extends State<CruiseModePage>
                     },
                     big: true,
                   ),
-              ],
+                // 2026-07-24 (vucko "+-Button"): Unfall/Baustelle/Stau melden —
+                // unterstes Element der Spalte, direkt über dem Info-Panel
+                // (per User-Screenshot markierte Stelle). Nur während einer
+                // bestätigten Route sichtbar — Melden ergibt nur im
+                // Fahr-Kontext Sinn.
+                if (hasRoute && _isRouteConfirmed)
+                  _FabBubble(
+                    heroTag: 'report_incident_fab',
+                    icon: Icons.add_rounded,
+                    color: const Color(0xFFE53935),
+                    onPressed: () => unawaited(_openIncidentReportSheet()),
+                    big: true,
+                  ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
@@ -17334,3 +17870,4 @@ class _FabBubble extends StatelessWidget {
     );
   }
 }
+

@@ -6,10 +6,12 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -24,6 +26,10 @@ const _communityChatTopicMentions = {
   'gruppenfahert',
   'geteilteroute',
 };
+
+// 2026-07-22 (vucko Emoji-Reaktionen): identische Auswahl wie im Gruppen-Chat
+// (group_chat_panel.dart), damit sich beide Chat-Arten gleich anfühlen.
+const _communityQuickEmojis = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
 class CommunityChatDetailPage extends StatefulWidget {
   const CommunityChatDetailPage({super.key, required this.communityId});
@@ -414,11 +420,83 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     }
   }
 
+  /// Emoji-Reaktion umschalten (langer Druck auf eine Nachricht) — optimistisch
+  /// + DB, gespiegelt vom Gruppen-Chat-Vorbild (GroupChatStore.toggleReaction).
+  void _toggleReaction(String messageId, String emoji) {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Lock gegen
+    // Text/Mehrfach-Emoji-Strings — betrifft in der Praxis nur einen
+    // hypothetischen künftigen Aufrufer, da die Quick-Emojis und der Picker
+    // schon jetzt nur echte Einzel-Emoji liefern.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    final index = _messages.indexWhere(
+      (m) => m['id']?.toString() == messageId,
+    );
+    if (index == -1) return;
+
+    final reactions = <Map<String, dynamic>>[
+      for (final r
+          in (_messages[index]['community_message_reactions'] as List?) ??
+              const [])
+        if (r is Map) Map<String, dynamic>.from(r),
+    ];
+    final mine = reactions.any(
+      (r) => r['emoji'] == emoji && r['user_id'] == uid,
+    );
+
+    setState(() {
+      final updated = <Map<String, dynamic>>[...reactions];
+      if (mine) {
+        updated.removeWhere(
+          (r) => r['emoji'] == emoji && r['user_id'] == uid,
+        );
+      } else {
+        updated.add({'emoji': emoji, 'user_id': uid});
+      }
+      _messages = [
+        for (final m in _messages)
+          if (m['id']?.toString() == messageId)
+            {...m, 'community_message_reactions': updated}
+          else
+            m,
+      ];
+    });
+
+    final future = mine
+        ? CommunityChatService.removeReaction(messageId, emoji)
+        : CommunityChatService.addReaction(messageId, emoji);
+    future
+        .then((_) => _load(scrollToBottom: false))
+        .catchError((_) => _load(scrollToBottom: false));
+  }
+
+  /// 2026-07-23 (vucko „wie bei WhatsApp"): echter Emoji-Picker (Raster, kein
+  /// Text-Keyboard) statt der 6 Schnell-Emojis — gespiegelt von
+  /// group_chat_panel.dart._openCustomEmojiPicker.
+  Future<void> _openCustomEmojiPicker(String messageId) async {
+    // Bottom-Sheet-Schließ-Animation erst abwarten — ein zweites Sheet im
+    // selben Tick wie Navigator.pop(sheetContext) kollidiert sonst mit der
+    // laufenden Pop-Transition und erscheint gar nicht.
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    if (!mounted) return;
+    final emoji = await showChatEmojiPicker(context);
+    if (emoji == null || emoji.isEmpty) return;
+    _toggleReaction(messageId, emoji);
+  }
+
   void _showMessageActions(Map<String, dynamic> message) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final isMine = message['user_id'] == uid;
     final canDelete = isMine || CommunityChatService.canModerate(_myRole);
     final isPinned = message['pinned_at'] != null;
+    final messageId = message['id']?.toString();
+    // Reagieren nur auf echte Server-Nachrichten (keine optimistische
+    // "sendet..."-Zeile mit lokaler ID).
+    final canReact =
+        message['_pending'] != true &&
+        messageId != null &&
+        !messageId.startsWith('local-');
 
     showModalBottomSheet<void>(
       context: context,
@@ -443,6 +521,66 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (canReact)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        for (final emoji in _communityQuickEmojis)
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              _toggleReaction(messageId, emoji);
+                            },
+                            child: Container(
+                              width: 46,
+                              height: 46,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1C1F26),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.06),
+                                ),
+                              ),
+                              child: Text(
+                                emoji,
+                                style: const TextStyle(fontSize: 24),
+                              ),
+                            ),
+                          ),
+                        // 2026-07-23 (vucko): eigenes Emoji über die normale
+                        // System-Emoji-Tastatur wählen (nicht auf die 6
+                        // Schnell-Emojis beschränkt).
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            unawaited(_openCustomEmojiPicker(messageId));
+                          },
+                          child: Container(
+                            width: 46,
+                            height: 46,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1C1F26),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.06),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.add_rounded,
+                              color: Colors.white70,
+                              size: 22,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (canReact)
+                  Divider(color: Colors.white.withValues(alpha: 0.06), height: 18),
                 _MessageActionTile(
                   icon: Icons.reply_rounded,
                   label: 'Antworten',
@@ -1476,9 +1614,89 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                     ),
                   ],
                 ),
+                _buildReactions(message),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// Reaktions-Pillen unter dem Post (Emoji + Anzahl, eigene hervorgehoben).
+  /// Gespiegelt von group_chat_panel.dart._buildReactions/_reactionPill.
+  Widget _buildReactions(Map<String, dynamic> message) {
+    final raw = message['community_message_reactions'];
+    if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+
+    final counts = <String, int>{};
+    final mineEmojis = <String>{};
+    for (final r in raw) {
+      if (r is! Map) continue;
+      final emoji = r['emoji']?.toString();
+      if (emoji == null || emoji.isEmpty) continue;
+      counts[emoji] = (counts[emoji] ?? 0) + 1;
+      if (r['user_id'] == uid) mineEmojis.add(emoji);
+    }
+    if (counts.isEmpty) return const SizedBox.shrink();
+
+    final id = message['id']?.toString();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        children: [
+          for (final entry in counts.entries)
+            _reactionPill(
+              entry.key,
+              entry.value,
+              mine: mineEmojis.contains(entry.key),
+              messageId: id,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _reactionPill(
+    String emoji,
+    int count, {
+    required bool mine,
+    required String? messageId,
+  }) {
+    return GestureDetector(
+      onTap: messageId == null ? null : () => _toggleReaction(messageId, emoji),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: mine
+              ? AppAccentColors.accent.withValues(alpha: 0.22)
+              : const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: mine
+                ? AppAccentColors.accent.withValues(alpha: 0.85)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 13)),
+            if (count > 1) ...[
+              const SizedBox(width: 4),
+              Text(
+                '$count',
+                style: TextStyle(
+                  color: mine ? Colors.white : Colors.white70,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

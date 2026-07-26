@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/community_chat_message.dart';
@@ -35,12 +36,14 @@ class CommunityChatService {
   static const String _messageSelect =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, pinned_at, pinned_by, '
-      'profiles:user_id(id, username, avatar_url)';
+      'profiles:user_id(id, username, avatar_url), '
+      'community_message_reactions(emoji, user_id)';
 
   static const String _messageSelectWithoutPins =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, '
-      'profiles:user_id(id, username, avatar_url)';
+      'profiles:user_id(id, username, avatar_url), '
+      'community_message_reactions(emoji, user_id)';
 
   static const String _legacyMessageSelect =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
@@ -264,6 +267,14 @@ class CommunityChatService {
       }
       return row['id'] as String;
     } on PostgrestException catch (e) {
+      // CC001 = server-seitiges Premium-Gate (Trigger, folgt nach Rollout
+      // dieser App-Version) — eigener Code statt generischem 42501, weil
+      // das für JEDE RLS-Verletzung auf JEDER Tabelle stehen würde.
+      if (e.code == 'CC001') {
+        throw const CommunityChatServiceException(
+          'Communities erstellen ist ab Premium verfügbar. Jetzt upgraden.',
+        );
+      }
       throw CommunityChatServiceException(e.message);
     }
   }
@@ -634,6 +645,34 @@ class CommunityChatService {
     }
   }
 
+  /// Emoji-Reaktion setzen (idempotent — doppeltes Setzen ist ein No-Op).
+  /// Gespiegelt von GroupChatService.addReaction.
+  static Future<void> addReaction(String messageId, String emoji) async {
+    // 2026-07-23 (vucko "nur Emoji, kein Text bei Reaktionen"): Defense in
+    // Depth auf Service-Ebene — die UI filtert schon, aber falls ein
+    // künftiger Aufrufer diese Prüfung umgeht, greift sie hier nochmal.
+    if (!EmojiGuard.isSingleEmoji(emoji)) return;
+    final uid = _userId;
+    if (uid == null) return;
+    await _db.from('community_message_reactions').upsert(
+      {'message_id': messageId, 'user_id': uid, 'emoji': emoji},
+      onConflict: 'message_id,user_id,emoji',
+      ignoreDuplicates: true,
+    );
+  }
+
+  /// Eigene Emoji-Reaktion entfernen.
+  static Future<void> removeReaction(String messageId, String emoji) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db
+        .from('community_message_reactions')
+        .delete()
+        .eq('message_id', messageId)
+        .eq('user_id', uid)
+        .eq('emoji', emoji);
+  }
+
   static RealtimeChannel subscribeMessages(
     String communityId,
     void Function() onChange, {
@@ -649,6 +688,15 @@ class CommunityChatService {
         column: 'community_id',
         value: communityId,
       ),
+      callback: (_) => onChange(),
+    );
+    // Reaktionen haben kein community_id → kein Spalten-Filter möglich; RLS
+    // liefert per Realtime nur Reaktionen aus den eigenen Communities aus,
+    // also unkritisch (gespiegelt von GroupChatService.subscribeMessages).
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'community_message_reactions',
       callback: (_) => onChange(),
     );
     channel.subscribe(onStatus);

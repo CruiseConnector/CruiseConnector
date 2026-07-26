@@ -12,6 +12,7 @@ class CommunityChatMessage {
     this.pinnedAt,
     this.pinnedBy,
     this.profile,
+    this.reactions = const [],
   });
 
   final String id;
@@ -26,6 +27,10 @@ class CommunityChatMessage {
   final String? pinnedAt;
   final String? pinnedBy;
   final Map<String, dynamic>? profile;
+  // 2026-07-22 (vucko Emoji-Reaktionen): rohe {emoji, user_id}-Maps aus dem
+  // community_message_reactions-Embed — bewusst ungetypt wie beim Gruppen-Chat-
+  // Vorbild, damit toggleReaction() dieselbe Liste direkt mutieren kann.
+  final List<Map<String, dynamic>> reactions;
 
   factory CommunityChatMessage.fromJson(Map<String, dynamic> json) {
     return CommunityChatMessage(
@@ -41,6 +46,7 @@ class CommunityChatMessage {
       pinnedAt: json['pinned_at']?.toString(),
       pinnedBy: json['pinned_by']?.toString(),
       profile: _readMap(json['profiles']),
+      reactions: _readReactions(json['community_message_reactions']),
     );
   }
 
@@ -57,7 +63,16 @@ class CommunityChatMessage {
     'pinned_at': pinnedAt,
     'pinned_by': pinnedBy,
     'profiles': profile,
+    'community_message_reactions': reactions,
   };
+
+  static List<Map<String, dynamic>> _readReactions(Object? value) {
+    if (value is! List) return const [];
+    return [
+      for (final r in value)
+        if (r is Map) Map<String, dynamic>.from(r),
+    ];
+  }
 
   static Map<String, dynamic>? _readMap(Object? value) {
     if (value is Map<String, dynamic>) return Map<String, dynamic>.from(value);

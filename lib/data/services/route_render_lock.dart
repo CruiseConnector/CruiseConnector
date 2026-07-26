@@ -284,6 +284,26 @@ class RouteRenderLock {
       centerSegmentIndex: searchSegmentIndex,
       speedMps: speedMps,
     );
+    // 2026-07-24 (vucko Autobahn-Dreh-Bug): Die ERST-/NEU-Akquise (auch nach
+    // einem Heading-Divergenz-Release, s.u.) suchte rein nach Lateral-Distanz —
+    // richtungsblind. Auf einem Rundkurs mit Hin-/Rückleg auf derselben
+    // Autobahn (Parallelfahrbahn ~20-30m) konnte sie sich dadurch aufs
+    // GEGENLÄUFIGE Leg locken: Kamera drehte abrupt weg und brauchte ~4s
+    // (erneuter Divergenz-Release-Zyklus), bis sie zurückfand. Bei
+    // verlässlichem GPS-Kurs (>8 m/s) werden bei der Akquise deshalb
+    // Segmente verworfen, deren Richtung >100° vom Kurs abweicht — mit
+    // Fallback auf die alte richtungsblinde Suche, falls kein
+    // richtungskonformes Segment im Fenster liegt (nie schlechter als vorher).
+    // NUR die Akquise; ein bestehender Lock bleibt komplett unberührt.
+    final acquisitionHeading =
+        (!hasLock &&
+            headingDeg != null &&
+            headingDeg.isFinite &&
+            headingDeg >= 0.0 &&
+            speedMps.isFinite &&
+            speedMps > 8.0)
+        ? headingDeg
+        : null;
     var best = _searchBestProjection(
       coordinates: coordinates,
       cumulative: cumulative,
@@ -292,7 +312,20 @@ class RouteRenderLock {
       cosLat: cosLat,
       from: primaryWindow.from,
       to: primaryWindow.to,
+      directionalHeadingDeg: acquisitionHeading,
     );
+    if (acquisitionHeading != null &&
+        (best.segment < 0 || best.lateralMeters > lateralMaxMeters)) {
+      best = _searchBestProjection(
+        coordinates: coordinates,
+        cumulative: cumulative,
+        latitude: latitude,
+        longitude: longitude,
+        cosLat: cosLat,
+        from: primaryWindow.from,
+        to: primaryWindow.to,
+      );
+    }
     final usedReanchorWindow =
         hasLock && searchSegmentIndex != previousSegmentIndex;
     if (usedReanchorWindow) {
@@ -525,6 +558,7 @@ class RouteRenderLock {
     required double cosLat,
     required int from,
     required int to,
+    double? directionalHeadingDeg,
   }) {
     var bestLateral2 = double.infinity;
     var bestDistanceM = -1.0;
@@ -537,6 +571,18 @@ class RouteRenderLock {
       final dx = bx - ax;
       final dy = by - ay;
       final len2 = dx * dx + dy * dy;
+      // 2026-07-24 (vucko Autobahn-Dreh-Bug): optionaler Richtungs-Filter
+      // für die Akquise (siehe project()) — dx=Ost-Meter, dy=Nord-Meter,
+      // also Segment-Kurs = atan2(dx, dy). Gegenläufige Parallel-Legs
+      // (~180° Differenz) fallen raus, großzügige 100° lassen jede echte
+      // Kurve im 35m-Akquise-Radius durch.
+      if (directionalHeadingDeg != null && len2 > 1e-9) {
+        final segBearing =
+            (math.atan2(dx, dy) * 180.0 / math.pi + 360.0) % 360.0;
+        var headingDiff = (directionalHeadingDeg - segBearing).abs() % 360.0;
+        if (headingDiff > 180.0) headingDiff = 360.0 - headingDiff;
+        if (headingDiff > 100.0) continue;
+      }
       var t = 0.0;
       if (len2 > 1e-9) {
         t = (-(ax * dx + ay * dy) / len2).clamp(0.0, 1.0);

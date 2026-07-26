@@ -24,9 +24,16 @@ Future<void> showVoiceVolumeSheet(BuildContext context) {
   ).whenComplete(() => TtsService.instance.navSuppressed = false);
 }
 
-/// Untergrenze des Reglers — selbst „leise" bleibt klar hörbar (der Nutzer fand
-/// die Ansagen zu leise; ganz runter bis 0 wäre nutzlos).
-const double _kMinVolume = 0.4;
+/// Untergrenze des Reglers — selbst „leise" bleibt klar hörbar.
+///
+/// 2026-07-25 (vucko „Navi auch bei leise gestellt laut genug hören"): 0.4 → 0.65,
+/// und die Grenze liegt jetzt im [VoiceSettingsService] (Source of Truth), damit
+/// auch ein BEREITS gespeicherter kleinerer Wert beim Laden hochgezogen wird —
+/// sonst hätte der Fix für bestehende Installationen gar nicht gegriffen.
+/// Grund für die Anhebung: Diese Lautstärke regelt NUR die Sprachausgabe selbst
+/// und vertieft das Ducking der Musik nicht (die Ducking-Tiefe ist systemseitig
+/// fix und per API nicht verstärkbar).
+const double _kMinVolume = VoiceSettingsService.minVolume;
 
 class _VoiceVolumeSheet extends StatefulWidget {
   const _VoiceVolumeSheet();
@@ -241,9 +248,9 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
             // Klare Schnellstufen — der Nutzer hört sofort den Unterschied.
             Row(
               children: [
-                _presetChip('Leise', 0.55, accent),
+                _presetChip('Leise', 0.70, accent),
                 const SizedBox(width: 8),
-                _presetChip('Mittel', 0.78, accent),
+                _presetChip('Mittel', 0.85, accent),
                 const SizedBox(width: 8),
                 _presetChip('Laut', 1.0, accent),
               ],

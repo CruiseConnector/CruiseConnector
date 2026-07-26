@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.5.1+78
+version: 1.5.2+84
 
 environment:
   # Dieses Projekt benoetigt Flutter 3.44.2 / Dart 3.12.2 (wegen sign_in_with_apple
@@ -92,6 +92,13 @@ dependencies:
   firebase_analytics: ^12.4.3
   firebase_crashlytics: ^5.2.4
   flutter_compass: ^0.8.1
+  emoji_picker_flutter: ^4.5.2
+  # Grapheme-Cluster-genaue String-Iteration (ZWJ-Sequenzen, Hautton-Modifier,
+  # Flaggen als EIN Zeichen) — war schon transitiv da, jetzt explizit für den
+  # Emoji-Reaktions-Guard.
+  characters: ^1.4.1
+  wakelock_plus: ^1.5.2
+  floating: ^6.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
