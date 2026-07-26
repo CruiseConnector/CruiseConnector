@@ -15,39 +15,124 @@ import 'package:cruise_connect/domain/models/road_incident.dart';
 ///   neue Meldungen ohne Refresh.
 /// - Votes: "Noch da?/Weg" beim Vorbeifahren, via SECURITY-DEFINER-RPC
 ///   (`vote_road_incident`) — kein Doppel-Vote, Counter serverseitig.
+///
+/// 2026-07-26 (vucko "darf nicht ausgenutzt werden koennen"): Der Client
+/// schreibt NICHT mehr direkt in `road_incidents` — die Schreibrechte sind
+/// entzogen. Alles laeuft ueber SECURITY-DEFINER-Funktionen, die serverseitig
+/// Ort, Menge und Vertrauen pruefen. Konkret kann der Client damit weder
+/// `expires_at` noch `active`, `confirmed_count`, `visibility` oder
+/// `reported_by` bestimmen — genau die Felder, ueber die sich das System
+/// vorher haette aushebeln lassen.
+class RoadIncidentReportResult {
+  const RoadIncidentReportResult({this.incident, this.message, this.merged = false});
+
+  /// Die (neue oder zusammengefuehrte) Meldung — null bei Ablehnung.
+  final RoadIncident? incident;
+
+  /// Server-Begruendung bei Ablehnung, direkt anzeigbar (deutsch).
+  final String? message;
+
+  /// true = es gab hier schon dieselbe Meldung, sie wurde nur bestaetigt.
+  final bool merged;
+
+  bool get ok => incident != null;
+}
+
 class RoadIncidentService {
   RoadIncidentService._();
   static final RoadIncidentService instance = RoadIncidentService._();
 
   static SupabaseClient get _db => Supabase.instance.client;
 
-  /// Meldet eine neue Verkehrslage an der aktuellen Position.
-  Future<RoadIncident?> report({
+  /// Meldet eine neue Verkehrslage. Der Server entscheidet ueber Annahme,
+  /// Lebensdauer und Sichtbarkeit; abgelehnt wird mit einer Begruendung, die
+  /// direkt angezeigt werden kann (Tageslimit, zu schnell hintereinander,
+  /// unplausible Entfernung, Sperre).
+  Future<RoadIncidentReportResult> report({
     required RoadIncidentType type,
     required double latitude,
     required double longitude,
   }) async {
-    final user = _db.auth.currentUser;
-    if (user == null) return null;
+    if (_db.auth.currentUser == null) {
+      return const RoadIncidentReportResult(message: 'Nicht angemeldet.');
+    }
     try {
-      final response = await _db
+      final res = await _db.rpc('report_road_incident', params: {
+        'p_type': type.name,
+        'p_lat': latitude,
+        'p_lng': longitude,
+      });
+      final map = Map<String, dynamic>.from(res as Map);
+      final id = map['incident_id'] as String?;
+      if (id == null) {
+        return const RoadIncidentReportResult(
+          message: 'Melden fehlgeschlagen — bitte spaeter erneut versuchen.',
+        );
+      }
+      final row = await _db
           .from('road_incidents')
-          .insert({
-            'type': type.name,
-            'lat': latitude,
-            'lng': longitude,
-            'reported_by': user.id,
-            'expires_at': DateTime.now()
-                .toUtc()
-                .add(type.ttl)
-                .toIso8601String(),
-          })
           .select()
-          .single();
-      return RoadIncident.fromJson(Map<String, dynamic>.from(response));
+          .eq('id', id)
+          .maybeSingle();
+      if (row == null) {
+        // Kann passieren, wenn die Meldung still gestellt wurde und die
+        // Policy sie fuer diesen Nutzer nicht liefert — kein Fehlerfall.
+        return RoadIncidentReportResult(merged: map['merged'] == true);
+      }
+      return RoadIncidentReportResult(
+        incident: RoadIncident.fromJson(Map<String, dynamic>.from(row)),
+        merged: map['merged'] == true,
+      );
+    } on PostgrestException catch (e) {
+      debugPrint('[RoadIncident] report abgelehnt: ${e.message}');
+      return RoadIncidentReportResult(message: _readableError(e.message));
     } catch (e) {
       debugPrint('[RoadIncident] report failed: $e');
-      return null;
+      return const RoadIncidentReportResult(
+        message: 'Melden fehlgeschlagen — bitte spaeter erneut versuchen.',
+      );
+    }
+  }
+
+  /// Postgres haengt an Exceptions gern Kontext an; fuer den Nutzer bleibt nur
+  /// der eigentliche Satz uebrig.
+  String _readableError(String raw) {
+    final cleaned = raw.split('\n').first.trim();
+    return cleaned.isEmpty
+        ? 'Melden gerade nicht moeglich.'
+        : cleaned;
+  }
+
+  /// Eigene Meldung zuruecknehmen — der schnellste saubere Weg, einen Fehler
+  /// zu korrigieren, und er kostet den Melder kein Vertrauen.
+  Future<bool> retract(String incidentId) async {
+    try {
+      await _db.rpc('retract_road_incident',
+          params: {'p_incident_id': incidentId});
+      return true;
+    } catch (e) {
+      debugPrint('[RoadIncident] retract failed: $e');
+      return false;
+    }
+  }
+
+  /// Letzte bekannte Position — NUR waehrend laufender Navigation setzen.
+  /// Sie ist der Beleg dafuer, dass eine Meldung wirklich von vor Ort kommt.
+  Future<void> pushLivePosition(double lat, double lng) async {
+    try {
+      await _db.rpc('set_live_position', params: {'p_lat': lat, 'p_lng': lng});
+    } catch (e) {
+      debugPrint('[RoadIncident] Position senden fehlgeschlagen: $e');
+    }
+  }
+
+  /// Beim Fahrtende wieder loeschen (vuckos Vorgabe: keine Standortdaten
+  /// ausserhalb aktiver Navigation aufbewahren).
+  Future<void> clearLivePosition() async {
+    try {
+      await _db.rpc('clear_live_position');
+    } catch (e) {
+      debugPrint('[RoadIncident] Position loeschen fehlgeschlagen: $e');
     }
   }
 
@@ -127,17 +212,19 @@ class RoadIncidentService {
     }
   }
 
-  /// Stau-Ausdehnung nachtragen (nur eigene Meldung, RLS ri_update_own).
+  /// Stau-Ausdehnung nachtragen — serverseitig auf die eigene Meldung, den
+  /// Typ „stau" und eine plausible Laenge begrenzt.
   Future<void> updateJamExtent({
     required String incidentId,
     required double endLat,
     required double endLng,
   }) async {
     try {
-      await _db
-          .from('road_incidents')
-          .update({'jam_end_lat': endLat, 'jam_end_lng': endLng})
-          .eq('id', incidentId);
+      await _db.rpc('update_jam_extent', params: {
+        'p_incident_id': incidentId,
+        'p_end_lat': endLat,
+        'p_end_lng': endLng,
+      });
     } catch (e) {
       debugPrint('[RoadIncident] jam extent update failed: $e');
     }

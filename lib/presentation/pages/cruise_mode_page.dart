@@ -584,6 +584,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   String? _activeIncidentAlertId;
   RealtimeChannel? _incidentChannel;
   Timer? _incidentRefetchDebounce;
+  DateTime? _lastLivePositionPushAt;
   String? _jamTrackingIncidentId;
   DateTime? _jamTrackingStartedAt;
   DateTime? _jamRecoverySince;
@@ -3605,6 +3606,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ist ein harmloser No-Op.
     unawaited(WakelockPlus.disable().catchError((Object _) {}));
     unawaited(NavigationPipService.instance.disarm());
+    unawaited(RoadIncidentService.instance.clearLivePosition());
     _incidentRefetchDebounce?.cancel();
     _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
@@ -12227,9 +12229,32 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Ausdehnungs-Tracking — gleiche O(n)-Kostenordnung wie die Baustellen.
     _processIncidentGeofence(position.latitude, position.longitude);
     _tickJamTracking(position);
+    _pushLivePositionThrottled(position);
+  }
+
+  /// 2026-07-26 (vucko "darf nicht ausgenutzt werden koennen"): Die letzte
+  /// bekannte Position ist serverseitig der BELEG dafür, dass eine Meldung
+  /// wirklich von vor Ort kommt — ohne sie akzeptiert der Server nur eine
+  /// kurzlebige, ungeprüfte Meldung. Bewusst nur während laufender Navigation
+  /// und gedrosselt; beim Fahrtende wird sie wieder gelöscht (Vuckos Vorgabe:
+  /// keine Standortdaten außerhalb der Fahrt aufbewahren).
+  void _pushLivePositionThrottled(geo.Position position) {
+    final now = DateTime.now();
+    final last = _lastLivePositionPushAt;
+    if (last != null && now.difference(last) < const Duration(seconds: 60)) {
+      return;
+    }
+    _lastLivePositionPushAt = now;
+    unawaited(
+      RoadIncidentService.instance
+          .pushLivePosition(position.latitude, position.longitude),
+    );
   }
 
   void _stopNavigationTracking() {
+    // Standort-Beleg wieder entfernen — er gilt nur für die laufende Fahrt.
+    _lastLivePositionPushAt = null;
+    unawaited(RoadIncidentService.instance.clearLivePosition());
     // 2026-07-24 (vucko Wakelock): Display-Sperre wieder freigeben — dieser
     // Funnel deckt ALLE Stop-Pfade ab (Pause, Beenden, Lobby-Rückkehr,
     // Setup-Rückkehr, Ankunft, Simulation, Post-Ride-Cleanup).
@@ -14034,26 +14059,36 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       return;
     }
-    final incident = await RoadIncidentService.instance.report(
+    final result = await RoadIncidentService.instance.report(
       type: type,
       latitude: lat,
       longitude: lng,
     );
     if (!mounted) return;
-    if (incident == null) {
+    if (!result.ok) {
+      // 2026-07-26: Der Server begründet Ablehnungen jetzt konkret (Tageslimit,
+      // zu schnell hintereinander, unplausibel, gesperrt). Das ist ehrlicher
+      // als das frühere pauschale „fehlgeschlagen" und sagt dem Nutzer, was er
+      // tun kann.
       TopToast.show(
         context,
-        message: 'Melden fehlgeschlagen — bitte später erneut versuchen.',
+        message: result.message ?? 'Melden gerade nicht möglich.',
         isError: true,
       );
       return;
     }
+    final incident = result.incident!;
     setState(() {
-      _routeIncidents = [..._routeIncidents, incident];
+      _routeIncidents = [
+        ..._routeIncidents.where((i) => i.id != incident.id),
+        incident,
+      ];
     });
     TopToast.show(
       context,
-      message: '${type.label} gemeldet — danke!',
+      message: result.merged
+          ? '${type.label} bestätigt — danke!'
+          : '${type.label} gemeldet — danke!',
       icon: type.icon,
     );
     if (type == RoadIncidentType.stau) {
