@@ -2823,7 +2823,50 @@ async function handler(req: Request): Promise<Response> {
       },
     );
   }
-  return await generateRoute(body);
+  // ── Generierungs-Telemetrie (2026-07-11): speist route_generation_events
+  // fürs Admin-Monitoring (Generierungen 24h/7d, Heute-Seite, Wochenvergleich).
+  // Die alte route_search_sessions-Queue ist seit der v2-Edge tot — dieses
+  // Logging ist ihr schlanker Ersatz. Best-effort: Telemetrie-Fehler dürfen
+  // NIEMALS das Routing beeinträchtigen. Reroutes zählen nicht als Suche.
+  const genStartedAt = Date.now();
+  const res = await generateRoute(body);
+  if (!isReroute && _rlAdmin) {
+    try {
+      let success = res.status === 200;
+      let genErrCode: string | null = null;
+      try {
+        const peek = await res.clone().json();
+        if (peek && typeof peek === 'object' && (peek as { error?: unknown }).error) {
+          success = false;
+          genErrCode = String((peek as { error: unknown }).error).slice(0, 60);
+        }
+      } catch (_) {
+        // Antwort ist kein JSON — der HTTP-Status entscheidet.
+      }
+      const b = body as Record<string, unknown>;
+      const logPromise = _rlAdmin
+        .from('route_generation_events')
+        .insert({
+          user_id: rl.tier === 'authed' ? rl.key.slice(4) : null,
+          route_type: (b.route_type as string) ?? 'ROUND_TRIP',
+          style_key: (b.selected_style ?? b.mode)?.toString().slice(0, 40) ?? null,
+          distance_km:
+            Math.round(Number(b.target_distance_km ?? b.targetDistance ?? 0)) || null,
+          avoid_highways: b.avoid_highways === true,
+          source: 'edge_v2',
+          success,
+          error_code: genErrCode,
+          duration_ms: Date.now() - genStartedAt,
+        })
+        .then(() => {}, () => {});
+      const er = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+      if (er?.waitUntil) er.waitUntil(logPromise);
+      else await logPromise;
+    } catch (_) {
+      // Telemetrie ist nie ein Fehler fürs Routing.
+    }
+  }
+  return res;
 }
 
 serve(handler);

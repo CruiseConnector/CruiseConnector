@@ -1,561 +1,723 @@
-<!doctype html><html lang="de"><head>
+<!doctype html>
+<html lang="de">
+<head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>CruiseConnect · Monitoring</title>
 <style>
   :root{
-    --bg:#0e1116;--surface:#161b22;--surface2:#1c232c;--line:#242c37;
-    --txt:#e9edf2;--muted:#8b95a3;--dim:#5b6675;
-    --accent:#ff7a1a;--accent-dim:#3a2416;
-    --ok:#3fb950;--ok-dim:#12261a;--bad:#f85149;--bad-dim:#2a1516;--warn:#d29922;
-    --blue:#4d9fff;
+    /* App-Farbwelt: Rot auf Nachtschwarz (wie App-UI & Store-Design) */
+    --bg:#0b0e14; --bg2:#0e1219; --card:#12151c; --card2:#1c1f26;
+    --line:rgba(255,255,255,.06); --line2:rgba(255,255,255,.1);
+    --txt:#eceef2; --muted:#8b93a1; --dim:#5a6272;
+    --red:#e92a22; --red-hot:#ff453a; --red-dim:rgba(233,42,34,.14);
+    --ok:#34c759; --ok-dim:rgba(52,199,89,.12); --warn:#ffd60a; --bad:#ff453a; --bad-dim:rgba(255,69,58,.12);
   }
-  *{box-sizing:border-box}
+  *{box-sizing:border-box} html,body{height:100%}
   body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
-  .wrap{max-width:1160px;margin:0 auto;padding:20px 18px 70px}
-  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:6px 2px 18px}
-  .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#ffb066);display:grid;place-items:center;font-size:17px}
-  h1{font-size:17px;font-weight:680;margin:0;letter-spacing:.2px}
-  .sub{color:var(--muted);font-size:12.5px}
-  .live{margin-left:auto;display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(63,185,80,.5);animation:pulse 2s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  a{color:inherit}
+
+  /* ── Layout: Sidebar + Content ── */
+  .shell{display:flex;min-height:100vh}
+  aside{width:218px;flex:0 0 218px;background:var(--bg2);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
+  .mark{width:34px;height:34px;border-radius:9px;background:#000;display:grid;place-items:center;font-weight:800;font-size:13px;letter-spacing:-.5px;color:var(--red);border:1px solid #23262e}
+  .brand b{font-size:14px;letter-spacing:.2px}
+  .brand small{display:block;color:var(--dim);font-size:10.5px;font-weight:600;letter-spacing:1.2px}
+  nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--muted);text-decoration:none;font-size:13.5px;font-weight:600;transition:.15s}
+  nav a svg{width:17px;height:17px;flex:0 0 17px;opacity:.8}
+  nav a:hover{background:var(--card);color:var(--txt)}
+  nav a.on{background:var(--red-dim);color:var(--red-hot)}
+  nav a.on svg{opacity:1}
+  .side-foot{margin-top:auto;padding:10px 8px;color:var(--dim);font-size:11px;line-height:1.5}
+  main{flex:1;min-width:0;padding:22px 26px 70px;max-width:1160px}
+
+  /* ── Topbar ── */
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  .top h1{font-size:20px;font-weight:750;margin:0;letter-spacing:-.2px}
+  .live{margin-left:auto;display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12.5px;background:var(--card);border:1px solid var(--line);padding:7px 13px;border-radius:999px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(52,199,89,.5)}70%{box-shadow:0 0 0 7px rgba(52,199,89,0)}100%{box-shadow:0 0 0 0 rgba(52,199,89,0)}}
   @media (prefers-reduced-motion){.dot{animation:none}}
-  h2{font-size:12px;font-weight:640;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin:26px 2px 11px;display:flex;align-items:center;gap:8px}
-  h2 .hint{font-weight:500;letter-spacing:0;text-transform:none;color:var(--dim);font-size:11px}
-  .grid{display:grid;gap:11px}
-  .g5{grid-template-columns:repeat(5,1fr)} .g4{grid-template-columns:repeat(4,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
-  @media (max-width:900px){.g5{grid-template-columns:repeat(3,1fr)}}
-  @media (max-width:760px){.g5,.g4,.g3{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}}
-  @media (max-width:430px){.g5,.g4,.g3{grid-template-columns:1fr}}
-  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:14px 15px}
-  .kpi .label{color:var(--muted);font-size:12px;font-weight:520;margin-bottom:7px}
-  .kpi .val{font-size:26px;font-weight:700;line-height:1;letter-spacing:-.4px}
-  .kpi .val small{font-size:13px;color:var(--muted);font-weight:600;margin-left:3px}
-  .kpi .foot{margin-top:8px;font-size:12px;color:var(--muted)}
-  .up{color:var(--ok)} .down{color:var(--bad)} .accent{color:var(--accent)}
-  .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;font-size:12.5px;font-weight:600}
+
+  /* ── Karten & KPIs ── */
+  h2{font-size:11.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--dim);margin:24px 2px 11px}
+  .grid{display:grid;gap:12px}
+  .g4{grid-template-columns:repeat(4,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media (max-width:900px){.g4{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:560px){.g4,.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:15px 16px;position:relative;overflow:hidden}
+  .kpi .label{color:var(--muted);font-size:12px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:7px}
+  .kpi .val{font-size:29px;font-weight:760;line-height:1;letter-spacing:-.6px}
+  .kpi .val small{font-size:14px;color:var(--muted);font-weight:600;margin-left:3px}
+  .kpi .foot{margin-top:9px;font-size:12px;color:var(--muted)}
+  .hero{background:linear-gradient(150deg,rgba(233,42,34,.16),rgba(233,42,34,.03) 55%),var(--card)}
+  .hero .val{font-size:38px;color:#fff}
+  .up{color:var(--ok)} .down{color:var(--bad)} .red{color:var(--red-hot)}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;font-size:12.5px;font-weight:650}
   .pill.ok{background:var(--ok-dim);color:var(--ok)} .pill.bad{background:var(--bad-dim);color:var(--bad)}
-  .infra-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 3px;border-bottom:1px solid var(--line)}
-  .infra-row:last-child{border-bottom:none}
-  .infra-row .n{font-weight:600} .infra-row .m{color:var(--dim);font-size:12px}
-  .spark{display:flex;align-items:flex-end;gap:4px;height:80px;padding-top:6px}
-  .bar{flex:1;background:var(--accent-dim);border-radius:3px 3px 0 0;position:relative;min-height:2px}
-  .bar>span{position:absolute;inset:0 0 auto 0;background:linear-gradient(180deg,var(--accent),#c85e10);border-radius:3px 3px 0 0}
-  .bar b{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--muted);opacity:0;transition:.15s;white-space:nowrap}
-  .bar:hover b{opacity:1}
-  .axis{display:flex;gap:4px;margin-top:6px}.axis span{flex:1;text-align:center;font-size:9.5px;color:var(--dim)}
-  .legend{display:flex;gap:16px;margin-top:10px;font-size:11.5px;color:var(--muted)}
-  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .soon{border-style:dashed;opacity:.8} .soon .val{color:var(--dim)}
+
+  /* ── Charts ── */
+  .chart{width:100%;height:190px;display:block}
+  .chart-sm{height:120px}
+  .legend{display:flex;gap:16px;margin-top:6px;font-size:11.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
+  .tip{position:fixed;pointer-events:none;background:#000;border:1px solid var(--line2);border-radius:9px;padding:7px 10px;font-size:12px;z-index:50;display:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .tip b{color:#fff}
+
+  /* Balkenlisten (Kategorien) */
+  .bars .row{display:grid;grid-template-columns:110px 1fr 44px;gap:10px;align-items:center;padding:7px 0;font-size:13px}
+  .bars .row .k{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bars .row .v{text-align:right;color:var(--txt);font-weight:650}
+
+  /* Funnel (Onboarding) — zentrierte, sich verjüngende Balken + Drop-off */
+  .funnel .step{margin:10px 0}
+  .funnel .lab{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .funnel .lab b{color:var(--txt);font-weight:650} .funnel .lab .pc{color:var(--muted)}
+  .funnel .fbar{height:34px;background:linear-gradient(90deg,var(--red),#ff7a45);border-radius:8px;display:flex;align-items:center;padding-left:12px;color:#fff;font-weight:700;font-size:14px;min-width:34px;transition:width .5s ease}
+  .funnel .drop{font-size:11px;color:var(--bad);text-align:right;margin-top:3px}
+
+  /* Retention-Kohorten-Matrix (Heatmap-Tabelle) */
+  .rt{width:100%;border-collapse:separate;border-spacing:3px;font-size:12px}
+  .rt th{color:var(--dim);font-size:10.5px;font-weight:600;padding:2px;text-align:center}
+  .rt td.lab{color:var(--muted);text-align:left;white-space:nowrap;font-weight:600}
+  .rt td.sz{color:var(--dim);text-align:right;padding-right:6px}
+  .rt td.cell{text-align:center;border-radius:5px;color:#fff;font-weight:600;padding:6px 2px;min-width:34px}
+
+  /* Wochentag×Stunde-Heatmap */
+  .hm{display:grid;grid-template-columns:34px repeat(24,1fr);gap:2px;font-size:9px}
+  .hm .hh{color:var(--dim);text-align:center;grid-row:1}
+  .hm .dl{color:var(--muted);font-size:10px;display:flex;align-items:center;font-weight:600}
+  .hm .c{aspect-ratio:1;border-radius:2px;background:var(--card2)}
+
+  /* Sparkline in KPI-Karten */
+  .spark{width:100%;height:34px;margin-top:9px;display:block}
+
+  /* Alert-Badge an KPI-Werten */
+  .alert{display:inline-block;margin-left:8px;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;vertical-align:2px}
+  .alert.ok{background:var(--ok-dim);color:var(--ok)} .alert.warn{background:rgba(255,214,10,.14);color:var(--warn)} .alert.bad{background:var(--bad-dim);color:var(--bad)}
+  .track{height:8px;background:var(--card2);border-radius:99px;overflow:hidden}
+  .fill{height:100%;background:linear-gradient(90deg,var(--red),#ff7a45);border-radius:99px;transition:width .5s ease}
+
   table{width:100%;border-collapse:collapse;font-size:13px}
-  td{padding:8px 4px;border-bottom:1px solid var(--line)} tr:last-child td{border-bottom:none}
-  td.r{text-align:right;color:var(--muted)}
-  .u{font-weight:600} .rank{color:var(--dim);width:22px}
-  .tag{font-size:11px;color:var(--muted);background:var(--surface2);padding:2px 7px;border-radius:6px}
-  .bl{display:flex;flex-direction:column;gap:9px;margin-top:4px}
-  .blrow{display:flex;align-items:center;gap:10px;font-size:13px}
-  .blk{width:34%;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .blbar{flex:1;height:8px;background:var(--surface2);border-radius:5px;overflow:hidden}
-  .blbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#ffb066);border-radius:5px}
-  .blbar i.b{background:linear-gradient(90deg,var(--blue),#8ec5ff)}
-  .blc{width:52px;text-align:right;color:var(--muted);font-weight:600}
-  .empty{color:var(--dim);font-size:12.5px;padding:8px 2px}
-  .soon{border-style:dashed;opacity:.85}.soon .val{color:var(--dim)}
-  .banner{display:flex;gap:10px;align-items:flex-start;background:var(--accent-dim);border:1px solid #4a3016;border-radius:11px;padding:11px 14px;color:#ffcf9e;font-size:12.5px;margin-bottom:11px}
-  .err{background:var(--bad-dim);border:1px solid #4a1c1a;color:#ff9b95;padding:10px 14px;border-radius:10px;margin:10px 0;font-size:13px;display:none}
-  footer{color:var(--dim);font-size:11.5px;text-align:center;margin-top:34px;line-height:1.6}
-  /* Hover/Klick-Historie (12-Wochen-Kurve) */
-  .card[data-hk]{cursor:pointer;position:relative}
-  .card[data-hk]:hover{border-color:rgba(255,122,26,.45)}
-  .card[data-hk]::after{content:'⌄';position:absolute;top:10px;right:12px;color:var(--dim);font-size:12px}
-  #histpop{position:absolute;z-index:50;display:none;width:min(340px,88vw);background:#10151c;border:1px solid rgba(255,122,26,.4);border-radius:14px;padding:14px 15px 12px;box-shadow:0 14px 40px rgba(0,0,0,.55)}
-  #histpop .t{font-size:12.5px;font-weight:700;color:var(--txt);margin-bottom:2px}
-  #histpop .s{font-size:11px;color:var(--muted);margin-bottom:8px}
-  #histpop .mm{display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim);margin-top:5px}
-  /* ── Detail-Ansicht (Klick auf Kennzahl → Vollbild mit Zurück) ── */
-  #detail{position:fixed;inset:0;z-index:120;background:var(--bg);overflow-y:auto;display:none;animation:dvin .22s ease}
-  #detail.on{display:block}
-  @keyframes dvin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  .dv-wrap{max-width:1000px;margin:0 auto;padding:18px 22px 60px}
-  .dv-top{display:flex;align-items:center;gap:14px;padding:6px 0 18px;position:sticky;top:0;background:linear-gradient(180deg,var(--bg) 72%,transparent);z-index:2}
-  .dv-back{display:inline-flex;align-items:center;gap:7px;background:var(--surface2);border:1px solid var(--line);color:var(--txt);font-size:13.5px;font-weight:600;padding:9px 15px 9px 12px;border-radius:11px;cursor:pointer;transition:.15s}
-  .dv-back:hover{border-color:rgba(255,122,26,.5);color:#fff}
-  .dv-crumb{font-size:12px;color:var(--dim)}
-  .dv-hero{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 24px;margin-bottom:3px}
-  .dv-hero .n{font-size:56px;font-weight:800;letter-spacing:-2px;line-height:1;color:#fff;font-variant-numeric:tabular-nums}
-  .dv-hero .n small{font-size:22px;font-weight:700;color:var(--muted);margin-left:6px;letter-spacing:0}
-  .dv-delta{font-size:13.5px;font-weight:700;padding:5px 11px;border-radius:999px}
-  .dv-delta.up{color:#3fb950;background:rgba(63,185,80,.13)}
-  .dv-delta.dn{color:#ff6b63;background:rgba(255,107,99,.13)}
-  .dv-delta.fl{color:var(--muted);background:var(--surface2)}
-  .dv-sub{color:var(--muted);font-size:13px;margin:2px 0 18px}
-  .dv-chips{display:flex;gap:8px;margin:0 0 14px}
-  .dv-chip{font-size:12.5px;font-weight:600;color:var(--muted);background:var(--surface);border:1px solid var(--line);padding:7px 14px;border-radius:10px;cursor:pointer;transition:.12s}
-  .dv-chip.sel{background:var(--accent);border-color:var(--accent);color:#fff}
-  .dv-chip:not(.sel):hover{color:#fff;border-color:rgba(255,122,26,.45)}
-  .dv-chart{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px 16px 12px;position:relative}
-  .dv-chart svg{display:block;width:100%;height:auto;overflow:visible}
-  .dv-tt{position:absolute;pointer-events:none;transform:translate(-50%,0);background:#0c1015;border:1px solid rgba(255,122,26,.5);border-radius:10px;padding:6px 10px;font-size:12px;color:#fff;white-space:nowrap;opacity:0;transition:opacity .1s;z-index:3;box-shadow:0 8px 22px rgba(0,0,0,.5)}
-  .dv-tt b{color:var(--accent)} .dv-tt span{color:var(--dim);display:block;font-size:10.5px;font-weight:600;margin-bottom:1px}
-  .dv-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
-  .dv-tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 15px}
-  .dv-tile .l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:7px}
-  .dv-tile .v{font-size:23px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums}
-  .dv-tblwrap{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:2px 16px 10px;margin-top:6px}
-  .dv-tbl{width:100%;border-collapse:collapse;font-size:13.5px}
-  .dv-tbl th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.4px;font-weight:700;padding:12px 4px 8px}
-  .dv-tbl th:last-child,.dv-tbl td:last-child{text-align:right}
-  .dv-tbl td{padding:10px 4px;border-top:1px solid var(--line);color:var(--txt)}
-  .dv-tbl td .mini{display:inline-block;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--accent),#c85e10);vertical-align:middle;margin-right:8px;min-width:2px}
-  .dv-tbl td.v{font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
-  @media(max-width:620px){.dv-tiles{grid-template-columns:repeat(2,1fr)}.dv-hero .n{font-size:44px}}
+  td,th{padding:9px 6px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.8px;font-weight:650}
+  tr:last-child td{border-bottom:none}
+  td.r,th.r{text-align:right;color:var(--muted)}
+  .u{font-weight:650} .rank{color:var(--dim);width:24px}
+  .tag{font-size:11px;color:var(--muted);background:var(--card2);padding:3px 8px;border-radius:7px}
+
+  .infra-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 2px;border-bottom:1px solid var(--line)}
+  .infra-row:last-child{border-bottom:none}
+  .infra-row .n{font-weight:650} .infra-row .m{color:var(--dim);font-size:12px;margin-top:2px}
+
+  .banner{display:flex;gap:11px;align-items:center;background:var(--red-dim);border:1px solid rgba(233,42,34,.3);border-radius:12px;padding:12px 15px;color:#ffb3ae;font-size:13px;margin-bottom:12px}
+  .err{background:var(--bad-dim);border:1px solid rgba(255,69,58,.35);color:#ff9b95;padding:11px 14px;border-radius:11px;margin:10px 0;font-size:13px;display:none}
+
+  .page{display:none;animation:fadein .3s cubic-bezier(.2,.7,.3,1)}
+  .page.on{display:block}
+  @keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion){.page{animation:none}}
+
+  /* Vergleichs-Modus (Δ vs. Vorwoche) */
+  .cmpbtn{background:var(--card);border:1px solid var(--line);color:var(--muted);padding:8px 14px;border-radius:999px;font-size:12.5px;font-weight:650;cursor:pointer;font-family:inherit;transition:.15s}
+  .cmpbtn:hover{color:var(--txt);border-color:var(--line2)}
+  .cmpbtn.on{background:var(--red-dim);color:var(--red-hot);border-color:rgba(233,42,34,.45)}
+  .delta{display:none;margin-left:8px;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700;background:var(--card2);color:var(--muted);vertical-align:1px;white-space:nowrap}
+  .delta.ok{background:var(--ok-dim);color:var(--ok)} .delta.bad{background:var(--bad-dim);color:var(--bad)}
+  body.cmp .delta{display:inline-block}
+  #cmptable td:first-child{color:var(--muted)}
+  #cmptable .now{font-weight:700}
+
+  /* Routen-Motiv im Header (SVG-Deko) */
+  .motif{position:absolute;right:-30px;top:-24px;width:220px;opacity:.5;pointer-events:none}
+
+  /* ── Mobile: Sidebar wird Bottom-Bar ── */
+  @media (max-width:760px){
+    .shell{flex-direction:column}
+    aside{width:100%;height:auto;position:fixed;bottom:0;top:auto;z-index:40;flex-direction:row;padding:6px 8px calc(6px + env(safe-area-inset-bottom));border-right:none;border-top:1px solid var(--line2);background:rgba(11,14,20,.92);backdrop-filter:blur(14px)}
+    .brand,.side-foot{display:none}
+    nav{display:flex;flex:1;justify-content:space-around;gap:0}
+    nav a{flex-direction:column;gap:4px;font-size:9.5px;padding:6px 4px;border-radius:9px}
+    main{padding:18px 14px 110px}
+  }
 </style></head>
-<body><div class="wrap">
-  <header>
-    <div class="logo">🛣️</div>
-    <div><h1>CruiseConnect · Monitoring</h1><div class="sub">Live · Nutzung · Geografie · Routing · Infrastruktur · Monetarisierung</div></div>
-    <div class="live"><span id="stamp">lädt…</span><span class="dot" id="livedot"></span><span>LIVE</span></div>
-  </header>
-  <div class="err" id="err"></div>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand">
+      <div class="mark">CC</div>
+      <div><b>CruiseConnect</b><small>MONITORING</small></div>
+    </div>
+    <nav id="nav">
+      <a href="#/start" data-p="start"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Überblick</a>
+      <a href="#/heute" data-p="heute"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></svg>Heute</a>
+      <a href="#/fahrten" data-p="fahrten"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17a2.5 2.5 0 1 0 0 .01M19 17a2.5 2.5 0 1 0 0 .01"/><path d="M3 17V7a1 1 0 0 1 1-1h9l3 4h4a1 1 0 0 1 1 1v6"/></svg>Fahrten</a>
+      <a href="#/analytics" data-p="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5M4 19h16"/><rect x="7" y="11" width="3" height="5" rx="1"/><rect x="12" y="7" width="3" height="9" rx="1"/><rect x="17" y="13" width="3" height="3" rx="1"/></svg>Analytics</a>
+      <a href="#/community" data-p="community"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M2.8 19c.6-3 3-4.6 6.2-4.6s5.6 1.6 6.2 4.6"/><circle cx="17.5" cy="9.5" r="2.4"/><path d="M15.4 14.9c2.9.1 5 1.5 5.6 4.1"/></svg>Community</a>
+      <a href="#/routing" data-p="routing"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="5" r="2.2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/></svg>Routing</a>
+      <a href="#/nutzer" data-p="nutzer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 4 5.7 4 9s-1.2 6.4-4 9c-2.8-2.6-4-5.7-4-9s1.2-6.4 4-9z"/></svg>Nutzer &amp; Geo</a>
+      <a href="#/umsatz" data-p="umsatz"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5A4.2 4.2 0 0 0 8 12a4.2 4.2 0 0 0 7.5 3.5M6.5 10.7h5M6.5 13.3h5"/></svg>Umsatz</a>
+    </nav>
+    <div class="side-foot">Produktions-DB · live berechnet<br>Auto-Refresh stündlich</div>
+  </aside>
 
-  <h2>Überblick</h2>
-  <div class="grid g5" id="overview"></div>
+  <main>
+    <div class="top">
+      <h1 id="ptitle">Überblick</h1>
+      <button id="cmpbtn" class="cmpbtn" type="button" title="Kennzahlen mit der Vorwoche vergleichen">Δ Vorwoche</button>
+      <button id="refbtn" class="cmpbtn" type="button" title="Daten sofort neu laden">⟳ Aktualisieren</button>
+      <div class="live"><span id="stamp">lädt…</span><span id="fresh"></span><span class="dot" id="livedot"></span><b style="color:var(--txt);font-size:11px;letter-spacing:.8px">LIVE</b></div>
+    </div>
+    <div class="err" id="err"></div>
 
-  <h2>Wachstum <span class="hint">— Fahrten &amp; neue Nutzer, letzte 14 Tage</span></h2>
-  <div class="card"><div class="spark" id="spark"></div><div class="axis" id="axis"></div>
-    <div class="legend"><span><i style="background:var(--accent)"></i>Fahrten/Tag</span><span><i style="background:var(--blue)"></i>neue Nutzer/Tag</span></div></div>
+    <!-- ══ SEITE: ÜBERBLICK ══ -->
+    <section class="page" id="p-start">
+      <div class="grid g4">
+        <div class="card kpi hero">
+          <svg class="motif" viewBox="0 0 200 120"><path d="M-10 100 C 40 90, 30 40, 80 42 S 150 90, 210 30" fill="none" stroke="#e92a22" stroke-width="5" stroke-linecap="round" opacity=".85"/><circle cx="80" cy="42" r="7" fill="#e92a22"/><circle cx="80" cy="42" r="3" fill="#fff"/></svg>
+          <div class="label">Nutzer gesamt</div><div class="val" id="k-users">–</div><svg class="spark" id="sp-users"></svg><div class="foot" id="k-users-f"></div>
+        </div>
+        <div class="card kpi"><div class="label">Aktiv (DAU / WAU / MAU)</div><div class="val" id="k-active">–</div><div class="foot">eindeutige Fahrer</div></div>
+        <div class="card kpi"><div class="label">Fahrten gesamt</div><div class="val" id="k-rides">–</div><svg class="spark" id="sp-rides"></svg><div class="foot" id="k-rides-f"></div></div>
+        <div class="card kpi"><div class="label">Distanz gesamt</div><div class="val" id="k-km">–</div><div class="foot" id="k-km-f"></div></div>
+      </div>
 
-  <h2>Plattform &amp; Sprachen</h2>
-  <div class="grid g3">
-    <div class="card"><div class="kpi"><div class="label">Geräte-Plattform</div></div><div id="platforms" style="margin-top:8px"></div></div>
-    <div class="card"><div class="kpi"><div class="label">App-Sprache</div></div><div id="languages" style="margin-top:6px"></div></div>
-    <div class="card"><div class="kpi"><div class="label">Push-Reichweite</div></div><div id="reach" style="margin-top:6px"></div></div>
-  </div>
+      <h2>14 Tage · Fahrten & neue Nutzer</h2>
+      <div class="card"><svg class="chart" id="c-trend"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Fahrten</span><span><i style="background:#4da3ff"></i>Neue Nutzer</span></div>
+      </div>
 
-  <h2>Wo die Nutzer sind <span class="hint">— anonym aggregiert, keine Einzeldaten</span></h2>
-  <div class="grid g3">
-    <div class="card"><div class="kpi"><div class="label">Länder (Nutzer)</div></div><div id="geo_countries" style="margin-top:6px"></div></div>
-    <div class="card"><div class="kpi"><div class="label">Aktive Regionen (Städte, 30 T.)</div></div><div id="geo_cities" style="margin-top:6px"></div></div>
-    <div class="card"><div class="kpi"><div class="label">Regionen</div></div><div id="geo_regions" style="margin-top:6px"></div></div>
-  </div>
+      <div id="cmpwrap" style="display:none">
+        <h2>Vergleich · letzte 7 Tage vs. die 7 Tage davor</h2>
+        <div class="card"><table id="cmptable"></table></div>
+      </div>
 
-  <h2>Fahrten &amp; Fahrstile</h2>
-  <div class="grid g2">
-    <div class="card"><div class="kpi"><div class="label">Beliebteste Fahrstile</div></div><div id="styles" style="margin-top:6px"></div></div>
-    <div class="grid g2" id="ridestats" style="align-content:start"></div>
-  </div>
+      <div class="grid g2" style="margin-top:12px">
+        <div class="card"><div class="kpi"><div class="label">GraphHopper-Server</div></div><div id="infra"></div></div>
+        <div class="card"><div class="kpi"><div class="label">Letzte Fahrten</div></div><table id="recent"></table></div>
+      </div>
+    </section>
 
-  <h2>Garage</h2>
-  <div class="grid g2">
-    <div class="grid g2" id="garagestats" style="align-content:start"></div>
-    <div class="card"><div class="kpi"><div class="label">Top-Marken</div></div><div id="brands" style="margin-top:6px"></div></div>
-  </div>
+    <!-- ══ SEITE: HEUTE (Tagesansicht) ══ -->
+    <section class="page" id="p-heute">
+      <div class="grid g3">
+        <div class="card kpi hero"><div class="label">Fahrten heute</div><div class="val" id="t-rides">–</div><div class="foot" id="t-rides-f"></div></div>
+        <div class="card kpi"><div class="label">Aktive Fahrer heute</div><div class="val" id="t-active">–</div><div class="foot">eindeutige Fahrer seit 0 Uhr</div></div>
+        <div class="card kpi"><div class="label">Neue Nutzer heute</div><div class="val" id="t-users">–</div><div class="foot">Registrierungen seit 0 Uhr</div></div>
+      </div>
+      <div class="grid g3" style="margin-top:12px">
+        <div class="card kpi"><div class="label">Posts heute</div><div class="val" id="t-posts">–</div><div class="foot">Community-Beiträge</div></div>
+        <div class="card kpi"><div class="label">Routen-Generierungen</div><div class="val" id="t-gen">–</div><div class="foot">Suchanfragen heute</div></div>
+        <div class="card kpi"><div class="label">GraphHopper</div><div class="val" id="t-infra">–</div><div class="foot" id="t-infra-f"></div></div>
+      </div>
+      <h2>Heute · Verlauf pro Stunde</h2>
+      <div class="card"><svg class="chart" id="c-today"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Fahrten</span><span><i style="background:#4da3ff"></i>Neue Nutzer</span><span><i style="background:#34c759"></i>Generierungen</span></div>
+      </div>
+      <div class="card" style="margin-top:12px"><div class="kpi"><div class="label">Fahrten der letzten 24 h</div></div><table id="t-recent"></table></div>
+      <div style="color:var(--dim);font-size:11.5px;margin-top:10px">Zeitzone Europe/Wien · Tag beginnt um 0:00 Uhr lokal</div>
+    </section>
 
-  <h2>Routing &amp; Infrastruktur</h2>
-  <div class="grid g2">
-    <div class="grid g2" id="routing" style="align-content:start"></div>
-    <div class="card"><div class="kpi"><div class="label">GraphHopper-Server</div></div><div id="infra" style="margin-top:6px"></div></div>
-  </div>
+    <!-- ══ SEITE: FAHRTEN ══ -->
+    <section class="page" id="p-fahrten">
+      <div class="grid g4">
+        <div class="card kpi hero"><div class="label">Fahrten gesamt</div><div class="val" id="f-total">–</div><div class="foot" id="f-total-f"></div></div>
+        <div class="card kpi"><div class="label">Kilometer gesamt</div><div class="val" id="f-km">–</div><div class="foot" id="f-km-f"></div></div>
+        <div class="card kpi"><div class="label">Ø Fahrtdauer</div><div class="val" id="f-dur">–</div><div class="foot">Minuten pro Fahrt</div></div>
+        <div class="card kpi"><div class="label">Top-Speed</div><div class="val" id="f-speed">–</div><div class="foot" id="f-speed-f"></div></div>
+      </div>
+      <h2>12 Wochen · Kilometer & Fahrten</h2>
+      <div class="card"><svg class="chart" id="c-rides12"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Kilometer</span><span><i style="background:#4da3ff"></i>Fahrten</span></div>
+      </div>
+      <div class="grid g2" style="margin-top:12px">
+        <div class="card"><div class="kpi"><div class="label">Fahrstile</div></div><div class="bars" id="f-styles"></div></div>
+        <div class="card"><div class="kpi"><div class="label">Top-Fahrer (km gesamt)</div></div><table id="f-topkm"></table></div>
+      </div>
+    </section>
 
-  <h2>Community</h2>
-  <div class="grid g5" id="community"></div>
+    <!-- ══ SEITE: ANALYTICS ══ -->
+    <section class="page" id="p-analytics">
+      <div class="grid g4">
+        <div class="card kpi hero"><div class="label">Stickiness (DAU/MAU)</div><div class="val" id="an-stick">–</div><div class="foot" id="an-stick-f"></div></div>
+        <div class="card kpi"><div class="label">Routing P95-Latenz</div><div class="val" id="an-p95">–</div><div class="foot" id="an-p95-f"></div></div>
+        <div class="card kpi"><div class="label">Routing-Fehlerrate</div><div class="val" id="an-err">–</div><div class="foot" id="an-err-f"></div></div>
+        <div class="card kpi"><div class="label">Onboarding-Quote</div><div class="val" id="an-onbq">–</div><div class="foot">Registriert → gefahren</div></div>
+      </div>
 
-  <h2>Stabilität &amp; Crashes</h2>
-  <div id="stabilityslot"></div>
+      <h2>Onboarding-Funnel</h2>
+      <div class="card"><div class="funnel" id="an-funnel"></div></div>
 
-  <h2>Downloads</h2>
-  <div id="downloadslot"></div>
+      <h2>Retention-Kohorten · Wochen seit Registrierung</h2>
+      <div class="card"><div style="overflow-x:auto"><table class="rt" id="an-retention"></table></div>
+        <div style="color:var(--dim);font-size:11px;margin-top:8px">Zelle = Anteil der Kohorte, der in Woche N eine Fahrt gemacht hat. Value-Moment = abgeschlossene Fahrt.</div>
+      </div>
 
-  <h2>Werbung &amp; Abo</h2>
-  <div id="monetslot"></div>
+      <h2>Wann wird gefahren · Wochentag × Stunde</h2>
+      <div class="card"><div class="hm" id="an-heatmap"></div></div>
+    </section>
 
-  <h2>Aktivität</h2>
-  <div class="grid g2">
-    <div class="card"><div class="kpi"><div class="label">Letzte Fahrten</div></div><table id="recent"></table></div>
-    <div class="card"><div class="kpi"><div class="label">Top-Fahrer (km gesamt)</div></div><table id="topkm"></table></div>
-  </div>
+    <!-- ══ SEITE: COMMUNITY ══ -->
+    <section class="page" id="p-community">
+      <div class="grid g4">
+        <div class="card kpi hero"><div class="label">Posts</div><div class="val" id="s-posts">–</div><div class="foot" id="s-posts-f"></div></div>
+        <div class="card kpi"><div class="label">Follows</div><div class="val" id="s-follows">–</div><div class="foot">Verbindungen gesamt</div></div>
+        <div class="card kpi"><div class="label">Gruppen</div><div class="val" id="s-groups">–</div><div class="foot" id="s-groups-f"></div></div>
+        <div class="card kpi"><div class="label">Push-Geräte</div><div class="val" id="s-tokens">–</div><div class="foot" id="s-tokens-f"></div></div>
+      </div>
+      <h2>12 Wochen · Posts, Kommentare & Follows</h2>
+      <div class="card"><svg class="chart" id="c-social12"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Posts</span><span><i style="background:#4da3ff"></i>Kommentare</span><span><i style="background:#34c759"></i>Follows</span></div>
+      </div>
+      <div class="grid g2" style="margin-top:12px">
+        <div class="card kpi"><div class="label">Aktivität 24 h</div><div id="s-24h" style="margin-top:4px"></div></div>
+        <div class="card kpi"><div class="label">Moderation</div><div class="val" id="s-reports">–</div><div class="foot">offene Meldungen</div></div>
+      </div>
+    </section>
 
-  <footer id="foot"></footer>
+    <!-- ══ SEITE: ROUTING ══ -->
+    <section class="page" id="p-routing">
+      <div class="grid g4">
+        <div class="card kpi hero"><div class="label">Routen-Pool</div><div class="val" id="r-pool">–</div><div class="foot" id="r-pool-f"></div></div>
+        <div class="card kpi"><div class="label">Ø Qualität</div><div class="val" id="r-q">–</div><div class="foot">Pool-Score (0–100)</div></div>
+        <div class="card kpi"><div class="label">Generierungen 24 h</div><div class="val" id="r-gen">–</div><div class="foot" id="r-gen-f"></div></div>
+        <div class="card kpi"><div class="label">Städte abgedeckt</div><div class="val" id="r-cities">–</div><div class="foot">mit kuratiertem Pool</div></div>
+      </div>
+      <h2>Performance · Generierungs-Latenz (Perzentile)</h2>
+      <div class="grid g3">
+        <div class="card kpi"><div class="label">Median (P50) 24 h</div><div class="val" id="rp-p50">–</div><div class="foot">typische Dauer</div></div>
+        <div class="card kpi"><div class="label">P95 24 h</div><div class="val" id="rp-p95">–</div><div class="foot" id="rp-p95-f"></div></div>
+        <div class="card kpi"><div class="label">Fehlerrate 24 h</div><div class="val" id="rp-err">–</div><div class="foot" id="rp-err-f"></div></div>
+      </div>
+      <h2>Infrastruktur</h2>
+      <div class="card"><div id="r-infra"></div></div>
+      <h2>12 Wochen · Pool-Wachstum & Generierungen</h2>
+      <div class="card"><svg class="chart" id="c-routing12"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Pool-Größe</span><span><i style="background:#4da3ff"></i>Generierungen</span></div>
+      </div>
+    </section>
+
+    <!-- ══ SEITE: NUTZER & GEO ══ -->
+    <section class="page" id="p-nutzer">
+      <div class="grid g4">
+        <div class="card kpi hero"><div class="label">Nutzer gesamt</div><div class="val" id="n-total">–</div><div class="foot" id="n-total-f"></div></div>
+        <div class="card kpi"><div class="label">Onboarding abgeschlossen</div><div class="val" id="n-onb">–</div><div class="foot" id="n-onb-f"></div></div>
+        <div class="card kpi"><div class="label">Plattformen</div><div class="val" id="n-platform">–</div><div class="foot">iOS / Android (Geräte)</div></div>
+        <div class="card kpi"><div class="label">Fahrzeuge in Garagen</div><div class="val" id="n-garage">–</div><div class="foot" id="n-garage-f"></div></div>
+      </div>
+      <h2>12 Wochen · Nutzer-Wachstum</h2>
+      <div class="card"><svg class="chart" id="c-users12"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Nutzer gesamt</span><span><i style="background:#4da3ff"></i>Neue pro Woche</span></div>
+      </div>
+      <div class="grid g3" style="margin-top:12px">
+        <div class="card"><div class="kpi"><div class="label">Länder (Geräte, anonym)</div></div><div class="bars" id="n-geo"></div></div>
+        <div class="card"><div class="kpi"><div class="label">Sprachen</div></div><div class="bars" id="n-lang"></div></div>
+        <div class="card"><div class="kpi"><div class="label">Auto-Marken</div></div><div class="bars" id="n-brands"></div></div>
+      </div>
+    </section>
+
+    <!-- ══ SEITE: UMSATZ ══ -->
+    <section class="page" id="p-umsatz">
+      <div id="m-banner"></div>
+      <div class="grid g4" id="m-grid"></div>
+      <h2>12 Wochen · Zahlende Abos & Ad-Umsatz</h2>
+      <div class="card"><svg class="chart" id="c-money12"></svg>
+        <div class="legend"><span><i style="background:var(--red)"></i>Zahlende Abos</span><span><i style="background:#34c759"></i>Ad-Umsatz €</span></div>
+      </div>
+    </section>
+
+    <footer style="color:var(--dim);font-size:11.5px;text-align:center;margin-top:36px" id="foot"></footer>
+  </main>
 </div>
-<div id="histpop"></div>
-<div id="detail"></div>
+<div class="tip" id="tip"></div>
+
 <script>
   var API='https://tlcfaxvvqzobmzwvfnvb.supabase.co/functions/v1/admin-monitor';
   var TOKEN=new URLSearchParams(location.search).get('token')||'';
-  var HIST=null; // 12-Wochen-Serien vom Server
+  var HIST=null, LAST=null;
+
+  function $(id){return document.getElementById(id);}
   function num(n){if(n===null||n===undefined)return '–';return Number(n).toLocaleString('de-DE');}
-  function set(id,h){var el=document.getElementById(id);if(el)el.innerHTML=h;}
   function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
   function ago(min){if(min==null)return'';if(min<60)return min+' min';if(min<1440)return Math.round(min/60)+' h';return Math.round(min/1440)+' T';}
-  // hk = Serien-Key: Karte zeigt bei Hover/Klick die 12-Wochen-Kurve
-  function kpi(label,val,unit,foot,cls,hk){
-    return '<div class="card kpi'+(cls?' '+cls:'')+'"'+(hk?' data-hk="'+hk+'" data-hl="'+esc(label)+'"':'')+'><div class="label">'+label+'</div><div class="val">'+val+(unit?'<small>'+unit+'</small>':'')+'</div>'+(foot?'<div class="foot">'+foot+'</div>':'')+'</div>';
+
+  // ── Zähler-Animation: Zahlen zählen sichtbar hoch/runter ──
+  var prevVals={};
+  function setNum(id,value,suffix){
+    var el=$(id); if(el==null)return;
+    if(value===null||value===undefined){el.textContent='–';return;}
+    var v=Number(value), from=prevVals[id]!==undefined?prevVals[id]:v;
+    prevVals[id]=v;
+    if(from===v){el.innerHTML=num(v)+(suffix||'');return;}
+    var t0=performance.now(),dur=600;
+    (function step(t){
+      var p=Math.min(1,(t-t0)/dur); p=1-Math.pow(1-p,3);
+      el.innerHTML=num(Math.round(from+(v-from)*p))+(suffix||'');
+      if(p<1)requestAnimationFrame(step);
+    })(t0);
   }
 
-  // ── Historien-Popover: SVG-Kurve über die letzten 12 Wochen ───────────────
-  var pop=null;
-  function curveSvg(vals){
-    var W=310,H=96,P=8;
-    var max=Math.max.apply(null,vals.concat([1])), min=Math.min.apply(null,vals.concat([0]));
-    var span=(max-min)||1;
-    var pts=vals.map(function(v,i){
-      var x=P+i*(W-2*P)/Math.max(vals.length-1,1);
-      var y=H-P-(v-min)/span*(H-2*P);
-      return [x,y];
+  // ── SVG-Flächen-Charts ──────────────────────────────────────────────────
+  // Registry-Prinzip: chart() merkt sich nur die Daten; gezeichnet wird ein
+  // Chart erst, wenn seine Seite sichtbar ist (drawVisible). Dadurch ist der
+  // Tab-Wechsel flüssig — es wird nie die ganze Seite neu gerendert.
+  var CHARTS={};
+  function chart(svgId,labels,series){
+    CHARTS[svgId]={labels:labels,series:series};
+    drawChart(svgId);
+  }
+  function drawVisible(){
+    for(var k in CHARTS){var el=$(k);if(el&&el.clientWidth)drawChart(k);}
+    for(var s in SPARKS){var e=$(s);if(e&&e.clientWidth)drawSpark(s);}
+  }
+  function drawChart(svgId){
+    var reg=CHARTS[svgId],svg=$(svgId);
+    if(!reg||!svg||!svg.clientWidth)return; // unsichtbar → beim Seitenwechsel
+    var labels=reg.labels,series=reg.series;
+    var W=svg.clientWidth,H=svg.clientHeight||190,P=8,PB=20;
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    var max=1; series.forEach(function(s){s.values.forEach(function(v){if(v>max)max=v;});});
+    var n=labels.length; if(n<2){svg.innerHTML='';return;}
+    function X(i){return P+i*(W-2*P)/(n-1);}
+    function Y(v){return (H-PB)-(v/max)*(H-PB-14);}
+    var out='<defs>';
+    series.forEach(function(s,si){
+      out+='<linearGradient id="g'+svgId+si+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="'+s.color+'" stop-opacity=".28"/><stop offset="1" stop-color="'+s.color+'" stop-opacity="0"/></linearGradient>';
     });
-    var line=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
-    var area=line+' L'+pts[pts.length-1][0].toFixed(1)+' '+(H-2)+' L'+pts[0][0].toFixed(1)+' '+(H-2)+' Z';
-    var last=pts[pts.length-1];
-    return '<svg width="100%" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="display:block">'+
-      '<path d="'+area+'" fill="rgba(255,122,26,.14)"/>'+
-      '<path d="'+line+'" fill="none" stroke="#ff7a1a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>'+
-      '<circle cx="'+last[0]+'" cy="'+last[1]+'" r="3.4" fill="#ff7a1a"/></svg>';
-  }
-  function showHist(card){
-    if(!HIST||!pop) return;
-    var key=card.getAttribute('data-hk');
-    var vals=HIST[key];
-    if(!vals||!vals.length){ pop.style.display='none'; return; }
-    vals=vals.map(Number);
-    var labels=HIST.labels||[];
-    var max=Math.max.apply(null,vals), min=Math.min.apply(null,vals);
-    pop.innerHTML='<div class="t">'+esc(card.getAttribute('data-hl'))+' — letzte 12 Wochen</div>'+
-      '<div class="s">aktuell: <b style="color:#ff7a1a">'+num(vals[vals.length-1])+'</b> · min '+num(min)+' · max '+num(max)+'</div>'+
-      curveSvg(vals)+
-      '<div class="mm"><span>'+esc(labels[0]||'')+'</span><span>wöchentlich</span><span>'+esc(labels[labels.length-1]||'')+'</span></div>';
-    pop.setAttribute('data-for',key);
-    var r=card.getBoundingClientRect();
-    pop.style.display='block';
-    var pw=pop.offsetWidth, ph=pop.offsetHeight;
-    var left=Math.max(8,Math.min(window.scrollX+r.left, window.scrollX+document.documentElement.clientWidth-pw-8));
-    var top=window.scrollY+r.bottom+8;
-    if(r.bottom+ph+16>window.innerHeight) top=window.scrollY+r.top-ph-8;
-    pop.style.left=left+'px'; pop.style.top=Math.max(8,top)+'px';
-  }
-  function initHistEvents(){
-    pop=document.getElementById('histpop');
-    var hoverable=window.matchMedia('(hover: hover)').matches;
-    if(hoverable){
-      document.addEventListener('mouseover',function(e){
-        var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
-        if(c) showHist(c);
+    out+='</defs>';
+    series.forEach(function(s,si){
+      var line='',area='';
+      s.values.forEach(function(v,i){
+        var x=X(i),y=Y(v);
+        if(i===0){line='M'+x+' '+y;area='M'+x+' '+(H-PB)+' L'+x+' '+y;}
+        else{
+          var px=X(i-1),py=Y(s.values[i-1]),cx=(px+x)/2;
+          line+=' C'+cx+' '+py+','+cx+' '+y+','+x+' '+y;
+          area+=' C'+cx+' '+py+','+cx+' '+y+','+x+' '+y;
+        }
       });
-      document.addEventListener('mouseout',function(e){
-        var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
-        if(c && !(e.relatedTarget && (c.contains(e.relatedTarget)||pop.contains(e.relatedTarget)))) pop.style.display='none';
+      area+=' L'+X(n-1)+' '+(H-PB)+' Z';
+      out+='<path d="'+area+'" fill="url(#g'+svgId+si+')"/>';
+      out+='<path d="'+line+'" fill="none" stroke="'+s.color+'" stroke-width="2.5" stroke-linecap="round"/>';
+      out+='<circle cx="'+X(n-1)+'" cy="'+Y(s.values[n-1])+'" r="2.8" fill="'+s.color+'"/>';
+    });
+    labels.forEach(function(l,i){ if(i%2===0||i===n-1) out+='<text x="'+X(i)+'" y="'+(H-4)+'" text-anchor="middle" font-size="9.5" fill="#5a6272">'+esc(l)+'</text>'; });
+    // Hover-Guide: senkrechte Linie + ein Mini-Ball pro Kurve, folgt der Maus.
+    out+='<line id="'+svgId+'-gl" x1="-9" x2="-9" y1="12" y2="'+(H-PB)+'" stroke="rgba(255,255,255,.16)" stroke-width="1" style="display:none"/>';
+    series.forEach(function(s,si){
+      out+='<circle id="'+svgId+'-hd'+si+'" r="5" fill="'+s.color+'" stroke="#0b0e14" stroke-width="2.5" style="display:none;transition:cx .09s ease-out,cy .09s ease-out"/>';
+    });
+    svg.innerHTML=out;
+    svg.onmousemove=function(ev){
+      var r=svg.getBoundingClientRect(),fx=(ev.clientX-r.left)*(W/r.width);
+      var i=Math.round((fx-P)/((W-2*P)/(n-1))); i=Math.max(0,Math.min(n-1,i));
+      var gl=$(svgId+'-gl');
+      if(gl){gl.style.display='block';gl.setAttribute('x1',X(i));gl.setAttribute('x2',X(i));}
+      var t=$('tip'),html='<b>'+esc(labels[i])+'</b>';
+      series.forEach(function(s,si){
+        var hd=$(svgId+'-hd'+si);
+        if(hd){hd.style.display='block';hd.setAttribute('cx',X(i));hd.setAttribute('cy',Y(s.values[i]));}
+        html+='<br><span style="color:'+s.color+'">●</span> '+esc(s.name)+': <b>'+num(s.values[i])+'</b>';
       });
-    }
-    // Klick auf eine Kennzahl → volle Detail-Ansicht (mit Zurück-Button).
-    document.addEventListener('click',function(e){
-      var c=e.target.closest?e.target.closest('.card[data-hk]'):null;
-      if(c){ pop.style.display='none'; openDetail(c.getAttribute('data-hk'),c.getAttribute('data-hl')); }
-    });
-    // Zurück per ESC + Browser-/Handy-Zurück-Geste.
-    document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeDetail(); });
-    window.addEventListener('popstate',function(){ if(detailOpen) closeDetail(true); });
+      t.innerHTML=html;t.style.display='block';
+      t.style.left=Math.min(window.innerWidth-180,ev.clientX+16)+'px';t.style.top=(ev.clientY+14)+'px';
+    };
+    svg.onmouseleave=function(){
+      $('tip').style.display='none';
+      var gl=$(svgId+'-gl'); if(gl)gl.style.display='none';
+      series.forEach(function(s,si){var hd=$(svgId+'-hd'+si);if(hd)hd.style.display='none';});
+    };
   }
 
-  // ── Detail-Ansicht (Figma-Chart-Kit-Stil): Hero-Zahl, großer Chart mit
-  //    Grid + Achsen + Hover-Tooltip, Kennzahl-Kacheln, Wochen-Tabelle ───────
-  var SERIES_META={
-    users_total:{u:'Nutzer',d:'Registrierte Konten insgesamt'},
-    users_new:{u:'Nutzer',d:'Neu-Registrierungen pro Woche'},
-    active:{u:'Fahrer',d:'Eindeutig aktive Fahrer pro Woche'},
-    rides:{u:'Fahrten',d:'Abgeschlossene Fahrten pro Woche'},
-    km:{u:'km',d:'Gefahrene Kilometer pro Woche'},
-    top_speed:{u:'km/h',d:'Höchstgeschwindigkeit pro Woche'},
-    posts:{u:'Posts',d:'Neue Community-Posts pro Woche'},
-    follows:{u:'Follows',d:'Neue akzeptierte Follows pro Woche'},
-    groups_new:{u:'Gruppen',d:'Neu erstellte Gruppen pro Woche'},
-    generations:{u:'Suchen',d:'Routen-Generierungen pro Woche'},
-    pool:{u:'Routen',d:'Kuratierter Routen-Pool (Bestand)'},
-    vehicles:{u:'Fahrzeuge',d:'Fahrzeuge in den Garagen (Bestand)'},
-    tokens:{u:'Geräte',d:'Registrierte Push-Geräte (Bestand)'},
-    subs_paying:{u:'Abos',d:'Zahlende Abos (Bestand)'},
-    ad_rev:{u:'€',d:'Werbe-Umsatz pro Woche'}
-  };
-  var detailOpen=false, dvKey=null, dvLabel='', dvRange=12, dvPushed=false;
-
-  function bigChart(vals,labels,unit){
-    // Interaktiver Area+Line-Chart mit Grid, Y-Achse, X-Labels, Hover-Tracker.
-    var W=920,H=300,PL=48,PR=14,PT=16,PB=30;
-    var iw=W-PL-PR, ih=H-PT-PB;
-    var max=Math.max.apply(null,vals.concat([1])), min=Math.min.apply(null,vals);
-    min=Math.min(min,max); if(min===max){min=Math.max(0,min-1);max=max+1;}
-    // „nette" Y-Achse (0-Basis wenn sinnvoll)
-    var lo=min>0 && min/max>0.55 ? min : 0, hi=max;
-    var span=(hi-lo)||1;
-    var xs=function(i){return PL+(vals.length<2?iw/2:i*iw/(vals.length-1));};
-    var ys=function(v){return PT+ih-(v-lo)/span*ih;};
-    var pts=vals.map(function(v,i){return [xs(i),ys(v)];});
-    var line=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
-    var area=line+' L'+pts[pts.length-1][0].toFixed(1)+' '+(PT+ih)+' L'+pts[0][0].toFixed(1)+' '+(PT+ih)+' Z';
-    // Grid + Y-Labels (5 Linien)
-    var grid='',ylab='';
-    for(var g=0;g<=4;g++){
-      var gv=lo+span*g/4, gy=ys(gv);
-      grid+='<line x1="'+PL+'" y1="'+gy.toFixed(1)+'" x2="'+(W-PR)+'" y2="'+gy.toFixed(1)+'" stroke="rgba(255,255,255,.06)" stroke-width="1"/>';
-      ylab+='<text x="'+(PL-8)+'" y="'+(gy+4).toFixed(1)+'" text-anchor="end" fill="#5b6673" font-size="11">'+num(Math.round(gv))+'</text>';
-    }
-    // X-Labels (jede 2.)
-    var xlab='';
-    labels.forEach(function(l,i){ if(i%2===0||i===labels.length-1) xlab+='<text x="'+xs(i).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" fill="#5b6673" font-size="10.5">'+esc(l)+'</text>'; });
-    // Punkte + unsichtbare Hit-Zone
-    var dots=pts.map(function(p,i){return '<circle class="dvpt" data-i="'+i+'" cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="3" fill="#0e1116" stroke="#ff7a1a" stroke-width="2"/>';}).join('');
-    var last=pts[pts.length-1];
-    var svg='<svg id="dvsvg" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+
-      '<defs><linearGradient id="dvg" x1="0" y1="0" x2="0" y2="1">'+
-      '<stop offset="0" stop-color="#ff7a1a" stop-opacity=".32"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/></linearGradient></defs>'+
-      grid+ylab+xlab+
-      '<path d="'+area+'" fill="url(#dvg)"/>'+
-      '<path d="'+line+'" fill="none" stroke="#ff7a1a" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>'+
-      '<line id="dvtrack" x1="0" y1="'+PT+'" x2="0" y2="'+(PT+ih)+'" stroke="rgba(255,122,26,.55)" stroke-width="1" style="opacity:0"/>'+
-      dots+
-      '<circle id="dvcur" cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="5" fill="#ff7a1a"/>'+
-      '<rect id="dvhit" x="'+PL+'" y="'+PT+'" width="'+iw+'" height="'+ih+'" fill="transparent"/>'+
-      '</svg>';
-    return {svg:svg, geom:{W:W,PL:PL,iw:iw,xs:function(i){return PL+(vals.length<2?iw/2:i*iw/(vals.length-1));},pts:pts}};
+  // ── Balkenliste für Kategorien ──
+  function bars(id,items,unit){
+    var el=$(id); if(!el)return;
+    items=(items||[]).slice(0,7);
+    if(!items.length){el.innerHTML='<div style="color:var(--dim);font-size:13px;padding:8px 0">Noch keine Daten</div>';return;}
+    var max=Math.max.apply(null,items.map(function(x){return x.c;}));
+    el.innerHTML=items.map(function(x){
+      return '<div class="row"><div class="k">'+esc(x.k)+'</div><div class="track"><div class="fill" style="width:'+Math.round(x.c/max*100)+'%"></div></div><div class="v">'+num(x.c)+(unit||'')+'</div></div>';
+    }).join('');
   }
 
-  function openDetail(key,label){
-    if(!HIST||!HIST[key]){ return; }
-    dvKey=key; dvLabel=label; dvRange=12;
-    detailOpen=true;
-    if(!dvPushed){ try{history.pushState({dv:1},''); dvPushed=true;}catch(e){} }
-    renderDetail();
-    var d=document.getElementById('detail'); d.classList.add('on');
-    document.body.style.overflow='hidden';
+  // ── Seiten-Navigation (Hash-Routing) ──
+  var TITLES={start:'Überblick',heute:'Heute',fahrten:'Fahrten',analytics:'Analytics',community:'Community',routing:'Routing & Infrastruktur',nutzer:'Nutzer & Geografie',umsatz:'Werbung & Abo'};
+
+  // Mini-Sparkline (KPI-Karten): schlichte Linie. Wie die Charts erst zeichnen,
+  // wenn die Seite sichtbar ist (Registry → drawVisible), sonst clientWidth=0.
+  var SPARKS={};
+  function spark(id,values,color){ SPARKS[id]={values:values,color:color}; drawSpark(id); }
+  function drawSpark(id){
+    var reg=SPARKS[id],el=$(id); if(!reg||!el||!el.clientWidth)return;
+    var W=el.clientWidth,H=34,P=2; el.setAttribute('viewBox','0 0 '+W+' '+H);
+    var vs=(reg.values||[]).map(Number); if(vs.length<2){el.innerHTML='';return;}
+    var max=Math.max.apply(null,vs)||1,n=vs.length;
+    var d=vs.map(function(v,i){return (i?'L':'M')+(P+i*(W-2*P)/(n-1))+' '+((H-P)-(v/max)*(H-2*P));}).join(' ');
+    el.innerHTML='<path d="'+d+'" fill="none" stroke="'+(reg.color||'#e92a22')+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>';
   }
-  function closeDetail(fromPop){
-    if(!detailOpen) return;
-    detailOpen=false;
-    document.getElementById('detail').classList.remove('on');
-    document.body.style.overflow='';
-    if(dvPushed && !fromPop){ try{history.back();}catch(e){} }
-    dvPushed=false;
+  // Alert-Badge (grün/gelb/rot) je nach Schwellen (mehr = schlechter? invert).
+  function alertBadge(val,warn,bad,invert){
+    if(val==null)return '';
+    var cls=invert ? (val>=bad?'ok':val>=warn?'warn':'bad') : (val<=warn?'ok':val<=bad?'warn':'bad');
+    var txt=cls==='ok'?'OK':cls==='warn'?'Achtung':'Kritisch';
+    return '<span class="alert '+cls+'">'+txt+'</span>';
   }
-  function renderDetail(){
-    var full=(HIST[dvKey]||[]).map(Number), labelsFull=HIST.labels||[];
-    var n=Math.min(dvRange,full.length);
-    var vals=full.slice(full.length-n), labels=labelsFull.slice(labelsFull.length-n);
-    var meta=SERIES_META[dvKey]||{u:'',d:''};
-    var cur=vals[vals.length-1], prev=vals.length>1?vals[vals.length-2]:cur;
-    var max=Math.max.apply(null,vals), min=Math.min.apply(null,vals);
-    var avg=vals.reduce(function(a,b){return a+b;},0)/vals.length;
-    var diff=cur-prev, pct=prev?Math.round(diff/prev*100):0;
-    var dcls=diff>0?'up':(diff<0?'dn':'fl'), darr=diff>0?'▲':(diff<0?'▼':'■');
-    var chart=bigChart(vals,labels,meta.u);
-    var rows='';
-    for(var i=vals.length-1;i>=0;i--){
-      var w=max?Math.max(2,Math.round(vals[i]/max*90)):2;
-      var dd=i>0?vals[i]-vals[i-1]:0;
-      rows+='<tr><td>'+esc(labels[i])+'</td><td class="v">'+num(vals[i])+'</td>'+
-        '<td style="color:'+(dd>0?'#3fb950':(dd<0?'#ff6b63':'#5b6673'))+'">'+(dd>0?'+':'')+num(dd)+'</td>'+
-        '<td><span class="mini" style="width:'+w+'%"></span></td></tr>';
-    }
-    var chips=[4,8,12].map(function(r){ if(r>full.length&&r!==12)return ''; return '<div class="dv-chip'+(r===dvRange?' sel':'')+'" data-r="'+r+'">'+r+' Wochen</div>';}).join('');
-    document.getElementById('detail').innerHTML=
-      '<div class="dv-wrap">'+
-      '<div class="dv-top"><button class="dv-back" id="dvback">← Zurück</button>'+
-        '<span class="dv-crumb">Überblick › '+esc(dvLabel)+'</span></div>'+
-      '<div class="dv-hero"><div class="n">'+num(cur)+(meta.u&&meta.u!=='€'?'<small>'+esc(meta.u)+'</small>':'')+'</div>'+
-        '<div class="dv-delta '+dcls+'">'+darr+' '+(diff>0?'+':'')+num(diff)+(prev&&Math.abs(pct)<1000?' ('+(pct>0?'+':'')+pct+'%)':'')+' zur Vorwoche</div></div>'+
-      '<div class="dv-sub">'+esc(meta.d)+'</div>'+
-      '<div class="dv-chips">'+chips+'</div>'+
-      '<div class="dv-chart">'+chart.svg+'<div class="dv-tt" id="dvtt"></div></div>'+
-      '<div class="dv-tiles">'+
-        '<div class="dv-tile"><div class="l">Aktuell</div><div class="v">'+num(cur)+'</div></div>'+
-        '<div class="dv-tile"><div class="l">Durchschnitt</div><div class="v">'+num(Math.round(avg))+'</div></div>'+
-        '<div class="dv-tile"><div class="l">Maximum</div><div class="v">'+num(max)+'</div></div>'+
-        '<div class="dv-tile"><div class="l">Minimum</div><div class="v">'+num(min)+'</div></div>'+
-      '</div>'+
-      '<div class="dv-tblwrap"><table class="dv-tbl"><thead><tr><th>Woche</th><th>Wert</th><th>Δ</th><th>Verlauf</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-      '</div>';
-    document.getElementById('dvback').onclick=function(){closeDetail();};
-    // Zeitraum-Chips
-    Array.prototype.forEach.call(document.querySelectorAll('#detail .dv-chip'),function(ch){
-      ch.onclick=function(){ dvRange=parseInt(ch.getAttribute('data-r'),10); renderDetail(); };
-    });
-    wireChartHover(chart.geom,vals,labels,meta.u);
+  function route(){
+    var p=(location.hash||'#/start').replace('#/','');
+    if(!TITLES[p])p='start';
+    document.querySelectorAll('.page').forEach(function(x){x.classList.remove('on');});
+    var sec=$('p-'+p); if(sec)sec.classList.add('on');
+    document.querySelectorAll('#nav a').forEach(function(a){a.classList.toggle('on',a.dataset.p===p);});
+    $('ptitle').textContent=TITLES[p];
+    // Nur die Charts der jetzt sichtbaren Seite zeichnen — kein Voll-Rerender,
+    // dadurch fühlt sich der Tab-Wechsel sofort an.
+    requestAnimationFrame(drawVisible);
   }
-  function wireChartHover(geom,vals,labels,unit){
-    var svg=document.getElementById('dvsvg'), hit=document.getElementById('dvhit'),
-        track=document.getElementById('dvtrack'), cur=document.getElementById('dvcur'),
-        tt=document.getElementById('dvtt'), wrap=document.querySelector('#detail .dv-chart');
-    if(!svg||!hit) return;
-    function toSvgX(clientX){
-      var r=svg.getBoundingClientRect();
-      return (clientX-r.left)/r.width*geom.W;
-    }
-    function move(clientX){
-      var sx=toSvgX(clientX);
-      // nächsten Datenpunkt finden
-      var best=0,bd=1e9;
-      for(var i=0;i<geom.pts.length;i++){var d=Math.abs(geom.pts[i][0]-sx);if(d<bd){bd=d;best=i;}}
-      var p=geom.pts[best];
-      track.setAttribute('x1',p[0]); track.setAttribute('x2',p[0]); track.style.opacity=1;
-      cur.setAttribute('cx',p[0]); cur.setAttribute('cy',p[1]);
-      // Tooltip positionieren (relativ zum chart-wrap in px)
-      var r=svg.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
-      var px=(p[0]/geom.W)*r.width+(r.left-wr.left);
-      var py=(p[1]/300)*r.height+(r.top-wr.top);
-      tt.innerHTML='<span>'+esc(labels[best])+'</span><b>'+num(vals[best])+'</b> '+esc(unit&&unit!=='€'?unit:'');
-      tt.style.left=px+'px'; tt.style.top=Math.max(0,py-52)+'px'; tt.style.opacity=1;
-    }
-    function leave(){ track.style.opacity=0; tt.style.opacity=0;
-      var lp=geom.pts[geom.pts.length-1]; cur.setAttribute('cx',lp[0]); cur.setAttribute('cy',lp[1]); }
-    hit.addEventListener('mousemove',function(e){move(e.clientX);});
-    hit.addEventListener('mouseleave',leave);
-    hit.addEventListener('touchmove',function(e){ if(e.touches[0]){move(e.touches[0].clientX);} },{passive:true});
-    hit.addEventListener('touchend',leave);
+  window.addEventListener('hashchange',route);
+
+  // ── Vergleichs-Modus: Δ vs. Vorwoche (rollierende 7-Tage-Fenster) ──
+  var CMP=localStorage.getItem('cc_cmp')==='1';
+  function setCmp(on){
+    CMP=on; try{localStorage.setItem('cc_cmp',on?'1':'0');}catch(e){}
+    $('cmpbtn').classList.toggle('on',on);
+    document.body.classList.toggle('cmp',on);
+    $('cmpwrap').style.display=on?'block':'none';
   }
-  initHistEvents();
-  function barlist(items,opts){
-    opts=opts||{};items=items||[];
-    if(!items.length)return '<div class="empty">Noch keine Daten</div>';
-    var max=1;items.forEach(function(x){if(x.c>max)max=x.c;});
-    return '<div class="bl">'+items.map(function(x){
-      var w=Math.max(3,Math.round(x.c/max*100));
-      return '<div class="blrow"><span class="blk">'+esc(x.k)+'</span><span class="blbar"><i class="'+(opts.blue?'b':'')+'" style="width:'+w+'%"></i></span><span class="blc">'+num(x.c)+'</span></div>';
-    }).join('')+'</div>';
-  }
-  function platformBars(p){
-    p=p||{};var order=['ios','android','web','macos','unknown'];var names={ios:'iOS',android:'Android',web:'Web',macos:'macOS',unknown:'Unbekannt'};
-    var items=order.filter(function(k){return p[k];}).map(function(k){return {k:names[k],c:p[k]};});
-    Object.keys(p).forEach(function(k){if(order.indexOf(k)<0)items.push({k:k,c:p[k]});});
-    return barlist(items,{blue:true});
+  function dHTML(cur,prev){
+    cur=Number(cur||0); prev=Number(prev||0);
+    var cls=cur>prev?'ok':(cur<prev?'bad':'');
+    var txt;
+    if(prev===0){txt=cur===0?'±0':'+'+num(cur);}
+    else{var p=Math.round((cur-prev)/prev*100);txt=(p>0?'+':'')+p+'%';}
+    return '<span class="delta '+cls+'">'+txt+' vs. VW</span>';
   }
 
+  // ── Rendern ──
   function render(d){
+    LAST=d;
     var m=d.metrics||{},inf=d.infra||{};
     HIST=d.history||HIST;
-    var u=m.users||{},a=m.activity||{},r=m.rides||{},ro=m.routing||{},s=m.social||{},mo=m.monetization||{},md=m.moderation||{},
-        dl=m.downloads||{},st=m.stability||{},geo=m.geo||{},ga=m.garage||{};
+    var u=m.users||{},a=m.activity||{},r=m.rides||{},ro=m.routing||{},s=m.social||{},mo=m.monetization||{},md=m.moderation||{},g=m.garage||{},pf=m.platforms||{};
 
-    set('overview',
-      kpi('Nutzer gesamt',num(u.total),'','<span class="up">+'+num(u.new_7d)+'</span> in 7 T. · '+num(u.onboarded)+' onboarded','','users_total')+
-      kpi('Downloads', dl.connected?num(dl.total):'–','', dl.connected?(num(dl.d7)+' in 7 T.'):'Store-API nicht angebunden', dl.connected?'':'soon')+
-      kpi('Aktiv (DAU/WAU/MAU)',num(a.dau)+' <small>/</small> '+num(a.wau)+' <small>/</small> '+num(a.mau),'','eindeutige Fahrer','','active')+
-      kpi('Fahrten gesamt',num(r.total),'',num(r.today)+' heute · '+num(r.d7)+' in 7 T.','','rides')+
-      kpi('Distanz gesamt',num(r.km_total),'km',num(r.km_7d)+' km 7 T. · ⌀ '+num(r.avg_min)+' min','','km')
-    );
+    // Überblick
+    setNum('k-users',u.total);
+    $('k-users-f').innerHTML='<span class="up">+'+num(u.new_7d)+'</span> in 7 Tagen · +'+num(u.new_24h)+' in 24 h';
+    $('k-active').innerHTML=num(a.dau)+' <small>/</small> '+num(a.wau)+' <small>/</small> '+num(a.mau);
+    setNum('k-rides',r.total);
+    $('k-rides-f').textContent=num(r.today)+' heute · '+num(r.d7)+' in 7 Tagen';
+    setNum('k-km',r.km_total,'<small>km</small>');
+    $('k-km-f').textContent=num(r.km_7d)+' km in 7 Tagen · Ø '+num(r.avg_min)+' min';
 
-    var t=m.trend_14d||[];var mx=1;t.forEach(function(x){if(x.rides>mx)mx=x.rides;if(x.users>mx)mx=x.users;});
-    set('spark',t.map(function(x){
-      var hr=Math.round(x.rides/mx*100),hu=Math.round(x.users/mx*100);
-      return '<div class="bar" title="'+x.day+'"><span style="height:'+hr+'%"></span><i style="position:absolute;bottom:0;left:50%;width:3px;height:'+hu+'%;background:var(--blue);border-radius:2px"></i><b>'+x.rides+' F · '+x.users+' N</b></div>';
-    }).join(''));
-    set('axis',t.map(function(x,i){return '<span>'+(i%2===0?x.day:'')+'</span>';}).join(''));
+    var t=m.trend_14d||[];
+    chart('c-trend',t.map(function(x){return x.day;}),[
+      {name:'Fahrten',color:'#e92a22',values:t.map(function(x){return x.rides;})},
+      {name:'Neue Nutzer',color:'#4da3ff',values:t.map(function(x){return x.users;})}
+    ]);
 
-    set('platforms',platformBars(m.platforms));
-    set('languages',barlist((m.languages||[]).map(function(x){return {k:x.k==='—'?'(nicht gesetzt)':x.k,c:x.c};})));
-    set('reach',
-      '<div class="val" style="font-size:26px;font-weight:700">'+num(s.tokens_active)+'<small style="font-size:13px;color:var(--muted);font-weight:600"> aktiv</small></div>'+
-      '<div class="foot" style="margin-top:8px">von '+num(s.tokens_total)+' registrierten Geräten</div>');
-
-    set('geo_countries',barlist(geo.countries));
-    set('geo_cities',barlist(geo.cities));
-    set('geo_regions',barlist(geo.regions));
-
-    set('styles',barlist(m.styles));
-    set('ridestats',
-      kpi('Top-Speed max','<span class="accent">'+num(r.top_speed_max)+'</span>','km/h','⌀ '+num(r.top_speed_avg)+' km/h (30 T.)','','top_speed')+
-      kpi('Fahrt-Fotos',num(r.photos),'','geteilte Erinnerungen')
-    );
-
-    set('garagestats',
-      kpi('Fahrzeuge',num(ga.vehicles),'','in den Garagen','','vehicles')+
-      kpi('Marken',num((ga.brands||[]).length),'+','verschiedene')
-    );
-    set('brands',barlist(ga.brands));
-
-    set('routing',
-      kpi('Routen-Pool',num(ro.pool_size),'',num(ro.pool_cities)+' Städte · ⌀ Q '+num(ro.avg_quality),'','pool')+
-      kpi('Generierungen 24h',num(ro.gen_24h),'',num(ro.gen_7d)+' in 7 Tagen','','generations')
-    );
-    function irow(name,label,p){var up=p&&p.up;return '<div class="infra-row"><div><div class="n">'+name+'</div><div class="m">'+label+'</div></div><span class="pill '+(up?'ok':'bad')+'">'+(up?'●':'○')+' '+(up?('OK · '+(p.ms!=null?p.ms+' ms':'')):'OFFLINE')+'</span></div>';}
-    set('infra',irow('PC2 · vucko2','Primär (car + 4 Profile)',inf.pc2)+irow('PC1 · vucko','Fallback (Vollgraph)',inf.pc1));
-
-    set('community',
-      kpi('Posts',num(s.posts_total),'',num(s.posts_24h)+' in 24h','','posts')+
-      kpi('Follows',num(s.follows),'','akzeptiert','','follows')+
-      kpi('Gruppen',num(s.groups_total),'',num(s.groups_7d)+' neu 7 T.','','groups_new')+
-      kpi('Communities',num(s.communities),'',num(s.comm_msgs_24h)+' Nachr. 24h')+
-      kpi('Moderation',num(md.reports_open),'','Meldungen offen')
-    );
-
-    // Stabilität
-    if(st.connected){
-      set('stabilityslot','<div class="grid g4">'+
-        kpi('Fatale Crashes 24h',num(st.fatal_24h),'',num(st.fatal_7d)+' in 7 T.', st.fatal_24h>0?'':'')+
-        kpi('Fehler 24h',num(st.errors_24h),'','alle Schweregrade')+
-        kpi('Betroffene Nutzer 7 T.',num(st.affected_7d),'','eindeutig')+
-        kpi('Crash-freie Rate','—','','Crashlytics für Details')+
-      '</div>');
-    } else {
-      set('stabilityslot',
-        '<div class="banner">🛡️ <div><b>Crash-Log vorbereitet.</b> Die App kann gefangene Fehler/Crashes in <span class="tag">app_error_log</span> schreiben (leichter Hook) → dann erscheinen hier Live-Zahlen. Vollständige Stacktraces &amp; crash-freie Rate weiterhin in <b>Firebase Crashlytics</b>.</div></div>'+
-        '<div class="grid g4">'+
-        '<div class="card kpi soon"><div class="label">Fatale Crashes 24h</div><div class="val">–</div><div class="foot">app_error_log leer</div></div>'+
-        '<div class="card kpi soon"><div class="label">Fehler 24h</div><div class="val">–</div><div class="foot">App-Hook nötig</div></div>'+
-        '<div class="card kpi soon"><div class="label">Betroffene Nutzer</div><div class="val">–</div></div>'+
-        '<div class="card kpi soon"><div class="label">Crash-freie Rate</div><div class="val">–</div><div class="foot">Firebase Crashlytics</div></div>'+
-        '</div>');
+    function irow(name,label,p){
+      var up=p&&p.up,txt=up?('Online · '+(p.ms!=null?p.ms+' ms':'')):'OFFLINE';
+      return '<div class="infra-row"><div><div class="n">'+name+'</div><div class="m">'+label+'</div></div><span class="pill '+(up?'ok':'bad')+'">'+(up?'●':'○')+' '+txt+'</span></div>';
     }
-
-    // Downloads
-    if(dl.connected){
-      set('downloadslot','<div class="grid g4">'+
-        kpi('Downloads gesamt',num(dl.total),'','')+
-        kpi('Letzte 7 Tage',num(dl.d7),'',num(dl.d30)+' in 30 T.')+
-        kpi('iOS',num(dl.ios),'','App Store')+
-        kpi('Android',num(dl.android),'','Play Store')+
-      '</div>');
-    } else {
-      set('downloadslot',
-        '<div class="banner">📲 <div><b>Download-Zahlen vorbereitet.</b> Tabelle <span class="tag">app_downloads_daily</span> ist da — sobald ein kleiner Cron die <b>App-Store-Connect</b>- &amp; <b>Play-Console</b>-API (oder manuelle Einträge) hineinschreibt, erscheinen hier iOS/Android-Downloads pro Tag.</div></div>'+
-        '<div class="grid g4">'+
-        '<div class="card kpi soon"><div class="label">Downloads gesamt</div><div class="val">–</div><div class="foot">Store-API nötig</div></div>'+
-        '<div class="card kpi soon"><div class="label">Letzte 7 Tage</div><div class="val">–</div></div>'+
-        '<div class="card kpi soon"><div class="label">iOS</div><div class="val">–</div><div class="foot">App Store Connect</div></div>'+
-        '<div class="card kpi soon"><div class="label">Android</div><div class="val">–</div><div class="foot">Play Console</div></div>'+
-        '</div>');
-    }
-
-    // Werbung & Abo
-    if(mo.connected){
-      set('monetslot','<div class="grid g4">'+
-        kpi('MRR',num(mo.mrr_eur),'€','monatl. wiederkehrend')+
-        kpi('Zahlende Abos',num(mo.subs_paying),'','von '+num(mo.subs_total)+' gesamt','','subs_paying')+
-        kpi('Ad-Umsatz 7 T.',num(mo.ad_rev_7d),'€',num(mo.ad_impr_7d)+' Impressions · '+num(mo.ad_rev_30d)+'€ 30T','','ad_rev')+
-        kpi('ARPU (7 T.)',(u.total?(((Number(mo.ad_rev_7d)+0)/u.total).toFixed(2)):'0'),'€','Umsatz / Nutzer')+
-      '</div>');
-    } else {
-      set('monetslot',
-        '<div class="banner">💡 <div><b>Werbung &amp; Abos vorbereitet, noch nicht angebunden.</b> Sobald AdMob / RevenueCat (o.ä.) in <span class="tag">subscriptions</span> und <span class="tag">ad_revenue_daily</span> schreibt, füllt sich dieses Fenster automatisch: MRR, zahlende Abos, Ad-Umsatz, Impressions, ARPU.</div></div>'+
-        '<div class="grid g4">'+
-        '<div class="card kpi soon"><div class="label">MRR</div><div class="val">– €</div><div class="foot">RevenueCat / Stripe / IAP</div></div>'+
-        '<div class="card kpi soon"><div class="label">Zahlende Abos</div><div class="val">–</div></div>'+
-        '<div class="card kpi soon"><div class="label">Ad-Umsatz 7 T.</div><div class="val">– €</div><div class="foot">AdMob</div></div>'+
-        '<div class="card kpi soon"><div class="label">ARPU</div><div class="val">– €</div></div>'+
-        '</div>');
-    }
+    $('infra').innerHTML=irow('PC2 · vucko2','Primär — car + 4 Motorrad-Profile',inf.pc2)+irow('PC1 · vucko','Fallback — Vollgraph DACH+',inf.pc1);
+    $('r-infra').innerHTML=$('infra').innerHTML;
 
     var rec=m.recent||[];
-    set('recent',rec.length?rec.map(function(x){return '<tr><td class="u">'+esc(x.username)+'</td><td><span class="tag">'+esc(x.style)+'</span></td><td class="r">'+x.km+' km</td><td class="r">'+ago(x.ago_min)+'</td></tr>';}).join(''):'<tr><td class="empty">Keine Fahrten</td></tr>');
-    set('topkm',(m.top_km||[]).map(function(x,i){return '<tr><td class="rank">'+(i+1)+'</td><td class="u">'+esc(x.username)+'</td><td class="r">'+num(x.km)+' km</td></tr>';}).join(''));
+    $('recent').innerHTML=rec.length?rec.slice(0,8).map(function(x){return '<tr><td class="u">'+esc(x.username)+'</td><td><span class="tag">'+esc(x.style)+'</span></td><td class="r">'+x.km+' km</td><td class="r">'+ago(x.ago_min)+'</td></tr>';}).join(''):'<tr><td style="color:var(--dim)">Noch keine Fahrten</td></tr>';
 
-    document.getElementById('stamp').textContent=new Date(m.generated_at||Date.now()).toLocaleTimeString('de-DE');
-    document.getElementById('foot').innerHTML='Auto-Refresh alle 30 s · Geo-Daten anonym aggregiert (nur Zählungen, keine Einzelstandorte) · CruiseConnect Admin-Monitoring';
-    var e=document.getElementById('err');if(d.error){e.style.display='block';e.textContent='DB-Fehler: '+d.error;}else{e.style.display='none';}
+    // Heute (Tagesansicht)
+    var td=d.today||{},tk=td.kpi||{};
+    setNum('t-rides',tk.rides);
+    $('t-rides-f').textContent=num(tk.km)+' km heute';
+    setNum('t-active',tk.active);
+    setNum('t-users',tk.users_new);
+    setNum('t-posts',tk.posts);
+    setNum('t-gen',tk.generations);
+    var bothUp=inf.pc2&&inf.pc2.up&&inf.pc1&&inf.pc1.up;
+    $('t-infra').innerHTML=bothUp?'<span class="up">2/2</span>':((inf.pc2&&inf.pc2.up)||(inf.pc1&&inf.pc1.up)?'<span style="color:var(--warn)">1/2</span>':'<span class="down">0/2</span>');
+    $('t-infra-f').textContent='Server online';
+    if(td.labels)chart('c-today',td.labels,[
+      {name:'Fahrten',color:'#e92a22',values:td.rides||[]},
+      {name:'Neue Nutzer',color:'#4da3ff',values:td.users_new||[]},
+      {name:'Generierungen',color:'#34c759',values:td.generations||[]}
+    ]);
+    $('t-recent').innerHTML=rec.filter(function(x){return x.ago_min!=null&&x.ago_min<1440;}).map(function(x){return '<tr><td class="u">'+esc(x.username)+'</td><td><span class="tag">'+esc(x.style)+'</span></td><td class="r">'+x.km+' km</td><td class="r">'+ago(x.ago_min)+'</td></tr>';}).join('')||'<tr><td style="color:var(--dim)">Heute noch keine Fahrten — die Straßen warten. 🏁</td></tr>';
+
+    // Fahrten
+    setNum('f-total',r.total);
+    $('f-total-f').textContent=num(r.today)+' heute · '+num(r.d7)+' in 7 Tagen · '+num(r.photos)+' mit Foto';
+    setNum('f-km',r.km_total,'<small>km</small>');
+    $('f-km-f').textContent=num(r.km_7d)+' km in 7 Tagen';
+    setNum('f-dur',r.avg_min,'<small>min</small>');
+    setNum('f-speed',r.top_speed_max,'<small>km/h</small>');
+    $('f-speed-f').textContent='Ø Top-Speed '+num(r.top_speed_avg)+' km/h';
+    bars('f-styles',m.styles);
+    $('f-topkm').innerHTML=(m.top_km||[]).map(function(x,i){return '<tr><td class="rank">'+(i+1)+'</td><td class="u">'+esc(x.username)+'</td><td class="r">'+num(x.km)+' km</td></tr>';}).join('');
+    if(HIST)chart('c-rides12',HIST.labels||[],[
+      {name:'Kilometer',color:'#e92a22',values:HIST.km||[]},
+      {name:'Fahrten',color:'#4da3ff',values:HIST.rides||[]}
+    ]);
+
+    // Community
+    setNum('s-posts',s.posts_total);$('s-posts-f').textContent=num(s.posts_24h)+' in 24 h';
+    setNum('s-follows',s.follows);
+    setNum('s-groups',s.groups_total);$('s-groups-f').textContent=num(s.groups_7d)+' neu in 7 Tagen';
+    setNum('s-tokens',s.tokens_active);$('s-tokens-f').textContent='von '+num(s.tokens_total)+' registrierten aktiv';
+    $('s-24h').innerHTML='<div class="foot" style="font-size:13px;line-height:2">'+num(s.posts_24h)+' Posts · '+num(s.comments_24h)+' Kommentare · '+num(s.comm_msgs_24h)+' Community-Nachrichten</div>';
+    setNum('s-reports',md.reports_open);
+    if(HIST)chart('c-social12',HIST.labels||[],[
+      {name:'Posts',color:'#e92a22',values:HIST.posts||[]},
+      {name:'Kommentare',color:'#4da3ff',values:HIST.comments||[]},
+      {name:'Follows',color:'#34c759',values:HIST.follows||[]}
+    ]);
+
+    // Routing
+    setNum('r-pool',ro.pool_size);$('r-pool-f').textContent=num(ro.pool_verified)+' verifiziert';
+    setNum('r-q',ro.avg_quality);
+    setNum('r-gen',ro.gen_24h);$('r-gen-f').textContent=num(ro.gen_7d)+' in 7 Tagen';
+    setNum('r-cities',ro.pool_cities);
+    if(HIST)chart('c-routing12',HIST.labels||[],[
+      {name:'Pool-Größe',color:'#e92a22',values:HIST.pool||[]},
+      {name:'Generierungen',color:'#4da3ff',values:HIST.generations||[]}
+    ]);
+
+    // ── Analytics (Retention, Funnel, Heatmap, Perf) ──
+    var an=d.analytics||{},perf=an.routing_perf||{};
+    // Sparklines im Überblick (aus 14-Tage-Trend)
+    spark('sp-users',t.map(function(x){return x.users;}),'#4da3ff');
+    spark('sp-rides',t.map(function(x){return x.rides;}),'#e92a22');
+
+    // Stickiness + Onboarding-Quote
+    var stick=(a.mau?Math.round(a.dau/a.mau*100):0);
+    $('an-stick').innerHTML=stick+'<small>%</small>';
+    $('an-stick-f').innerHTML='DAU '+num(a.dau)+' / MAU '+num(a.mau)+alertBadge(stick,20,10,true);
+    var fn=an.funnel||[];
+    var fReg=(fn[0]||{}).c||0,fDrv=(fn[3]||{}).c||0;
+    $('an-onbq').innerHTML=(fReg?Math.round(fDrv/fReg*100):0)+'<small>%</small>';
+
+    // Routing-Perf (Analytics + Routing-Seite), mit Alert-Badges
+    $('an-p95').innerHTML=(perf.p95_24h!=null?num(perf.p95_24h):'–')+'<small>ms</small>';
+    $('an-p95-f').innerHTML='P50 '+num(perf.p50_24h)+' ms'+alertBadge(perf.p95_24h,1500,3000,false);
+    $('an-err').innerHTML=(perf.err_rate_24h!=null?perf.err_rate_24h:'–')+'<small>%</small>';
+    $('an-err-f').innerHTML=num(perf.total_7d)+' in 7 T.'+alertBadge(perf.err_rate_24h,1,5,false);
+    setNum('rp-p50',perf.p50_24h,'<small>ms</small>');
+    $('rp-p95').innerHTML=(perf.p95_24h!=null?num(perf.p95_24h):'–')+'<small>ms</small>';
+    $('rp-p95-f').innerHTML='7-Tage P95 '+num(perf.p95_7d)+' ms'+alertBadge(perf.p95_24h,1500,3000,false);
+    $('rp-err').innerHTML=(perf.err_rate_24h!=null?perf.err_rate_24h:'–')+'<small>%</small>';
+    $('rp-err-f').innerHTML='7 T.: '+(perf.err_rate_7d!=null?perf.err_rate_7d:'–')+'%'+alertBadge(perf.err_rate_24h,1,5,false);
+
+    // Onboarding-Funnel (verjüngende Balken + Drop-off)
+    var fmax=(fn[0]||{}).c||1;
+    $('an-funnel').innerHTML=fn.map(function(s,i){
+      var pct=Math.round((s.c||0)/fmax*100), prev=i>0?(fn[i-1].c||0):null;
+      var drop=(prev!=null&&prev>0)?Math.round((1-(s.c||0)/prev)*100):null;
+      return '<div class="step"><div class="lab"><b>'+esc(s.k)+'</b><span class="pc">'+num(s.c)+' · '+pct+'%</span></div>'+
+             '<div class="fbar" style="width:'+Math.max(pct,6)+'%"></div>'+
+             (drop!=null&&drop>0?'<div class="drop">−'+drop+'% Abbruch</div>':'')+'</div>';
+    }).join('');
+
+    // Retention-Kohorten-Matrix (Farbe = Retention%)
+    var rt=an.retention||[]; var maxWk=0;
+    rt.forEach(function(r){(r.cells||[]).forEach(function(c){if(c.wk>maxWk)maxWk=c.wk;});});
+    maxWk=Math.min(maxWk,7);
+    function retColor(p){ if(p==null)return 'var(--card2)'; var a=0.12+0.78*Math.min(p,100)/100; return 'rgba(233,42,34,'+a.toFixed(2)+')'; }
+    if(rt.length){
+      var head='<tr><th style="text-align:left">Kohorte</th><th class="sz">Größe</th>';
+      for(var w=0;w<=maxWk;w++)head+='<th>W'+w+'</th>';
+      head+='</tr>';
+      $('an-retention').innerHTML=head+rt.map(function(r){
+        var cellByWk={}; (r.cells||[]).forEach(function(c){cellByWk[c.wk]=c.pct;});
+        var row='<tr><td class="lab">'+esc(r.cohort)+'</td><td class="sz">'+num(r.size)+'</td>';
+        for(var w=0;w<=maxWk;w++){var p=cellByWk[w];row+='<td class="cell" style="background:'+retColor(p)+'">'+(p!=null?p+'%':'·')+'</td>';}
+        return row+'</tr>';
+      }).join('');
+    } else { $('an-retention').innerHTML='<tr><td style="color:var(--dim)">Noch keine Kohorten-Daten</td></tr>'; }
+
+    // Wochentag×Stunde-Heatmap
+    var hm=an.heatmap||[]; var hmMax=1,grid={};
+    hm.forEach(function(x){grid[x.d+'_'+x.h]=x.c; if(x.c>hmMax)hmMax=x.c;});
+    var dowLabels=['So','Mo','Di','Mi','Do','Fr','Sa'];
+    var order=[1,2,3,4,5,6,0]; // Mo-first
+    var hout='<div class="hh" style="grid-column:1"></div>';
+    for(var h=0;h<24;h++)hout+='<div class="hh">'+(h%3===0?h:'')+'</div>';
+    order.forEach(function(dow){
+      hout+='<div class="dl">'+dowLabels[dow]+'</div>';
+      for(var h=0;h<24;h++){var c=grid[dow+'_'+h]||0;var al=c?(0.15+0.85*c/hmMax):0;
+        hout+='<div class="c" style="background:'+(c?'rgba(233,42,34,'+al.toFixed(2)+')':'var(--card2)')+'" title="'+dowLabels[dow]+' '+h+':00 · '+c+'"></div>';}
+    });
+    $('an-heatmap').innerHTML=hout;
+
+    // Nutzer & Geo
+    setNum('n-total',u.total);$('n-total-f').innerHTML='<span class="up">+'+num(u.new_7d)+'</span> in 7 Tagen · '+num(u.banned)+' gesperrt';
+    setNum('n-onb',u.onboarded);$('n-onb-f').textContent='von '+num(u.total)+' · Ø Level '+num(u.avg_level);
+    $('n-platform').innerHTML=num(pf.ios)+' <small>iOS</small> · '+num(pf.android)+' <small>Android</small>';
+    setNum('n-garage',g.vehicles);$('n-garage-f').textContent=(m.garage&&m.garage.brands?m.garage.brands.length:0)+' Marken';
+    bars('n-geo',(m.geo||{}).countries);
+    bars('n-lang',m.languages);
+    bars('n-brands',(g.brands||[]).map(function(x){return {k:x.k,c:x.c};}));
+    if(HIST)chart('c-users12',HIST.labels||[],[
+      {name:'Nutzer gesamt',color:'#e92a22',values:HIST.users_total||[]},
+      {name:'Neue pro Woche',color:'#4da3ff',values:HIST.users_new||[]}
+    ]);
+
+    // Umsatz
+    var hasMoney=(mo.subs_paying||0)>0||(Number(mo.ad_rev_30d)||0)>0;
+    $('m-banner').innerHTML=hasMoney?'':'<div class="banner">💡 <div><b>Werbung & Abos starten im August.</b> Die Anbindung (AdMob / RevenueCat → <span class="tag">subscriptions</span> <span class="tag">ad_revenue_daily</span>) ist vorbereitet — sobald Umsätze fließen, füllt sich diese Seite automatisch.</div></div>';
+    $('m-grid').innerHTML=
+      '<div class="card kpi '+(hasMoney?'hero':'soon')+'"><div class="label">MRR</div><div class="val">'+num(mo.mrr_eur)+' €</div><div class="foot">monatlich wiederkehrend</div></div>'+
+      '<div class="card kpi'+(hasMoney?'':' soon')+'"><div class="label">Zahlende Abos</div><div class="val">'+num(mo.subs_paying)+'</div><div class="foot">von '+num(mo.subs_total)+' Abos gesamt</div></div>'+
+      '<div class="card kpi'+(hasMoney?'':' soon')+'"><div class="label">Ad-Umsatz 7 T.</div><div class="val">'+num(mo.ad_rev_7d)+' €</div><div class="foot">'+num(mo.ad_impr_7d)+' Impressions</div></div>'+
+      '<div class="card kpi'+(hasMoney?'':' soon')+'"><div class="label">Ad-Umsatz 30 T.</div><div class="val">'+num(mo.ad_rev_30d)+' €</div><div class="foot">AdMob</div></div>';
+    if(HIST)chart('c-money12',HIST.labels||[],[
+      {name:'Zahlende Abos',color:'#e92a22',values:HIST.subs_paying||[]},
+      {name:'Ad-Umsatz €',color:'#34c759',values:HIST.ad_rev||[]}
+    ]);
+
+    // Vergleich Δ vs. Vorwoche: Tabelle + Badges an den Kern-KPIs.
+    // WICHTIG: nur an Footer anhängen, die oben in DIESEM render() frisch
+    // gesetzt wurden — sonst würden sich Badges bei jedem Refresh stapeln.
+    var cp=d.compare||{},cc=cp.cur||{},pp=cp.prev||{};
+    var ROWS=[['Fahrten','rides',''],['Kilometer','km',' km'],['Aktive Fahrer','active',''],['Neue Nutzer','users_new',''],['Posts','posts',''],['Kommentare','comments',''],['Follows','follows',''],['Routen-Generierungen','generations','']];
+    $('cmptable').innerHTML='<tr><th>Kennzahl</th><th class="r">Letzte 7 Tage</th><th class="r">7 Tage davor</th><th class="r">Δ</th></tr>'+ROWS.map(function(rw){
+      return '<tr><td>'+rw[0]+'</td><td class="r now">'+num(cc[rw[1]])+rw[2]+'</td><td class="r">'+num(pp[rw[1]])+rw[2]+'</td><td class="r">'+dHTML(cc[rw[1]],pp[rw[1]])+'</td></tr>';
+    }).join('');
+    $('k-users-f').innerHTML+=dHTML(cc.users_new,pp.users_new);
+    $('k-rides-f').innerHTML+=dHTML(cc.rides,pp.rides);
+    $('k-km-f').innerHTML+=dHTML(cc.km,pp.km);
+    $('f-total-f').innerHTML+=dHTML(cc.rides,pp.rides);
+    $('f-km-f').innerHTML+=dHTML(cc.km,pp.km);
+    $('s-posts-f').innerHTML+=dHTML(cc.posts,pp.posts);
+    $('r-gen-f').innerHTML+=dHTML(cc.generations,pp.generations);
+    $('n-total-f').innerHTML+=dHTML(cc.users_new,pp.users_new);
+
+    $('stamp').textContent=new Date(m.generated_at||Date.now()).toLocaleTimeString('de-DE');
+    $('foot').textContent='Alle Zahlen live aus der Produktions-Datenbank berechnet · Geo anonym aggregiert · CruiseConnect Admin-Monitoring';
+    var e=$('err');if(d.error){e.style.display='block';e.textContent='DB-Fehler: '+d.error;}else{e.style.display='none';}
   }
 
-  function load(){
-    document.getElementById('livedot').style.background='var(--warn)';
-    fetch(API+'?data=1&token='+encodeURIComponent(TOKEN),{cache:'no-store'})
+  // ── Robust-Loader: sichtbares Datenalter, Fokus-Refresh, Watchdog ──
+  var lastOk=0;
+  function load(force){
+    $('livedot').style.background='var(--warn)';
+    fetch(API+'?data=1&token='+encodeURIComponent(TOKEN)+(force?'&force=1':'')+'&_='+Date.now(),{cache:'no-store'})
       .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status+(r.status===401?' — Token ungültig':''));return r.json();})
-      .then(function(d){render(d);document.getElementById('livedot').style.background='var(--ok)';})
-      .catch(function(e){var el=document.getElementById('err');el.style.display='block';el.textContent='Verbindungsfehler: '+e.message;document.getElementById('livedot').style.background='var(--bad)';});
+      .then(function(d){render(d);lastOk=Date.now();$('livedot').style.background='var(--ok)';})
+      .catch(function(e){var el=$('err');el.style.display='block';el.textContent='Verbindungsfehler: '+e.message+' — neuer Versuch in 15 s';$('livedot').style.background='var(--bad)';setTimeout(load,15000);});
   }
-  load();setInterval(load,30000);
-</script></body></html>
+  setInterval(function(){
+    if(!lastOk)return;
+    var sec=Math.round((Date.now()-lastOk)/1000);
+    $('fresh').textContent=sec<8?'· live':'· vor '+(sec<120?sec+' s':(sec<7200?Math.round(sec/60)+' min':(sec/3600).toFixed(1)+' h'));
+    if(sec>7500)location.reload(); // Watchdog: eingefrorener Tab → Selbstheilung
+  },5000);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)load();});
+  window.addEventListener('focus',function(){load();});
+  window.addEventListener('online',function(){load();});
+  window.addEventListener('resize',function(){drawVisible();});
+
+  $('cmpbtn').addEventListener('click',function(){setCmp(!CMP);});
+  $('refbtn').addEventListener('click',function(){load(true);});
+  setCmp(CMP); route(); load(); setInterval(load,3600000);
+</script>
+</body></html>

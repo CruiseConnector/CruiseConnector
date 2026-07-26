@@ -267,6 +267,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.onMapClick,
     this.onControllerReady,
     this.onCameraMoved,
+    this.onUserGestureEnd,
     this.rotateGestures = true,
     this.styleAsset = 'assets/map/cruise_dark.json',
     this.activeRoutePoints = const [],
@@ -287,6 +288,13 @@ class CruiseMapLibreMap extends StatefulWidget {
   final void Function(ll.LatLng point)? onMapClick;
   final void Function(CruiseMapLibreController controller)? onControllerReady;
   final VoidCallback? onCameraMoved;
+
+  /// 2026-07-22 (vucko Free-Cam-Kompass): Feuert beim LOSLASSEN des Fingers,
+  /// wenn diese Geste vorher [onCameraMoved] ausgelöst hatte. Nötig, damit die
+  /// Auto-Rotate-Gesten-Sperre erst AB Gesten-Ende zu laufen beginnt — sonst
+  /// lief sie bei langen Dreh-Gesten (>3s) ab, während der Finger noch auf dem
+  /// Screen war, und die Kamera drehte mitten in der Geste gegen den Nutzer.
+  final VoidCallback? onUserGestureEnd;
   final bool rotateGestures;
   final String styleAsset;
 
@@ -1504,9 +1512,13 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                 },
                 onPointerUp: (_) {
                   _pointerDownPos = null;
+                  // Nur echte Gesten (Drag >18px) melden ihr Ende — ein
+                  // bloßer Tap soll die Auto-Rotate-Sperre nicht verlängern.
+                  if (_userPanFired) widget.onUserGestureEnd?.call();
                 },
                 onPointerCancel: (_) {
                   _pointerDownPos = null;
+                  if (_userPanFired) widget.onUserGestureEnd?.call();
                 },
                 child: mb.MapLibreMap(
                   styleString: style,

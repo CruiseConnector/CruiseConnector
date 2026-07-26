@@ -46,7 +46,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   final _destinationCtrl = TextEditingController();
 
   double _maxPeople = 10;
-  String _selectedLength = '50 Km';
+  String _selectedLength = '50 km';
   String _selectedLocation = 'Aktueller Standort';
   String _selectedStyle = 'Sport Mode';
   String _planningType = 'Zufall';

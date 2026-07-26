@@ -6293,7 +6293,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '$_streakDays Tage Streak',
+                      _streakDays == 1
+                          ? '1 Tag Streak'
+                          : '$_streakDays Tage Streak',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -6420,7 +6422,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                 children: [
                   Text(
                     hasStreak
-                        ? '$_streakDays Tage Streak'
+                        ? (_streakDays == 1
+                              ? '1 Tag Streak'
+                              : '$_streakDays Tage Streak')
                         : 'Keine aktive Streak',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

@@ -792,10 +792,43 @@ class _CommunityPageState extends State<CommunityPage>
 
     final children = <Widget>[];
 
+    // 2026-07-10 (vucko IG-Entdecken): Instagram-Style-Interleaving.
+    // - Erste Karte nach 4–5 Posts, danach alle ~5–6 Posts.
+    // - Rotierend: Personen-Empfehlungen → öffentliche Gruppen → Werbung
+    //   (Werbe-Teaser aktiv; echtes Ad-System erst ab August).
+    // - Personen-Empfehlungen IMMER (früher nur bei <5 Follows).
+    // 2026-07-11: Karten-Typen, die die Rotation nicht erreicht hat (dünner
+    // oder leerer Feed — z.B. wenn man fast allen schon folgt), werden am
+    // Ende angehängt. Entdecken zeigt damit IMMER Personen/Gruppen/Werbung.
+    final rand = math.Random(discoverPosts.length * 31 + 7);
+    // Rotations-Slots: 0=Personen, 1=Gruppen, 2=Werbung (nur wenn aktiv).
+    final slots = <int>[0, 1];
+    if (_discoverAdsEnabled) slots.add(2);
+
+    Widget slotWidget(int slot) {
+      switch (slot) {
+        case 1: // Öffentliche Gruppen von Unbekannten
+          return _discoverGroups.isNotEmpty
+              ? _buildGroupsCarousel()
+              : _buildCreateGroupTile();
+        case 2: // Werbung (Teaser; ab August echte Ads)
+          return _buildDiscoverAdCard();
+        default:
+          // Personen-Empfehlungen. „Freunde einladen" ist die letzte Karte
+          // IM Karussell (Instagram-Muster) — der große Einladen-Kasten
+          // erscheint nur noch, wenn es gar keine Vorschläge gibt.
+          return _suggestedUsers.isNotEmpty
+              ? _buildUsersCarousel()
+              : _buildInviteFriendsTile();
+      }
+    }
+
+    final shownSlots = <int>{};
+
     if (discoverPosts.isEmpty) {
       children.add(
         const Padding(
-          padding: EdgeInsets.all(32),
+          padding: EdgeInsets.fromLTRB(32, 28, 32, 12),
           child: Center(
             child: Text(
               'Noch keine Posts in der Community',
@@ -805,19 +838,8 @@ class _CommunityPageState extends State<CommunityPage>
         ),
       );
     } else {
-      // 2026-07-10 (vucko IG-Entdecken): Instagram-Style-Interleaving.
-      // - Nie als erstes Item (erste Karte nach 4–5 Posts).
-      // - Danach alle ~5–6 Posts eine Karte.
-      // - Rotierend: Personen-Empfehlungen → öffentliche Gruppen → Werbung
-      //   (Werbung erst ab August, bis dahin per Flag übersprungen).
-      // - Personen-Empfehlungen IMMER (früher nur bei <5 Follows).
-      final rand = math.Random(discoverPosts.length * 31 + 7);
       int nextInsertAt = 4 + rand.nextInt(2); // 4..5
-      // Rotations-Slots: 0=Personen, 1=Gruppen, 2=Werbung (nur wenn aktiv).
-      final slots = <int>[0, 1];
-      if (_discoverAdsEnabled) slots.add(2);
       int slotCursor = rand.nextInt(slots.length);
-      bool inviteShown = false;
 
       for (var i = 0; i < discoverPosts.length; i++) {
         final post = discoverPosts[i];
@@ -830,33 +852,19 @@ class _CommunityPageState extends State<CommunityPage>
         final after = i + 1;
         if (after >= nextInsertAt) {
           final slot = slots[slotCursor % slots.length];
-          final Widget inserted;
-          switch (slot) {
-            case 1: // Öffentliche Gruppen von Unbekannten
-              inserted = _discoverGroups.isNotEmpty
-                  ? _buildGroupsCarousel()
-                  : _buildCreateGroupTile();
-              break;
-            case 2: // Werbung (nur Free, ab August)
-              inserted = _buildDiscoverAdCard();
-              break;
-            default: // Personen-Empfehlungen
-              if (_suggestedUsers.isNotEmpty) {
-                if (!inviteShown && rand.nextInt(4) == 0) {
-                  inserted = _buildInviteFriendsTile();
-                  inviteShown = true;
-                } else {
-                  inserted = _buildUsersCarousel();
-                }
-              } else {
-                inserted = _buildInviteFriendsTile();
-                inviteShown = true;
-              }
-          }
-          children.add(inserted);
+          children.add(slotWidget(slot));
+          shownSlots.add(slot);
           slotCursor++;
           nextInsertAt = after + 5 + rand.nextInt(2); // alle 5–6 Posts
         }
+      }
+    }
+
+    // Fehlende Karten-Typen anhängen (Personen → Gruppen → Werbung), damit
+    // der Tab auch bei 0–4 fremden Posts lebendig ist wie bei Instagram.
+    for (final slot in slots) {
+      if (!shownSlots.contains(slot)) {
+        children.add(slotWidget(slot));
       }
     }
 
@@ -946,17 +954,107 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  // 2026-07-10 (vucko): Werbung im Entdecken-Feed erst ab August (das Ad-System
-  // wurde bis dahin aus main entfernt, git revert f3b56b4). Bis dahin false →
-  // der Werbe-Slot im Rotationszyklus wird übersprungen. Im August: auf true
-  // schalten (idealerweise + Free-Tier-Check) und _buildDiscoverAdCard() mit
-  // einer echten Native-Ad (google_mobile_ads) füllen.
-  bool get _discoverAdsEnabled => false;
+  // 2026-07-10 (vucko): Werbe-Slot im Entdecken-Feed AKTIV als dezenter Teaser.
+  // Das echte Ad-System (RevenueCat/google_mobile_ads) kommt erst ab August und
+  // wurde bis dahin aus main entfernt (git revert f3b56b4). Bis dahin zeigt der
+  // Slot einen neutralen Platzhalter ("hier erscheint bald Werbung"), damit die
+  // Feed-Struktur schon steht. Im August: _buildDiscoverAdCard() durch eine echte
+  // Native-Ad ersetzen + Free-Tier-Check (SubscriptionProvider), sobald reaktiviert.
+  bool get _discoverAdsEnabled => true;
 
-  // Werbe-Karte im Entdecken-Feed. Aktuell Platzhalter — wird NICHT angezeigt
-  // (`_discoverAdsEnabled` = false). SizedBox.shrink() = nimmt keinen Platz ein.
+  // Werbe-Platzhalter im Entdecken-Feed. Dezenter Teaser im Stil der übrigen
+  // Feed-Karten — signalisiert Nutzern, dass hier ab August Werbung erscheint.
+  // KEINE Partner-Einladung/Bewerbungs-Aufforderung — echte Ads kommen über
+  // AdMob (SDK), nicht über Firmen, die sich selbst als Werbepartner melden.
+  // Noch keine echte Ad, kein Tracking, kein SDK.
   Widget _buildDiscoverAdCard() {
-    return const SizedBox.shrink();
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF12151C),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Dezentes "Anzeige"-Label (Transparenz-Kennzeichnung).
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'ANZEIGE',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppAccentColors.accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.campaign_outlined,
+                      color: AppAccentColors.accent,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Hier erscheint bald Werbung',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'Ab August zeigen wir hier Werbung.',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontSize: 12.5,
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
+        const SizedBox(height: 10),
+      ],
+    );
   }
 
   Widget _buildCreateGroupTile() {
@@ -1150,19 +1248,98 @@ class _CommunityPageState extends State<CommunityPage>
   }
 
   Widget _buildUsersCarousel() {
-    final visibleCount = math.min(_suggestedUsers.length, 5);
+    // 2026-07-11 (vucko): Instagram-Style — große Vorschlags-Karten
+    // („Für dich vorgeschlagen") + „Freunde einladen" nur noch als letzte
+    // Karte im Karussell statt als eigener großer Kasten.
+    final visibleCount = math.min(_suggestedUsers.length, 8);
     _usersCarouselCtrl ??= PageController(
-      viewportFraction: 160 / MediaQuery.of(context).size.width,
+      viewportFraction: 200 / MediaQuery.of(context).size.width,
     );
     return _buildCarouselSection(
-      title: 'Leute, denen du folgen könntest',
-      height: 170,
-      itemCount: visibleCount,
-      itemWidth: 160,
+      title: 'Für dich vorgeschlagen',
+      height: 246,
+      itemCount: visibleCount + 1, // +1 = Einladen-Karte am Ende
+      itemWidth: 200,
       controller: _usersCarouselCtrl!,
       itemBuilder: (ctx, i) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: _buildSuggestedUserCard(_suggestedUsers[i]),
+        child: i < visibleCount
+            ? _buildSuggestedUserCard(_suggestedUsers[i])
+            : _buildInviteCarouselCard(),
+      ),
+    );
+  }
+
+  /// Kompakte „Freunde einladen"-Karte als letztes Karussell-Item
+  /// (Instagram-Muster) — ersetzt den großen Einladen-Kasten im Feed.
+  Widget _buildInviteCarouselCard() {
+    return Container(
+      width: 188,
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 68,
+            height: 68,
+            decoration: BoxDecoration(
+              color: AppAccentColors.accent.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.person_add_alt_1,
+              color: AppAccentColors.accent,
+              size: 30,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Freunde einladen',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Hol deine Crew in die App.',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.5),
+              fontSize: 11,
+            ),
+          ),
+          const Spacer(),
+          GestureDetector(
+            onTap: () => _shareInviteLink(context),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: AppAccentColors.accent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Link teilen',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1278,81 +1455,121 @@ class _CommunityPageState extends State<CommunityPage>
       fallbackUserId: user['id'] as String?,
     );
     final avatar = user['avatar_url'] as String?;
-    // 2026-07-10 (vucko): „@a, @b … folgen diesem Account" (gemeinsame Follower).
-    final mutualLine = SocialService.mutualFollowersLine(user);
+    // 2026-07-11 (vucko): Instagram-Style-Karte — großer Avatar, „N gemeinsame
+    // Follower", X zum Wegwischen, voller Folgen-Button.
+    final mutualCount = user['mutual_count'] as int? ?? 0;
+    final subtitle = mutualCount > 0
+        ? (mutualCount == 1
+              ? '1 gemeinsamer Follower'
+              : '$mutualCount gemeinsame Follower')
+        : 'Neu bei Cruise Connector';
     return Container(
-      width: 140,
+      width: 188,
       margin: const EdgeInsets.symmetric(horizontal: 4),
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF1C1F26),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Stack(
         children: [
-          UserAvatar(
-            name: name,
-            avatarUrl: avatar,
-            radius: 24,
-            backgroundColor: const Color(0xFF0B0E14),
-            onTap: () => _openUserProfile(id, name),
-          ),
-          Text(
-            name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 13),
-          ),
-          if (mutualLine != null)
-            Text(
-              mutualLine,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
-                fontSize: 9.5,
-                height: 1.15,
-              ),
-            ),
-          GestureDetector(
-            onTap: () async {
-              final next = await context.read<CommunityProvider>().followUser(
-                id,
-                targetIsPrivate: isPrivate,
-              );
-              if (!mounted) return;
-              if (next == 'accepted') {
+          Positioned(
+            top: 4,
+            right: 4,
+            child: IconButton(
+              onPressed: () {
+                // Dauerhaft merken (SharedPreferences) — wer weggeklickt
+                // wurde, taucht auf diesem Gerät nicht mehr auf.
+                SocialService.dismissSuggestedUser(id);
                 setState(() {
                   _suggestedUsers.removeWhere((u) => u['id'] == id);
                 });
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: isConnected
-                    ? Colors.transparent
-                    : AppAccentColors.accent,
-                borderRadius: BorderRadius.circular(12),
-                border: isConnected ? Border.all(color: Colors.grey) : null,
+              },
+              icon: Icon(
+                Icons.close,
+                size: 18,
+                color: Colors.white.withValues(alpha: 0.55),
               ),
-              child: Text(
-                status == 'accepted'
-                    ? 'Gefolgt'
-                    : status == 'pending'
-                    ? 'Angefragt'
-                    : isPrivate
-                    ? 'Anfragen'
-                    : 'Folgen',
-                style: TextStyle(
-                  color: isConnected ? Colors.grey : Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 18, 12, 12),
+            child: Column(
+              children: [
+                UserAvatar(
+                  name: name,
+                  avatarUrl: avatar,
+                  radius: 34,
+                  backgroundColor: const Color(0xFF0B0E14),
+                  onTap: () => _openUserProfile(id, name),
                 ),
-              ),
+                const SizedBox(height: 10),
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 11,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () async {
+                    final next = await context
+                        .read<CommunityProvider>()
+                        .followUser(id, targetIsPrivate: isPrivate);
+                    if (!mounted) return;
+                    if (next == 'accepted') {
+                      setState(() {
+                        _suggestedUsers.removeWhere((u) => u['id'] == id);
+                      });
+                    }
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isConnected
+                          ? Colors.transparent
+                          : AppAccentColors.accent,
+                      borderRadius: BorderRadius.circular(10),
+                      border: isConnected
+                          ? Border.all(color: Colors.grey)
+                          : null,
+                    ),
+                    child: Text(
+                      status == 'accepted'
+                          ? 'Gefolgt'
+                          : status == 'pending'
+                          ? 'Angefragt'
+                          : isPrivate
+                          ? 'Anfragen'
+                          : 'Folgen',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: isConnected ? Colors.grey : Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

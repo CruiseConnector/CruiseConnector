@@ -489,6 +489,30 @@ class CommunityChatService {
     }
   }
 
+  /// 2026-07-13 (vucko): Owner kann seine Community nachträglich zwischen
+  /// privat und öffentlich umschalten. `.select('id')` holt die geänderte
+  /// Zeile zurück — ein leeres Ergebnis heißt: RLS hat blockiert (kein Owner)
+  /// → ehrlicher Fehler statt stillem Fehlschlag (Muster wie Foto-Update).
+  static Future<void> setCommunityVisibility({
+    required String communityId,
+    required bool isPublic,
+  }) async {
+    try {
+      final rows = await _db
+          .from('communities')
+          .update({'is_public': isPublic})
+          .eq('id', communityId)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw const CommunityChatServiceException(
+          'Nur der Owner kann die Sichtbarkeit ändern.',
+        );
+      }
+    } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(e.message);
+    }
+  }
+
   static Future<void> sendMessage(
     String communityId,
     String body, {

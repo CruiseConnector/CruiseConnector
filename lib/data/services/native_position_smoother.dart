@@ -72,8 +72,11 @@ class NativePositionSmoother {
   // die Drehung kam in Bursts (Ruckeln beim Abbiegen, auf Geraden unsichtbar).
   double _headingRateDegPerSec = 0.0;
   double _movementHeading = 0.0;
-  // ignore: unused_field - Reserviert für zukünftige Diagnostik
+  // 2026-07-22 (vucko Re-Lock-Kamera): letztes VALIDES rohes GPS-Heading
+  // (Gate: isFinite, 0-360, headingAccuracy<45) + Zeitstempel. Dient beim
+  // Zentrieren als zuverlässiger Fallback, wenn keine Routen-Tangente da ist.
   double _lastGpsHeading = 0.0;
+  DateTime? _lastGpsHeadingAt;
   bool _hasValidHeading = false;
   bool _hasValidMovementHeading = false;
   double? _lastHeadingLat;
@@ -111,6 +114,38 @@ class NativePositionSmoother {
 
   /// Velocity in lng/s für Prediction.
   double get velocityLng => _vLng;
+
+  /// 2026-07-22 (vucko Re-Lock-Kamera): letztes zuverlässiges rohes GPS-Heading
+  /// (nur gesetzt, wenn das strenge Validitäts-Gate in [_updateHeading] galt).
+  double get lastReliableGpsHeading => _lastGpsHeading;
+
+  /// Ob [lastReliableGpsHeading] frisch genug ist, um beim Zentrieren als
+  /// Fallback zu dienen (älter als 5s = Fahrsituation kann sich geändert haben).
+  bool get hasRecentReliableGpsHeading {
+    final at = _lastGpsHeadingAt;
+    return at != null &&
+        DateTime.now().difference(at) < const Duration(seconds: 5);
+  }
+
+  /// 2026-07-22 (vucko Re-Lock-Kamera, „300-400m verkehrt herum"): Setzt den
+  /// kompletten Heading-Zustand HART auf [headingDeg]. Nötig beim Zentrieren/
+  /// Navigations-Start: der EMA-Zustand (_smoothedHeading/_movementHeading)
+  /// konnte während Stand-/Langsamfahrt-Phasen aus GPS-Jitter bis zu ~180°
+  /// falsch geprägt sein und heilte sich danach nur über mehrere reale Fixe
+  /// hinweg (= genau die beobachteten 300-400m Fahrstrecke). Position/Velocity
+  /// und die Bewegungs-Anker (_lastHeadingLat/Lng) bleiben bewusst unberührt —
+  /// nur die RICHTUNG wird auf den extern bestimmten, korrekten Wert gestellt.
+  void snapHeading(double headingDeg) {
+    if (!headingDeg.isFinite) return;
+    var h = headingDeg % 360.0;
+    if (h < 0) h += 360.0;
+    _smoothedHeading = h;
+    _movementHeading = h;
+    _headingRateDegPerSec = 0.0;
+    _hasValidHeading = true;
+    _hasValidMovementHeading = true;
+    _lastHeadingTime = DateTime.now();
+  }
 
   /// Verarbeitet eine neue GPS-Position.
   /// Gibt die geglättete Position zurück, oder null wenn kein Rebuild nötig.
@@ -303,6 +338,7 @@ class NativePositionSmoother {
     _headingRateDegPerSec = 0.0;
     _movementHeading = 0.0;
     _lastGpsHeading = 0.0;
+    _lastGpsHeadingAt = null;
     _hasValidHeading = false;
     _hasValidMovementHeading = false;
     _lastHeadingLat = null;
@@ -327,6 +363,7 @@ class NativePositionSmoother {
     // GPS-Heading speichern wenn valide
     if (hasGpsHeading) {
       _lastGpsHeading = gpsHeading;
+      _lastGpsHeadingAt = DateTime.now();
     }
 
     // Bewegungs-Heading berechnen
@@ -459,6 +496,16 @@ class NativePositionSmoother {
     if (prevLat == null || prevLng == null) {
       _lastHeadingLat = raw.latitude;
       _lastHeadingLng = raw.longitude;
+      return;
+    }
+
+    // 2026-07-22 (vucko Re-Lock-Kamera): Bei ECHTEM Stillstand (OS meldet
+    // ~0 m/s) sind Positions-Deltas reines GPS-Rauschen — eine daraus
+    // berechnete „Bewegungsrichtung" ist Zufall (bis ~180° falsch) und hat
+    // den EMA-Zustand an Ampeln/im Stand korrumpiert. Kein Update, Anker
+    // bleibt stehen; sobald echte Bewegung einsetzt (speed >= 0.5), rechnet
+    // der nächste Fix mit korrekter Richtung weiter.
+    if (raw.speed.isFinite && raw.speed >= 0 && raw.speed < 0.5) {
       return;
     }
 

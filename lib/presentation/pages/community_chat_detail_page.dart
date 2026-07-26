@@ -746,11 +746,49 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     }
   }
 
+  /// 2026-07-13 (vucko): Owner schaltet die Community nachträglich zwischen
+  /// privat und öffentlich um — optimistisch mit Revert bei Fehler (gleiches
+  /// Muster wie _toggleOwnerOnlyMessages).
+  Future<void> _toggleVisibility() async {
+    final community = _community;
+    if (community == null) return;
+    final current = community['is_public'] == true;
+    final next = !current;
+    setState(() {
+      _community = {...community, 'is_public': next};
+    });
+    try {
+      await CommunityChatService.setCommunityVisibility(
+        communityId: widget.communityId,
+        isPublic: next,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              next
+                  ? 'Community ist jetzt öffentlich — jeder kann beitreten.'
+                  : 'Community ist jetzt privat — Beitritt nur per Invite-Code.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _community = {...community, 'is_public': current};
+        });
+      }
+      _showError(e, fallback: 'Sichtbarkeit konnte nicht geändert werden.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final community = _community;
     final title = community?['name']?.toString() ?? 'Community';
     final ownerOnlyMessages = community?['owner_only_messages'] == true;
+    final isPublicCommunity = community?['is_public'] == true;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
@@ -779,9 +817,35 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                 _confirmDeleteCommunity();
               } else if (value == 'owner_only') {
                 _toggleOwnerOnlyMessages();
+              } else if (value == 'visibility') {
+                _toggleVisibility();
               }
             },
             itemBuilder: (_) => [
+              if (_amAdmin)
+                PopupMenuItem(
+                  value: 'visibility',
+                  child: Row(
+                    children: [
+                      Icon(
+                        isPublicCommunity
+                            ? Icons.lock_outline
+                            : Icons.public,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          isPublicCommunity
+                              ? 'Auf privat stellen'
+                              : 'Öffentlich machen',
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               if (_amAdmin)
                 PopupMenuItem(
                   value: 'owner_only',

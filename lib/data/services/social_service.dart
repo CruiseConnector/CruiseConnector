@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/input_limits.dart';
@@ -1353,6 +1354,39 @@ class SocialService {
 
   /// Nutzer-Vorschläge: Freunde-von-Freunden, fallback neueste Nutzer.
   /// Wird vom Entdecken-Tab genutzt wenn man (noch) niemandem folgt.
+  // ── Weggeklickte Vorschläge („X" auf der Karte) ──────────────────────────
+  // Lokal persistiert (SharedPreferences): Wer einmal weggeklickt wurde, wird
+  // auf diesem Gerät nicht mehr vorgeschlagen. Bewusst KEINE DB-Tabelle —
+  // kein Migrations-Risiko, funktioniert offline, Instagram-ähnlich genug.
+  static const String _dismissedSuggestionsKey = 'suggested_users_dismissed_v1';
+  static const int _dismissedSuggestionsCap = 300;
+
+  static Future<Set<String>> getDismissedSuggestionIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return (prefs.getStringList(_dismissedSuggestionsKey) ?? const [])
+          .toSet();
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  static Future<void> dismissSuggestedUser(String userId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList(_dismissedSuggestionsKey) ?? <String>[];
+      list
+        ..remove(userId)
+        ..add(userId);
+      final trimmed = list.length > _dismissedSuggestionsCap
+          ? list.sublist(list.length - _dismissedSuggestionsCap)
+          : list;
+      await prefs.setStringList(_dismissedSuggestionsKey, trimmed);
+    } catch (_) {
+      // Best effort — ein verlorenes Dismissal ist kein Fehlerfall.
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> getSuggestedUsers({
     int limit = 10,
   }) async {
@@ -1360,16 +1394,21 @@ class SocialService {
     if (uid == null) return [];
 
     // IDs denen ich folge oder bei denen eine Anfrage offen ist ausschließen.
+    // Blockierte/Blockierende ebenfalls (wie im Discover-Feed).
     final following = await _db
         .from('follows')
         .select('following_id, status')
         .eq('follower_id', uid);
+    final blocked = await getBlockedAndBlockerIds();
     final acceptedFollowing = (following as List)
         .where((r) => (r as Map)['status'] == 'accepted')
         .map((r) => r['following_id'] as String)
         .toSet();
+    final dismissed = await getDismissedSuggestionIds();
     final excluded = <String>{
       uid,
+      ...blocked,
+      ...dismissed,
       ...following.map((r) => (r as Map)['following_id'] as String),
     };
 
@@ -1401,7 +1440,10 @@ class SocialService {
         }
       }
       if (suggestions.isNotEmpty) {
-        final taken = suggestions.keys.take(limit).toList();
+        // Zufällige Auswahl aus dem GANZEN FoF-Pool statt immer derselben
+        // ersten N — so rotieren die Vorschläge bei jedem Neuladen.
+        final pool = suggestions.keys.toList()..shuffle();
+        final taken = pool.take(limit).toList();
         // Usernames aller benötigten gemeinsamen Follower in EINER Query holen.
         final neededFollowerIds = <String>{};
         for (final sid in taken) {
@@ -1434,18 +1476,22 @@ class SocialService {
       }
     }
 
-    // 2) Fallback: neueste Profile (nicht-private)
+    // 2) Fallback: neueste Profile. WICHTIG: kein `.eq('is_private', false)` —
+    // das warf auch alle Profile mit is_private=NULL (Alt-Accounts vor der
+    // Spalte) raus und ließ die Vorschläge komplett leer. Private Profile
+    // dürfen wie bei Instagram vorgeschlagen werden — „Folgen" wird für sie
+    // automatisch zur Anfrage (followUser handhabt das über den Status).
     final recent = await _db
         .from('profiles')
         .select('id, username, avatar_url, is_private')
-        .eq('is_private', false)
         .order('created_at', ascending: false)
-        .limit(limit + excluded.length);
-    return (recent as List)
+        .limit(limit * 3 + excluded.length);
+    final pool = (recent as List)
         .whereType<Map<String, dynamic>>()
         .where((p) => !excluded.contains(p['id']))
-        .take(limit)
-        .toList();
+        .toList()
+      ..shuffle();
+    return pool.take(limit).toList();
   }
 
   /// Baut die „gemeinsame Follower"-Zeile für Vorschlags-Karten (Instagram-

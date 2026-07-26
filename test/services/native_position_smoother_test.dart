@@ -156,5 +156,99 @@ void main() {
         );
       },
     );
+
+    // 2026-07-22 (vucko „nach Routen-Start 300-400m verkehrt herum"):
+    // snapHeading() muss den kompletten Heading-Zustand HART setzen — auch die
+    // Bewegungs-Komponente, sonst blendet der nächste Low-Speed-Fix den gerade
+    // gesetzten korrekten Wert sofort wieder Richtung altem (falschem) Zustand.
+    test('snapHeading() setzt Heading hart und predict() bleibt darauf', () {
+      final smoother = NativePositionSmoother();
+      final start = DateTime.utc(2026, 7, 22, 12);
+      smoother.update(
+        position(
+          latitude: 47.4125,
+          longitude: 9.7417,
+          timestamp: start,
+          heading: 180,
+          speed: 10,
+        ),
+      );
+      smoother.update(
+        position(
+          latitude: 47.4126,
+          longitude: 9.7417,
+          timestamp: start.add(const Duration(seconds: 1)),
+          heading: 180,
+          speed: 10,
+        ),
+      );
+
+      smoother.snapHeading(42.0);
+
+      expect(smoother.heading, closeTo(42.0, 0.001));
+      expect(smoother.hasValidHeading, isTrue);
+      // Keine Rest-Drehrate: predict() darf nicht vom Snap wegdriften.
+      final predicted = smoother.predict(DateTime.now()).heading;
+      expect(predicted, closeTo(42.0, 0.001));
+    });
+
+    test('Stillstands-Jitter (speed≈0) korrumpiert das Bewegungs-Heading '
+        'nicht mehr (kein 180°-Flip an der Ampel)', () {
+      final smoother = NativePositionSmoother(
+        minHeadingDistanceMeters: 1.2,
+        stationaryNoiseMeters: 1.2,
+      );
+      final start = DateTime.utc(2026, 7, 22, 12);
+      // Fahrt nach Norden aufbauen (Heading ≈ 0°).
+      var lat = 47.4125;
+      for (var i = 0; i < 5; i++) {
+        smoother.update(
+          position(
+            latitude: lat,
+            longitude: 9.7417,
+            timestamp: start.add(Duration(seconds: i)),
+            heading: 0,
+            speed: 12,
+          ),
+        );
+        lat += 0.0001; // ~11m/s nordwärts
+      }
+      final headingBefore = smoother.heading;
+      expect(
+        headingBefore < 20 || headingBefore > 340,
+        isTrue,
+        reason: 'Aufbau-Fahrt zeigt nach Norden',
+      );
+
+      // Ampel-Stopp: OS meldet speed=0, Position jittert 3-5m nach SÜDEN —
+      // vor dem Fix prägte genau das ein ~180°-falsches Bewegungs-Heading.
+      var jitterLat = lat;
+      for (var i = 0; i < 6; i++) {
+        jitterLat -= 0.00004; // ~4,4m südwärts pro „Fix" (reines Rauschen)
+        smoother.update(
+          position(
+            latitude: jitterLat,
+            longitude: 9.7417,
+            timestamp: start.add(Duration(seconds: 5 + i)),
+            heading: 0,
+            headingAccuracy: 90, // GPS-Heading im Stand unbrauchbar
+            speed: 0, // OS: Stillstand
+          ),
+        );
+      }
+
+      // Heading darf durch den Stillstands-Jitter NICHT Richtung Süden (180°)
+      // gekippt sein.
+      final headingAfter = smoother.heading;
+      final delta = (headingAfter - headingBefore).abs() % 360;
+      final effectiveDelta = delta > 180 ? 360 - delta : delta;
+      expect(
+        effectiveDelta,
+        lessThan(45.0),
+        reason:
+            'Stillstands-Rauschen darf die Richtung nicht umdrehen '
+            '(vorher: $headingBefore°, nachher: $headingAfter°)',
+      );
+    });
   });
 }

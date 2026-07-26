@@ -22,6 +22,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
+import 'package:cruise_connect/data/services/compass_heading_service.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
@@ -247,8 +248,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       _persistActiveRideSnapshot(force: true, paused: _isPaused);
+      // 2026-07-22 (vucko Free-Cam-Kompass): Magnetometer im Hintergrund
+      // nicht weiterlaufen lassen (Akku) — Resume startet ihn bei Bedarf neu.
+      _stopCompass();
     }
     if (state != AppLifecycleState.resumed || !mounted || _disposed) return;
+    _startCompassIfNeeded();
 
     // 2026-07-03 (vucko Async-nach-Resume, Geräte-Video 07-03): Der Kamera-/
     // Render-Ticker (AnimationController mit vsync) wird von Flutter GEMUTET,
@@ -265,6 +270,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // aktuellen Standort verankert → sofort synchron.
     _nativeSmoother.rebaseToNow();
     _resetPuckBlend();
+    // 2026-07-22 (vucko „GPS veraltet"-Fehlmeldung): Beim Resume wurde bisher
+    // alles resynct (Smoother, Kamera, Render-Lock, Gruppen-Realtime) — nur der
+    // GPS-Stall-Zustand nicht. Ein im Hintergrund aufgelaufenes Fix-Gap wurde so
+    // beim Aufsperren sofort als „GPS-Signal schwach" gewertet, obwohl kein
+    // Empfangsproblem vorlag. Stempel frisch setzen + kurze Gnadenfrist + ein
+    // evtl. hängendes Flag sofort löschen.
+    _lastLocationFixAt = DateTime.now();
+    _resumeGpsGraceUntil = DateTime.now().add(const Duration(seconds: 8));
+    if (_gpsWeak) {
+      _gpsWeak = false;
+      _safeSetState(() {});
+    }
     final resumeLoc = _userLocation;
     if (resumeLoc != null &&
         _isRouteConfirmed &&
@@ -320,7 +337,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   // ─────────────────────── Route Setup State ─────────────────────────────────
   bool _isRoundTrip = true;
   String _planningType = 'Zufall';
-  String _selectedLength = '50 Km';
+  String _selectedLength = '50 km';
   String _selectedLocation = 'Aktueller Standort';
   // 2026-05-28 (vucko): "Standort wählen" — vom User gesetzter Startpunkt
   // (Karten-Tap ODER Adresssuche). Wenn gesetzt + _selectedLocation ==
@@ -635,7 +652,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   _lastStallGlideAt; // letzter Dead-Reckoning-Glide-Tick während Stall
   Timer? _gpsStallWatchdog;
   bool _gpsWeak = false; // „GPS schwach"-Hinweis sichtbar?
-  static const Duration _gpsWeakThreshold = Duration(seconds: 5);
+  // 2026-07-22 (vucko): 5s war knapper als Google/Apple-Praxis (15-30s) und
+  // feuerte bei alltäglichen, harmlosen 5-8s-Fix-Lücken (Kreuzung unter Brücke,
+  // dichte Bäume). 10s zeigt echte Ausfälle (Tunnel) immer noch schnell genug.
+  static const Duration _gpsWeakThreshold = Duration(seconds: 10);
+  // 2026-07-22 (vucko „GPS veraltet"-Fehlmeldung): Nach App-Resume ist ein
+  // Fix-Gap normal (OS drosselt Background-Delivery) — Gnadenfrist statt
+  // sofortiger Warnung im Moment des Aufsperrens.
+  DateTime? _resumeGpsGraceUntil;
   static const Duration _gpsStallGlideThreshold = Duration(milliseconds: 1800);
 
   // 2026-06-24 (vucko Y4): dezenter „kein Internet"-Hinweis während der Fahrt
@@ -893,6 +917,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     lowSpeedThresholdMs: 2.5, // Unter 9 km/h: Bewegungs-Heading priorisieren
     highSpeedThresholdMs: 8.0, // Über 29 km/h: GPS-Heading priorisieren
   );
+
+  // 2026-07-22 (vucko Free-Cam-Kompass, Google-Maps-artig): Im FREIEN Modus
+  // dreht die Karte smooth in Blickrichtung mit. Quelle geschwindigkeits-
+  // abhängig: im Stand/Schritttempo der Magnetometer-Kompass (GPS-Kurs friert
+  // dort ein), ab Fahrtempo das fusionierte Bewegungs-Heading (Magnetometer im
+  // Fahrzeug ist durch Metall/Elektronik gestört). Läuft NUR im freien Modus —
+  // der Lock-Modus behält seine Routen-Tangente.
+  final CompassHeadingService _compassService = CompassHeadingService();
+  // Gesten-Sperre: Auto-Rotate pausiert, solange der Nutzer die Karte gerade
+  // selbst bewegt hat. Wird bei Gesten-START und (wichtig!) bei Gesten-ENDE
+  // gestempelt — sonst liefe die Sperre bei langen Dreh-Gesten ab, während der
+  // Finger noch auf dem Screen ist, und die Kamera drehte gegen den Nutzer.
+  DateTime? _lastUserCameraGestureAt;
+  static const Duration _freeRotateGestureBlock = Duration(seconds: 3);
+  // Zuletzt ANGEWANDTES Auto-Rotate-Bearing (Rate-Limit: erst ab 3° Differenz
+  // wird ein neuer Kamera-Call abgesetzt — Method-Channel-Schonung wie beim
+  // _camMoveInFlight-Muster des Lock-Modus).
+  double _lastFreeAutoRotateHeading = 0.0;
+  // Eigenes In-Flight-Flag (BEWUSST nicht _camMoveInFlight teilen: sonst würde
+  // ein noch laufendes Free-Rotate-animateTo beim Umschalten auf Lock den
+  // ersten Locked-moveTo bis zu 400ms blockieren).
+  bool _freeRotateInFlight = false;
 
   // Animierte Kamera-Bewegung zwischen GPS-Updates (alle Plattformen)
   AnimationController? _cameraAnimController;
@@ -1603,6 +1649,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     final last = _lastLocationFixAt;
     if (last == null) return;
+    // 2026-07-22 (vucko): Resume-Gnadenfrist — direkt nach dem Aufsperren ist
+    // ein Gap erwartbar und KEIN Empfangsproblem (siehe _resumeGpsGraceUntil).
+    final grace = _resumeGpsGraceUntil;
+    if (grace != null && DateTime.now().isBefore(grace)) {
+      if (_gpsWeak) {
+        _gpsWeak = false;
+        _safeSetState(() {});
+      }
+      return;
+    }
     final gap = DateTime.now().difference(last);
     final moving = _gpsLastFixSpeedMps >= 3.0;
     final warn = moving && gap >= _gpsWeakThreshold;
@@ -3516,6 +3572,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _routeSearchExitTimer?.cancel();
     _rerouteWatchdog?.cancel();
     _gpsStallWatchdog?.cancel();
+    _stopCompass();
     _cameraAnimController?.removeListener(_onCameraAnimationTick);
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
@@ -3704,6 +3761,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!_isCameraLocked) {
         // Freie Kamera: Puck-Overlay pro Frame reprojizieren.
         _mlController?.reprojectMarkers();
+        // 2026-07-22 (vucko Free-Cam-Kompass): Karte smooth in Blick-/Fahrt-
+        // richtung nachdrehen (Google-Maps-artig) — mit Gesten-Sperre,
+        // 3°-Rate-Limit und eigenem In-Flight-Schutz.
+        _applyFreeModeAutoRotate();
         // 2026-06-13 (vucko Free-Cam-Ruckeln, Geräte-Video): Idle-Stop mit
         // HYSTERESE. Vorher stoppte der Ticker bei einem EINZELNEN Frame
         // <0,3 m/s — ein kurzer Smoother-Speed-Dip (nach Reroute, GPS-Glitch)
@@ -3714,8 +3775,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         // prüfen. Bei einem fehlerhaften Reroute kann die Smoother-Geschwindigkeit
         // kurz auf ~0 einfrieren, OBWOHL der Wagen fährt — dann darf der Ticker
         // NICHT pausieren, sonst klebt der Puck bis zum nächsten 1Hz-Fix.
+        // 2026-07-22 (vucko Free-Cam-Kompass): Zusätzlich NICHT pausieren,
+        // solange die Auto-Rotation noch >=3° nachzudrehen hat — sonst fröre
+        // die Drehung im Stand mitten in der Bewegung ein (der Kompass-Hook
+        // _onCompassHeadingUpdate weckt den Ticker sonst zwar wieder, aber
+        // Stop/Start pro Frame wäre reines Geflacker).
         final movingByGps = (_userLocation?.speed ?? 0) > 0.6;
-        if (_nativeSmoother.speed < 0.15 && !movingByGps) {
+        if (_nativeSmoother.speed < 0.15 &&
+            !movingByGps &&
+            !_freeModeAutoRotatePending()) {
           _freeCamIdleTicks++;
           if (_freeCamIdleTicks >= 30) {
             _cameraAnimController?.stop();
@@ -6666,8 +6734,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       },
       onMapClick: (p) => _handleMapTap(null, p),
       onCameraMoved: () {
+        // 2026-07-22 (vucko Free-Cam-Kompass): Gesten-START stempeln — Auto-
+        // Rotate pausiert, während der Nutzer die Karte selbst bewegt.
+        _lastUserCameraGestureAt = DateTime.now();
         _unlockCameraFollow();
         _scheduleViewportPoiRefresh();
+      },
+      // Gesten-ENDE erneut stempeln: die 3s-Sperre beginnt erst ab Loslassen
+      // (sonst dreht die Kamera bei langen Gesten mitten unterm Finger los).
+      onUserGestureEnd: () {
+        _lastUserCameraGestureAt = DateTime.now();
       },
     );
   }
@@ -7239,6 +7315,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       '[CruiseMode] _onMapReady called, routeGeoJson=${_routeGeoJson != null}, routeLatLngs=${_routeLatLngs.length}',
     );
     _mapReady = true;
+    // 2026-07-22 (vucko Free-Cam-Kompass): Die Seite startet im freien Modus
+    // (_isCameraLocked=false) — Kompass sofort mitlaufen lassen, nicht erst
+    // nach der ersten Geste. Lock-Pfade stoppen ihn in _recenterMap().
+    _startCompassIfNeeded();
     // Route zeichnen falls schon vorhanden, sonst GPS-Position holen
     if (_routeGeoJson != null) {
       final geometry = Map<String, dynamic>.from(
@@ -12013,10 +12093,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // reguläre Render-Pfad übernimmt; der Render-Lock-Glide war monoton, springt
     // also nicht zurück).
     _lastLocationFixAt = DateTime.now();
-    final fixSpeed = position.speed.isFinite && position.speed > 0
-        ? position.speed
-        : _nativeSmoother.speed;
-    _gpsLastFixSpeedMps = fixSpeed.isFinite && fixSpeed > 0 ? fixSpeed : 0.0;
+    // 2026-07-22 (vucko „GPS veraltet"-Fehlmeldung): Tempo-Lesung ist nach unten
+    // zum Smoother-Update gewandert. Vorher wurde hier (a) eine ECHTE 0.0 vom OS
+    // (regulärer Stillstands-Wert, kein Fehler!) als „ungültig" verworfen und
+    // (b) stattdessen der noch NICHT mit diesem Fix aktualisierte Smoother
+    // gelesen — der zeigte beim Anhalten noch 4-8 m/s Restmoment. Ergebnis:
+    // „fährt" im Moment des Ampel-Stopps → kurze GPS-Lücke = falsche Warnung.
     _lastStallGlideAt = null;
     if (_gpsWeak) {
       _gpsWeak = false;
@@ -12107,6 +12189,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         _userHeading = _nativeSmoother.heading;
       }
     }
+
+    // 2026-07-22 (vucko „GPS veraltet"-Fehlmeldung): Tempo für „fährt vs. steht"
+    // ERST NACH dem Smoother-Update lesen. position.speed >= 0 akzeptiert die
+    // reguläre Stillstands-0.0; nur bei wirklich ungültigen Werten (NaN/negativ)
+    // greift der Smoother-Fallback — der jetzt garantiert den AKTUELLEN Fix
+    // eingerechnet hat statt des Restmoments vom vorherigen Tick.
+    final fixSpeed = position.speed.isFinite && position.speed >= 0
+        ? position.speed
+        : _nativeSmoother.speed;
+    _gpsLastFixSpeedMps = fixSpeed.isFinite && fixSpeed > 0 ? fixSpeed : 0.0;
 
     final nativePredictionTime = kIsWeb
         ? null
@@ -15807,11 +15899,99 @@ class _CruiseModePageState extends State<CruiseModePage>
     // (Kamera-Moves unterbindet der _isCameraLocked-Zweig im Tick selbst).
     _lastCameraFrameAt = null;
     _safeSetState(() => _isCameraLocked = false);
+    _startCompassIfNeeded();
+  }
+
+  // ── 2026-07-22 (vucko Free-Cam-Kompass) ──────────────────────────────────
+
+  void _startCompassIfNeeded() {
+    // Simulation hat keinen synthetischen Kompass — der echte Magnetometer-
+    // Wert würde beim Schreibtisch-Test nur verwirren.
+    if (kIsWeb || _isCameraLocked || _isSimulationRunning || !mounted) return;
+    _compassService.onUpdate = _onCompassHeadingUpdate;
+    _compassService.start();
+  }
+
+  void _stopCompass() => _compassService.stop();
+
+  /// Weckt den pausierten Free-Cam-Ticker auf, wenn sich das Gerät im Stand
+  /// nennenswert dreht (Idle-Stop hält ihn sonst an — vor dem Kompass gab es
+  /// im Stand schlicht nichts zu animieren). Die eigentliche Rotation macht
+  /// weiterhin der Ticker (Glättung, Gesten-Sperre, Rate-Limit).
+  void _onCompassHeadingUpdate() {
+    if (!mounted || _disposed || _isCameraLocked) return;
+    if (_cameraAnimController?.isAnimating ?? false) return;
+    final target = _freeModeAutoRotateBearing();
+    if (target == null) return;
+    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() < 3.0) {
+      return;
+    }
+    _lastCameraFrameAt = null;
+    _cameraAnimController?.repeat();
+  }
+
+  /// Ziel-Bearing für die Auto-Rotation im freien Modus — oder null, wenn
+  /// gerade keine vertrauenswürdige Quelle existiert.
+  double? _freeModeAutoRotateBearing() {
+    if (_isSimulationRunning) return null;
+    final speedNow = math.max(
+      _nativeSmoother.speed,
+      _userLocation?.speed ?? 0.0,
+    );
+    if (speedNow < 2.5) {
+      // Stand/Schritttempo: Magnetometer ist hier die EINZIGE lebendige
+      // Richtungs-Quelle (GPS-Kurs friert ein, Bewegungs-Heading ruht).
+      return _compassService.hasHeading ? _compassService.heading : null;
+    }
+    // Fahrt: Bewegungs-/GPS-Heading-Fusion ist die bessere Quelle.
+    return (_userHeading.isFinite && _userHeading >= 0) ? _userHeading : null;
+  }
+
+  /// Ob Auto-Rotate aktuell etwas zu tun hätte (>=3° Abweichung) — hält den
+  /// Idle-Stop des Tickers davon ab, mitten in einer Drehung zu pausieren.
+  bool _freeModeAutoRotatePending() {
+    final target = _freeModeAutoRotateBearing();
+    if (target == null) return false;
+    return GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() >=
+        3.0;
+  }
+
+  /// Google-Maps-artige Kompass-Rotation: pro Tick im freien Modus prüfen, ob
+  /// die Kamera smooth Richtung Blick-/Fahrtrichtung nachdrehen soll.
+  void _applyFreeModeAutoRotate() {
+    if (_freeRotateInFlight) return;
+    final target = _freeModeAutoRotateBearing();
+    if (target == null) return;
+    final gestureAt = _lastUserCameraGestureAt;
+    if (gestureAt != null &&
+        DateTime.now().difference(gestureAt) < _freeRotateGestureBlock) {
+      return;
+    }
+    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() < 3.0) {
+      return;
+    }
+    final cur = _mlController?.raw.cameraPosition;
+    if (cur == null) return;
+    _freeRotateInFlight = true;
+    _lastFreeAutoRotateHeading = target;
+    _mlController!
+        .animateTo(
+          lat: cur.target.latitude,
+          lng: cur.target.longitude,
+          zoom: cur.zoom,
+          bearing: target,
+          duration: const Duration(milliseconds: 400),
+        )
+        .whenComplete(() => _freeRotateInFlight = false);
   }
 
   Future<void> _recenterMap() async {
     final position = _userLocation;
     if (position == null || !_mapReady) return;
+    // 2026-07-22 (vucko Free-Cam-Kompass): Zentrieren = gelockter Follow —
+    // der Magnetometer wird nicht mehr gebraucht (Lock nutzt Routen-Tangente/
+    // Bewegungs-Heading). Jeder Lock-Pfad läuft durch diese Funktion.
+    _stopCompass();
     // 2026-06-08 (vucko Butterweich): Recenter über den Smooth-Follow-Ticker.
     // Kamera-Stand UND Ziel auf den Standort setzen (Snap), Ticker (re)starten —
     // kein konkurrierendes animateCamera mehr.
@@ -15828,9 +16008,43 @@ class _CruiseModePageState extends State<CruiseModePage>
         : null;
     final anchor =
         lockedAnchor ?? LatLng(position.latitude, position.longitude);
-    final heading = (_userHeading.isFinite && _userHeading >= 0)
-        ? _userHeading
-        : _lastCameraHeading;
+    // 2026-07-22 (vucko „nach Routen-Start 300-400m verkehrt herum"): Bisher
+    // wurde hier HART auf _userHeading gesnappt — das ist der fusionierte
+    // Smoother-Zustand, der nach Stand-/Langsamfahrt-Phasen (Ampel, Routen-
+    // Start, App-Resume) aus GPS-Jitter bis ~180° falsch geprägt sein konnte
+    // und sich danach nur über mehrere reale Fixe hinweg heilte (= 300-400m).
+    // Jetzt gilt dieselbe Prioritätsordnung wie im laufenden Navigations-Tick:
+    // 1) Routen-Tangente in Fahrtrichtung (on-route die Wahrheit),
+    // 2) letztes zuverlässiges rohes GPS-Heading (frisch, streng validiert),
+    // 3) _userHeading, 4) letztes Kamera-Heading.
+    // Ankunftsfenster (~180m vor Ziel) wie im Tick ausgenommen: dort ist die
+    // Tangente an den letzten Stützpunkten degeneriert (Spin/Flip-Fix 06-24).
+    // BEWUSST kein _isOverviewActive-Gate: _showRouteOverview() ruft
+    // _recenterMap() auf, WÄHREND das Flag noch true ist (finally setzt es
+    // erst danach zurück) — die Tangente muss auch dort greifen.
+    final remainingForRecenter = _remainingDistance;
+    final inArrivalWindow =
+        remainingForRecenter != null &&
+        remainingForRecenter.isFinite &&
+        remainingForRecenter <= _arrivalCameraFreezeMeters;
+    double? tangentHeading;
+    if (_isRouteConfirmed && !inArrivalWindow) {
+      tangentHeading = _routeTangentCameraBearing(anchor);
+    }
+    final gpsFallback = (!kIsWeb && _nativeSmoother.hasRecentReliableGpsHeading)
+        ? _nativeSmoother.lastReliableGpsHeading
+        : null;
+    final heading =
+        tangentHeading ??
+        gpsFallback ??
+        ((_userHeading.isFinite && _userHeading >= 0)
+            ? _userHeading
+            : _lastCameraHeading);
+    // Smoother-Heading-Zustand HART mitziehen: sonst fiele der Navigations-
+    // Tick beim nächsten Tangenten-Aussetzer (Mini-Off-Route-Blip) sofort auf
+    // den alten, evtl. korrupten EMA-Zustand zurück und die Kamera drehte
+    // wieder weg.
+    if (!kIsWeb) _nativeSmoother.snapHeading(heading);
     _camCurLat = anchor.latitude;
     _camCurLng = anchor.longitude;
     _camCurHeading = heading;

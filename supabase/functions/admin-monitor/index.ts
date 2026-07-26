@@ -15,6 +15,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const MONITOR_TOKEN = Deno.env.get('MONITOR_TOKEN') ?? '';
+// Not-Aus (2026-07-21): auf Vuckos Anweisung per Incident deaktiviert, bis
+// die Ursache eines "es ist schon wieder passiert"-Vorfalls geklärt ist —
+// unterbindet JEDE der 5 schweren RPCs, egal wie viele Dashboards offen sind.
+// Reaktivieren: `supabase secrets set MONITOR_PAUSED=false` (oder Secret löschen).
+const MONITOR_PAUSED = (Deno.env.get('MONITOR_PAUSED') ?? '').toLowerCase() === 'true';
 
 // GraphHopper-Funnels (öffentliche /health)
 const PC2_HEALTH = 'https://vucko2-hp-prodesk-600-g5-desktop-mini.taildddd94.ts.net/health';
@@ -42,26 +47,176 @@ Deno.serve(async (req) => {
   }
 
   if (url.searchParams.get('data') === '1') {
-    const supa = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
-    const [{ data, error }, hist, pc2, pc1] = await Promise.all([
-      supa.rpc('admin_monitor_metrics'),
-      supa.rpc('admin_monitor_history'),
-      ping(PC2_HEALTH),
-      ping(PC1_HEALTH),
-    ]);
-    return new Response(
-      JSON.stringify({
-        metrics: error ? null : data,
-        history: hist.error ? null : hist.data,
-        error: error?.message ?? null,
-        infra: { pc2, pc1 },
-      }),
-      { headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' } },
-    );
+    if (MONITOR_PAUSED) {
+      // Kein einziger RPC-Call, keine DB-Anfrage — reine statische Antwort.
+      return new Response(
+        JSON.stringify({
+          metrics: null, history: null, today: null, compare: null, analytics: null,
+          error: 'Monitoring pausiert (Wartung nach Incident) — RPC-Abfragen deaktiviert.',
+          infra: { pc2: { up: false, ms: null }, pc1: { up: false, ms: null } },
+        }),
+        { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } },
+      );
+    }
+    // "force=1" (manueller ⟳-Button) bypasst den Halbtags-Slot bewusst NICHT
+    // mehr — Vuckos Vorgabe "0 Uhr, 12 Uhr, mehr nicht" gilt ausnahmslos,
+    // auch für Klicks. Der Button liefert einfach den aktuellen Cache-Stand.
+    const body = await getMonitorData();
+    return new Response(body, {
+      headers: {
+        'content-type': 'application/json',
+        // CDN-Cache (Supabase läuft hinter Cloudflare): s-maxage lässt das CDN
+        // die Antwort teilen → ALLE Dashboards zusammen erzeugen so gut wie
+        // keine RPC-Last, egal wie viele offen sind. Der Browser selbst
+        // cacht nicht (max-age=0), damit der Fresh-Ticker ehrlich bleibt.
+        'cache-control': 'public, max-age=0, s-maxage=3300',
+        'access-control-allow-origin': '*',
+      },
+    });
   }
 
   return html(PAGE, 200);
 });
+
+// ── Daten-Beschaffung mit Cache + Single-Flight (2026-07-19) ────────────────
+// WARUM: Jeder offene Dashboard-Viewer (Browser-Tabs, Desktop-Apps, Handy-App,
+// Kollege) pollte alle 30 s → JEDER Poll feuerte 5 schwere RPCs. Bei mehreren
+// Viewern hat sich die DB damit selbst überlastet (522-Sturm in den API-Logs,
+// „Unhealthy"-Status). Jetzt: EIN RPC-Rundlauf pro ~25 s für ALLE Viewer
+// (Modul-Cache), parallele Anfragen teilen sich denselben Refresh
+// (Single-Flight), und bei DB-Problemen wird der letzte gute Stand mit
+// stale-Markierung ausgeliefert statt weiter zu hämmern. RPCs haben 12-s-
+// Abort, damit keine Anfrage-Leichen die DB weiter belasten.
+// Genau 2 echte Aktualisierungen pro Tag (Vuckos Vorgabe nach dem Incident
+// vom 21.07.: "einmal um 0 Uhr, einmal um 12 Uhr, mehr nicht") — statt einer
+// Alters-basierten TTL (die bei vielen offenen Dashboards trotzdem beliebig
+// oft neu zünden könnte) hängt die Cache-Gültigkeit jetzt an einer festen
+// Kalender-"Halbtags-Slot"-ID (Europe/Vienna, DST-sicher via Intl). Erst wenn
+// der Slot wechselt (Uhrzeit kreuzt 00:00 oder 12:00 in Wien), wird EIN
+// einziges Mal neu von der DB geholt — egal wie oft/viele Clients pollen.
+const FAIL_COOLDOWN_MS = 30_000;
+let _cacheBody: string | null = null;
+let _cacheSlot = '';
+let _inflight: Promise<string> | null = null;
+let _lastFailBody: string | null = null;
+let _lastFailAt = 0;
+
+function viennaSlotKey(d = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Vienna',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  const hour = Number(get('hour'));
+  const half = hour < 12 ? 'am' : 'pm'; // ab 00:00 -> 'am'-Slot, ab 12:00 -> 'pm'-Slot
+  return `${get('year')}-${get('month')}-${get('day')}-${half}`;
+}
+
+async function getMonitorData(): Promise<string> {
+  if (_cacheBody && _cacheSlot === viennaSlotKey()) return _cacheBody;
+  // Fehler-Cooldown: Wenn die DB gerade down ist, nicht bei jedem Poll eine
+  // neue RPC-Salve zünden — letzten Fehlerstand ausliefern, max. ~2 echte
+  // Versuche pro Minute, egal wie viele Dashboards offen sind.
+  if (!_cacheBody && _lastFailBody && Date.now() - _lastFailAt < FAIL_COOLDOWN_MS) {
+    return _lastFailBody;
+  }
+  if (_inflight) {
+    // Refresh läuft schon: alten Stand sofort liefern statt mitzuwarten,
+    // sonst stauen sich bei langsamer DB die Requests.
+    if (_cacheBody) return _cacheBody;
+    return _inflight;
+  }
+  _inflight = refreshMonitorData().finally(() => {
+    _inflight = null;
+  });
+  if (_cacheBody) return _cacheBody; // stale sofort, frisch kommt beim nächsten Poll
+  return _inflight;
+}
+
+// Circuit-Breaker: winziger, 3 s begrenzter Probe-Query. Schlägt er fehl,
+// werden die 5 schweren RPCs GAR NICHT gefeuert — die kranke DB bekommt Ruhe
+// zum Erholen, statt von jedem Dashboard-Poll weiter gepinnt zu werden.
+// Funktioniert pro Isolate ohne geteilten Zustand.
+async function dbProbe(): Promise<boolean> {
+  try {
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/communities?select=id&limit=1`,
+      {
+        headers: { apikey: SERVICE_ROLE, authorization: `Bearer ${SERVICE_ROLE}` },
+        signal: AbortSignal.timeout(3000),
+      },
+    );
+    return r.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function refreshMonitorData(): Promise<string> {
+  if (!(await dbProbe())) {
+    if (_cacheBody) return markStale(_cacheBody);
+    _lastFailBody = JSON.stringify({
+      metrics: null, history: null, today: null, compare: null, analytics: null,
+      error: 'Datenbank erholt sich gerade (Circuit-Breaker aktiv) — nächster Versuch in Kürze.',
+      infra: { pc2: { up: false, ms: null }, pc1: { up: false, ms: null } },
+    });
+    _lastFailAt = Date.now();
+    return _lastFailBody;
+  }
+  const supa = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
+  const rpc = (name: string) =>
+    supa.rpc(name).abortSignal(AbortSignal.timeout(12_000));
+  try {
+    const [{ data, error }, hist, today, compare, analytics, pc2, pc1] = await Promise.all([
+      rpc('admin_monitor_metrics'),
+      rpc('admin_monitor_history'),
+      rpc('admin_monitor_today'),
+      rpc('admin_monitor_compare'),
+      rpc('admin_monitor_analytics'),
+      ping(PC2_HEALTH),
+      ping(PC1_HEALTH),
+    ]);
+    const body = JSON.stringify({
+      metrics: error ? null : data,
+      history: hist.error ? null : hist.data,
+      today: today.error ? null : today.data,
+      compare: compare.error ? null : compare.data,
+      analytics: analytics.error ? null : analytics.data,
+      error: error?.message ?? null,
+      infra: { pc2, pc1 },
+      cached_at: new Date().toISOString(),
+    });
+    // Nur brauchbare Antworten cachen (metrics vorhanden) — sonst stale behalten.
+    if (!error) {
+      _cacheBody = body;
+      _cacheSlot = viennaSlotKey();
+      return body;
+    }
+    if (_cacheBody) return markStale(_cacheBody);
+    _lastFailBody = body;
+    _lastFailAt = Date.now();
+    return body;
+  } catch (e) {
+    if (_cacheBody) return markStale(_cacheBody);
+    _lastFailBody = JSON.stringify({
+      metrics: null, history: null, today: null, compare: null, analytics: null,
+      error: `DB nicht erreichbar: ${e instanceof Error ? e.message : e}`,
+      infra: { pc2: { up: false, ms: null }, pc1: { up: false, ms: null } },
+    });
+    _lastFailAt = Date.now();
+    return _lastFailBody;
+  }
+}
+
+function markStale(body: string): string {
+  try {
+    const o = JSON.parse(body);
+    o.stale = true;
+    return JSON.stringify(o);
+  } catch (_) {
+    return body;
+  }
+}
 
 function html(body: string, status = 200): Response {
   return new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
@@ -127,7 +282,7 @@ const PAGE = `<!doctype html><html lang="de"><head>
   <header>
     <div class="logo">🛣️</div>
     <div><h1>CruiseConnect · Monitoring</h1><div class="sub">Live-Übersicht · Nutzung · Routing · Infrastruktur</div></div>
-    <div class="live"><span id="stamp">lädt…</span><span class="dot" id="livedot"></span><span>LIVE</span></div>
+    <div class="live"><span id="stamp">lädt…</span><span id="fresh"></span><span class="dot" id="livedot"></span><span>LIVE</span></div>
   </header>
   <div class="err" id="err"></div>
 
@@ -226,18 +381,44 @@ const PAGE = `<!doctype html><html lang="de"><head>
     set('topkm', tk.map(function(x,i){return '<tr><td class="rank">'+(i+1)+'</td><td class="u">'+esc(x.username)+'</td><td class="r">'+num(x.km)+' km</td></tr>';}).join(''));
 
     document.getElementById('stamp').textContent = new Date(m.generated_at||Date.now()).toLocaleTimeString('de-DE');
-    document.getElementById('foot').textContent = 'Automatische Aktualisierung alle 30 s · CruiseConnect Admin-Monitoring';
+    document.getElementById('foot').textContent = 'Automatische Aktualisierung 2×/Tag (0 Uhr & 12 Uhr) · CruiseConnect Admin-Monitoring';
     var e=document.getElementById('err'); if(d.error){e.style.display='block';e.textContent='DB-Fehler: '+d.error;} else {e.style.display='none';}
   }
   function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
   function ago(min){ if(min==null)return''; if(min<60)return min+' min'; if(min<1440)return Math.round(min/60)+' h'; return Math.round(min/1440)+' T'; }
 
+  // Loader (2026-07-21, Vuckos Vorgabe nach Incident): genau 2 Aktualisierungen
+  // pro Tag — 0 Uhr und 12 Uhr (Europe/Vienna), mehr nicht. Kein Fokus-/
+  // Sichtbarkeits-/Online-Auto-Refresh mehr (die haben früher bei vielen
+  // offenen Tabs zusätzliche Polls ausgelöst). Serverseitig gilt dieselbe
+  // Sperre ohnehin zusätzlich (Halbtags-Slot-Cache) — dieser Client-Teil
+  // vermeidet nur unnötige Requests, ist aber nicht die eigentliche Bremse.
+  var lastOk=0;
   function load(){
     document.getElementById('livedot').style.background='var(--warn)';
-    fetch('?data=1&token='+encodeURIComponent(TOKEN),{cache:'no-store'})
-      .then(function(r){return r.json();})
-      .then(function(d){render(d);document.getElementById('livedot').style.background='var(--ok)';})
-      .catch(function(e){var el=document.getElementById('err');el.style.display='block';el.textContent='Verbindungsfehler: '+e;document.getElementById('livedot').style.background='var(--bad)';});
+    fetch('?data=1&token='+encodeURIComponent(TOKEN)+'&_='+Date.now(),{cache:'no-store'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+      .then(function(d){render(d);lastOk=Date.now();document.getElementById('livedot').style.background='var(--ok)';})
+      .catch(function(e){var el=document.getElementById('err');el.style.display='block';el.textContent='Verbindungsfehler: '+(e&&e.message||e)+' — neuer Versuch in 15 s';document.getElementById('livedot').style.background='var(--bad)';setTimeout(load,15000);});
   }
-  load(); setInterval(load,30000);
+  setInterval(function(){
+    if(!lastOk)return;
+    var s=Math.round((Date.now()-lastOk)/1000);
+    var f=document.getElementById('fresh');
+    if(f)f.textContent=s<8?'· live':'· vor '+(s<120?s+' s':Math.round(s/60)+' min');
+    // Reiner Notfall-Reload falls die Seite mal >14h hängt (Gerät stand still
+    // o.ä.) — normal wird der Cache-Wechsel längst über scheduleNext() abgeholt.
+    if(s>50400)location.reload();
+  },5000);
+  function msUntilNextSlot(){
+    var parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Vienna',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+    var get=function(t){return Number(parts.find(function(p){return p.type===t;}).value);};
+    var secNow=get('hour')*3600+get('minute')*60+get('second');
+    var boundary=secNow<12*3600?12*3600:24*3600;
+    return (boundary-secNow)*1000;
+  }
+  function scheduleNext(){
+    setTimeout(function(){load();scheduleNext();},msUntilNextSlot()+5000);
+  }
+  load(); scheduleNext();
 </script></body></html>`;

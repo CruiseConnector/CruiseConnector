@@ -248,7 +248,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           if (isRoundTrip && !isWaypointPlanning) ...[
             _SelectionRow(
               title: 'Länge',
-              options: const ['25 Km', '50 Km', '75 Km', '100 Km'],
+              options: const ['25 km', '50 km', '75 km', '100 km'],
               selectedValue: widget.selectedLength,
               onSelect: widget.onLengthChanged,
             ),
@@ -1561,49 +1561,19 @@ class _HighwayToggleSwitch extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          // 2026-06-08 (vucko): Flexible + ellipsis → kein
-                          // RenderFlex-Overflow mehr, wenn Titel + Badge in
-                          // schmalen Layouts knapp werden (war 22px Overflow).
-                          Flexible(
-                            child: Text(
-                              'Autobahn-Zugang',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.96),
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: highwaysIncluded
-                                  ? accentColor.withValues(alpha: 0.18)
-                                  : Colors.white.withValues(alpha: 0.06),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              highwaysIncluded ? 'AN' : 'AUS',
-                              style: TextStyle(
-                                color: highwaysIncluded
-                                    ? accentColor
-                                    : Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ),
-                        ],
+                      // 2026-07-11 (vucko): Label voll ausgeschrieben
+                      // („Autobahn an/aus") statt Titel + AN/AUS-Chip — der
+                      // Chip drängte den Titel in schmalen Layouts ins
+                      // Ellipsis („Autobahn-…"). Keine Kurzformen einführen!
+                      Text(
+                        highwaysIncluded ? 'Autobahn an' : 'Autobahn aus',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.96),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
                       ),
                       const SizedBox(height: 6),
                       Text(

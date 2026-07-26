@@ -802,7 +802,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           const SizedBox(width: 7),
           Flexible(
             child: Text(
-              '${widget.streakDays} Tage Streak · +$bonusXp XP Bonus (×$mulText)',
+              '${widget.streakDays} ${widget.streakDays == 1 ? 'Tag' : 'Tage'} Streak · +$bonusXp XP Bonus (×$mulText)',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Colors.white,

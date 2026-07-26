@@ -669,7 +669,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                           _level.level >= UserLevel.maxLevel
                               ? '$_totalXp XP gesamt · Maximallevel'
                               : '$_totalXp XP gesamt · noch ${_level.xpToNextLevel} XP',
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Color(0xFFA0AEC0),
@@ -793,7 +793,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                         children: [
                           Text(
                             _streakDays > 0
-                                ? '$_streakDays Tage Streak'
+                                ? (_streakDays == 1
+                                      ? '1 Tag Streak'
+                                      : '$_streakDays Tage Streak')
                                 : 'Noch kein aktiver Streak',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -808,7 +810,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                             _streakDays > 0
                                 ? 'Nächste Fahrt bringt ${nextMultiplier.toStringAsFixed(2)}x XP.'
                                 : 'Eine Fahrt startet deine Serie.',
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: Color(0xFFA0AEC0),
@@ -1618,7 +1620,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               const SizedBox(width: 12),
               Text(
                 _streakDays > 0
-                    ? '\u{1F525} $_streakDays Tage Streak'
+                    ? (_streakDays == 1
+                          ? '\u{1F525} 1 Tag Streak'
+                          : '\u{1F525} $_streakDays Tage Streak')
                     : 'Kein Streak',
                 style: TextStyle(
                   color: _streakDays > 0
