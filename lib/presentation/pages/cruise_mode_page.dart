@@ -23,9 +23,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
-import 'package:cruise_connect/core/monetization_config.dart';
-import 'package:cruise_connect/data/services/ad_service.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -348,7 +345,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Weiches Scoring — nie ein harter Reject (sonst Vorarlberg-Explosion).
   CountryPreference _countryPreference = CountryPreference.any;
   String? _homeCountryCode; // Auto-erkannt via Reverse-Geocode am Start.
-  StreamSubscription<void>? _routeLockDowngradeSub;
   // 2026-05-28 (vucko Task #83): One-Shot — nächste A→B-Suche erzwingt eine
   // direkte Route ohne Quality-Reject ("Direkte Route nehmen").
   bool _forceAcceptDirectOnce = false;
@@ -1964,15 +1960,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 2026-07-23 (vucko "Downgrade auf Free setzt Routen-Auswahl zurück"):
-    // Basic/Premium → Free wärend der laufenden Session — eine bereits
-    // gewählte, jetzt gesperrte Länge/Stil/Inlandsfilter wird auf den
-    // Free-legalen Default zurückgesetzt (sonst würde die Suche einen
-    // Wert verwenden, der in der UI als gesperrt angezeigt wird).
-    _routeLockDowngradeSub = context
-        .read<SubscriptionProvider>()
-        .downgradeToFreeEvents
-        .listen((_) => _resetRouteSelectionOnDowngrade());
     // 2026-06-17 (vucko Geräte-Video, 90°-Kipper): Die Fahransicht ist
     // portrait-designt (Banner/Karte/Buttons). Dreht das Telefon während der
     // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
@@ -2063,18 +2050,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       final prefs = await SharedPreferences.getInstance();
       final stored = prefs.getString(_countryPrefKey);
       var pref = CountryPreferenceLabel.fromStorage(stored);
-      // 2026-07-23 (vucko "Inlandsfilter ab Basic"): ein gespeicherter Wert
-      // aus einer früheren Basic/Premium-Zeit darf für einen jetzt Free-
-      // Nutzer nicht wieder geladen/angezeigt werden — die Route selbst ist
-      // ohnehin schon über _effectiveCountryPreferenceForGeneration
-      // abgesichert, das hier hält nur die ANZEIGE konsistent dazu.
-      if (pref != CountryPreference.any &&
-          mounted &&
-          context.read<SubscriptionProvider>().initialized &&
-          !context.read<SubscriptionProvider>().canUseInlandsfilter) {
-        pref = CountryPreference.any;
-        unawaited(_persistCountryPreference(pref));
-      }
       if (mounted && pref != _countryPreference) {
         setState(() => _countryPreference = pref);
       }
@@ -2095,16 +2070,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool get _countryFilterAppliesToCurrentRoute =>
       _isRoundTrip && !_isWaypointPlanning;
 
-  /// 2026-07-23 (vucko "Inlandsfilter ab Basic"): live geprüft (kein
-  /// Lade-Race möglich, anders als ein einmaliger Sanitize-Check beim
-  /// Seiten-Laden) — selbst wenn `_countryPreference` noch einen Altwert
-  /// aus einer früheren Basic/Premium-Zeit hält, generiert ein Free-Nutzer
-  /// garantiert NIE eine inlandsbeschränkte Route.
   CountryPreference get _effectiveCountryPreferenceForGeneration {
     if (!_countryFilterAppliesToCurrentRoute) return CountryPreference.any;
-    if (!context.read<SubscriptionProvider>().canUseInlandsfilter) {
-      return CountryPreference.any;
-    }
     return _countryPreference;
   }
 
@@ -3541,50 +3508,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  /// 2026-07-23 (vucko "Downgrade auf Free setzt Routen-Auswahl zurück"):
-  /// siehe initState-Kommentar. Auch für die einmalige Bereinigung beim
-  /// Laden wiederverwendet (siehe didChangeDependencies) — z.B. wenn ein
-  /// Account VOR diesem Feature schon "Im Land bleiben" o.ä. gesetzt hatte
-  /// und inzwischen (oder schon immer) Free ist.
-  void _resetRouteSelectionOnDowngrade() {
-    if (!mounted) return;
-    setState(() {
-      if (!{'25 Km', '50 Km'}.contains(_selectedLength)) {
-        _selectedLength = '50 Km';
-      }
-      if (_selectedStyle != 'Sport Mode') {
-        _selectedStyle = 'Sport Mode';
-      }
-      if (_countryPreference != CountryPreference.any) {
-        _countryPreference = CountryPreference.any;
-      }
-    });
-  }
-
-  bool _initialTierSanitizeDone = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // 2026-07-23 (vucko "Free-Locks auch bei bereits gesetzten Altwerten"):
-    // SubscriptionProvider lädt async (init() wird in main.dart NICHT
-    // awaitet) — erst wenn `initialized` true ist, ist der Tier-Wert
-    // vertrauenswürdig. Erst dann EINMALIG prüfen/bereinigen, sonst könnte
-    // ein noch ladender (default-free) Zustand einen echten Basic/Premium-
-    // Nutzer fälschlich zurücksetzen.
-    final subscription = context.watch<SubscriptionProvider>();
-    if (!_initialTierSanitizeDone && subscription.initialized) {
-      _initialTierSanitizeDone = true;
-      if (!subscription.isPaid) {
-        _resetRouteSelectionOnDowngrade();
-      }
-    }
-  }
-
   @override
   void dispose() {
     _disposed = true;
-    _routeLockDowngradeSub?.cancel();
     // 2026-06-17 (vucko 90°-Kipper): Orientierungs-Sperre der Fahransicht wieder
     // aufheben — der Rest der App darf drehen.
     SystemChrome.setPreferredOrientations(const [
@@ -3622,12 +3548,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     // ist ein harmloser No-Op.
     unawaited(WakelockPlus.disable().catchError((Object _) {}));
     unawaited(NavigationPipService.instance.disarm());
-    // 2026-07-25 (Werbe-Audit): Dasselbe Sicherheitsnetz für das Werbe-Flag.
-    // AdService ist ein Singleton — blieb navigationActive nach einem dispose()
-    // ohne _stopNavigationTracking() auf true hängen (z.B. Logout mitten in der
-    // Solo-Fahrt: pushAndRemoveUntil disposed die ganze HomePage), war für den
-    // Rest des App-Prozesses JEDE Werbung tot, auch nach erneutem Login.
-    AdService.instance.navigationActive = false;
     _incidentRefetchDebounce?.cancel();
     _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
@@ -6665,14 +6585,6 @@ class _CruiseModePageState extends State<CruiseModePage>
                 DriveControlPanel(
                   onStart: () async {
                     _setGroupPaused(false);
-                    // 2026-07-22 (vucko Werbung): Vor-Fahrt-Video (Rewarded,
-                    // 30-60s) für Free-Nutzer — best effort: keine geladene
-                    // Ad → Fahrt startet SOFORT, nie blockieren. Cooldown
-                    // verhindert ein Video bei jedem Pause/Weiter.
-                    if (mounted &&
-                        context.read<SubscriptionProvider>().showsAds) {
-                      await _showPreRideAdGate();
-                    }
                     await _startNavigationFlow();
                   },
                   onPause: () {
@@ -8531,14 +8443,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// nur der Haupt-Such-Button. Cooldown verhindert Spam bei mehreren Taps
   /// kurz hintereinander.
   void _showRouteSearchRewardedVideoIfDue() {
-    if (context.read<SubscriptionProvider>().showsAds) {
-      unawaited(
-        AdService.instance.showRewardedVideo(
-          placement: 'route_search',
-          cooldownSec: MonetizationConfig.routeSearchRewardedCooldownSec,
-        ),
-      );
-    }
+    // Ohne Werbesystem auf main bewusst ein No-Op — die Aufrufstellen (Haupt-
+    // Such-Button, Warmup-Dialog) bleiben erhalten, damit der Hook beim
+    // spaeteren Werbe-Merge nur an EINER Stelle wieder scharf geschaltet wird.
   }
 
   Future<void> _generateRoute({bool startValidatorRetry = false}) async {
@@ -10762,38 +10669,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  /// 2026-07-23 (vucko "30-60s, nicht überspringbar beim Fahren"): zeigt das
-  /// Vor-Fahrt-Video und legt währenddessen (und in der ggf. verbleibenden
-  /// Mindest-Restzeit danach) ein blickdichtes, nicht wegtippbares Overlay
-  /// über die schon (synchron in DriveControlPanel._handleStart) auf
-  /// "läuft"-Zustand umgeschaltete Fahrt-Steuerung — sonst könnte man
-  /// während der erzwungenen Wartezeit "Beenden"/"Pause" antippen, obwohl
-  /// die Fahrt technisch noch gar nicht gestartet ist.
-  Future<void> _showPreRideAdGate() async {
-    final secondsLeft = ValueNotifier<int>(30);
-    late OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (_) => _PreRideAdGateOverlay(secondsLeft: secondsLeft),
-    );
-    Overlay.of(context).insert(entry);
-    try {
-      await AdService.instance.showRewardedBeforeRide(
-        onTick: (s) => secondsLeft.value = s,
-      );
-    } finally {
-      entry.remove();
-      secondsLeft.dispose();
-    }
-  }
-
   Future<void> _startNavigationFlow() async {
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
-    // 2026-07-22 (vucko Werbung): Ab hier läuft die Fahrt — ALLE Anzeigen
-    // (App-Open/Interstitial) sind unterdrückt, bis das Tracking endet
-    // (AdMob-Policy + Sicherheit; Rücknahme in _stopNavigationTracking).
-    AdService.instance.navigationActive = true;
 
     // 2026-07-02 (vucko Geräte-Video): Voice-State der letzten Fahrt darf die
     // neue nicht beeinflussen (Index-Kollision → verschluckte/doppelte Ansage).
@@ -12271,8 +12150,6 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _stopNavigationTracking() {
-    // Fahrt beendet/pausiert den Tracking-Modus → Werbung wieder erlaubt.
-    AdService.instance.navigationActive = false;
     // 2026-07-24 (vucko Wakelock): Display-Sperre wieder freigeben — dieser
     // Funnel deckt ALLE Stop-Pfade ab (Pause, Beenden, Lobby-Rückkehr,
     // Setup-Rückkehr, Ankunft, Simulation, Post-Ride-Cleanup).
@@ -17780,54 +17657,3 @@ class _FabBubble extends StatelessWidget {
   }
 }
 
-/// 2026-07-23 (vucko "30-60s, nicht überspringbar beim Fahren"): blickdichtes
-/// Overlay während des Vor-Fahrt-Videos + einer eventuellen Mindest-
-/// Restwartezeit danach (falls die Ad selbst vorzeitig geschlossen wurde).
-/// PopScope verhindert ein Wegwischen per Zurück-Geste/-Taste.
-class _PreRideAdGateOverlay extends StatelessWidget {
-  const _PreRideAdGateOverlay({required this.secondsLeft});
-
-  final ValueNotifier<int> secondsLeft;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      child: Material(
-        color: Colors.black.withValues(alpha: 0.92),
-        child: Center(
-          child: ValueListenableBuilder<int>(
-            valueListenable: secondsLeft,
-            builder: (context, seconds, _) => Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.ondemand_video_rounded,
-                  color: AppAccentColors.accent,
-                  size: 40,
-                ),
-                const SizedBox(height: 18),
-                const Text(
-                  'Startklar machen …',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  seconds > 0 ? 'Noch $seconds Sekunden' : 'Gleich geht\'s los …',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.6),
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

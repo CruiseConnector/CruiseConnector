@@ -1,6 +1,4 @@
-import 'dart:async' show unawaited;
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:geolocator/geolocator.dart';
@@ -10,17 +8,10 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
-import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
-import 'package:cruise_connect/core/monetization_config.dart';
-import 'package:cruise_connect/data/services/ad_service.dart';
-import 'package:cruise_connect/presentation/widgets/ads/ad_post_card.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
-import 'package:cruise_connect/data/services/house_ad_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
@@ -68,10 +59,6 @@ class _CommunityPageState extends State<CommunityPage>
   List<Map<String, dynamic>> _myGroups = [];
   List<Map<String, dynamic>> _discoverGroups = [];
   List<Map<String, dynamic>> _suggestedUsers = [];
-  // House-Ads (Eigenvermarktung ohne Drittanbieter) für den Entdecken-Feed.
-  List<HouseAd> _houseAds = [];
-  int _houseAdCursor = 0;
-  final Set<String> _trackedAdImpressions = {};
   List<Map<String, dynamic>> _searchResults = [];
   Map<String, dynamic>? _searchedGroup;
   final _searchController = TextEditingController();
@@ -236,79 +223,6 @@ class _CommunityPageState extends State<CommunityPage>
     // Community dieselbe Inbox und denselben Badge-State verwenden.
   }
 
-  /// Eigene Gruppen-Fahrten erstellen ist ab Basic verfügbar (bis 5
-  /// Mitglieder), Free kann nur beitreten — Client-seitiges Gate.
-  /// Server-Trigger (Design fertig) folgt erst nach App-Rollout.
-  Future<void> _openCreateGroup() async {
-    if (context.read<SubscriptionProvider>().maxGroupSize <= 0) {
-      _showGroupCreationUpsell();
-      return;
-    }
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const CreateGroupPage()),
-    );
-    _loadData();
-  }
-
-  void _showGroupCreationUpsell() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF202733), Color(0xFF151A23)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
-            const SizedBox(height: 14),
-            const Text(
-              'Eigene Gruppen-Fahrten sind ab Basic',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Gruppen beitreten geht für alle — eine eigene Gruppen-Fahrt (bis zu 5 Mitglieder) erstellst du mit Basic.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13.5, height: 1.4),
-            ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
-                  );
-                },
-                icon: const Icon(Icons.workspace_premium, size: 20),
-                label: const Text('Jetzt freischalten', style: TextStyle(fontWeight: FontWeight.w700)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppAccentColors.accent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _loadData() async {
     try {
       final provider = context.read<CommunityProvider>();
@@ -317,7 +231,6 @@ class _CommunityPageState extends State<CommunityPage>
         SocialService.getMyGroups(),
         SocialService.getDiscoverGroups(),
         SocialService.getSuggestedUsers(),
-        HouseAdService.getAds(),
       ]);
 
       if (mounted) {
@@ -334,8 +247,6 @@ class _CommunityPageState extends State<CommunityPage>
           _myGroups = results[1] as List<Map<String, dynamic>>;
           _discoverGroups = shuffledGroups;
           _suggestedUsers = shuffledUsers;
-          _houseAds = results[4] as List<HouseAd>;
-          _houseAdCursor = 0;
           _loading = false;
         });
       }
@@ -498,7 +409,10 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               onPressed: () async {
                 if (_tabController.index == 1) {
-                  await _openCreateGroup();
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
+                  );
                 } else {
                   await Navigator.push(
                     context,
@@ -616,37 +530,15 @@ class _CommunityPageState extends State<CommunityPage>
       );
     }
 
-    // 2026-07-22 (vucko Werbung): Native-Ad als „Post" alle N Posts — LAZY
-    // über Index-Mapping im weiterhin faulen ListView.separated (kein eager
-    // children-Umbau: Ads laden erst, wenn ihr Slot in Sichtweite gebaut
-    // wird — AdMob-konform + kein unnötiger Request beim Tab-Öffnen).
-    final showsAds = context.watch<SubscriptionProvider>().showsAds;
-    const adEvery = MonetizationConfig.feedAdEveryNPosts;
-    final adCount = showsAds ? feedPosts.length ~/ adEvery : 0;
-
-    // Index-Mapping: nach jedem N-ten Post ein Ad-Item einschieben.
-    // Gesamtzahl = Posts + Ads; Item i ist eine Ad, wenn (i+1) % (N+1) == 0.
-    Widget buildInterleaved(BuildContext context, int index) {
-      const block = adEvery + 1;
-      if (showsAds && (index + 1) % block == 0) {
-        return AdPostCard(
-          key: ValueKey('friendfeed_ad_${index ~/ block}'),
-          placementKey: 'friend_feed',
-        );
-      }
-      final postIndex = showsAds ? index - (index + 1) ~/ block : index;
-      return _buildPostItem(feedPosts[postIndex]);
-    }
-
     return RefreshIndicator(
       onRefresh: _loadData,
       color: AppAccentColors.accent,
       child: ListView.separated(
         padding: const EdgeInsets.only(bottom: 80),
-        itemCount: feedPosts.length + adCount,
+        itemCount: feedPosts.length,
         separatorBuilder: (_, _) =>
             const Divider(color: Colors.white10, height: 1),
-        itemBuilder: buildInterleaved,
+        itemBuilder: (context, index) => _buildPostItem(feedPosts[index]),
       ),
     );
   }
@@ -899,8 +791,6 @@ class _CommunityPageState extends State<CommunityPage>
     final discoverPosts = provider.discoverPosts;
 
     final children = <Widget>[];
-    // Merker für die Sichtbarkeits-Garantie unten (rebuild-sicher).
-    final adCursorAtBuildStart = _houseAdCursor;
 
     if (discoverPosts.isEmpty) {
       children.add(
@@ -947,8 +837,8 @@ class _CommunityPageState extends State<CommunityPage>
                   ? _buildGroupsCarousel()
                   : _buildCreateGroupTile();
               break;
-            case 2: // Werbung (nur Free): House-Priorität, sonst AdMob-Native
-              inserted = _buildDiscoverAdSlot();
+            case 2: // Werbung (nur Free, ab August)
+              inserted = _buildDiscoverAdCard();
               break;
             default: // Personen-Empfehlungen
               if (_suggestedUsers.isNotEmpty) {
@@ -968,15 +858,6 @@ class _CommunityPageState extends State<CommunityPage>
           nextInsertAt = after + 5 + rand.nextInt(2); // alle 5–6 Posts
         }
       }
-    }
-
-    // 2026-07-13 (vucko House-Ads): Sichtbarkeits-Garantie bei dünnem Feed —
-    // erreicht die Rotation den Werbe-Slot in DIESEM Build nicht (wenige/keine
-    // fremden Posts), hängen wir genau EINE Bild-Anzeige ans Ende.
-    if (_discoverAdsEnabled &&
-        _houseAds.isNotEmpty &&
-        _houseAdCursor == adCursorAtBuildStart) {
-      children.add(_buildDiscoverAdSlot());
     }
 
     return RefreshIndicator(
@@ -1065,195 +946,17 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  // 2026-07-13 (vucko House-Ads): Der Werbe-Slot zeigt jetzt echte BILD-
-  // Kampagnen aus der eigenen `house_ads`-Tabelle (Eigen-/Direktvermarktung,
-  // KEIN Drittanbieter/AdMob-SDK nötig). Aktiv nur, wenn Kampagnen geladen
-  // wurden — sonst wird der Slot in der Rotation übersprungen wie bisher.
-  // 2026-07-22 (vucko Werbung): Slot jetzt zweistufig — House-Kampagne hat
-  // Vorrang (Direktvermarktung, höhere Marge), sonst AdMob-Native. BEIDES nur
-  // für Free-Nutzer: Basic/Premium sind laut Paywall „komplett werbefrei",
-  // also verschwinden auch House-Ads für sie (vorher ungegated — Regelbruch).
-  bool get _discoverAdsEnabled =>
-      context.read<SubscriptionProvider>().showsAds &&
-      (_houseAds.isNotEmpty || !kIsWeb);
+  // 2026-07-10 (vucko): Werbung im Entdecken-Feed erst ab August (das Ad-System
+  // wurde bis dahin aus main entfernt, git revert f3b56b4). Bis dahin false →
+  // der Werbe-Slot im Rotationszyklus wird übersprungen. Im August: auf true
+  // schalten (idealerweise + Free-Tier-Check) und _buildDiscoverAdCard() mit
+  // einer echten Native-Ad (google_mobile_ads) füllen.
+  bool get _discoverAdsEnabled => false;
 
-  int _admobNativeSlotCounter = 0;
-
-  Widget _buildDiscoverAdSlot() {
-    if (!context.read<SubscriptionProvider>().showsAds) {
-      return const SizedBox.shrink();
-    }
-    if (_houseAds.isNotEmpty) return _buildDiscoverAdCard();
-    return AdPostCard(
-      key: ValueKey('discover_admob_${_admobNativeSlotCounter++}'),
-      placementKey: 'discover_feed',
-    );
-  }
-
-  // Bild-Werbekarte (House-Ad) im Entdecken-Feed: CDN-Bild, „ANZEIGE"-Label,
-  // optional Headline/CTA; Impression einmal pro Feed-Aufbau, Klick öffnet
-  // die Ziel-URL extern. Kampagnen rotieren über den Cursor.
+  // Werbe-Karte im Entdecken-Feed. Aktuell Platzhalter — wird NICHT angezeigt
+  // (`_discoverAdsEnabled` = false). SizedBox.shrink() = nimmt keinen Platz ein.
   Widget _buildDiscoverAdCard() {
-    if (_houseAds.isEmpty) return const SizedBox.shrink();
-    final ad = _houseAds[_houseAdCursor % _houseAds.length];
-    _houseAdCursor++;
-    if (_trackedAdImpressions.add(ad.id)) {
-      HouseAdService.track(ad.id, 'impression');
-    }
-    return Column(
-      children: [
-        const SizedBox(height: 10),
-        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
-        GestureDetector(
-          onTap: () {
-            final url = ad.targetUrl;
-            if (url == null || url.isEmpty) return;
-            HouseAdService.track(ad.id, 'click');
-            launchUrl(
-              Uri.parse(url),
-              mode: LaunchMode.externalApplication,
-            );
-          },
-          child: Container(
-            width: double.infinity,
-            margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFF12151C),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Bild (Querformat ~2:1) mit dezentem ANZEIGE-Badge oben links.
-                Stack(
-                  children: [
-                    AspectRatio(
-                      aspectRatio: 2,
-                      child: Image.network(
-                        ad.imageUrl,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => Container(
-                          color: const Color(0xFF1C1F26),
-                          alignment: Alignment.center,
-                          child: Icon(
-                            Icons.campaign_outlined,
-                            color: AppAccentColors.accent,
-                            size: 34,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 10,
-                      left: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'ANZEIGE',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if ((ad.headline ?? '').isNotEmpty ||
-                    (ad.ctaLabel ?? '').isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if ((ad.headline ?? '').isNotEmpty)
-                                Text(
-                                  ad.headline!,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14.5,
-                                  ),
-                                ),
-                              if ((ad.body ?? '').isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 2),
-                                  child: Text(
-                                    ad.body!,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.55,
-                                      ),
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                              if ((ad.advertiser ?? '').isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 3),
-                                  child: Text(
-                                    ad.advertiser!,
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.35,
-                                      ),
-                                      fontSize: 10.5,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        if ((ad.ctaLabel ?? '').isNotEmpty) ...[
-                          const SizedBox(width: 10),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 8,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppAccentColors.accent,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              ad.ctaLabel!,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        Divider(height: 1, color: Colors.white.withValues(alpha: 0.10)),
-        const SizedBox(height: 10),
-      ],
-    );
+    return const SizedBox.shrink();
   }
 
   Widget _buildCreateGroupTile() {
@@ -1304,7 +1007,13 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               const SizedBox(height: 12),
               GestureDetector(
-                onTap: _openCreateGroup,
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CreateGroupPage()),
+                  );
+                  _loadData();
+                },
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
@@ -3262,21 +2971,6 @@ class _CommunityPageState extends State<CommunityPage>
     try {
       await SocialService.joinGroup(groupId);
       await _loadData();
-      // 2026-07-22 (vucko Werbung): Interstitial NACH erfolgreichem Beitritt
-      // (fire-and-forget, Beitritt ist serverseitig schon durch — Ad kann
-      // nie blockieren). Nur Free-Tier, globale + Placement-Cooldowns im
-      // AdService.
-      // 2026-07-23 (vucko Werbung): 30s-Rewarded-Video NACH erfolgreichem
-      // Beitritt (vorher Interstitial) — fire-and-forget, Beitritt ist
-      // serverseitig schon durch, kann durchs Video nie blockiert werden.
-      if (mounted && context.read<SubscriptionProvider>().showsAds) {
-        unawaited(
-          AdService.instance.showRewardedVideo(
-            placement: 'group_join',
-            cooldownSec: MonetizationConfig.groupJoinRewardedCooldownSec,
-          ),
-        );
-      }
       return true;
     } catch (e) {
       if (mounted) {
@@ -3296,14 +2990,6 @@ class _CommunityPageState extends State<CommunityPage>
     try {
       final groupId = await SocialService.joinGroupWithCode(code);
       await _loadData();
-      if (mounted && context.read<SubscriptionProvider>().showsAds) {
-        unawaited(
-          AdService.instance.showRewardedVideo(
-            placement: 'group_join',
-            cooldownSec: MonetizationConfig.groupJoinRewardedCooldownSec,
-          ),
-        );
-      }
       return groupId;
     } catch (e) {
       if (mounted) {

@@ -2,14 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
-import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/mode_explainer_bubble.dart';
 
 /// Setup-Karte für die Routenplanung (Rundkurs / A-nach-B).
@@ -156,87 +154,11 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     widget.onAvoidHighwaysChanged?.call(value);
   }
 
-  /// 2026-07-23 (vucko "Free nur 25/50km + Sport Mode + Inlandsfilter ab
-  /// Basic"): identisches Pop-up-Design wie beim Dashboard-Gate
-  /// (home_content_page.dart._showDashboardEditUpsell) und beim
-  /// Gruppen-Erstellen-Gate (community_page.dart._showGroupCreationUpsell).
-  void _showRouteLockUpsell(String title, String explanation) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF202733), Color(0xFF151A23)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.lock_rounded, color: Colors.white38, size: 40),
-            const SizedBox(height: 14),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              explanation,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 13.5,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SubscriptionTierPage()),
-                  );
-                },
-                icon: const Icon(Icons.workspace_premium, size: 20),
-                label: const Text(
-                  'Jetzt freischalten',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppAccentColors.accent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final isRoundTrip = widget.isRoundTrip;
     final isWaypointPlanning =
         isRoundTrip && widget.planningType == 'Wegpunkte';
-    final subscription = context.watch<SubscriptionProvider>();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -329,13 +251,6 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               options: const ['25 Km', '50 Km', '75 Km', '100 Km'],
               selectedValue: widget.selectedLength,
               onSelect: widget.onLengthChanged,
-              lockedOptions: subscription.canUseAllRouteDistances
-                  ? const {}
-                  : const {'75 Km', '100 Km'},
-              onLockedTap: (_) => _showRouteLockUpsell(
-                'Alle Streckenlängen sind ab Basic',
-                'Mit Free fährst du 25 oder 50 km. 75 und 100 km gibt es ab Basic.',
-              ),
             ),
             const Divider(color: Colors.white10, height: 32),
           ],
@@ -374,13 +289,6 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
               ],
               selectedValue: widget.selectedStyle,
               onSelect: widget.onStyleChanged,
-              lockedOptions: subscription.canUseAllRouteModes
-                  ? const {}
-                  : const {'Kurvenjagd', 'Abendrunde', 'Entdecker'},
-              onLockedTap: (_) => _showRouteLockUpsell(
-                'Alle Fahrstile sind ab Basic',
-                'Mit Free fährst du im Sport Mode. Kurvenjagd, Abendrunde und Entdecker gibt es ab Basic.',
-              ),
             ),
           ],
         ],
@@ -902,9 +810,6 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     // (Altwert aus Persistenz), damit nichts hängt.
     final onlyHome = widget.countryPreference != CountryPreference.any;
     final accentColor = accent;
-    // 2026-07-23 (vucko "Inlandsfilter ab Basic"):
-    final canUseInlandsfilter =
-        context.watch<SubscriptionProvider>().canUseInlandsfilter;
     final backgroundColor = onlyHome
         ? accentColor.withValues(alpha: 0.12)
         : const Color(0xFF0B0E14);
@@ -921,18 +826,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () {
-            if (!canUseInlandsfilter) {
-              _showRouteLockUpsell(
-                'Der Inlandsfilter ist ab Basic',
-                'Mit Free bekommst du Grenzübertritte, wenn sie die schönste Route ergeben. Auf dein Heimatland einschränken kannst du ab Basic.',
-              );
-              return;
-            }
-            widget.onCountryPreferenceChanged?.call(
-              onlyHome ? CountryPreference.any : CountryPreference.onlyHome,
-            );
-          },
+          onTap: () => widget.onCountryPreferenceChanged?.call(
+            onlyHome ? CountryPreference.any : CountryPreference.onlyHome,
+          ),
           borderRadius: BorderRadius.circular(12),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
@@ -1014,14 +910,6 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                               ),
                             ),
                           ),
-                          if (!canUseInlandsfilter) ...[
-                            const SizedBox(width: 6),
-                            Icon(
-                              Icons.lock_rounded,
-                              size: 13,
-                              color: Colors.grey[600],
-                            ),
-                          ],
                         ],
                       ),
                       const SizedBox(height: 6),
@@ -1786,20 +1674,12 @@ class _SelectionRow extends StatelessWidget {
     required this.options,
     required this.selectedValue,
     required this.onSelect,
-    this.lockedOptions = const {},
-    this.onLockedTap,
   });
 
   final String title;
   final List<String> options;
   final String selectedValue;
   final ValueChanged<String> onSelect;
-
-  /// 2026-07-23 (vucko "Free nur 25/50km + Sport Mode"): Optionen in dieser
-  /// Menge sind für den aktuellen Nutzer gesperrt (Free-Tier) — sie zeigen
-  /// ein Schloss-Icon und rufen [onLockedTap] statt [onSelect] auf.
-  final Set<String> lockedOptions;
-  final ValueChanged<String>? onLockedTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1820,10 +1700,8 @@ class _SelectionRow extends StatelessWidget {
           runSpacing: 12,
           children: options.map((option) {
             final isSelected = option == selectedValue;
-            final isLocked = lockedOptions.contains(option);
             return GestureDetector(
-              onTap: () =>
-                  isLocked ? onLockedTap?.call(option) : onSelect(option),
+              onTap: () => onSelect(option),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.symmetric(
@@ -1847,32 +1725,13 @@ class _SelectionRow extends StatelessWidget {
                         ]
                       : [],
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      option,
-                      style: TextStyle(
-                        color: isLocked
-                            ? Colors.grey[600]
-                            : isSelected
-                            ? Colors.white
-                            : Colors.grey[400],
-                        fontWeight: isSelected
-                            ? FontWeight.bold
-                            : FontWeight.w500,
-                        fontSize: 14,
-                      ),
-                    ),
-                    if (isLocked) ...[
-                      const SizedBox(width: 6),
-                      Icon(
-                        Icons.lock_rounded,
-                        size: 13,
-                        color: Colors.grey[600],
-                      ),
-                    ],
-                  ],
+                child: Text(
+                  option,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.grey[400],
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    fontSize: 14,
+                  ),
                 ),
               ),
             );

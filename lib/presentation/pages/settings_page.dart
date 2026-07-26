@@ -11,8 +11,6 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
-import 'package:cruise_connect/presentation/pages/subscription_tier_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
@@ -23,12 +21,9 @@ import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.da
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:provider/provider.dart';
-import 'package:purchases_ui_flutter/purchases_ui_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -51,7 +46,6 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _loadSettings();
-    unawaited(_refreshAdPrivacyOptions());
   }
 
   Future<void> _loadSettings() async {
@@ -90,22 +84,6 @@ class _SettingsPageState extends State<SettingsPage> {
     final selected = await showMapDownloadPreferenceSheet(context, force: true);
     if (!mounted || selected == null) return;
     setState(() => _mapAutoDownloadPolicy = selected);
-  }
-
-  Future<void> _openCustomerCenter() async {
-    try {
-      await RevenueCatUI.presentCustomerCenter();
-    } catch (e) {
-      debugPrint('[Settings] Customer Center fehlgeschlagen: $e');
-      if (!mounted) return;
-      TopToast.show(
-        context,
-        message: 'Konnte gerade nicht geöffnet werden. Versuch es später erneut.',
-        icon: Icons.error_outline_rounded,
-        isError: true,
-        duration: const Duration(seconds: 4),
-      );
-    }
   }
 
   Future<void> _togglePrivacy(bool newValue) async {
@@ -285,39 +263,6 @@ class _SettingsPageState extends State<SettingsPage> {
     await AppTutorialService.requestReplay();
     if (!mounted) return;
     Navigator.pop(context);
-  }
-
-  /// UMP-Datenschutzoptionen (nur EWR — siehe Aufrufstelle in RECHTLICHES).
-  bool _adPrivacyOptionsAvailable = false;
-
-  Future<void> _refreshAdPrivacyOptions() async {
-    if (kIsWeb) return;
-    try {
-      final status =
-          await ConsentInformation.instance.getPrivacyOptionsRequirementStatus();
-      if (!mounted) return;
-      final required =
-          status == PrivacyOptionsRequirementStatus.required;
-      if (required != _adPrivacyOptionsAvailable) {
-        setState(() => _adPrivacyOptionsAvailable = required);
-      }
-    } catch (_) {
-      // Kein UMP verfügbar (z.B. SDK noch nicht initialisiert) → Eintrag bleibt
-      // aus. Werbung ist nie ein Fehlerfall.
-    }
-  }
-
-  Future<void> _openAdPrivacyOptions() async {
-    ConsentForm.showPrivacyOptionsForm((error) {
-      if (error == null || !mounted) return;
-      TopToast.show(
-        context,
-        message: 'Werbe-Einstellungen konnten nicht geöffnet werden.',
-        icon: Icons.ads_click_outlined,
-        isError: true,
-        duration: const Duration(seconds: 3),
-      );
-    });
   }
 
   Future<void> _openLegalDocument(LegalDocument document) async {
@@ -508,30 +453,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile('Passwort ändern', Icons.lock_outline),
-                  const Divider(color: Colors.white10, height: 1),
-                  _buildNavTile(
-                    'Abonnement verwalten',
-                    Icons.workspace_premium_outlined,
-                    subtitle: 'Free · Basic · Premium',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const SubscriptionTierPage(),
-                      ),
-                    ),
-                  ),
-                  // Nur für zahlende Nutzer — Free hat nichts zu kündigen
-                  // oder umzustellen. RevenueCats fertiges Self-Service-UI
-                  // (Kündigen, Zahlungsprobleme, Plan wechseln) statt einer
-                  // eigenen Kündigungs-Seite.
-                  if (context.watch<SubscriptionProvider>().isPaid) ...[
-                    const Divider(color: Colors.white10, height: 1),
-                    _buildNavTile(
-                      'Zahlung & Kündigung',
-                      Icons.receipt_long_outlined,
-                      subtitle: 'Abo-Details, Kündigen, Zahlungsprobleme',
-                      onTap: _openCustomerCenter,
-                    ),
-                  ],
                 ]),
 
                 const SizedBox(height: 24),
@@ -636,20 +557,6 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     if (document != LegalDocuments.settingsDocuments.last)
                       const Divider(color: Colors.white10, height: 1),
-                  ],
-                  // 2026-07-25 (Werbe-Audit): Googles UMP-Richtlinie verlangt im
-                  // EWR einen dauerhaft erreichbaren Weg, die einmal gegebene
-                  // Werbe-Einwilligung zu ändern. Der Eintrag erscheint nur,
-                  // wenn UMP ihn für diesen Nutzer auch verlangt (außerhalb des
-                  // EWR gibt es kein Formular — dann bliebe ein toter Menüpunkt).
-                  if (_adPrivacyOptionsAvailable) ...[
-                    const Divider(color: Colors.white10, height: 1),
-                    _buildNavTile(
-                      'Werbe-Einstellungen',
-                      Icons.ads_click_outlined,
-                      subtitle: 'Einwilligung für personalisierte Werbung ändern',
-                      onTap: _openAdPrivacyOptions,
-                    ),
                   ],
                 ]),
 

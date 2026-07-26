@@ -17,12 +17,10 @@ import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/route_provider.dart';
-import 'package:cruise_connect/application/providers/subscription_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
-import 'package:cruise_connect/data/services/ad_service.dart';
 import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
@@ -87,11 +85,6 @@ void main() {
         url: AppConstants.supabaseUrl,
         anonKey: AppConstants.supabaseAnonKey,
       );
-      // 2026-07-22 (vucko Werbung): AdMob-SDK fire-and-forget initialisieren —
-      // bewusst OHNE await, der Kaltstart darf nicht auf einen Netzwerk-Call
-      // des Ad-SDKs warten (Gray-Screen-Fix nicht regressieren). Der erste
-      // Ad-Request passiert ohnehin erst nach Erreichen der HomePage.
-      unawaited(AdService.instance.initializeSdkOnly());
       // Voice-Setting + Notification-Settings beim Start laden
       // (persistiert via SharedPrefs).
       unawaited(VoiceSettingsService.instance.load());
@@ -401,8 +394,6 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
-        // 2026-07-10 (vucko): Abo-Status (Free/Basic/Premium) + Feature-Gating.
-        ChangeNotifierProvider(create: (_) => SubscriptionProvider()..init()),
         // 2026-05-23 (vucko): Notification-Service als Provider —
         // Realtime-Subscription wird in HomePage initState gestartet.
         ChangeNotifierProvider<NotificationService>.value(
