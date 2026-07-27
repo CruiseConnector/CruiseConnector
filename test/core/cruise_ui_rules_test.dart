@@ -72,4 +72,56 @@ void main() {
       }
     });
   });
+  group('soloRideNeedsLeaveConfirmation', () {
+    test(
+      'REGRESSION 2026-07-27: auch nach PAUSE muss nachgefragt werden',
+      () {
+        // Genau hier lag der Fehler der ersten Fassung: sie leitete den
+        // Zustand aus _positionSubscription ab, und _stopNavigationTracking
+        // nullt das bei jeder Pause. Danach liess sich die Fahrt kommentarlos
+        // und ungewertet verwerfen.
+        expect(
+          soloRideNeedsLeaveConfirmation(
+            isGroupRide: false,
+            routeConfirmed: true,
+            rideStarted: true,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('reine Routenvorschau fragt nicht nach', () {
+      expect(
+        soloRideNeedsLeaveConfirmation(
+          isGroupRide: false,
+          routeConfirmed: true,
+          rideStarted: false,
+        ),
+        isFalse,
+      );
+      expect(
+        soloRideNeedsLeaveConfirmation(
+          isGroupRide: false,
+          routeConfirmed: false,
+          rideStarted: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('Gruppenfahrten bleiben bei ihrem eigenen Flow', () {
+      for (final started in [true, false]) {
+        expect(
+          soloRideNeedsLeaveConfirmation(
+            isGroupRide: true,
+            routeConfirmed: true,
+            rideStarted: started,
+          ),
+          isFalse,
+          reason: 'rideStarted=$started',
+        );
+      }
+    });
+  });
 }

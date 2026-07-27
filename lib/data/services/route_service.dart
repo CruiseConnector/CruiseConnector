@@ -3397,14 +3397,26 @@ class RouteService {
           'return_${(sessionOrigin[1] * 10000).round()}_${(sessionOrigin[0] * 10000).round()}',
       candidateBudget: 3,
       // 2026-07-27 (vucko „teilweise keine gefunden oder sehr lange geladen"):
-      // Der Anfahrts-Leg lief schon immer mit navigationReroute:true, also 8s
-      // und einem Versuch. Dieser Rueckweg-Leg nicht — er bekam die vollen
-      // 26-40s. Beide gehoeren zum SELBEN Pool-Fallback, der eigentlich das
-      // schnelle Sicherheitsnetz sein soll. Bei einem langsamen (nicht toten)
-      // GraphHopper blockierte allein diese Zeile pro Join-Punkt bis zu 40
-      // Sekunden, bei mehreren Pool-Treffern summierte sich das auf Minuten —
-      // der Fallback wurde damit selbst zur Ursache der langen Ladezeit.
-      navigationReroute: true,
+      // Dieser Rueckweg-Leg lief mit den vollen 26-40s Zeitlimit, waehrend der
+      // Anfahrts-Leg desselben Pool-Fallbacks 8s hat. Bei einem langsamen (nicht
+      // toten) GraphHopper blockierte allein diese Zeile pro Join-Punkt bis zu
+      // 40 Sekunden; bei mehreren Pool-Treffern summierte sich das auf Minuten,
+      // und ausgerechnet das Sicherheitsnetz wurde zur Bremse.
+      //
+      // Bewusst NICHT ueber navigationReroute:true geloest (erste Fassung, im
+      // Review verworfen): dieses Flag setzt serverseitig zusaetzlich eine
+      // Hauptstrassen-Praeferenz, streicht die Start-Offset-Rettungsphasen und
+      // aktiviert eine 180-m-Hardgrenze. Es haette den Rueckweg also nicht nur
+      // schneller, sondern auch fehleranfaelliger gemacht — genau gegen das
+      // zweite gemeldete Symptom. Stattdessen nur die Wartezeit deckeln, die
+      // Routing-Semantik bleibt unveraendert.
+    ).timeout(
+      const Duration(seconds: 12),
+      onTimeout: () => throw const RouteServiceException(
+        type: RouteErrorType.network,
+        userMessage: 'Rueckweg dauert zu lange.',
+        debugMessage: 'return_leg_timeout_12s',
+      ),
     );
   }
 

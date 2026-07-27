@@ -586,6 +586,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   RealtimeChannel? _incidentChannel;
   Timer? _incidentRefetchDebounce;
   DateTime? _lastLivePositionPushAt;
+
+  /// Wurde die aktuelle Solo-Fahrt tatsaechlich gestartet? Bleibt auch waehrend
+  /// Pause und Simulation true und wird erst beim Abschluss oder beim
+  /// Verlassen zurueckgesetzt.
+  bool _soloRideStarted = false;
+
+  /// Generationszaehler fuer parallele POI-Ladevorgaenge (siehe
+  /// _loadPoisFromSettings): nur die juengste Anfrage darf den Zustand setzen.
+  int _poiLoadGeneration = 0;
   String? _jamTrackingIncidentId;
   DateTime? _jamTrackingStartedAt;
   DateTime? _jamRecoverySince;
@@ -9548,6 +9557,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     _hazardCheckDone = false;
     _roadHazards = const [];
     // 2026-05-28 (vucko Task #66): alte Baustellen + Geofence zurücksetzen.
+    // 2026-07-27: Diese beiden bleiben BEWUSST hart geleert — anders als die
+    // POIs darunter. Baustellen und Verkehrsmeldungen sind Sicherheitsdaten;
+    // eine Warnung der VORIGEN Route auf der neuen stehen zu lassen waere
+    // schlimmer als eine Luecke von ein bis zwei Sekunden, bis
+    // _checkHazardsInBackground die echten Werte nachliefert.
     _routeConstructions = const [];
     _constructionGeofence.clear();
     _activeConstructionAlertId = null;
@@ -10494,6 +10508,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _navigationController.clearManeuverDistanceSmoothing();
       _showRouteInfoBanner = false;
       _isRouteConfirmed = false;
+      _soloRideStarted = false;
       _isExistingRouteSession = false;
       _cachedCurveCount = 0;
       _remainingDistance = null;
@@ -10533,10 +10548,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Läuft gerade eine echte Solo-Fahrt (nicht bloß die Routenvorschau)?
   /// Nur dann ist ein Rückfragen sinnvoll — in der Vorschau kostet Zurück
   /// nichts und ein Dialog wäre reine Belästigung.
-  bool get _soloRideIsRunning =>
-      widget.groupId == null &&
-      _isRouteConfirmed &&
-      (_positionSubscription != null || _activeTripId != null);
+  bool get _soloRideIsRunning => soloRideNeedsLeaveConfirmation(
+    isGroupRide: widget.groupId != null,
+    routeConfirmed: _isRouteConfirmed,
+    rideStarted: _soloRideStarted,
+  );
 
   /// 2026-07-27 (vucko „beim Zurück soll ein Pop-up kommen"): Bestätigung vor
   /// dem Verlassen einer laufenden Solo-Fahrt.
@@ -10746,6 +10762,7 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   void _returnToCruiseSetupFromActiveRoute() {
     if (!mounted || _disposed) return;
+    _soloRideStarted = false;
     if (widget.groupId != null) {
       unawaited(_returnToGroupLobbyFromActiveRoute());
       return;
@@ -10868,6 +10885,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
+    // 2026-07-27 (Review-Fund): Ab hier laeuft eine echte Fahrt. Das Flag
+    // ueberlebt bewusst Pause und Simulation — anders als
+    // _positionSubscription, das _stopNavigationTracking bei JEDER Pause auf
+    // null setzt. Genau daran war die erste Fassung der Zurueck-Abfrage
+    // gescheitert (nach Pause kam kein Dialog mehr).
+    _soloRideStarted = widget.groupId == null;
 
     // 2026-07-02 (vucko Geräte-Video): Voice-State der letzten Fahrt darf die
     // neue nicht beeinflussen (Index-Kollision → verschluckte/doppelte Ansage).
@@ -11333,7 +11356,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (last.startsWith('no_route') || last == 'no_candidate') {
       return 'Keine Anschlussroute gefunden. Folge der Linie, wende erst bei sicherer Möglichkeit.';
     }
-    return 'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit';
+    return 'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit.';
   }
 
   void _publishRerouteFailure({
@@ -11371,7 +11394,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         context,
         message:
             userMessage ??
-            'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit',
+            'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit.',
         icon: Icons.warning_amber_rounded,
         isError: true,
         duration: const Duration(milliseconds: 4000),
@@ -13303,7 +13326,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   // (z.B. kleine Tankstellen ohne OSM-Tag).
   Future<void> _loadPoisFromSettings(List<List<double>> coords) async {
     final types = PoiSettingsService.instance.enabledTypes;
-    if (types.isEmpty || coords.length < 2) return;
+    // 2026-07-27 (Review-Fund): Zwei Routen kurz hintereinander erzeugen zwei
+    // parallele, unabhaengige Ladevorgaenge. Ohne Generationszaehler konnte die
+    // LANGSAMERE (aeltere) Antwort die bereits korrekten POIs der neueren Route
+    // ueberschreiben — und im Fehlerfall sogar loeschen. Nur die jeweils
+    // juengste Anfrage darf den Zustand noch anfassen.
+    final generation = ++_poiLoadGeneration;
+    if (types.isEmpty || coords.length < 2) {
+      if (mounted && generation == _poiLoadGeneration) {
+        setState(() => _routePois = const []);
+      }
+      return;
+    }
     try {
       final pois = await RoutePoiService.instance.fetchPoisAlongRoute(
         coordinates: coords,
@@ -13323,12 +13357,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           })
           .take(50)
           .toList();
+      if (generation != _poiLoadGeneration) return;
       setState(() => _routePois = filtered);
     } catch (_) {
       // 2026-07-27: Da _applyRouteResult die alte Liste bewusst stehen lässt,
       // muss der Fehlerfall hier aufräumen — sonst blieben POIs der VORIGEN
-      // Route dauerhaft auf der neuen Strecke liegen.
-      if (mounted) setState(() => _routePois = const []);
+      // Route dauerhaft auf der neuen Strecke liegen. Aber NUR, wenn inzwischen
+      // keine neuere Anfrage laeuft, sonst wuerde ein alter Fehlschlag eine
+      // frisch geladene, korrekte Liste wegraeumen.
+      if (mounted && generation == _poiLoadGeneration) {
+        setState(() => _routePois = const []);
+      }
     }
   }
 

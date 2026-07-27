@@ -30,3 +30,23 @@ bool cruiseFabColumnHidden({
   if (hasRoute) return false;
   return !configCollapsed;
 }
+
+/// Muss beim Verlassen einer laufenden Fahrt nachgefragt werden?
+///
+/// 2026-07-27 (Review-Fund): Die erste Fassung leitete das aus
+/// `_positionSubscription != null` ab. Dieses Feld wird bei JEDER Pause
+/// genullt — nach einem Tipp auf Pause kam deshalb gar kein Dialog mehr, und
+/// die Fahrt liess sich unbemerkt und ungewertet wegwerfen. [rideStarted]
+/// beschreibt stattdessen den Lebenszyklus der Fahrt und ueberlebt Pause,
+/// Simulation und kurze GPS-Aussetzer.
+bool soloRideNeedsLeaveConfirmation({
+  required bool isGroupRide,
+  required bool routeConfirmed,
+  required bool rideStarted,
+}) {
+  // Gruppenfahrten haben ihren eigenen Bestaetigungs- und Lobby-Flow.
+  if (isGroupRide) return false;
+  // Reine Routenvorschau: Zurueck kostet nichts, ein Dialog waere Belaestigung.
+  if (!routeConfirmed || !rideStarted) return false;
+  return true;
+}
