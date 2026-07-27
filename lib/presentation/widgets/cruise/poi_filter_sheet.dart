@@ -251,7 +251,7 @@ class _PoiFilterSheetState extends State<PoiFilterSheet> {
                 if (noneEnabled)
                   Center(
                     child: Text(
-                      'Keine POIs ausgewählt — Map bleibt clean.',
+                      'Keine POIs ausgewählt, Map bleibt clean.',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.45),
                         fontSize: 12,

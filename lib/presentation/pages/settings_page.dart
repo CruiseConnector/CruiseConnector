@@ -1000,7 +1000,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     TopToast.show(
       context,
-      message: 'Karte wird geprüft — fehlende Tiles werden nachgeladen…',
+      message: 'Karte wird geprüft, fehlende Tiles werden nachgeladen…',
       icon: Icons.verified_outlined,
       duration: const Duration(seconds: 3),
     );
@@ -1011,7 +1011,7 @@ class _SettingsPageState extends State<SettingsPage> {
       TopToast.show(
         context,
         message: result.repairedNow > 0
-            ? '✅ ${result.repairedNow} Tiles repariert — Karte ist komplett.'
+            ? '✅ ${result.repairedNow} Tiles repariert, Karte ist komplett.'
             : '✅ Karte ist komplett (${result.ok} Tiles).',
         icon: Icons.check_circle_outline_rounded,
         duration: const Duration(seconds: 4),
@@ -1020,7 +1020,7 @@ class _SettingsPageState extends State<SettingsPage> {
       TopToast.show(
         context,
         message:
-            '⚠️ ${result.stillMissing} Tiles fehlen weiterhin — Netzverbindung prüfen.',
+            '⚠️ ${result.stillMissing} Tiles fehlen weiterhin, Netzverbindung prüfen.',
         icon: Icons.warning_amber_rounded,
         duration: const Duration(seconds: 5),
       );
@@ -1066,7 +1066,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     TopToast.show(
       context,
-      message: '$deleted Tiles gelöscht — Cache leer',
+      message: '$deleted Tiles gelöscht, Cache leer',
       icon: Icons.delete_outline_rounded,
       duration: const Duration(seconds: 3),
     );

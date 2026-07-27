@@ -289,8 +289,8 @@ class _RouteSharePageState extends State<RouteSharePage> {
       // die App (Android App-Link). Ein Bild kann selbst keinen Link tragen,
       // daher reist er im Begleittext mit (Caption in WhatsApp/Instagram & Co.).
       final headline = dist != null
-          ? '${widget.data.title} · $dist — mit Cruise Connector'
-          : '${widget.data.title} — mit Cruise Connector';
+          ? '${widget.data.title} · $dist, mit Cruise Connector'
+          : '${widget.data.title}, mit Cruise Connector';
       final result = await Share.shareXFiles(
         [XFile(outFile.path, mimeType: 'image/png', name: '$baseName.png')],
         text: '$headline\n${CruiseDeepLinks.shareUrl}',
@@ -503,12 +503,12 @@ class _RouteSharePageState extends State<RouteSharePage> {
                 Expanded(
                   child: Text(
                     _isSticker
-                        ? 'Transparenter Sticker — leg ihn in der Story-App über dein eigenes Foto.'
+                        ? 'Transparenter Sticker, leg ihn in der Story-App über dein eigenes Foto.'
                         : _isMap
-                            ? 'Echte Karte mit deiner Route — direkt teilen.'
+                            ? 'Echte Karte mit deiner Route, direkt teilen.'
                             : _bgPhoto != null
-                                ? 'Dein Foto als Hintergrund — Karte drüber frei ziehen & skalieren.'
-                                : 'Foto/Selfie als Hintergrund hinzufügen — oder dunkel lassen für Chats.',
+                                ? 'Dein Foto als Hintergrund, Karte drüber frei ziehen & skalieren.'
+                                : 'Foto/Selfie als Hintergrund hinzufügen oder dunkel lassen für Chats.',
                     style: const TextStyle(
                       color: Color(0xFF8B97A8),
                       fontSize: 11.5,

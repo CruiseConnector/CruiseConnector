@@ -1952,7 +1952,18 @@ class RoutePoolService {
     }
 
     matches.sort((a, b) {
-      final byDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
+      // 2026-07-27 (vucko „wir haben sehr oft die gleiche Route bekommen"):
+      // Hier stand `a.startDistanceKm.compareTo(b.startDistanceKm)` auf dem
+      // ROHEN Double. Zwei Startentfernungen sind praktisch nie exakt gleich,
+      // also war dieser Vergleich immer entscheidend und ALLE folgenden
+      // Kriterien — Rotation und Qualität — kamen nie zum Zug. Ergebnis: jeder
+      // Client an derselben Stelle bekam deterministisch denselben Eintrag,
+      // Suche für Suche und Nutzer für Nutzer. Ein paar hundert Meter
+      // Startentfernung sind für den Fahrer ohnehin bedeutungslos, deshalb
+      // vergleichen wir in 500-m-Stufen und lassen darin die Rotation wirken.
+      final byDistance = _startDistanceBucket(
+        a.startDistanceKm,
+      ).compareTo(_startDistanceBucket(b.startDistanceKm));
       if (byDistance != 0) return byDistance;
 
       final byCity = _boolScore(
@@ -1964,6 +1975,14 @@ class RoutePoolService {
         _sameAdmin2(query, a.route),
       ).compareTo(_boolScore(_sameAdmin2(query, b.route)));
       if (byAdmin2 != 0) return -byAdmin2;
+
+      // Länger nicht vorgeschlagen gewinnt. Das ist die Rotation, die der
+      // Kommentar an der Datenbank-Abfrage schon immer versprochen hat, die
+      // aber mangels Modellfeld nie ankam.
+      final byRecency = _suggestionRecencyRank(
+        a.route.lastSuggestedAt,
+      ).compareTo(_suggestionRecencyRank(b.route.lastSuggestedAt));
+      if (byRecency != 0) return byRecency;
 
       final byRotation = b.route.weeklyRotationScore.compareTo(
         a.route.weeklyRotationScore,
@@ -2265,8 +2284,17 @@ class RoutePoolService {
       ).compareTo(_poolStyleFitScore(a.route, requestedStyle));
       if (byStyleFit != 0) return byStyleFit;
 
-      final byStartDistance = a.startDistanceKm.compareTo(b.startDistanceKm);
+      // 2026-07-27: gleiche Falle wie in findMatches — der rohe Double-Vergleich
+      // entschied immer und schaltete Rotation wie Qualität faktisch ab.
+      final byStartDistance = _startDistanceBucket(
+        a.startDistanceKm,
+      ).compareTo(_startDistanceBucket(b.startDistanceKm));
       if (byStartDistance != 0) return byStartDistance;
+
+      final byRecency = _suggestionRecencyRank(
+        a.route.lastSuggestedAt,
+      ).compareTo(_suggestionRecencyRank(b.route.lastSuggestedAt));
+      if (byRecency != 0) return byRecency;
 
       final byRotation = b.route.weeklyRotationScore.compareTo(
         a.route.weeklyRotationScore,
@@ -3930,6 +3958,22 @@ class RoutePoolService {
   }
 
   static int _boolScore(bool value) => value ? 1 : 0;
+
+  /// Startentfernung in 500-m-Stufen. Innerhalb einer Stufe sind die Routen
+  /// für den Fahrer gleich gut erreichbar, also darf dort die Rotation
+  /// entscheiden statt der letzten Nachkommastelle.
+  static int _startDistanceBucket(double km) => (km * 2).floor();
+
+  /// Rang nach „zuletzt vorgeschlagen": 0 = noch nie, dann nach Alter.
+  /// Kleinere Zahl gewinnt, frisch Gezeigtes landet hinten.
+  static int _suggestionRecencyRank(DateTime? lastSuggestedAt) {
+    if (lastSuggestedAt == null) return 0;
+    final hours = DateTime.now().toUtc().difference(lastSuggestedAt).inHours;
+    if (hours >= 168) return 1; // älter als eine Woche: so gut wie frisch
+    if (hours >= 48) return 2;
+    if (hours >= 12) return 3;
+    return 4; // in den letzten 12 Stunden gezeigt: ganz nach hinten
+  }
 
   static double _toRadians(double degrees) => degrees * (math.pi / 180.0);
 

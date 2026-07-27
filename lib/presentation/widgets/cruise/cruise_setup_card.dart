@@ -123,13 +123,13 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
 
   static const Map<String, String> _modeExplanations = {
     'roundtrip':
-        'Rundkurs: Du startest und endest am gleichen Punkt. Perfekt für eine Feierabendrunde — wir suchen kurvige Straßen in der gewünschten Distanz.',
+        'Rundkurs: Du startest und endest am gleichen Punkt. Perfekt für eine Feierabendrunde, wir suchen kurvige Straßen in der gewünschten Distanz.',
     'atob':
         'A nach B: Du gibst Start und Ziel an. Wir berechnen die schönste Fahrt dorthin, optional mit Wegpunkten dazwischen.',
     'zufall':
-        'Zufall: Wir wählen den Rundkurs spontan — meist mit den kurvigsten Straßen rund um deinen Standort. Schnellste Option.',
+        'Zufall: Wir wählen den Rundkurs spontan, meist mit den kurvigsten Straßen rund um deinen Standort. Schnellste Option.',
     'wegpunkte':
-        'Wegpunkte: Du tippst auf der Karte deine Stopps. Trip-Modus erlaubt bis 5 Stopps — perfekt für mehrtägige Touren mit Pause/Resume.',
+        'Wegpunkte: Du tippst auf der Karte deine Stopps. Trip-Modus erlaubt bis 5 Stopps, perfekt für mehrtägige Touren mit Pause/Resume.',
   };
 
   @override
@@ -682,7 +682,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Text(
-                    'Kein Treffer — versuch z.B. „McDonald\'s Dornbirn" '
+                    'Kein Treffer. Versuch z.B. „McDonald\'s Dornbirn" '
                     'oder „Flughafen Zürich".',
                     style: TextStyle(color: Colors.white54, fontSize: 13),
                   ),
@@ -817,8 +817,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         ? accentColor.withValues(alpha: 0.55)
         : Colors.white.withValues(alpha: 0.08);
     final description = onlyHome
-        ? 'Route bleibt in $homeShort — keine Grenzübertritte.'
-        : 'Grenzübertritte erlaubt — die schönste Route zählt.';
+        ? 'Route bleibt in $homeShort, keine Grenzübertritte.'
+        : 'Grenzübertritte erlaubt, die schönste Route zählt.';
 
     return Semantics(
       button: true,
@@ -988,7 +988,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         CountryPreference.any,
         Icons.public_rounded,
         'Überall',
-        'Grenzübertritte sind erlaubt — die schönste Route zählt.',
+        'Grenzübertritte sind erlaubt, die schönste Route zählt.',
       ),
       (
         CountryPreference.preferHome,
@@ -1000,7 +1000,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         CountryPreference.onlyHome,
         Icons.shield_rounded,
         'Nur $homeShort',
-        'Vermeidet Grenzübertritte — ideal ohne Ausweis/Pass dabei.',
+        'Vermeidet Grenzübertritte, ideal ohne Ausweis/Pass dabei.',
       ),
     ];
     final activeSubtitle = options

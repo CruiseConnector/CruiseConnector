@@ -218,8 +218,8 @@ class CruiseManeuverIndicator extends StatelessWidget {
                   groupFollowerWaiting
                       ? 'Neue Route der Gruppe kommt gleich'
                       : isTakingLong
-                      ? 'Suche läuft weiter — Route bleibt sichtbar'
-                      : 'Route wird angepasst — bitte weiterfahren',
+                      ? 'Suche läuft weiter, Route bleibt sichtbar'
+                      : 'Route wird angepasst, bitte weiterfahren',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.65),
                     fontSize: 14,

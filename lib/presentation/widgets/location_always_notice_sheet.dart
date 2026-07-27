@@ -171,7 +171,7 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                     const SizedBox(height: 10),
                                     Text(
                                       _needsSettingsStep
-                                          ? 'Du hast den Standort nur „Beim Verwenden" freigegeben. Für Navigation im Hintergrund und Gruppenfahrten öffnen wir dich direkt in den Einstellungen — dort auf Standort tippen und „Immer" wählen.'
+                                          ? 'Du hast den Standort nur „Beim Verwenden" freigegeben. Für Navigation im Hintergrund und Gruppenfahrten öffnen wir dich direkt in den Einstellungen. Tippe dort auf Standort und wähle „Immer".'
                                           : 'Für aktive Navigation, Gruppenfahrten und sichere Re-Updates muss Cruise Connector deinen Standort auch weiter nutzen können, wenn du kurz die App wechselst oder der Bildschirm gesperrt ist.',
                                       style: TextStyle(
                                         color: Colors.white.withValues(

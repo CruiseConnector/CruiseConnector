@@ -905,8 +905,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
           SnackBar(
             content: Text(
               next
-                  ? 'Community ist jetzt öffentlich — jeder kann beitreten.'
-                  : 'Community ist jetzt privat — Beitritt nur per Invite-Code.',
+                  ? 'Community ist jetzt öffentlich. Jeder kann beitreten.'
+                  : 'Community ist jetzt privat. Beitritt nur per Invite-Code.',
             ),
           ),
         );

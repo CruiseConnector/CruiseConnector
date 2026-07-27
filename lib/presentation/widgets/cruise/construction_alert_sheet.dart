@@ -110,7 +110,7 @@ class _ConstructionAlertSheetState extends State<ConstructionAlertSheet>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text(
-            'Danke fürs Bescheid sagen — wird bei nächster Bestätigung gespeichert.',
+            'Danke fürs Bescheid sagen, wird bei nächster Bestätigung gespeichert.',
           ),
           backgroundColor: Colors.grey.shade800,
           duration: const Duration(seconds: 3),

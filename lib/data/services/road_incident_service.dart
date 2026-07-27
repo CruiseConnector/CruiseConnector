@@ -66,7 +66,7 @@ class RoadIncidentService {
       final id = map['incident_id'] as String?;
       if (id == null) {
         return const RoadIncidentReportResult(
-          message: 'Melden fehlgeschlagen — bitte spaeter erneut versuchen.',
+          message: 'Melden fehlgeschlagen. Bitte spaeter erneut versuchen.',
         );
       }
       final row = await _db
@@ -89,7 +89,7 @@ class RoadIncidentService {
     } catch (e) {
       debugPrint('[RoadIncident] report failed: $e');
       return const RoadIncidentReportResult(
-        message: 'Melden fehlgeschlagen — bitte spaeter erneut versuchen.',
+        message: 'Melden fehlgeschlagen. Bitte spaeter erneut versuchen.',
       );
     }
   }

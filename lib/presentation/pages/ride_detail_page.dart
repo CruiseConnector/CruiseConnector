@@ -222,7 +222,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
         // versuchen muss (kein „verschwundenes" Foto).
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Foto-Upload fehlgeschlagen — bitte erneut versuchen.'),
+            content: Text('Foto-Upload fehlgeschlagen, bitte erneut versuchen.'),
             backgroundColor: Color(0xFF1C1F26),
             duration: Duration(seconds: 3),
           ),

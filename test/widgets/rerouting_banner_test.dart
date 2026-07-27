@@ -35,7 +35,7 @@ void main() {
 
     expect(find.text('Neuberechnung'), findsOneWidget);
     expect(
-      find.text('Suche läuft weiter — Route bleibt sichtbar'),
+      find.text('Suche läuft weiter, Route bleibt sichtbar'),
       findsOneWidget,
     );
     expect(find.text('Rechts abbiegen.'), findsNothing);
@@ -81,7 +81,7 @@ void main() {
 
     expect(find.text('Neuberechnung'), findsOneWidget);
     expect(
-      find.text('Route wird angepasst — bitte weiterfahren'),
+      find.text('Route wird angepasst, bitte weiterfahren'),
       findsOneWidget,
     );
     expect(find.text('Folge der Gruppe'), findsNothing);

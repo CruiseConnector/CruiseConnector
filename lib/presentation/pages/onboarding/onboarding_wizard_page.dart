@@ -1123,7 +1123,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       title: 'Bestätige deine E-Mail',
       subtitle:
           'Wir haben dir einen 6-stelligen Code an $_pendingEmail geschickt. '
-          'Gib ihn hier ein — du bleibst angemeldet und machst direkt weiter.',
+          'Gib ihn hier ein, du bleibst angemeldet und machst direkt weiter.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

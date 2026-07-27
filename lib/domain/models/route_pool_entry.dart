@@ -27,6 +27,7 @@ class RoutePoolEntry {
     this.ratingCount = 0,
     this.completionRate,
     this.weeklyRotationScore = 0.0,
+    this.lastSuggestedAt,
     this.deprecatedAt,
     this.usageCount = 0,
     this.source = 'curated',
@@ -60,6 +61,14 @@ class RoutePoolEntry {
   final int ratingCount;
   final double? completionRate;
   final double weeklyRotationScore;
+
+  /// Wann diese Pool-Route zuletzt jemandem vorgeschlagen wurde.
+  ///
+  /// 2026-07-27 (vucko „wir haben sehr oft die gleiche Route bekommen"):
+  /// Die Spalte gab es in der Datenbank und die Abfrage sortierte auch danach —
+  /// sie wurde nur nie ins Modell uebernommen und konnte deshalb bei der
+  /// eigentlichen Auswahl im Client gar nicht beruecksichtigt werden.
+  final DateTime? lastSuggestedAt;
   final DateTime? deprecatedAt;
   final int usageCount;
   final String source;
@@ -108,6 +117,7 @@ class RoutePoolEntry {
       completionRate: (json['completion_rate'] as num?)?.toDouble(),
       weeklyRotationScore:
           (json['weekly_rotation_score'] as num?)?.toDouble() ?? 0.0,
+      lastSuggestedAt: _readRoutePoolDateTime(json['last_suggested_at']),
       deprecatedAt: _readRoutePoolDateTime(json['deprecated_at']),
       usageCount: (json['usage_count'] as num?)?.toInt() ?? 0,
       source: (json['source'] as String?) ?? 'curated',

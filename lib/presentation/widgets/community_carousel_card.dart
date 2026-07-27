@@ -302,7 +302,7 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Folgen fehlgeschlagen — bitte erneut versuchen.'),
+          content: Text('Folgen fehlgeschlagen, bitte erneut versuchen.'),
         ),
       );
     }

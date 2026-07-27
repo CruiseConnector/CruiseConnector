@@ -1744,7 +1744,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                                     children: [
                                       Flexible(
                                         child: Text(
-                                          'Level $userLevel - $levelName',
+                                          'Level $userLevel: $levelName',
                                           style: const TextStyle(
                                             color: Color(0xFFA0AEC0),
                                             fontSize: 12,
@@ -3908,7 +3908,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
               const SizedBox(height: 12),
               Text(
-                'Level $userLevel - $levelName',
+                'Level $userLevel: $levelName',
                 maxLines: 2,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.72),
@@ -4036,7 +4036,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               children: [
                 Expanded(
                   child: Text(
-                    'Level $userLevel - $levelName',
+                    'Level $userLevel: $levelName',
                     maxLines: 2,
                     style: const TextStyle(
                       color: Color(0xFFA0AEC0),
@@ -5159,7 +5159,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
               const SizedBox(height: 4),
               Text(
-                'Noch ~${remainingKm.toStringAsFixed(0)} km offen — die Route '
+                'Noch ~${remainingKm.toStringAsFixed(0)} km offen. Die Route '
                 'wird an deiner Position wieder aufgenommen.',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),

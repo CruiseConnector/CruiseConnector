@@ -2571,7 +2571,7 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
               'wird sie vollständig gelöscht. Ernenne vorher einen neuen Admin, '
               'wenn die Gruppe bestehen bleiben soll.'
         : widget.iAmOwner
-        ? 'Es gibt weitere Owner – die Gruppe bleibt bestehen, du '
+        ? 'Es gibt weitere Owner, die Gruppe bleibt bestehen. Du '
               'verlierst nur deine Mitgliedschaft.'
         : 'Du verlässt diese Gruppe. Beitritt später wieder möglich, '
               'solange sie öffentlich ist.';

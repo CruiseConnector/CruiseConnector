@@ -155,7 +155,7 @@ class _SafeErrorFallback extends StatelessWidget {
           Icon(Icons.refresh_rounded, color: Color(0xFF8A93A6), size: 34),
           SizedBox(height: 12),
           Text(
-            'Kurz hakte etwas — bitte zurück und erneut versuchen.',
+            'Kurz hakte etwas. Bitte zurück und erneut versuchen.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Color(0xFFB6BDC9),

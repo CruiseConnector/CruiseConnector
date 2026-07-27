@@ -647,7 +647,7 @@ class _CommunityPageState extends State<CommunityPage>
               }
               if (filtered.isEmpty) {
                 return _buildEmptyHint(
-                  'Keine Treffer — probier andere Filter.',
+                  'Keine Treffer, probier andere Filter.',
                 );
               }
               return Column(
@@ -1100,7 +1100,7 @@ class _CommunityPageState extends State<CommunityPage>
               ),
               const SizedBox(height: 6),
               const Text(
-                'Starte selbst eine — andere können beitreten.',
+                'Starte selbst eine, andere können beitreten.',
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -1224,7 +1224,7 @@ class _CommunityPageState extends State<CommunityPage>
     await shareText(
       context,
       text:
-          'Komm mit auf Cruise Connector — Routen planen, cruisen & sharen. $link',
+          'Komm mit auf Cruise Connector: Routen planen, cruisen & sharen. $link',
       subject: 'Join Cruise Connector',
     );
   }
@@ -2232,7 +2232,7 @@ class _CommunityPageState extends State<CommunityPage>
                                 counterText: '',
                                 hintText: replyToId != null
                                     ? 'Antwort schreiben...'
-                                    : 'Kommentar schreiben — @ erwähnt Follower',
+                                    : 'Kommentar schreiben, @ erwähnt Follower',
                                 hintStyle: const TextStyle(color: Colors.grey),
                                 border: InputBorder.none,
                               ),
@@ -2551,7 +2551,7 @@ class _CommunityPageState extends State<CommunityPage>
                               style: TextStyle(color: Colors.white),
                             ),
                             content: const Text(
-                              'Die Gruppe wird unwiderruflich gelöscht — auch für alle Mitglieder.',
+                              'Die Gruppe wird unwiderruflich gelöscht, auch für alle Mitglieder.',
                               style: TextStyle(color: Colors.grey),
                             ),
                             actions: [

@@ -400,7 +400,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Folge anderen Cruisern oder \nlike Posts — dann landen hier neue Updates',
+            'Folge anderen Cruisern oder \nlike Posts, dann landen hier neue Updates',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.55),

@@ -295,7 +295,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       if (_photoBytes != null && _uploadedPhotoUrl == null && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Fahrt gespeichert — Foto konnte nicht hochgeladen werden.'),
+            content: Text('Fahrt gespeichert, Foto konnte nicht hochgeladen werden.'),
             backgroundColor: Color(0xFF1C1F26),
             duration: Duration(seconds: 3),
           ),

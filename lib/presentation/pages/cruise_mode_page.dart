@@ -11,6 +11,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/cruise_ui_rules.dart';
 import 'package:flutter/services.dart'
     show HapticFeedback, SystemChrome, DeviceOrientation;
 import 'package:geolocator/geolocator.dart' as geo;
@@ -3482,7 +3483,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         TopToast.show(
           context,
           message:
-              'Diese Tour hat keine gültigen Wegpunkte mehr — wird geschlossen.',
+              'Diese Tour hat keine gültigen Wegpunkte mehr und wird geschlossen.',
           icon: Icons.info_outline_rounded,
           duration: const Duration(milliseconds: 3500),
         );
@@ -3539,7 +3540,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Visuelle Bestätigung
       TopToast.show(
         context,
-        message: 'Trip wird fortgesetzt — ${waypoints.length} Stopps geladen',
+        message: 'Trip wird fortgesetzt, ${waypoints.length} Stopps geladen',
         icon: Icons.route_rounded,
         duration: const Duration(milliseconds: 2800),
       );
@@ -4327,7 +4328,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               _tutorialBullet(
                 '🗺️',
                 'Trip-Modus',
-                'Bis zu 5 Stopps, mit Pause/Resume — perfekt für Mehrtages-Touren',
+                'Bis zu 5 Stopps, mit Pause/Resume, perfekt für Mehrtages-Touren',
               ),
               const SizedBox(height: 10),
               _tutorialBullet(
@@ -4479,7 +4480,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               style: const TextStyle(fontSize: 13, height: 1.4),
               children: [
                 TextSpan(
-                  text: '$title — ',
+                  text: '$title: ',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
@@ -4759,7 +4760,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // sonst umgeht es Bestätigung + Post-Route-Screen und der User landet wieder
     // auf der Routensuche. Wir fangen ihn ab und leiten in denselben Flow wie der
     // Zurück-Button (_handleActiveRouteBack → Bestätigen → Abschluss → Lobby).
-    final blockSystemBack = widget.groupId != null && _isRouteConfirmed;
+    // 2026-07-27 (vucko „beim Zurück soll ein Pop-up kommen"): Dasselbe gilt
+    // jetzt für laufende SOLO-Fahrten. Vorher poppte die Wischgeste die Seite
+    // sofort weg, ohne Rückfrage — ein Fix nur am Zurück-Button hätte den
+    // häufigsten Weg (iOS-Kantenwisch, Android-Zurück) offen gelassen.
+    final blockSystemBack =
+        (widget.groupId != null && _isRouteConfirmed) || _soloRideIsRunning;
     return PopScope(
       canPop: !blockSystemBack,
       onPopInvokedWithResult: (didPop, result) {
@@ -8573,6 +8579,22 @@ class _CruiseModePageState extends State<CruiseModePage>
           startPosition.latitude,
           startPosition.longitude,
         );
+        // 2026-07-27 (vucko „der Inlandsfilter funktioniert immer noch nicht"):
+        // CountryRegion.classify() kennt nur DACH und die direkten Nachbarn.
+        // Ausserhalb davon lieferte es null, und DANN prüften weder Client
+        // noch Edge Function irgendetwas — der Filter war ein stiller No-Op,
+        // ohne dass der Nutzer je erfahren hätte, warum die Route trotzdem
+        // ins Ausland führt. Jetzt sagen wir es ihm.
+        if (_homeCountryCode == null && mounted) {
+          TopToast.show(
+            context,
+            message:
+                'Für diese Gegend kennen wir das Land nicht. „Im Land bleiben" '
+                'wirkt hier nicht.',
+            icon: Icons.public_off_rounded,
+            duration: const Duration(seconds: 4),
+          );
+        }
       }
       final effectiveCountryPreference =
           _effectiveCountryPreferenceForGeneration;
@@ -9536,9 +9558,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_checkHazardsInBackground(result.coordinates));
     // 2026-05-24 (vucko Task #49): POIs auto-laden wenn Settings aktiv
     // (Google-Maps-Style: Tankstellen erscheinen automatisch auf der Map).
-    _routePois = const [];
+    //
+    // 2026-07-27 (vucko „die POIs verschwinden einfach"): Die Liste wird hier
+    // NICHT mehr sofort geleert. Vorher wurden _routePois, _routeConstructions
+    // und _routeIncidents im selben Tick auf leer gesetzt — damit griff der
+    // Early-Return in _buildPoiFeatures (alle drei leer), und die native Karte
+    // bekam per setGeoJsonSource eine LEERE FeatureCollection. Sämtliche
+    // Marker verschwanden sichtbar, teils sekundenlang, teils dauerhaft (wenn
+    // das Nachladen scheiterte). Jetzt bleiben die alten Marker stehen, bis
+    // die neuen da sind; _loadPoisFromSettings ersetzt sie in einem Rutsch und
+    // räumt im Fehlerfall selbst auf.
     if (PoiSettingsService.instance.anyEnabled) {
       unawaited(_loadPoisFromSettings(result.coordinates));
+    } else {
+      _routePois = const [];
     }
     // First-Run-Tutorial einmalig zeigen
     if (!PoiSettingsService.instance.tutorialSeen) {
@@ -10216,7 +10249,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _routeSearchNoticeTitle = 'Aktuelle Strecke bleibt';
         _routeSearchNoticeMessage = healingQueued
             ? 'Wir bereiten im Hintergrund neue Vorschläge vor.'
-            : 'Keine neue Variante gefunden — deine Route passt.';
+            : 'Keine neue Variante gefunden, deine Route passt.';
       });
       _scheduleRouteSearchStatusDismiss(
         hold: const Duration(milliseconds: 1800),
@@ -10490,6 +10523,86 @@ class _CruiseModePageState extends State<CruiseModePage>
       unawaited(_confirmAndStopGroupRide());
       return;
     }
+    if (_soloRideIsRunning) {
+      unawaited(_confirmAndLeaveSoloRide());
+      return;
+    }
+    _returnToCruiseSetupFromActiveRoute();
+  }
+
+  /// Läuft gerade eine echte Solo-Fahrt (nicht bloß die Routenvorschau)?
+  /// Nur dann ist ein Rückfragen sinnvoll — in der Vorschau kostet Zurück
+  /// nichts und ein Dialog wäre reine Belästigung.
+  bool get _soloRideIsRunning =>
+      widget.groupId == null &&
+      _isRouteConfirmed &&
+      (_positionSubscription != null || _activeTripId != null);
+
+  /// 2026-07-27 (vucko „beim Zurück soll ein Pop-up kommen"): Bestätigung vor
+  /// dem Verlassen einer laufenden Solo-Fahrt.
+  ///
+  /// Zum Text: Vucko wollte sinngemäß „du verlierst alle deine
+  /// Erfahrungspunkte". Das wäre falsch und hätte Nutzer unnötig erschreckt —
+  /// XP werden ausschließlich im Abschluss-Sheet vergeben
+  /// (_recordDriveSessionForCurrentRoute, nur aus onSave/onDiscard des
+  /// CruiseCompletionDialog). Wer ohne Beenden zurückgeht, bekommt für DIESE
+  /// Fahrt keine Punkte; bereits gutgeschriebene Punkte werden nirgends im
+  /// Code wieder abgezogen. Der Dialog sagt deshalb genau das.
+  Future<void> _confirmAndLeaveSoloRide() async {
+    if (!mounted || _disposed) return;
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Fahrt wirklich verlassen?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          'Für diese Fahrt bekommst du dann keine Erfahrungspunkte. '
+          'Deine bisherigen Punkte bleiben dir erhalten.\n\n'
+          'Beende die Fahrt stattdessen, dann wird sie gewertet.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('cancel'),
+            child: Text(
+              'Weiterfahren',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('end'),
+            child: const Text(
+              'Fahrt beenden',
+              style: TextStyle(
+                color: Color(0xFF5BD98A),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('leave'),
+            child: const Text(
+              'Verlassen',
+              style: TextStyle(
+                color: Color(0xFFFF6B61),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || _disposed) return;
+    if (choice == 'end') {
+      _stopNavigationTracking();
+      _stopSimulation(restartLiveTracking: false);
+      _onRouteEarlyStopped();
+      return;
+    }
+    if (choice != 'leave') return;
     _returnToCruiseSetupFromActiveRoute();
   }
 
@@ -10662,7 +10775,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (!mounted || _disposed) return;
         TopToast.show(
           context,
-          message: 'Tour zwischengespeichert — auf Home fortsetzen',
+          message: 'Tour zwischengespeichert, auf Home fortsetzen',
           icon: Icons.archive_outlined,
           duration: const Duration(milliseconds: 3000),
         );
@@ -11208,19 +11321,19 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   String _rerouteFailureUserMessage(List<String> causes) {
     if (causes.any((c) => c.startsWith('start_offset'))) {
-      return 'Reroute verworfen: Server-Route startete zu weit entfernt — folge der Linie, nächster Versuch kommt automatisch';
+      return 'Reroute verworfen: Server-Route startete zu weit entfernt. Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     final last = causes.isNotEmpty ? causes.last : '';
     if (last.startsWith('timeout') || last.startsWith('network')) {
-      return 'Reroute gerade nicht möglich (Netz/Server) — folge der Linie, nächster Versuch kommt automatisch';
+      return 'Reroute gerade nicht möglich (Netz/Server). Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     if (last.startsWith('edge_error')) {
-      return 'Reroute-Server meldet einen Fehler — folge der Linie, nächster Versuch kommt automatisch';
+      return 'Reroute-Server meldet einen Fehler. Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     if (last.startsWith('no_route') || last == 'no_candidate') {
-      return 'Keine Anschlussroute gefunden — folge der Linie, wende erst bei sicherer Möglichkeit';
+      return 'Keine Anschlussroute gefunden. Folge der Linie, wende erst bei sicherer Möglichkeit.';
     }
-    return 'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit';
+    return 'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit';
   }
 
   void _publishRerouteFailure({
@@ -11258,7 +11371,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         context,
         message:
             userMessage ??
-            'Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit',
+            'Keine sichere Reroute. Folge der Linie und wende erst bei sicherer Möglichkeit',
         icon: Icons.warning_amber_rounded,
         isError: true,
         duration: const Duration(milliseconds: 4000),
@@ -11308,7 +11421,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       TopToast.show(
         context,
-        message: 'Offline — gespeicherte Route bleibt sichtbar',
+        message: 'Offline: Gespeicherte Route bleibt sichtbar',
         icon: Icons.cloud_off_rounded,
         isError: true,
         duration: const Duration(milliseconds: 4000),
@@ -12049,8 +12162,8 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     if (Platform.isAndroid) {
       final notificationText = widget.groupId == null
-          ? 'Navigation läuft - dein Standort bleibt für die Route aktiv.'
-          : 'Navigation läuft - dein Standort wird mit der Gruppe geteilt.';
+          ? 'Navigation läuft, dein Standort bleibt für die Route aktiv.'
+          : 'Navigation läuft, dein Standort wird mit der Gruppe geteilt.';
       return geo.AndroidSettings(
         accuracy: geo.LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
@@ -13212,7 +13325,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           .toList();
       setState(() => _routePois = filtered);
     } catch (_) {
-      /* silent */
+      // 2026-07-27: Da _applyRouteResult die alte Liste bewusst stehen lässt,
+      // muss der Fehlerfall hier aufräumen — sonst blieben POIs der VORIGEN
+      // Route dauerhaft auf der neuen Strecke liegen.
+      if (mounted) setState(() => _routePois = const []);
     }
   }
 
@@ -13643,7 +13759,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       TopToast.show(
         context,
         message:
-            '${poi.type.label} liegt ${(minDistMeters / 1000).toStringAsFixed(1)} km abseits — bitte als neuen Stopp planen.',
+            '${poi.type.label} liegt ${(minDistMeters / 1000).toStringAsFixed(1)} km abseits, bitte als neuen Stopp planen.',
         icon: Icons.warning_amber_rounded,
         duration: const Duration(seconds: 4),
       );
@@ -13765,7 +13881,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (!mounted) return;
       TopToast.show(
         context,
-        message: 'Route konnte nicht angepasst werden — versuch es nochmal.',
+        message: 'Route konnte nicht angepasst werden, versuch es nochmal.',
         icon: Icons.error_outline_rounded,
         duration: const Duration(seconds: 4),
       );
@@ -13814,7 +13930,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     TopToast.show(
       context,
-      message: '${poi.type.label} entfernt — Route wird neu berechnet…',
+      message: '${poi.type.label} entfernt, Route wird neu berechnet…',
       icon: Icons.remove_circle_outline_rounded,
       duration: const Duration(seconds: 3),
     );
@@ -13831,7 +13947,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     TopToast.show(
       context,
       message:
-          '⛽ Tankstellen erscheinen automatisch auf der Karte — Filter in Einstellungen',
+          '⛽ Tankstellen erscheinen automatisch auf der Karte, Filter in den Einstellungen',
       icon: Icons.local_gas_station_rounded,
       duration: const Duration(seconds: 5),
     );
@@ -14054,7 +14170,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (lat == null || lng == null) {
       TopToast.show(
         context,
-        message: 'Keine GPS-Position — bitte gleich nochmal versuchen.',
+        message: 'Keine GPS-Position, bitte gleich nochmal versuchen.',
         isError: true,
       );
       return;
@@ -14087,8 +14203,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     TopToast.show(
       context,
       message: result.merged
-          ? '${type.label} bestätigt — danke!'
-          : '${type.label} gemeldet — danke!',
+          ? '${type.label} bestätigt, danke!'
+          : '${type.label} gemeldet, danke!',
       icon: type.icon,
     );
     if (type == RoadIncidentType.stau) {
@@ -14209,7 +14325,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (bounds == null) {
         // Karte nicht ready — Fallback: ~5km Radius um User-Position.
         final user = _userLocation;
-        if (user == null) return;
+        if (user == null) {
+          // 2026-07-27: Ohne dieses Zurücksetzen bliebe _poisLoading für immer
+          // true und der Wächter ganz oben („if (_poisLoading) return") würde
+          // JEDEN weiteren POI-Ladeversuch dieser Seite dauerhaft blockieren.
+          if (mounted) setState(() => _poisLoading = false);
+          return;
+        }
         bounds = LatLngBounds(
           LatLng(user.latitude - 0.04, user.longitude - 0.06),
           LatLng(user.latitude + 0.04, user.longitude + 0.06),
@@ -14281,7 +14403,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     // jetzt raus, solange das Sheet oben ist, und kommt zurück, sobald der
     // Nutzer es runterwischt (_configCollapsed == true). Die Buttons bleiben
     // damit erreichbar, sobald man die Karte tatsächlich sieht.
-    final hidden = waypointRailActive || !_configCollapsed;
+    // 2026-07-27 (vucko „Schnellzugriff/POIs sind während der Fahrt weg"):
+    // REGRESSION aus der Zeile darüber. `_configCollapsed` beschreibt das
+    // Setup-Sheet, das es NUR vor der bestätigten Route gibt (siehe die beiden
+    // Aufrufstellen: hasRoute:false vor der Route, hasRoute:true in der
+    // Navigation). Während der Fahrt gibt es nichts zum Hochwischen — trotzdem
+    // hing die Sichtbarkeit an dem Flag, und das steht beim Betreten der
+    // Navigation stellenweise auf false (z.B. Fahrt-Resume, Zeile ~2206) sowie
+    // als Startwert. Ergebnis: die komplette rechte Spalte (POI-Filter, Stimme,
+    // Kamera-Lock, Melde-Button) war mitten in der Fahrt unsichtbar.
+    // Das Ausblenden gilt jetzt ausdrücklich nur im Vor-Routen-Zustand.
+    final hidden = cruiseFabColumnHidden(
+      hasRoute: hasRoute,
+      waypointRailActive: waypointRailActive,
+      configCollapsed: _configCollapsed,
+    );
     final bottomInset = hasRoute ? 260.0 : 240.0;
     // 2026-07-25 (Review-Fund): Mit dem neuen Melde-FAB sind es bis zu 5
     // Bubbles (Debug: 6) à 60pt = 300-360pt. Bei bottom:260 ragte die Spalte
@@ -14846,7 +14982,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         TopToast.show(
           context,
           message:
-              'Reroute dauert zu lange — bitte weiterfahren, ich versuche es gleich erneut',
+              'Reroute dauert zu lange, bitte weiterfahren, ich versuche es gleich erneut',
           icon: Icons.refresh_rounded,
           isError: true,
           duration: const Duration(milliseconds: 4000),
@@ -14928,7 +15064,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
             etaBeforeSeconds: etaBeforeSeconds,
             userMessage:
-                'Reroute gerade nicht möglich: GPS ist noch nicht präzise genug — bitte weiterfahren',
+                'Reroute gerade nicht möglich: GPS ist noch nicht präzise genug, bitte weiterfahren',
           );
           return;
         }
@@ -15634,7 +15770,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             if (mounted) {
               TopToast.show(
                 context,
-                message: 'Route neu berechnet — zurück auf Kurs',
+                message: 'Route neu berechnet, zurück auf Kurs',
                 icon: Icons.check_circle,
                 duration: const Duration(milliseconds: 2500),
               );

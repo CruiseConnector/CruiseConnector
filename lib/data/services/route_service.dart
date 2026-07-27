@@ -1460,7 +1460,7 @@ class RouteService {
         throw const RouteServiceException(
           type: RouteErrorType.noRoute,
           userMessage:
-              'Hier ist kein Rundkurs möglich, der im Land bleibt — die Gegend '
+              'Hier ist kein Rundkurs möglich, der im Land bleibt. Die Gegend '
               'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
               'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
           debugMessage: 'all_round_trip_candidates_crossed_border',
@@ -3396,6 +3396,15 @@ class RouteService {
       fingerprintHint:
           'return_${(sessionOrigin[1] * 10000).round()}_${(sessionOrigin[0] * 10000).round()}',
       candidateBudget: 3,
+      // 2026-07-27 (vucko „teilweise keine gefunden oder sehr lange geladen"):
+      // Der Anfahrts-Leg lief schon immer mit navigationReroute:true, also 8s
+      // und einem Versuch. Dieser Rueckweg-Leg nicht — er bekam die vollen
+      // 26-40s. Beide gehoeren zum SELBEN Pool-Fallback, der eigentlich das
+      // schnelle Sicherheitsnetz sein soll. Bei einem langsamen (nicht toten)
+      // GraphHopper blockierte allein diese Zeile pro Join-Punkt bis zu 40
+      // Sekunden, bei mehreren Pool-Treffern summierte sich das auf Minuten —
+      // der Fallback wurde damit selbst zur Ursache der langen Ladezeit.
+      navigationReroute: true,
     );
   }
 
@@ -6518,7 +6527,7 @@ class RouteService {
       throw RouteServiceException(
         type: RouteErrorType.noRoute,
         userMessage:
-            'Hier ist kein Rundkurs mit ~${target.round()} km möglich — der '
+            'Hier ist kein Rundkurs mit ~${target.round()} km möglich. Der '
             'kürzeste Kurs wäre ${actual.round()} km. Versuch eine andere '
             'Distanz oder einen Start näher an einem dichteren Straßennetz.',
         debugMessage:
@@ -6548,7 +6557,7 @@ class RouteService {
       throw RouteServiceException(
         type: RouteErrorType.noRoute,
         userMessage:
-            'Hier ist kein Rundkurs möglich, der im Land bleibt — die Gegend '
+            'Hier ist kein Rundkurs möglich, der im Land bleibt. Die Gegend '
             'grenzt direkt ans Ausland. Schalt „Im Land bleiben" aus oder wähl '
             'eine kürzere Distanz bzw. einen Start weiter im Landesinneren.',
         debugMessage:
@@ -7742,15 +7751,28 @@ class RouteService {
         for (final exitIndex in exitIndices) {
           final loopSegment = _sliceRouteRange(rotatedLoop, 0, exitIndex);
           if (loopSegment.coordinates.length < 4) continue;
-          final returnLeg = backendUnavailable
-              ? null
-              : await _buildReturnLegIfNeeded(
-                  sessionOrigin: sessionOrigin,
-                  followOnRoute: loopSegment,
-                  mode: scenario.style,
-                  avoidHighways: scenario.avoidHighways,
-                  enabled: true,
-                );
+          // 2026-07-27: Scheitert der Rueckweg, ist das kein Grund, den ganzen
+          // Pool-Treffer wegzuwerfen — die Schleife allein ist eine gueltige
+          // Route. Vorher flog die Exception bis in den aeusseren Catch und
+          // dieser Join-Punkt war verloren, obwohl eine brauchbare Strecke
+          // bereits vorlag.
+          RouteResult? returnLeg;
+          if (!backendUnavailable) {
+            try {
+              returnLeg = await _buildReturnLegIfNeeded(
+                sessionOrigin: sessionOrigin,
+                followOnRoute: loopSegment,
+                mode: scenario.style,
+                avoidHighways: scenario.avoidHighways,
+                enabled: true,
+              );
+            } catch (e) {
+              debugPrint(
+                '[RouteService] Pool-Rueckweg fehlgeschlagen, nutze die '
+                'Schleife ohne Rueckweg: $e',
+              );
+            }
+          }
           final sessionRoute = returnLeg == null
               ? loopSegment
               : _mergeRouteSegments([loopSegment, returnLeg]);
@@ -8317,6 +8339,12 @@ class RouteService {
         );
         body['simplify_waypoints'] = true;
         body['max_waypoints'] = 8;
+        // 2026-07-27 (Inlandsfilter): Diese Fallback-Stufe schickte die
+        // Laenderpolicy nie mit. Die Edge Function wusste damit nichts vom
+        // „Im Land bleiben" und suchte gar nicht erst danach — der Client
+        // verwarf die grenzueberschreitenden Treffer dann zwar korrekt, aber
+        // die Stufe lief in Grenzregionen praktisch immer ins Leere.
+        _applyCountryPolicyToRequest(body, scenario);
         final result = await _invoke(body);
         final snapped = _snapRouteToStartPosition(result, startPosition);
         final candidate = _evaluateCandidate(
@@ -8389,6 +8417,14 @@ class RouteService {
       avoidHighways: true,
       waypointSignature: scenario.waypointSignature,
       closeLoop: scenario.closeLoop,
+      // 2026-07-27 (vucko „der Inlandsfilter funktioniert immer noch nicht"):
+      // Diese beiden Felder fehlten. RouteScenario setzt sie sonst auf die
+      // Defaults (any / null), wodurch diese Fallback-Stufe den Inlandsfilter
+      // still verwarf: die Edge-Anfrage ging ohne Laenderpolicy raus UND die
+      // Kandidatenbewertung sah countryPreference == any, sodass
+      // countryRejected nie greifen konnte.
+      countryPreference: scenario.countryPreference,
+      homeCountryCode: scenario.homeCountryCode,
     );
     final noHighwayBudget = math.max(
       _roundTripCandidateBudget(noHighwayScenario, styleConfig),
@@ -8602,6 +8638,10 @@ class RouteService {
         body['max_waypoints'] = _rescueRoundTripWaypointLimit(scenario);
         body['rescue_round_trip'] = true;
         body['route_variant_hint'] = '${variant.variantHint}-rescue-$label';
+        // 2026-07-27 (Inlandsfilter): identischer Fund wie in
+        // _tryRoundTripFallback — die letzte Rettungsstufe vor dem harten
+        // Fehlschlag war bisher blind fuer Landesgrenzen.
+        _applyCountryPolicyToRequest(body, scenario);
 
         debugPrint(
           '[RouteService] Rundkurs-Rescue $label: '

@@ -72,7 +72,7 @@ void showRouteTypeDialog({
                 icon: Icons.route,
                 color: Colors.orange,
                 title: 'Coole Route (Sport)',
-                subtitle: 'Mit $selectedStyle - anspruchsvoll',
+                subtitle: 'Mit $selectedStyle, anspruchsvoll',
                 onTap: () {
                   Navigator.pop(ctx);
                   onRouteSelected(suggestion, scenic: true, routeVariant: 0);

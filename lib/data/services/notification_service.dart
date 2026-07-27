@@ -335,7 +335,7 @@ class AppNotification {
           pick([
             '$name lädt dich zu $group ein',
             '$name will dich bei $group dabei haben',
-            'Komm zu $group — Einladung von $name',
+            'Komm zu $group, eingeladen von $name',
           ]),
         );
       case 'group_ride_started':
@@ -347,7 +347,7 @@ class AppNotification {
           ]),
           pick([
             '$name fährt jetzt los',
-            '$name hat die Tour gestartet — schließ dich an',
+            '$name hat die Tour gestartet, schließ dich an',
             'Spring auf: $name ist unterwegs',
           ]),
         );
@@ -391,8 +391,8 @@ class AppNotification {
           ]),
           pick([
             'Dein gestarteter Trip wartet auf Fortsetzung',
-            'Letzter Stopp erreicht — bereit für den nächsten?',
-            'Deine Multi-Stop-Tour pausiert — knack sie heute',
+            'Letzter Stopp erreicht, bereit für den nächsten?',
+            'Deine Multi-Stop-Tour pausiert, knack sie heute',
           ]),
         );
       default:
@@ -418,9 +418,9 @@ class AppNotification {
       return (
         pick(const ['Bestes Cruise-Wetter', 'Sonniger Tag', 'Heiß wie Asphalt']),
         pick([
-          '${temp.round()}° und $cond — perfekt für eine schattige Bergtour',
-          '${temp.round()}° draußen — Helm auf und ab in die Kurven',
-          'Idealer Tag für eine entspannte Runde — ${temp.round()}°',
+          '${temp.round()}° und $cond, perfekt für eine schattige Bergtour',
+          '${temp.round()}° draußen, Helm auf und ab in die Kurven',
+          'Idealer Tag für eine entspannte Runde bei ${temp.round()}°',
         ]),
       );
     }
@@ -430,9 +430,9 @@ class AppNotification {
         return (
           pick(const ['Perfekter Morgen', 'Morgentour gefällig?', 'Bestes Wetter']),
           pick([
-            '${temp.round()}° und $cond — frische Luft wartet auf dich',
-            '${temp.round()}° — Zeit für eine Vormittagsrunde',
-            'Idealer Morgen für eine Tour — ${temp.round()}° draußen',
+            '${temp.round()}° und $cond, frische Luft wartet auf dich',
+            '${temp.round()}°, Zeit für eine Vormittagsrunde',
+            'Idealer Morgen für eine Tour bei ${temp.round()}° draußen',
           ]),
         );
       }
@@ -440,9 +440,9 @@ class AppNotification {
         return (
           pick(const ['Feierabend-Cruise?', 'Goldene Stunde', 'Sunset-Tour wartet']),
           pick([
-            '${temp.round()}° — perfekt für eine Abendrunde',
-            'Sonnenuntergangs-Tour bei ${temp.round()}° — wie wärs?',
-            '${temp.round()}° und $cond — Zeit für einen entspannten Cruise',
+            '${temp.round()}°, perfekt für eine Abendrunde',
+            'Sonnenuntergangs-Tour bei ${temp.round()}°, wie wärs?',
+            '${temp.round()}° und $cond, Zeit für einen entspannten Cruise',
           ]),
         );
       }
@@ -453,9 +453,9 @@ class AppNotification {
           'Zeit für eine Tour',
         ]),
         pick([
-          '${temp.round()}° und $cond — bereit für eine Runde?',
+          '${temp.round()}° und $cond, bereit für eine Runde?',
           'Cruise-Bedingungen optimal: ${temp.round()}°',
-          'Heute idealer Tag — ${temp.round()}° und $cond',
+          'Heute idealer Tag mit ${temp.round()}° und $cond',
         ]),
       );
     }
@@ -468,7 +468,7 @@ class AppNotification {
           'Frische Luft wartet',
         ]),
         pick([
-          '${temp.round()}° — pack die Jacke und rauf aufs Bike',
+          '${temp.round()}°, pack die Jacke und rauf aufs Bike',
           'Kühl aber fahrbar: ${temp.round()}° und $cond',
           'Mit Jacke perfekt: ${temp.round()}° draußen',
         ]),
@@ -479,8 +479,8 @@ class AppNotification {
       return (
         pick(const ['Kalt aber möglich', 'Winter-Cruise', 'Frostige Tour?']),
         pick([
-          '${temp.round()}° — warm anziehen, dann rollts',
-          'Kalt aber klar bei ${temp.round()}° — vorsichtig fahren',
+          '${temp.round()}°, warm anziehen, dann rollts',
+          'Kalt aber klar bei ${temp.round()}°, vorsichtig fahren',
         ]),
       );
     }

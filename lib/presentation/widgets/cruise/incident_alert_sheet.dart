@@ -205,7 +205,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Von der Community gemeldet — ist das noch da?',
+                            'Von der Community gemeldet, ist das noch da?',
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.65),
                               fontSize: 13,

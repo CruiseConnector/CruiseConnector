@@ -191,7 +191,7 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Lautstärke einstellen — du hörst jede Änderung',
+                        'Lautstärke einstellen, du hörst jede Änderung',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.6),
                           fontSize: 13,

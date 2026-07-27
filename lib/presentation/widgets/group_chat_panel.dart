@@ -394,7 +394,7 @@ class _GroupChatPanelState extends State<GroupChatPanel> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Schreib der Gruppe — Treffpunkt, Tempo, alles klären.',
+                'Schreib der Gruppe: Treffpunkt, Tempo, alles klären.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey, fontSize: 13),
               ),
