@@ -966,6 +966,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Finger noch auf dem Screen ist, und die Kamera drehte gegen den Nutzer.
   DateTime? _lastUserCameraGestureAt;
   static const Duration _freeRotateGestureBlock = Duration(seconds: 3);
+  /// 2026-07-27 (vucko „Drehung nur ~200° statt 360°"): Getrennte Schwellen
+  /// statt der alten starren 3° an allen drei Stellen. Aufwecken erst bei
+  /// spuerbarer Abweichung (kein Ticker-Start durch Sensor-Rauschen), aber
+  /// danach bis fast auf null nachdrehen — vorher blieb dauerhaft bis zu 3°
+  /// Restversatz stehen, weil unterhalb der Schwelle nichts mehr ausgeloest
+  /// wurde.
+  static const double _freeRotateWakeDeg = 2.5;
+  static const double _freeRotateApplyDeg = 1.0;
   // Zuletzt ANGEWANDTES Auto-Rotate-Bearing (Rate-Limit: erst ab 3° Differenz
   // wird ein neuer Kamera-Call abgesetzt — Method-Channel-Schonung wie beim
   // _camMoveInFlight-Muster des Lock-Modus).
@@ -9642,6 +9650,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _cachedCurveCount = 0;
       _isExistingRouteSession = false;
     });
+    // 2026-07-27 (vucko „Drehung nur im freien Modus, aber zuverlaessig"):
+    // Hier wird der freie Modus gesetzt, OHNE ueber _unlockCameraFollow zu
+    // laufen — der Kompass blieb dadurch tot, bis der Nutzer einmal manuell
+    // sperrte und wieder entsperrte. Der Aufruf ist idempotent und prueft
+    // _isCameraLocked selbst, kostet also nichts, wenn gerade gelockt ist.
+    _startCompassIfNeeded();
     // Kurven async im Isolate berechnen (blockiert UI nicht)
     GamificationService.countCurvesAsync(result.coordinates).then((count) {
       if (mounted) setState(() => _cachedCurveCount = count);
@@ -10143,6 +10157,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = snapshot.isCameraLocked;
       _configCollapsed = snapshot.configCollapsed;
     });
+    // 2026-07-27 (vucko „Drehung nur im freien Modus, aber zuverlaessig"):
+    // Hier wird der freie Modus gesetzt, OHNE ueber _unlockCameraFollow zu
+    // laufen — der Kompass blieb dadurch tot, bis der Nutzer einmal manuell
+    // sperrte und wieder entsperrte. Der Aufruf ist idempotent und prueft
+    // _isCameraLocked selbst, kostet also nichts, wenn gerade gelockt ist.
+    _startCompassIfNeeded();
   }
 
   bool _snapshotHasVisibleRoute(_GeneratedRouteUiStateSnapshot snapshot) {
@@ -10537,6 +10557,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isCameraLocked = false;
       _configCollapsed = false;
     });
+    // 2026-07-27 (vucko „Drehung nur im freien Modus, aber zuverlaessig"):
+    // Hier wird der freie Modus gesetzt, OHNE ueber _unlockCameraFollow zu
+    // laufen — der Kompass blieb dadurch tot, bis der Nutzer einmal manuell
+    // sperrte und wieder entsperrte. Der Aufruf ist idempotent und prueft
+    // _isCameraLocked selbst, kostet also nichts, wenn gerade gelockt ist.
+    _startCompassIfNeeded();
   }
 
   void _saveActiveTripForLater() {
@@ -11932,6 +11958,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         _activeAvoidHighways = false;
         _recentDestinationDistances = [];
       });
+      // 2026-07-27 (vucko „Drehung nur im freien Modus, aber zuverlaessig"):
+      // Hier wird der freie Modus gesetzt, OHNE ueber _unlockCameraFollow zu
+      // laufen — der Kompass blieb dadurch tot, bis der Nutzer einmal manuell
+      // sperrte und wieder entsperrte. Der Aufruf ist idempotent und prueft
+      // _isCameraLocked selbst, kostet also nichts, wenn gerade gelockt ist.
+      _startCompassIfNeeded();
       CruiseModePage.isFullscreen.value = false;
 
       await _drawRoute(preparedPreviewResult.geometry, animateRouteDraw: true);
@@ -16731,7 +16763,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_cameraAnimController?.isAnimating ?? false) return;
     final target = _freeModeAutoRotateBearing();
     if (target == null) return;
-    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() < 3.0) {
+    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() <
+        _freeRotateWakeDeg) {
       return;
     }
     _lastCameraFrameAt = null;
@@ -16761,7 +16794,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     final target = _freeModeAutoRotateBearing();
     if (target == null) return false;
     return GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() >=
-        3.0;
+        _freeRotateApplyDeg;
   }
 
   /// Google-Maps-artige Kompass-Rotation: pro Tick im freien Modus prüfen, ob
@@ -16775,7 +16808,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         DateTime.now().difference(gestureAt) < _freeRotateGestureBlock) {
       return;
     }
-    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() < 3.0) {
+    if (GeoBearing.angleDiff(_lastFreeAutoRotateHeading, target).abs() <
+        _freeRotateApplyDeg) {
       return;
     }
     final cur = _mlController?.raw.cameraPosition;
@@ -16788,7 +16822,13 @@ class _CruiseModePageState extends State<CruiseModePage>
           lng: cur.target.longitude,
           zoom: cur.zoom,
           bearing: target,
-          duration: const Duration(milliseconds: 400),
+          // 2026-07-27: 400 ms deckelten die Nachfuehrung auf 2,5 Updates pro
+          // Sekunde — jeder Aufruf waehrend einer laufenden Animation war ein
+          // No-Op (`_freeRotateInFlight`). Bei einer zuegigen Drehung kam die
+          // Karte dadurch erst gut eine Sekunde NACH dem Nutzer an. 140 ms
+          // ergeben ~7 Updates pro Sekunde und bleiben trotzdem getweent
+          // (kein hartes Springen).
+          duration: const Duration(milliseconds: 140),
         )
         .whenComplete(() => _freeRotateInFlight = false);
   }
