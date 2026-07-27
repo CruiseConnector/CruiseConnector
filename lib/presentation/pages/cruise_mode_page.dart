@@ -557,6 +557,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-05-24 (vucko Task #44): POI-Layer (Tankstellen etc.)
   bool _poisVisible = false;
   bool _poisLoading = false;
+  /// 2026-07-27: Kam waehrend eines laufenden POI-Ladevorgangs eine neue
+  /// Anforderung, wurde sie einfach verworfen — die Karte blieb dann auf dem
+  /// alten Stand haengen. Jetzt wird sie gemerkt und direkt danach nachgeholt.
+  bool _poiReloadPending = false;
   List<RoutePoi> _routePois = const [];
   final Set<PoiType> _poiTypes = const {PoiType.fuel};
   // 2026-06-25 (vucko Marker-Swim, native): vorgerasterte POI/Baustellen-Icons
@@ -2027,6 +2031,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 2026-07-27 (vucko „ausgeschaltete POIs bleiben stehen"): An der WURZEL
+    // reagieren, nicht erst beim Schliessen des Filter-Sheets. Egal wo eine
+    // Kategorie umgeschaltet wird (Filter-Sheet, Einstellungsseite, sonstwo) —
+    // die Marker verschwinden sofort und ohne Netzwerkabfrage.
+    PoiSettingsService.instance.addListener(_onPoiSettingsChanged);
     // 2026-06-17 (vucko Geräte-Video, 90°-Kipper): Die Fahransicht ist
     // portrait-designt (Banner/Karte/Buttons). Dreht das Telefon während der
     // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
@@ -3617,6 +3626,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(WakelockPlus.disable().catchError((Object _) {}));
     unawaited(NavigationPipService.instance.disarm());
     unawaited(RoadIncidentService.instance.clearLivePosition());
+    PoiSettingsService.instance.removeListener(_onPoiSettingsChanged);
     _incidentRefetchDebounce?.cancel();
     _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
@@ -13571,7 +13581,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       return const [];
     }
     final features = <Map<String, dynamic>>[];
+    // 2026-07-27 (vucko „POIs sollen zuverlaessig sein"): Zweite, harte
+    // Absicherung direkt vor dem Zeichnen. Selbst wenn eine verspaetete
+    // Overpass-Antwort noch abgewaehlte Typen in `_routePois` schreibt, kann
+    // ein ausgeschalteter Marker so NIE auf der Karte landen.
+    final enabledPoiTypes = PoiSettingsService.instance.enabledTypes;
     for (final poi in _routePois) {
+      if (!enabledPoiTypes.contains(poi.type)) continue;
       final key = _poiIconKey(poi);
       if (!_poiIconImages.containsKey(key)) continue;
       features.add({
@@ -14300,6 +14316,32 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// 2026-05-28 (vucko Task #75): Öffnet das POI-Filter-Bottom-Sheet.
   /// Nach dem Schließen werden die POIs nach den aktuellen Filtern neu
   /// geladen (oder gelöscht falls alle deaktiviert).
+  /// 2026-07-27 (vucko „ausgeschaltete POIs bleiben stehen"): Der alte Weg
+  /// wartete auf eine Overpass-Abfrage, bevor abgewaehlte Marker verschwanden.
+  /// Lief bereits eine Abfrage, wurde die neue vom `_poisLoading`-Waechter
+  /// still verworfen — die Tankstellen blieben dann liegen, bis man ein
+  /// zweites Mal umschaltete. Genau das beschriebene Verhalten.
+  ///
+  /// Jetzt: abgewaehlte Kategorien fliegen SOFORT und synchron aus der Liste.
+  /// Neu hinzugewaehlte holt der Nachlader danach; sichtbar wird also nie
+  /// etwas Falsches, hoechstens kurz etwas Fehlendes.
+  void _onPoiSettingsChanged() {
+    if (!mounted || _disposed) return;
+    final enabled = PoiSettingsService.instance.enabledTypes;
+    if (enabled.isEmpty) {
+      if (_routePois.isEmpty && !_poisVisible) return;
+      setState(() {
+        _routePois = const [];
+        _poisVisible = false;
+      });
+      return;
+    }
+    final kept = _routePois.where((p) => enabled.contains(p.type)).toList();
+    if (kept.length != _routePois.length) {
+      setState(() => _routePois = kept);
+    }
+  }
+
   Future<void> _openPoiFilter() async {
     if (!mounted || _disposed) return;
     HapticFeedback.selectionClick();
@@ -14349,7 +14391,12 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _loadPoisInViewport({bool silent = false}) async {
     if (!mounted || _disposed) return;
-    if (_poisLoading) return;
+    if (_poisLoading) {
+      // Nicht verwerfen, sondern vormerken — sonst zeigt die Karte dauerhaft
+      // den Stand von vor der Aenderung.
+      _poiReloadPending = true;
+      return;
+    }
     setState(() => _poisLoading = true);
     try {
       LatLngBounds? bounds;
@@ -14368,6 +14415,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           // 2026-07-27: Ohne dieses Zurücksetzen bliebe _poisLoading für immer
           // true und der Wächter ganz oben („if (_poisLoading) return") würde
           // JEDEN weiteren POI-Ladeversuch dieser Seite dauerhaft blockieren.
+          _poiReloadPending = false;
           if (mounted) setState(() => _poisLoading = false);
           return;
         }
@@ -14396,6 +14444,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _routePois = pois;
         _poisLoading = false;
       });
+      if (_consumePendingPoiReload(silent: silent)) return;
       if (pois.isEmpty && !silent) {
         TopToast.show(
           context,
@@ -14407,7 +14456,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     } catch (e) {
       debugPrint('[CruiseMode] Viewport-POI-Load fehlgeschlagen: $e');
       if (mounted) setState(() => _poisLoading = false);
+      _consumePendingPoiReload(silent: silent);
     }
+  }
+
+  /// Holt eine waehrend des Ladens eingegangene Anforderung nach. Gibt true
+  /// zurueck, wenn nachgeladen wird — dann soll der Aufrufer nichts mehr
+  /// melden (z.B. kein „keine POIs"-Hinweis auf einem ueberholten Ergebnis).
+  bool _consumePendingPoiReload({required bool silent}) {
+    if (!_poiReloadPending) return false;
+    _poiReloadPending = false;
+    if (!mounted || _disposed) return false;
+    if (!PoiSettingsService.instance.anyEnabled) return false;
+    unawaited(_loadPoisInViewport(silent: silent));
+    return true;
   }
 
   /// 2026-05-28 (vucko Task #79): Gemeinsame FAB-Spalte für Pre-Route- UND
