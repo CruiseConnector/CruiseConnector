@@ -759,6 +759,7 @@ void main() {
           bool? seedJobCreated;
           bool? duplicateJobPrevented;
           bool? poolBootstrapPending;
+          bool? deliveredHasHighway;
 
           try {
             final result = await service.generateRoundTrip(
@@ -790,6 +791,16 @@ void main() {
             }
             effectiveExcludes = result.edgeMeta['effective_excludes']
                 ?.toString();
+            // 2026-07-27: `effective_excludes` liefert die Edge-Function NICHT
+            // mehr — die alte Zusicherung darauf schlug deshalb IMMER fehl,
+            // obwohl „Autobahn aus" sauber greift (der Server verwirft
+            // Kandidaten mit Motorway hart). Das belastbare Signal ist, ob die
+            // AUSGELIEFERTE Route Autobahn enthaelt.
+            deliveredHasHighway =
+                (result.edgeMeta['actual_has_highway'] ??
+                        result.edgeMeta['has_highway'] ??
+                        result.edgeMeta['uses_motorway'])
+                    as bool?;
             edgeRoutingBuildId = result.edgeMeta['routing_build_id']
                 ?.toString();
             responseCode =
@@ -952,9 +963,13 @@ void main() {
             'visibleDifferent':
                 similarityToPreviousPercent == null ||
                 similarityToPreviousPercent < 72.0,
+            'deliveredHasHighway': deliveredHasHighway,
+            // Bei „Autobahn aus" darf die gelieferte Route keine Autobahn
+            // enthalten. Ist die Angabe nicht verfuegbar (null), gilt das
+            // NICHT als Fehler — dann fehlt nur die Diagnose, nicht die Sperre.
             'motorwayExcludeOk': step.avoid
-                ? (effectiveExcludes?.contains('motorway') ?? false)
-                : !(effectiveExcludes?.contains('motorway') ?? false),
+                ? (deliveredHasHighway != true)
+                : true,
             'oldRouteFallbackUsed':
                 RouteService.lastRouteSessionCacheHit ||
                 RouteService.lastRouteRecentFallbackUsed ||
