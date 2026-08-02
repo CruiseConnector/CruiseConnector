@@ -136,6 +136,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   void initState() {
     super.initState();
     _avoidHighways = widget.selectedAvoidHighways;
+    // 2026-07-28 (vucko „bei Rundkurs sieht man keine Erklaerung"): Beim
+    // Oeffnen stand `_activeExplainer` auf null, es war also GAR KEINE
+    // Erklaerung sichtbar — obwohl Rundkurs vorausgewaehlt ist. Erst ein
+    // Wechsel auf „A nach B" und zurueck brachte sie zum Vorschein. Jetzt
+    // zeigt die Karte von Anfang an die Erklaerung zum aktiven Modus.
+    _activeExplainer = widget.isRoundTrip ? 'roundtrip' : 'atob';
   }
 
   @override
@@ -143,6 +149,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.selectedAvoidHighways != widget.selectedAvoidHighways) {
       _avoidHighways = widget.selectedAvoidHighways;
+    }
+    // Wird der Modus von AUSSEN umgeschaltet (nicht ueber die Knoepfe hier),
+    // muss die Erklaerung mitziehen — sonst stuende die Beschreibung des
+    // anderen Modus da. Nur wenn ueberhaupt eine Modus-Erklaerung sichtbar
+    // ist: hat der Nutzer sie weggetippt, bleibt sie weg.
+    if (oldWidget.isRoundTrip != widget.isRoundTrip &&
+        (_activeExplainer == 'roundtrip' || _activeExplainer == 'atob')) {
+      _activeExplainer = widget.isRoundTrip ? 'roundtrip' : 'atob';
     }
   }
 

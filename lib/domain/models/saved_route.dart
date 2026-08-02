@@ -258,7 +258,20 @@ class SavedRoute {
   /// (Kurvenjagd langsamer, Sport schneller). So steht auf der Share-Karte immer
   /// eine sinnvolle Zeit.
   String get durationLabelOrEstimate {
-    if (durationSeconds != null && durationSeconds! > 0) return formattedDuration;
+    // 2026-07-28 (vucko Export-Bild): Auf der geteilten Karte stand „9h 1m"
+    // fuer 26,7 km — rechnerisch 3 km/h. Der gespeicherte Wert war schlicht
+    // Muell (angehaltene Fahrt, die stundenlang mitlief). Frueher wurde er
+    // ungeprueft uebernommen und landete so im Bild, das Nutzer teilen.
+    //
+    // Jetzt: ein gespeicherter Wert zaehlt nur, wenn er zu einer plausiblen
+    // Durchschnittsgeschwindigkeit fuehrt. Sonst greift dieselbe
+    // stilbasierte Schaetzung wie bei fehlender Dauer — lieber eine
+    // vernuenftige Schaetzung als eine peinliche Zahl.
+    if (durationSeconds != null && durationSeconds! > 0) {
+      if (distanceKm <= 0) return formattedDuration;
+      final kmh = distanceKm / (durationSeconds! / 3600.0);
+      if (kmh >= 8.0 && kmh <= 200.0) return formattedDuration;
+    }
     if (distanceKm <= 0) return '--';
     final kmh = switch (style.toLowerCase()) {
       'kurvenjagd' => 46.0,

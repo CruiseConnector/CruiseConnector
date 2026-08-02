@@ -760,29 +760,33 @@ class RouteShareCard extends StatelessWidget {
                 ),
               ),
             ),
-          const SizedBox(height: 10),
-          _shadowText(
-            data.title,
-            fontSize: 20,
-            weight: FontWeight.w900,
-            maxLines: 2,
-          ),
+          const SizedBox(height: 12),
+          // 2026-07-28 (vucko „das Layout passt gar nicht"): Der Titel stand
+          // auf fixen 20 pt. Ein langer Name wie „Kurvenreicher Donnerstag"
+          // passte damit in der schmalen Sticker-Breite in keine Zeile, und
+          // Flutter bricht ein einzelnes zu langes Wort MITTEN drin um —
+          // im geteilten Bild stand dann „Kurvenreic / her Donn…". Jetzt
+          // sucht [_FittedTitle] die groesste Schriftgroesse, bei der der
+          // Titel wirklich hineinpasst; abgeschnitten wird nur noch im
+          // Extremfall.
+          _FittedTitle(text: data.title, maxLines: 2),
           if (data.subtitle != null) ...[
-            const SizedBox(height: 3),
+            const SizedBox(height: 5),
             _shadowText(
-              data.subtitle!,
-              fontSize: 12.5,
-              weight: FontWeight.w600,
-              color: Colors.white.withValues(alpha: 0.85),
+              data.subtitle!.toUpperCase(),
+              fontSize: 11.5,
+              weight: FontWeight.w700,
+              color: accent,
               maxLines: 1,
+              letterSpacing: 1.1,
             ),
           ],
           if (stats.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             // Wrap statt Row → bricht bei schmaler Breite (Sticker/Quadrat,
             // kleines Display, viele Stats) defensiv um statt zu overflowen.
             Wrap(
-              spacing: 10,
+              spacing: 8,
               runSpacing: 8,
               children: [
                 for (final s in stats) _statChip(s.$1, s.$2, accent),
@@ -796,18 +800,21 @@ class RouteShareCard extends StatelessWidget {
 
   Widget _statChip(IconData icon, String label, Color accent) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.22),
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: accent.withValues(alpha: 0.4)),
+        color: Colors.white.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white, size: 14),
+          Icon(icon, color: accent, size: 13),
           const SizedBox(width: 5),
-          _shadowText(label, fontSize: 13, weight: FontWeight.w900),
+          // Kennzahlen duerfen NIE umbrechen — „26,7 km" auf zwei Zeilen sieht
+          // kaputt aus. Der Wrap oben schiebt den ganzen Chip in die naechste
+          // Zeile, statt ihn zu zerlegen.
+          _shadowText(label, fontSize: 12.5, weight: FontWeight.w800),
         ],
       ),
     );
@@ -819,6 +826,7 @@ class RouteShareCard extends StatelessWidget {
     required FontWeight weight,
     Color color = Colors.white,
     int maxLines = 1,
+    double? letterSpacing,
   }) {
     return Text(
       text,
@@ -829,12 +837,94 @@ class RouteShareCard extends StatelessWidget {
         fontSize: fontSize,
         fontWeight: weight,
         height: 1.1,
+        letterSpacing: letterSpacing,
         shadows: const [
           Shadow(color: Colors.black, blurRadius: 6),
           Shadow(color: Colors.black54, blurRadius: 2),
         ],
       ),
     );
+  }
+}
+
+/// Titel, der sich in die verfuegbare Breite einpasst.
+///
+/// 2026-07-28 (vucko „das Layout passt gar nicht"): Ein fester Schriftgrad
+/// bricht bei langen Routennamen mitten im Wort um. Flutter trennt ein
+/// einzelnes Wort, das breiter als die Zeile ist, hart an beliebiger Stelle —
+/// im geteilten Bild stand dann „Kurvenreic / her Donn…".
+///
+/// Diese Klasse misst den Text mit [TextPainter] und nimmt die groesste
+/// Schriftgroesse, bei der er ohne Ueberlauf in [maxLines] passt UND kein
+/// einzelnes Wort breiter als die Zeile ist. Erst wenn selbst die kleinste
+/// Stufe nicht reicht, wird gekuerzt.
+class _FittedTitle extends StatelessWidget {
+  const _FittedTitle({required this.text, this.maxLines = 2});
+
+  final String text;
+  final int maxLines;
+
+  static const double _maxSize = 22;
+  static const double _minSize = 13;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final breite = constraints.maxWidth;
+        var groesse = _maxSize;
+        if (breite.isFinite && breite > 0) {
+          for (var kandidat = _maxSize; kandidat >= _minSize; kandidat -= 0.5) {
+            if (_passt(text, kandidat, breite, maxLines)) {
+              groesse = kandidat;
+              break;
+            }
+            groesse = _minSize;
+          }
+        }
+        return Text(
+          text,
+          maxLines: maxLines,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: groesse,
+            fontWeight: FontWeight.w900,
+            height: 1.12,
+            shadows: const [
+              Shadow(color: Colors.black, blurRadius: 6),
+              Shadow(color: Colors.black54, blurRadius: 2),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  static bool _passt(String text, double groesse, double breite, int maxLines) {
+    final stil = TextStyle(
+      fontSize: groesse,
+      fontWeight: FontWeight.w900,
+      height: 1.12,
+    );
+    // 1) Kein EINZELNES Wort darf breiter als die Zeile sein — sonst trennt
+    //    Flutter mitten im Wort, egal wie viele Zeilen erlaubt sind.
+    for (final wort in text.split(RegExp(r'\s+'))) {
+      if (wort.isEmpty) continue;
+      final wp = TextPainter(
+        text: TextSpan(text: wort, style: stil),
+        maxLines: 1,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (wp.width > breite) return false;
+    }
+    // 2) Der ganze Text muss in maxLines passen.
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: stil),
+      maxLines: maxLines,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: breite);
+    return !tp.didExceedMaxLines;
   }
 }
 

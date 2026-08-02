@@ -28,6 +28,7 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
+import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
@@ -90,6 +91,7 @@ void main() {
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
+      unawaited(CameraSettingsService.instance.load());
       MapStyleService.instance.ensureAutoDownloadScheduled(
         delay: const Duration(seconds: 10),
         reason: 'app_start',

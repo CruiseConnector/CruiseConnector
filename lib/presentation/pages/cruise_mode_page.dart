@@ -38,6 +38,7 @@ import 'package:cruise_connect/data/services/opening_hours_parser.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_detail_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_filter_sheet.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
+import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/widgets/weather_inline.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
@@ -2044,6 +2045,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Kategorie umgeschaltet wird (Filter-Sheet, Einstellungsseite, sonstwo) —
     // die Marker verschwinden sofort und ohne Netzwerkabfrage.
     PoiSettingsService.instance.addListener(_onPoiSettingsChanged);
+    CameraSettingsService.instance.addListener(_onCameraSettingsChanged);
     // 2026-06-17 (vucko Geräte-Video, 90°-Kipper): Die Fahransicht ist
     // portrait-designt (Banner/Karte/Buttons). Dreht das Telefon während der
     // Navigation, kippte die UI in ein kaputtes Querformat (Banner seitlich).
@@ -3635,6 +3637,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(NavigationPipService.instance.disarm());
     unawaited(RoadIncidentService.instance.clearLivePosition());
     PoiSettingsService.instance.removeListener(_onPoiSettingsChanged);
+    CameraSettingsService.instance.removeListener(_onCameraSettingsChanged);
     _incidentRefetchDebounce?.cancel();
     _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
@@ -14357,6 +14360,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Jetzt: abgewaehlte Kategorien fliegen SOFORT und synchron aus der Liste.
   /// Neu hinzugewaehlte holt der Nachlader danach; sichtbar wird also nie
   /// etwas Falsches, hoechstens kurz etwas Fehlendes.
+  /// 2026-07-28 (vucko „Kameradrehen als Modus"): Der Schalter wirkt SOFORT.
+  /// Ausschalten stoppt den Magnetometer und lässt die Karte stehen, wo sie
+  /// ist; Einschalten weckt ihn wieder — ohne dass der Nutzer die Seite
+  /// verlassen und neu öffnen muss.
+  void _onCameraSettingsChanged() {
+    if (!mounted || _disposed) return;
+    if (CameraSettingsService.instance.autoRotateFreeCam) {
+      _startCompassIfNeeded();
+    } else {
+      _stopCompass();
+    }
+  }
+
   void _onPoiSettingsChanged() {
     if (!mounted || _disposed) return;
     final enabled = PoiSettingsService.instance.enabledTypes;
@@ -16748,6 +16764,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Simulation hat keinen synthetischen Kompass — der echte Magnetometer-
     // Wert würde beim Schreibtisch-Test nur verwirren.
     if (kIsWeb || _isCameraLocked || _isSimulationRunning || !mounted) return;
+    // 2026-07-28 (vucko „Kameradrehen als Modus"): Ist die Auto-Drehung
+    // abgeschaltet, wird der Magnetometer gar nicht erst gestartet — spart
+    // Akku statt nur das Ergebnis wegzuwerfen.
+    if (!CameraSettingsService.instance.autoRotateFreeCam) return;
     _compassService.onUpdate = _onCompassHeadingUpdate;
     _compassService.start();
   }
@@ -16775,6 +16795,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// gerade keine vertrauenswürdige Quelle existiert.
   double? _freeModeAutoRotateBearing() {
     if (_isSimulationRunning) return null;
+    if (!CameraSettingsService.instance.autoRotateFreeCam) return null;
     final speedNow = math.max(
       _nativeSmoother.speed,
       _userLocation?.speed ?? 0.0,

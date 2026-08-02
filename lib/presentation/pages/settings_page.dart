@@ -4,6 +4,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
+import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/map_cache_status.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
@@ -558,6 +559,28 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (document != LegalDocuments.settingsDocuments.last)
                       const Divider(color: Colors.white10, height: 1),
                   ],
+                ]),
+
+                const SizedBox(height: 24),
+
+                // 2026-07-28 (vucko „Kameradrehen als Modus, den man ein- und
+                // ausschalten kann"): Betrifft ausschliesslich den freien
+                // Kameramodus. Waehrend der gefuehrten Navigation dreht
+                // weiterhin die Routen-Tangente.
+                _buildSectionHeader('FAHRANSICHT'),
+                _buildSectionContainer([
+                  AnimatedBuilder(
+                    animation: CameraSettingsService.instance,
+                    builder: (context, _) => _buildSwitchTile(
+                      'Karte dreht mit',
+                      CameraSettingsService.instance.autoRotateFreeCam,
+                      (v) => CameraSettingsService.instance
+                          .setAutoRotateFreeCam(v),
+                      subtitle:
+                          'Im freien Modus dreht sich die Karte in deine '
+                          'Blickrichtung. Aus: Norden bleibt oben.',
+                    ),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
