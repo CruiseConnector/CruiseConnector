@@ -131,6 +131,74 @@ class AuthService {
     unawaited(AnalyticsService.instance.logSignUp('email'));
   }
 
+  // ── Passwort vergessen / zurücksetzen ─────────────────────────────────────
+  // 2026-08-02 (vucko): Reset läuft bewusst über den 6-stelligen Code (wie die
+  // Signup-Bestätigung), NICHT über den Magic-Link. Der Link-Rückweg ist auf
+  // Mobile zerbrechlich (Browser-Wechsel, Deep-Link-Race mit dem OAuth-Handler)
+  // — genau deshalb wurde das Onboarding schon auf Code umgestellt.
+  // Voraussetzung: Supabase-Mail-Template „Reset Password" muss {{ .Token }}
+  // enthalten (siehe docs/PASSWORT_RESET_SETUP.md).
+
+  /// Schickt den 6-stelligen Reset-Code an die E-Mail-Adresse.
+  ///
+  /// Wirft NICHT, wenn die Adresse unbekannt ist: GoTrue antwortet aus
+  /// Anti-Enumeration-Gründen immer mit Erfolg. Die UI formuliert deshalb
+  /// neutral („falls ein Konto existiert").
+  static Future<void> sendPasswordResetCode(String email) async {
+    await _db.auth.resetPasswordForEmail(
+      email.trim(),
+      redirectTo: authCallbackUrl,
+    );
+  }
+
+  /// Prüft den Reset-Code aus der Mail. Danach besteht eine Recovery-Session,
+  /// mit der [updatePassword] das neue Passwort setzen darf.
+  static Future<void> verifyPasswordResetCode({
+    required String email,
+    required String token,
+  }) async {
+    await _db.auth.verifyOTP(
+      email: email.trim(),
+      token: token.trim(),
+      type: OtpType.recovery,
+    );
+    await ensureCurrentUserProfile();
+  }
+
+  /// Setzt ein neues Passwort für den aktuell angemeldeten User.
+  /// Braucht eine aktive Session (aus [verifyPasswordResetCode] oder Login).
+  static Future<void> updatePassword(String newPassword) async {
+    if (currentUser == null) {
+      throw const AuthException(
+        'Sitzung abgelaufen. Bitte fordere einen neuen Code an.',
+      );
+    }
+    await _db.auth.updateUser(UserAttributes(password: newPassword));
+  }
+
+  /// Prüft das aktuelle Passwort (Re-Auth vor dem Wechsel in den Einstellungen).
+  ///
+  /// Ein fehlgeschlagener Login lässt die bestehende Session unangetastet —
+  /// der Nutzer fliegt bei einem Tippfehler also nicht raus.
+  static Future<bool> verifyCurrentPassword(String password) async {
+    final email = currentUser?.email?.trim();
+    if (email == null || email.isEmpty) return false;
+    try {
+      await _db.auth.signInWithPassword(email: email, password: password);
+      return true;
+    } on AuthException {
+      return false;
+    }
+  }
+
+  /// Ob der Account überhaupt ein Passwort hat. Reine Google-/Apple-Konten
+  /// haben keine E-Mail-Identität — dort wird ein Passwort *gesetzt*, nicht
+  /// *geändert* (kein „aktuelles Passwort"-Feld).
+  static Future<bool> hasEmailIdentity() async {
+    final identities = await linkedIdentities();
+    return hasProvider(identities, 'email');
+  }
+
   /// Native Google-Anmeldung auf Android/iOS. Auf Web/Desktop fällt es auf
   /// Supabase OAuth mit Redirect zurück.
   static Future<void> signInWithGoogle() async {

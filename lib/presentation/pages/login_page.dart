@@ -5,6 +5,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
+import 'package:cruise_connect/presentation/pages/forgot_password_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
@@ -182,6 +183,17 @@ class _LoginPageState extends State<LoginPage> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _openForgotPassword() async {
+    final email = _emailController.text.trim();
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ForgotPasswordPage(
+          initialEmail: email.isEmpty ? null : email,
+        ),
+      ),
+    );
   }
 
   String _translateError(String msg) {
@@ -382,6 +394,33 @@ class _LoginPageState extends State<LoginPage> {
                             color: brand.withValues(alpha: 0.76),
                           ),
                           onPressed: () => setState(() => _obscure = !_obscure),
+                        ),
+                      ),
+
+                      // 2026-08-02 (vucko): Passwort vergessen — direkt unter dem
+                      // Passwortfeld, wo Nutzer es erwarten. Die eingetippte
+                      // Adresse wird mitgenommen, damit sie nicht doppelt getippt
+                      // werden muss.
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _isLoading ? null : _openForgotPassword,
+                          style: TextButton.styleFrom(
+                            foregroundColor: brand,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 6,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text(
+                            'Passwort vergessen?',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ),
 
