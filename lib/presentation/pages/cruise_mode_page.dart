@@ -821,6 +821,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   // statische Voll-Route, grauer Driven-Trail macht den Schnitt).
   double _totalDistanceDriven = 0.0; // Gesamte gefahrene Strecke in Metern
   DateTime? _navigationStartTime; // Zeitpunkt des Navigations-Starts
+  // 2026-07-28 (vucko „wie lange eine Strecke dauert stimmt manchmal nicht"):
+  // Die Fahrzeit war die reine Wanduhrzeit ab Fahrtstart — jede Pause lief
+  // voll mit. Ein Nutzer, der mittags eine Stunde stehenbleibt, bekam eine
+  // Stunde Fahrzeit geschenkt. Im gemeldeten Fall standen 26,7 km mit
+  // 9h 1m in der Datenbank (rund 3 km/h). Diese beiden Felder zaehlen die
+  // ausdrueckliche Pausenzeit mit, die spaeter abgezogen wird.
+  DateTime? _pauseStartedAt;
+  double _totalPausedSeconds = 0.0;
   // 2026-06-03 (vucko): Getter _isActivelyDriving entfernt — die Karte rendert
   // jetzt IMMER im Raster-Modus (flüssig + einheitlich), nicht mehr abhängig vom
   // Fahr-Status. _navigationStartTime bleibt für _isActivelyDrivingRoute aktiv.
@@ -6690,10 +6698,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                 const SizedBox(height: 4),
                 DriveControlPanel(
                   onStart: () async {
+                    _closePauseWindow();
                     _setGroupPaused(false);
                     await _startNavigationFlow();
                   },
                   onPause: () {
+                    // Pausen-Uhr starten (siehe _totalPausedSeconds).
+                    _pauseStartedAt ??= DateTime.now();
                     // 2026-06-24 (vucko Y3): Pause an die Gruppe melden, damit die
                     // anderen den Marker als „pausiert" sehen (Heartbeat hält ihn
                     // sichtbar, statt ihn offline aussehen zu lassen).
@@ -6704,6 +6715,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                     _persistActiveRideSnapshot(force: true, paused: true);
                   },
                   onStop: () {
+                    // Wird waehrend einer Pause beendet, muss die laufende
+                    // Pause noch in die Summe — sonst zaehlt sie als Fahrzeit.
+                    _closePauseWindow();
                     _setGroupPaused(false);
                     _stopNavigationTracking();
                     _stopSimulation(restartLiveTracking: false);
@@ -9644,6 +9658,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _totalDistanceDriven = 0.0;
       _sessionRouteStartIndexInActiveRoute = 0;
       _navigationStartTime = null;
+      _pauseStartedAt = null;
+      _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _lastRerouteFailed = false;
@@ -10017,27 +10033,6 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     return isApproachingDestination(_recentDestinationDistances);
-  }
-
-  List<List<double>> _sampleCoordinatesForSimilarity(
-    List<List<double>> coordinates, {
-    int maxSamples = 80,
-  }) {
-    if (coordinates.length <= maxSamples) {
-      return coordinates
-          .where((point) => point.length >= 2)
-          .map((point) => [point[0], point[1]])
-          .toList();
-    }
-    final sampled = <List<double>>[];
-    for (var i = 0; i < maxSamples; i++) {
-      final ratio = maxSamples == 1 ? 0.0 : i / (maxSamples - 1);
-      final index = ((coordinates.length - 1) * ratio).round();
-      final point = coordinates[index];
-      if (point.length < 2) continue;
-      sampled.add([point[0], point[1]]);
-    }
-    return sampled;
   }
 
   void _clearAccessLegState() {
@@ -10549,6 +10544,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _distanceToFinalTargetMeters = null;
       _sessionRouteStartIndexInActiveRoute = 0;
       _navigationStartTime = null;
+      _pauseStartedAt = null;
+      _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _lastRerouteFailed = false;
@@ -17121,18 +17118,54 @@ class _CruiseModePageState extends State<CruiseModePage>
     return (drivenDistanceMeters / plannedDistanceMeters).clamp(0.0, 1.0);
   }
 
+  /// Beendet ein laufendes Pausen-Fenster und schreibt die Dauer in die Summe.
+  void _closePauseWindow() {
+    final started = _pauseStartedAt;
+    if (started == null) return;
+    _pauseStartedAt = null;
+    final dauer = DateTime.now().difference(started).inSeconds.toDouble();
+    if (dauer > 0) _totalPausedSeconds += dauer;
+  }
+
+  /// Fahrzeit der abgeschlossenen Fahrt.
+  ///
+  /// 2026-07-28 (vucko „wie lange eine Strecke dauert stimmt manchmal nicht"):
+  /// Frueher wurde hier die rohe Wanduhrzeit seit Fahrtstart zurueckgegeben —
+  /// Pausen inklusive. Das ist der Grund, warum 26,7 km als „9h 1m" in der
+  /// Datenbank landeten (rund 3 km/h). Der Wert wandert ungeprueft in DREI
+  /// Tabellen (routes, route_ratings, user_drive_sessions), deshalb wird er
+  /// jetzt HIER an der Quelle bereinigt und nicht erst beim Anzeigen.
+  ///
+  /// Zwei Stufen:
+  ///   1. Ausdrueckliche Pausenzeit abziehen.
+  ///   2. Bleibt das Ergebnis unplausibel (Schnitt ausserhalb 5 bis 180 km/h,
+  ///      z.B. weil der Nutzer die App tagelang offen liegen liess statt zu
+  ///      pausieren), lieber die anteilige Routenschaetzung nehmen als eine
+  ///      Zahl, die niemand glauben kann.
   double? _calculateAdjustedCompletionDuration(double progressFraction) {
     final proportionalDuration = _completionRouteResult?.durationSeconds != null
         ? _completionRouteResult!.durationSeconds! * progressFraction
         : null;
-    final elapsedSeconds = _navigationStartTime != null
+    final roh = _navigationStartTime != null
         ? DateTime.now().difference(_navigationStartTime!).inSeconds.toDouble()
         : null;
 
-    if (elapsedSeconds != null && elapsedSeconds > 0) {
-      return elapsedSeconds;
+    if (roh != null && roh > 0) {
+      // Laeuft die Pause beim Beenden noch, zaehlt sie ebenfalls nicht mit.
+      final laufendePause = _pauseStartedAt != null
+          ? DateTime.now().difference(_pauseStartedAt!).inSeconds.toDouble()
+          : 0.0;
+      final bereinigt = roh - _totalPausedSeconds - laufendePause;
+      if (bereinigt > 0) {
+        final km = _drivenTrackRecorder.distanceMeters / 1000.0;
+        if (km <= 0) return bereinigt;
+        final kmh = km / (bereinigt / 3600.0);
+        if (kmh >= 5.0 && kmh <= 180.0) return bereinigt;
+        // Unplausibel: lieber die Schaetzung als eine peinliche Zahl.
+        return proportionalDuration ?? bereinigt;
+      }
     }
-    return proportionalDuration ?? elapsedSeconds;
+    return proportionalDuration ?? roh;
   }
 
   List<List<double>> _buildCompletionCoordinates() {
@@ -17143,16 +17176,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     return _drivenTrackRecorder.snapshot().drawableSegments;
   }
 
+  /// 2026-07-28 (vucko „die Kurven stimmen manchmal nicht"): Hier wurde die
+  /// Strecke VOR dem Zaehlen auf 120 Punkte ausgeduennt — und zwar per
+  /// Index-Schritt, nicht nach Entfernung. Auf einer Serpentinenfahrt mit
+  /// ueber tausend GPS-Punkten fiel damit jede zweite Kehre weg, weil zwischen
+  /// zwei weit auseinanderliegenden Stuetzpunkten die Sehne statt des Bogens
+  /// gemessen wurde.
+  ///
+  /// Die Detailseite derselben Fahrt zaehlt auf dem VOLLEN Track
+  /// (ride_detail_page.dart) — dieselbe Fahrt zeigte deshalb im
+  /// Abschluss-Sheet eine andere Kurvenzahl als spaeter in den Details.
+  /// `_sampleCoordinatesForSimilarity` ist fuer Aehnlichkeits-Vergleiche
+  /// gedacht (daher der Name) und hat vor einer Zaehlung nichts zu suchen.
+  /// `countCurves` resampelt intern ohnehin auf feste 20 m.
   int _estimateCompletionCurves(List<List<double>> coordinates) {
-    if (coordinates.length >= 6) {
-      final sampled = _sampleCoordinatesForSimilarity(
-        coordinates,
-        maxSamples: 120,
-      );
-      final counted = GamificationService.countCurves(sampled);
-      if (counted > 0) return counted;
-    }
-    return 0;
+    if (coordinates.length < 6) return 0;
+    return GamificationService.countCurves(coordinates);
   }
 
   RouteXpBreakdown _calculateCompletionXpBreakdown({
@@ -17191,8 +17230,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     final previewCoordinates = adjustedResult?.coordinates ?? <List<double>>[];
     final previewSegments = _buildCompletionSegments();
     final xpCoordinates = _buildCompletionCoordinates();
-    final curves = _estimateCompletionCurves(previewCoordinates);
-    final xpCurves = _estimateCompletionCurves(xpCoordinates);
+    // 2026-07-28 (vucko „die Kurven stimmen manchmal nicht"): Angezeigte Zahl
+    // und XP-Grundlage kamen aus ZWEI verschiedenen Koordinatenlisten
+    // (previewCoordinates gegen den gefahrenen Track). Der Nutzer sah dann
+    // eine Kurvenzahl und bekam Punkte fuer eine andere. Beides nutzt jetzt
+    // dieselbe Quelle: den tatsaechlich gefahrenen Track — das ist die
+    // ehrliche Grundlage fuer eine abgeschlossene Fahrt, und dieselbe, die
+    // spaeter die Fahrt-Detailseite verwendet.
+    final curves = _estimateCompletionCurves(xpCoordinates);
+    final xpCurves = curves;
     final xpBreakdown = _calculateCompletionXpBreakdown(
       creditedDistanceKm: creditEligible ? drivenKm : 0.0,
       curves: creditEligible ? xpCurves : 0,
