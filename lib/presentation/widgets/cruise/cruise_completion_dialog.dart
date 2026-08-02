@@ -73,6 +73,7 @@ class CruiseCompletionActionResult {
     this.previousTotalXp,
     this.newTotalXp,
     this.xpEarned,
+    this.savedRouteId,
   });
 
   final bool success;
@@ -82,6 +83,10 @@ class CruiseCompletionActionResult {
   final int? previousTotalXp;
   final int? newTotalXp;
   final int? xpEarned;
+
+  /// ID der gerade gespeicherten Route — Voraussetzung fürs Veröffentlichen
+  /// direkt aus dem Abschluss-Sheet heraus (2026-08-03, vucko).
+  final String? savedRouteId;
 
   bool get hasXpProgress =>
       previousTotalXp != null &&
@@ -112,6 +117,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.isRoundTrip = true,
     this.topSpeedKmh = 0,
     this.avgSpeedKmh = 0,
+    this.onPublish,
   });
 
   final double distanceKm;
@@ -145,6 +151,13 @@ class CruiseCompletionDialog extends StatefulWidget {
   final Future<void> Function() onDiscard;
   final bool isEarlyStop;
   final bool belowMinimum;
+
+  /// 2026-08-03 (vucko Route-Aufzeichnen): Wenn gesetzt, erscheint zusätzlich
+  /// „Speichern & veröffentlichen" — die Strecke wird gespeichert und danach als
+  /// Community-Post angeboten. Wird NUR für selbst aufgezeichnete Strecken
+  /// übergeben; bei normalen Fahrten ist der Callback null und der Button
+  /// existiert gar nicht.
+  final Future<void> Function(String savedRouteId)? onPublish;
 
   @override
   State<CruiseCompletionDialog> createState() => _CruiseCompletionDialogState();
@@ -270,7 +283,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     }
   }
 
-  Future<void> _handleSave() async {
+  /// [publish] = nach dem Speichern direkt in den Post-Editor (nur verfügbar,
+  /// wenn [CruiseCompletionDialog.onPublish] gesetzt ist — also beim
+  /// Aufzeichnen). Ohne das Flag verhält sich die Methode exakt wie bisher.
+  Future<void> _handleSave({bool publish = false}) async {
     if (_isSaving || _isSharing) return;
     setState(() => _isSaving = true);
     final title = _titleController.text.trim();
@@ -322,7 +338,31 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         debugPrint('[CruiseCompletion] Celebration skipped: $error');
       }
 
+      // 2026-08-03 (vucko Route-Aufzeichnen): Veröffentlichen erst NACH dem
+      // Schliessen des Sheets, damit der Post-Editor nicht darüber aufgeht.
+      // Ohne Routen-ID (Insert kam ohne Rückgabe zurück) wird ehrlich gesagt,
+      // dass die Strecke gespeichert ist und über die gespeicherten Routen
+      // veröffentlicht werden kann — statt kommentarlos nichts zu tun.
+      final publishCallback = publish ? widget.onPublish : null;
+      final savedRouteId = result.savedRouteId;
+      if (publishCallback != null && savedRouteId == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Strecke gespeichert. Veröffentlichen geht über deine '
+              'gespeicherten Routen.',
+            ),
+            backgroundColor: Color(0xFF1C1F26),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+
       if (mounted) Navigator.of(context).pop();
+
+      if (publishCallback != null && savedRouteId != null) {
+        await publishCallback(savedRouteId);
+      }
     } catch (error, stack) {
       debugPrint('[CruiseCompletion] Speichern fehlgeschlagen: $error');
       debugPrint('$stack');
@@ -817,6 +857,31 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   }
 
   Widget _buildActionRow() {
+    // 2026-08-03 (vucko Route-Aufzeichnen): Eigene Zeile statt vierter Button in
+    // der Reihe — zu viert wären die Labels nicht mehr lesbar. Nur sichtbar,
+    // wenn onPublish gesetzt ist (= aufgezeichnete Strecke).
+    if (widget.onPublish != null) {
+      return Column(
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: _ActionButton(
+              icon: Icons.public_rounded,
+              label: _isSaving ? 'Speichert...' : 'Speichern & veröffentlichen',
+              onTap: () => _handleSave(publish: true),
+              filled: true,
+              disabled: _isSaving || _isSharing,
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildDefaultActionRow(),
+        ],
+      );
+    }
+    return _buildDefaultActionRow();
+  }
+
+  Widget _buildDefaultActionRow() {
     return Row(
       children: [
         Expanded(
@@ -824,7 +889,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             icon: Icons.check_rounded,
             label: _isSaving ? 'Speichert...' : 'Speichern',
             onTap: _handleSave,
-            filled: true,
+            filled: widget.onPublish == null,
             disabled: _isSaving || _isSharing,
           ),
         ),

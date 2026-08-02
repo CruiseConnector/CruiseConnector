@@ -253,9 +253,29 @@ class SavedRoutesService {
 
   // ─── Speichern ────────────────────────────────────────────────────────────
 
+  /// Fügt die Zeile ein und liefert die vergebene Routen-ID zurück.
+  ///
+  /// 2026-08-03 (vucko Route-Aufzeichnen): Ausgelagert, weil [saveRoute] die
+  /// Zeile in mehreren Spalten-Fallbacks einfügt und jeder dieser Wege dieselbe
+  /// ID liefern muss — die braucht das Veröffentlichen direkt nach dem Speichern.
+  /// Schlägt das `select('id')` fehl (z. B. wegen RLS auf der Rückgabe), gilt
+  /// das Speichern trotzdem als erfolgreich; nur die ID fehlt dann.
+  static Future<String?> _insertRouteRow(Map<String, dynamic> row) async {
+    final inserted = await _db
+        .from('routes')
+        .insert(row)
+        .select('id')
+        .maybeSingle();
+    invalidateWeeklyTopRouteCache();
+    return inserted?['id']?.toString();
+  }
+
   /// Speichert eine Route für den eingeloggten User.
   /// Tut nichts, wenn kein User eingeloggt ist.
-  static Future<void> saveRoute({
+  ///
+  /// Liefert die ID der gespeicherten Route (oder `null`, wenn nicht
+  /// eingeloggt bzw. die ID nicht zurückkam).
+  static Future<String?> saveRoute({
     required RouteResult result,
     required String style,
     required bool isRoundTrip,
@@ -275,7 +295,7 @@ class SavedRoutesService {
     String? photoUrl,
   }) async {
     final userId = _db.auth.currentUser?.id;
-    if (userId == null) return;
+    if (userId == null) return null;
 
     final routeType = isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT';
     final name = (customName?.trim().isNotEmpty == true)
@@ -326,30 +346,26 @@ class SavedRoutesService {
     if (rating != null && rating > 0) row['rating'] = rating;
 
     try {
-      await _db.from('routes').insert(row);
-      invalidateWeeklyTopRouteCache();
+      return await _insertRouteRow(row);
     } on PostgrestException catch (e) {
       // Fallback: Falls 'name' Spalte noch nicht existiert, ohne speichern
       if (e.code == 'PGRST204' && e.message.contains('name')) {
         debugPrint('[SavedRoutes] name-Spalte fehlt, speichere ohne name');
         row.remove('name');
-        await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
+        return await _insertRouteRow(row);
       } else if (e.code == 'PGRST204' &&
           e.message.contains('completed_at_end')) {
         debugPrint(
           '[SavedRoutes] completed_at_end-Spalte fehlt, speichere ohne Completion-Flag',
         );
         row.remove('completed_at_end');
-        await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
+        return await _insertRouteRow(row);
       } else if (e.code == 'PGRST204' && e.message.contains('group_id')) {
         debugPrint(
           '[SavedRoutes] group_id-Spalte fehlt, speichere ohne Gruppenbezug',
         );
         row.remove('group_id');
-        await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
+        return await _insertRouteRow(row);
       } else if (e.code == 'PGRST204') {
         debugPrint(
           '[SavedRoutes] Route-Meta-Spalten fehlen, speichere ohne Meta: ${e.message}',
@@ -368,8 +384,7 @@ class SavedRoutesService {
           ..remove('xp_multiplier')
           ..remove('xp_streak_days')
           ..remove('xp_awarded');
-        await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
+        return await _insertRouteRow(row);
       } else {
         rethrow;
       }

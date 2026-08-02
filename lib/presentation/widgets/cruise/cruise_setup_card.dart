@@ -10,6 +10,15 @@ import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/mode_explainer_bubble.dart';
 
+/// Planungs-Typ „Route selbst aufzeichnen" — es wird nichts vorausberechnet,
+/// die Strecke entsteht aus dem GPS-Track der Fahrt.
+///
+/// 2026-08-03 (vucko Route-Aufzeichnen): Als Konstante, damit Setup-Karte,
+/// Cruise-Page und Gruppen-Session denselben String benutzen (die anderen
+/// Planungs-Typen sind historisch als Literale verstreut — die fassen wir nicht
+/// an, aber der neue Typ macht den Fehler nicht mit).
+const String kRecordingPlanningType = 'Aufzeichnen';
+
 /// Setup-Karte für die Routenplanung (Rundkurs / A-nach-B).
 class CruiseSetupCard extends StatefulWidget {
   const CruiseSetupCard({
@@ -115,6 +124,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   // null = keine. 'roundtrip' | 'atob' | 'zufall' | 'wegpunkte'
   String? _activeExplainer;
 
+  bool get _isRecordingPlanning =>
+      widget.planningType == kRecordingPlanningType;
+
+  String get _explainerKeyForPlanningType {
+    if (_isRecordingPlanning) return 'aufzeichnen';
+    return widget.planningType == 'Zufall' ? 'zufall' : 'wegpunkte';
+  }
+
   void _toggleExplainer(String key) {
     setState(() {
       _activeExplainer = _activeExplainer == key ? null : key;
@@ -130,6 +147,10 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         'Zufall: Wir wählen den Rundkurs spontan — meist mit den kurvigsten Straßen rund um deinen Standort. Schnellste Option.',
     'wegpunkte':
         'Wegpunkte: Du tippst auf der Karte deine Stopps. Trip-Modus erlaubt bis 5 Stopps — perfekt für mehrtägige Touren mit Pause/Resume.',
+    // 2026-08-03 (vucko Route-Aufzeichnen): dritter Planungs-Typ — keine
+    // Berechnung, die Strecke entsteht beim Fahren.
+    'aufzeichnen':
+        'Aufzeichnen: Wir planen nichts vor — du fährst einfach los und wir zeichnen deine Strecke auf. Am Ende drückst du „Aufzeichnung beenden" und kannst sie bewerten, speichern und veröffentlichen.',
   };
 
   @override
@@ -159,6 +180,10 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     final isRoundTrip = widget.isRoundTrip;
     final isWaypointPlanning =
         isRoundTrip && widget.planningType == 'Wegpunkte';
+    // 2026-08-03 (vucko Route-Aufzeichnen): Beim Aufzeichnen wird nichts
+    // berechnet — Länge, Stil, Autobahn-Vermeidung, Startort und Länder-Filter
+    // hätten keinerlei Wirkung und werden darum ausgeblendet.
+    final isRecording = isRoundTrip && _isRecordingPlanning;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -244,40 +269,42 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                   : _buildAtoBOptions(context),
             ),
           ),
-          const Divider(color: Colors.white10, height: 32),
-          if (isRoundTrip && !isWaypointPlanning) ...[
-            _SelectionRow(
-              title: 'Länge',
-              options: const ['25 Km', '50 Km', '75 Km', '100 Km'],
-              selectedValue: widget.selectedLength,
-              onSelect: widget.onLengthChanged,
+          if (!isRecording) ...[
+            const Divider(color: Colors.white10, height: 32),
+            if (isRoundTrip && !isWaypointPlanning) ...[
+              _SelectionRow(
+                title: 'Länge',
+                options: const ['25 Km', '50 Km', '75 Km', '100 Km'],
+                selectedValue: widget.selectedLength,
+                onSelect: widget.onLengthChanged,
+              ),
+              const Divider(color: Colors.white10, height: 32),
+            ],
+            _HighwayToggleSwitch(
+              isEnabled: _avoidHighways,
+              onChanged: _setAvoidHighways,
             ),
             const Divider(color: Colors.white10, height: 32),
-          ],
-          _HighwayToggleSwitch(
-            isEnabled: _avoidHighways,
-            onChanged: _setAvoidHighways,
-          ),
-          const Divider(color: Colors.white10, height: 32),
-          _SelectionRow(
-            title: 'Standort',
-            options: const ['Aktueller Standort', 'Standort wählen'],
-            selectedValue: widget.selectedLocation,
-            onSelect: widget.onLocationChanged,
-          ),
-          if (widget.selectedLocation == 'Standort wählen') ...[
-            const SizedBox(height: 14),
-            _buildStartLocationPicker(),
+            _SelectionRow(
+              title: 'Standort',
+              options: const ['Aktueller Standort', 'Standort wählen'],
+              selectedValue: widget.selectedLocation,
+              onSelect: widget.onLocationChanged,
+            ),
+            if (widget.selectedLocation == 'Standort wählen') ...[
+              const SizedBox(height: 14),
+              _buildStartLocationPicker(),
+            ],
           ],
           // 2026-05-31 (vucko): Länder-Filter NUR bei Rundkurs/Zufall — bei
           // A→B (festes Ziel) und Wegpunkten ergibt eine Land-Präferenz keinen
           // Sinn, das Ziel/die Stopps bestimmen ja schon den Verlauf.
-          if (isRoundTrip && !isWaypointPlanning) ...[
+          if (isRoundTrip && !isWaypointPlanning && !isRecording) ...[
             const Divider(color: Colors.white10, height: 32),
             _buildCountryPreference(),
           ],
-          const Divider(color: Colors.white10, height: 32),
-          if ((isRoundTrip && !isWaypointPlanning) ||
+          if (!isRecording) const Divider(color: Colors.white10, height: 32),
+          if ((isRoundTrip && !isWaypointPlanning && !isRecording) ||
               (!isRoundTrip && widget.selectedDetour != 'Direkt')) ...[
             _SelectionRow(
               title: 'Stil',
@@ -358,15 +385,32 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
           ],
         ),
+        // 2026-08-03 (vucko Route-Aufzeichnen): eigene Zeile statt drittem
+        // Element in der Row — „Aufzeichnen" ist zu lang für ein Drittel der
+        // Kartenbreite und würde umbrechen.
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: _ChoiceButton(
+            label: 'Aufzeichnen',
+            isSelected: _isRecordingPlanning,
+            onTap: () {
+              if (_isRecordingPlanning) {
+                _toggleExplainer('aufzeichnen');
+              } else {
+                widget.onPlanningTypeChanged(kRecordingPlanningType);
+                setState(() => _activeExplainer = 'aufzeichnen');
+              }
+            },
+          ),
+        ),
         ModeExplainerBubble(
-          text:
-              _modeExplanations[widget.planningType == 'Zufall'
-                  ? 'zufall'
-                  : 'wegpunkte'] ??
-              '',
+          text: _modeExplanations[_explainerKeyForPlanningType] ?? '',
           accentColor: context.watch<AppAccentProvider>().color,
           isOpen:
-              _activeExplainer == 'zufall' || _activeExplainer == 'wegpunkte',
+              _activeExplainer == 'zufall' ||
+              _activeExplainer == 'wegpunkte' ||
+              _activeExplainer == 'aufzeichnen',
           onDismiss: () => setState(() => _activeExplainer = null),
         ),
         AnimatedSwitcher(
@@ -389,16 +433,74 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
           },
           child: KeyedSubtree(
             key: ValueKey(
-              isWaypointPlanning
+              _isRecordingPlanning
+                  ? 'recording_planning_hint'
+                  : isWaypointPlanning
                   ? 'waypoint_planning_hint'
                   : 'random_planning_hint',
             ),
-            child: isWaypointPlanning
+            child: _isRecordingPlanning
+                ? _buildRecordingPlanningHint()
+                : isWaypointPlanning
                 ? _buildWaypointPlanningHint()
                 : _buildRandomPlanningHint(),
           ),
         ),
       ],
+    );
+  }
+
+  // 2026-08-03 (vucko Route-Aufzeichnen): Ersetzt beim Aufzeichnen den
+  // Planungs-Hinweis — es gibt hier nichts einzustellen, nur loszufahren.
+  Widget _buildRecordingPlanningHint() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B0E14),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.fiber_manual_record_rounded,
+                  size: 14,
+                  color: AppAccentColors.accent,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Deine eigene Strecke aufzeichnen',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Keine Vorausplanung: Du startest die Aufzeichnung und fährst los. '
+              'Am Ende drückst du „Aufzeichnung beenden" — danach kannst du die '
+              'Strecke bewerten, speichern und veröffentlichen.',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+                height: 1.25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
