@@ -954,13 +954,16 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  // 2026-07-10 (vucko): Werbe-Slot im Entdecken-Feed AKTIV als dezenter Teaser.
-  // Das echte Ad-System (RevenueCat/google_mobile_ads) kommt erst ab August und
-  // wurde bis dahin aus main entfernt (git revert f3b56b4). Bis dahin zeigt der
-  // Slot einen neutralen Platzhalter ("hier erscheint bald Werbung"), damit die
-  // Feed-Struktur schon steht. Im August: _buildDiscoverAdCard() durch eine echte
-  // Native-Ad ersetzen + Free-Tier-Check (SubscriptionProvider), sobald reaktiviert.
-  bool get _discoverAdsEnabled => true;
+  // 2026-07-29 (vucko „komplette Werbung raus, auch aus der Community-Leiste
+  // — es ist erst ab September relevant"): AUS. Der Entdecken-Feed zeigt
+  // keinen Werbe-Platzhalter mehr; „Hier erscheint bald Werbung" ist damit
+  // verschwunden.
+  //
+  // Der Bau-Code darunter (_buildDiscoverAdCard) bleibt ABSICHTLICH stehen —
+  // im September wird nur dieser Schalter wieder auf true gesetzt und die
+  // Platzhalter-Karte durch eine echte Native-Ad ersetzt. Loeschen wuerde die
+  // Arbeit vernichten, die dann wieder gebraucht wird.
+  bool get _discoverAdsEnabled => false;
 
   // Werbe-Platzhalter im Entdecken-Feed. Dezenter Teaser im Stil der übrigen
   // Feed-Karten — signalisiert Nutzern, dass hier ab August Werbung erscheint.

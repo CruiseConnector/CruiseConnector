@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/road_incident_service.dart';
 import 'package:cruise_connect/domain/models/road_incident.dart';
@@ -77,6 +78,35 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
   void _dismissWithoutVote() {
     if (!mounted) return;
     Navigator.of(context).maybePop();
+  }
+
+  /// 2026-07-29 (vucko „ich konnte den gemeldeten Unfall beim naechsten Mal
+  /// nicht mehr bereinigen"): Auf die EIGENE Meldung nimmt der Server keine
+  /// Stimme an (er wirft „eigene Meldung"). Das Sheet zeigte trotzdem nur
+  /// „Noch da / Schon weg" — der Melder konnte seine eigene Meldung also
+  /// niemals wegraeumen, der Tipp lief jedes Mal ins Leere.
+  /// Fuer die eigene Meldung gibt es deshalb das Zuruecknehmen.
+  bool get _istEigeneMeldung {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    return uid != null && widget.incident.reportedBy == uid;
+  }
+
+  Future<void> _zuruecknehmen() async {
+    if (_voting) return;
+    setState(() => _voting = true);
+    HapticFeedback.lightImpact();
+    final ok = await RoadIncidentService.instance.retract(widget.incident.id);
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? 'Meldung zurueckgenommen.' : 'Konnte gerade nicht gespeichert werden.',
+        ),
+        backgroundColor: Colors.grey.shade800,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<void> _vote(bool stillThere) async {
@@ -234,35 +264,51 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
                   ],
                 ),
                 const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _VoteButton(
-                        label: 'Noch da',
-                        icon: Icons.warning_amber_rounded,
-                        color: accent,
-                        primary: true,
-                        loading: _voting,
-                        onTap: () => _vote(true),
-                      ),
+                if (_istEigeneMeldung)
+                  // Eigene Meldung: abstimmen geht nicht, zuruecknehmen schon.
+                  SizedBox(
+                    width: double.infinity,
+                    child: _VoteButton(
+                      label: 'Meldung zurücknehmen',
+                      icon: Icons.undo_rounded,
+                      color: Colors.greenAccent.shade400,
+                      primary: true,
+                      loading: _voting,
+                      onTap: _zuruecknehmen,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _VoteButton(
-                        label: 'Schon weg',
-                        icon: Icons.check_circle_outline_rounded,
-                        color: Colors.greenAccent.shade400,
-                        primary: false,
-                        loading: _voting,
-                        onTap: () => _vote(false),
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _VoteButton(
+                          label: 'Noch da',
+                          icon: Icons.warning_amber_rounded,
+                          color: accent,
+                          primary: true,
+                          loading: _voting,
+                          onTap: () => _vote(true),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _VoteButton(
+                          label: 'Schon weg',
+                          icon: Icons.check_circle_outline_rounded,
+                          color: Colors.greenAccent.shade400,
+                          primary: false,
+                          loading: _voting,
+                          onTap: () => _vote(false),
+                        ),
+                      ),
+                    ],
+                  ),
                 const SizedBox(height: 8),
                 Center(
                   child: Text(
-                    'Verschwindet automatisch',
+                    _istEigeneMeldung
+                        ? 'Deine Meldung — verschwindet automatisch'
+                        : 'Verschwindet automatisch',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.35),
                       fontSize: 11,
