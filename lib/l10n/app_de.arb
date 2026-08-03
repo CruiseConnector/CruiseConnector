@@ -1,0 +1,123 @@
+{
+  "@@locale": "de",
+
+  "languageChoiceTitle": "Sprache wählen",
+  "@languageChoiceTitle": {
+    "description": "Überschrift des Sprachwahl-Screens beim ersten App-Start"
+  },
+  "languageChoiceSubtitle": "In welcher Sprache möchtest du Cruise Connector nutzen? Du kannst das jederzeit in den Einstellungen ändern.",
+  "languageChoiceContinue": "Weiter",
+  "languageGerman": "Deutsch",
+  "languageEnglish": "English",
+  "languageSystemHint": "Vorgeschlagen nach deiner Geräte-Sprache",
+
+  "settingsLanguage": "Sprache",
+  "@settingsLanguage": {
+    "description": "Menüpunkt in den App-Einstellungen"
+  },
+  "settingsLanguageSubtitle": "Sprache der App",
+
+  "welcomeTitle": "Willkommen zurück!",
+  "welcomeCreateAccount": "Konto erstellen",
+  "welcomeOrContinueWith": "oder weiter mit",
+
+  "loginTitle": "Willkommen zurück",
+  "loginSubtitle": "Melde dich an, um fortzufahren",
+  "loginNoAccountPrefix": "Noch kein Konto? ",
+  "loginRegisterNow": "Jetzt registrieren",
+  "loginResendVerification": "E-Mail erneut senden",
+  "loginVerificationResent": "Bestätigungs-E-Mail an {email} erneut gesendet.",
+  "@loginVerificationResent": {
+    "placeholders": { "email": { "type": "String" } }
+  },
+  "loginResendFailed": "E-Mail konnte nicht erneut gesendet werden. Bitte kurz warten.",
+  "loginErrorMissingFields": "Bitte E-Mail und Passwort eingeben.",
+  "loginErrorEmailMissing": "Bitte E-Mail eintragen.",
+  "loginErrorInvalidCredentials": "E-Mail oder Passwort falsch.",
+  "loginErrorEmailNotConfirmed": "Bitte bestätige zuerst deine E-Mail.",
+  "loginErrorFailed": "Login fehlgeschlagen. Bitte erneut versuchen.",
+
+  "authSignIn": "Anmelden",
+  "authEmailLabel": "E-Mail Adresse",
+  "authEmailHint": "deine@email.de",
+  "authPasswordLabel": "Passwort",
+  "authPasswordHint": "••••••••",
+  "authForgotPassword": "Passwort vergessen?",
+  "authSocialOpened": "Anmeldung geöffnet. Kehre danach zur App zurück.",
+  "authErrorSignInFailed": "Anmeldung fehlgeschlagen. Bitte erneut versuchen.",
+  "authErrorCancelled": "Anmeldung abgebrochen.",
+  "authErrorGoogleNotConfigured": "Google Login ist noch nicht fertig konfiguriert.",
+  "authErrorAppleUnavailable": "Apple Anmeldung ist auf diesem Gerät nicht verfügbar.",
+  "authErrorTooManyAttempts": "Zu viele Versuche. Bitte kurz warten.",
+
+  "authCurrentPassword": "Aktuelles Passwort",
+  "authNewPassword": "Neues Passwort",
+  "authNewPasswordConfirm": "Neues Passwort bestätigen",
+  "authPasswordRepeatHint": "Passwort wiederholen",
+  "authPasswordsDoNotMatch": "Passwörter stimmen nicht überein.",
+  "authPasswordTooShort": "Passwort muss mindestens {min} Zeichen haben.",
+  "@authPasswordTooShort": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "authPasswordTooWeak": "Passwort zu schwach. Mindestens {min} Zeichen.",
+  "@authPasswordTooWeak": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "authPasswordSaveFailed": "Passwort konnte nicht gespeichert werden. Bitte erneut versuchen.",
+
+  "changePasswordTitle": "Passwort ändern",
+  "changePasswordSetTitle": "Passwort festlegen",
+  "changePasswordHintCurrent": "Zur Sicherheit brauchen wir einmal dein aktuelles Passwort.",
+  "changePasswordHintSocial": "Dein Konto läuft bisher über Google oder Apple. Leg ein Passwort fest, um dich zusätzlich mit E-Mail anmelden zu können.",
+  "changePasswordErrorCurrentMissing": "Bitte gib dein aktuelles Passwort ein.",
+  "changePasswordErrorCurrentWrong": "Aktuelles Passwort ist falsch.",
+  "changePasswordErrorSameAsOld": "Das neue Passwort ist dein bisheriges.",
+  "changePasswordChanged": "Passwort geändert.",
+  "changePasswordSet": "Passwort gesetzt. Du kannst dich jetzt auch mit E-Mail anmelden.",
+
+  "resetPasswordTitle": "Passwort zurücksetzen",
+  "resetPasswordEnterEmail": "Gib deine E-Mail-Adresse ein. Wir schicken dir einen 6-stelligen Code, mit dem du ein neues Passwort setzt.",
+  "resetPasswordCodeStepTitle": "Code eingeben",
+  "resetPasswordCodeStepSubtitle": "Falls ein Konto mit {email} existiert, haben wir dir einen 6-stelligen Code geschickt.",
+  "@resetPasswordCodeStepSubtitle": {
+    "placeholders": { "email": { "type": "String" } }
+  },
+  "resetPasswordNewStepSubtitle": "Wähl ein neues Passwort — mindestens {min} Zeichen.",
+  "@resetPasswordNewStepSubtitle": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "resetPasswordDoneTitle": "Passwort geändert",
+  "resetPasswordDoneSubtitle": "Dein neues Passwort ist aktiv und du bist angemeldet. Beim nächsten Login nutzt du das neue Passwort.",
+  "resetPasswordSendCode": "Code senden",
+  "resetPasswordCodeLabel": "6-stelliger Code",
+  "resetPasswordSpamHint": "Keine Mail erhalten? Sieh auch im Spam-Ordner nach.",
+  "resetPasswordResend": "Code erneut senden",
+  "resetPasswordResendIn": "Code erneut senden ({seconds} s)",
+  "@resetPasswordResendIn": {
+    "placeholders": { "seconds": { "type": "int" } }
+  },
+  "resetPasswordChangeEmail": "E-Mail-Adresse ändern",
+  "resetPasswordSave": "Passwort speichern",
+  "resetPasswordToApp": "Weiter zur App",
+  "resetPasswordErrorInvalidEmail": "Bitte gib eine gültige E-Mail-Adresse ein.",
+  "resetPasswordErrorSendFailed": "Der Code konnte nicht gesendet werden. Bitte erneut versuchen.",
+  "resetPasswordCodeSent": "Neuer Code gesendet. Schau in dein Postfach.",
+  "resetPasswordErrorResendFailed": "Konnte keinen neuen Code senden. Bitte kurz warten.",
+  "resetPasswordErrorCodeMissing": "Bitte gib den 6-stelligen Code ein.",
+  "resetPasswordErrorCodeInvalid": "Code ungültig oder abgelaufen.",
+  "resetPasswordErrorVerifyFailed": "Bestätigung fehlgeschlagen. Bitte erneut versuchen.",
+  "resetPasswordErrorRateLimited": "Zu viele E-Mails in kurzer Zeit. Bitte warte ein paar Minuten.",
+  "resetPasswordErrorCodeExpired": "Der Code ist abgelaufen. Fordere einen neuen an.",
+  "resetPasswordErrorCodeWrong": "Der Code stimmt nicht. Bitte prüfe die Ziffern.",
+  "resetPasswordErrorSamePassword": "Das ist dein bisheriges Passwort. Bitte wähle ein neues.",
+  "resetPasswordErrorSessionExpired": "Sitzung abgelaufen. Bitte fordere einen neuen Code an.",
+  "resetPasswordErrorGeneric": "Das hat nicht geklappt. Bitte erneut versuchen.",
+
+  "commonCancel": "Abbrechen",
+  "commonOr": "oder",
+  "commonSave": "Speichern",
+  "commonBack": "Zurück",
+  "commonContinue": "Weiter",
+  "commonRetry": "Erneut versuchen",
+  "commonClose": "Schließen"
+}

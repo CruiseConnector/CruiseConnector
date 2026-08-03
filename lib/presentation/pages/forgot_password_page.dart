@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
@@ -86,7 +87,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   Future<void> _sendCode() async {
     final email = _emailCtrl.text.trim();
     if (!AppInputLimits.looksLikeEmail(email)) {
-      setState(() => _errorMsg = 'Bitte gib eine gültige E-Mail-Adresse ein.');
+      setState(() => _errorMsg = context.l10n.resetPasswordErrorInvalidEmail);
       return;
     }
 
@@ -110,7 +111,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       if (mounted) {
         setState(
           () => _errorMsg =
-              'Der Code konnte nicht gesendet werden. Bitte erneut versuchen.',
+              context.l10n.resetPasswordErrorSendFailed,
         );
       }
     } finally {
@@ -129,8 +130,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       _startResendCooldown();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Neuer Code gesendet. Schau in dein Postfach.'),
+        SnackBar(
+          content: Text(context.l10n.resetPasswordCodeSent),
         ),
       );
     } on AuthException catch (e) {
@@ -142,7 +143,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       debugPrint('[ForgotPassword] resend Fehler: $e');
       if (mounted) {
         setState(
-          () => _errorMsg = 'Konnte keinen neuen Code senden. Bitte kurz warten.',
+          () => _errorMsg = context.l10n.resetPasswordErrorResendFailed,
         );
       }
     } finally {
@@ -154,7 +155,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   Future<void> _verifyCode() async {
     final code = _codeCtrl.text.trim();
     if (code.length < 6) {
-      setState(() => _errorMsg = 'Bitte gib den 6-stelligen Code ein.');
+      setState(() => _errorMsg = context.l10n.resetPasswordErrorCodeMissing);
       return;
     }
 
@@ -169,7 +170,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       );
       if (!mounted) return;
       if (AuthService.currentUser == null) {
-        setState(() => _errorMsg = 'Code ungültig oder abgelaufen.');
+        setState(() => _errorMsg = context.l10n.resetPasswordErrorCodeInvalid);
         return;
       }
       setState(() => _step = _ResetStep.password);
@@ -180,7 +181,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       debugPrint('[ForgotPassword] verifyCode Fehler: $e');
       if (mounted) {
         setState(
-          () => _errorMsg = 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.',
+          () => _errorMsg = context.l10n.resetPasswordErrorVerifyFailed,
         );
       }
     } finally {
@@ -193,13 +194,14 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     final password = _passwordCtrl.text;
     if (!AppInputLimits.isValidPassword(password)) {
       setState(
-        () => _errorMsg =
-            'Passwort muss mindestens ${AppInputLimits.passwordMinLength} Zeichen haben.',
+        () => _errorMsg = context.l10n.authPasswordTooShort(
+          AppInputLimits.passwordMinLength,
+        ),
       );
       return;
     }
     if (password != _passwordRepeatCtrl.text) {
-      setState(() => _errorMsg = 'Passwörter stimmen nicht überein.');
+      setState(() => _errorMsg = context.l10n.authPasswordsDoNotMatch);
       return;
     }
 
@@ -218,7 +220,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       if (mounted) {
         setState(
           () => _errorMsg =
-              'Passwort konnte nicht gespeichert werden. Bitte erneut versuchen.',
+              context.l10n.authPasswordSaveFailed,
         );
       }
     } finally {
@@ -264,24 +266,26 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   String _translateError(AuthException e) {
     final m = e.message.toLowerCase();
     if (_isRateLimited(e)) {
-      return 'Zu viele E-Mails in kurzer Zeit. Bitte warte ein paar Minuten.';
+      return context.l10n.resetPasswordErrorRateLimited;
     }
     if (m.contains('expired')) {
-      return 'Der Code ist abgelaufen. Fordere einen neuen an.';
+      return context.l10n.resetPasswordErrorCodeExpired;
     }
     if (m.contains('invalid') || m.contains('incorrect')) {
-      return 'Der Code stimmt nicht. Bitte prüfe die Ziffern.';
+      return context.l10n.resetPasswordErrorCodeWrong;
     }
     if (m.contains('password should be') || m.contains('weak')) {
-      return 'Passwort zu schwach. Mindestens ${AppInputLimits.passwordMinLength} Zeichen.';
+      return context.l10n.authPasswordTooWeak(
+        AppInputLimits.passwordMinLength,
+      );
     }
     if (m.contains('same password') || m.contains('should be different')) {
-      return 'Das ist dein bisheriges Passwort. Bitte wähle ein neues.';
+      return context.l10n.resetPasswordErrorSamePassword;
     }
     if (m.contains('session') || m.contains('jwt')) {
-      return 'Sitzung abgelaufen. Bitte fordere einen neuen Code an.';
+      return context.l10n.resetPasswordErrorSessionExpired;
     }
-    return 'Das hat nicht geklappt. Bitte erneut versuchen.';
+    return context.l10n.resetPasswordErrorGeneric;
   }
 
   void _backToEmailStep() {
@@ -318,9 +322,9 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                   }
                 },
         ),
-        title: const Text(
-          'Passwort zurücksetzen',
-          style: TextStyle(
+        title: Text(
+          context.l10n.resetPasswordTitle,
+          style: const TextStyle(
             color: Colors.white,
             fontSize: 17,
             fontWeight: FontWeight.w600,
@@ -356,27 +360,25 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     final (icon, title, subtitle) = switch (_step) {
       _ResetStep.email => (
         Icons.lock_reset_rounded,
-        'Passwort vergessen?',
-        'Gib deine E-Mail-Adresse ein. Wir schicken dir einen 6-stelligen '
-            'Code, mit dem du ein neues Passwort setzt.',
+        context.l10n.authForgotPassword,
+        context.l10n.resetPasswordEnterEmail,
       ),
       _ResetStep.code => (
         Icons.mark_email_read_rounded,
-        'Code eingeben',
-        'Falls ein Konto mit $_sentToEmail existiert, haben wir dir einen '
-            '6-stelligen Code geschickt.',
+        context.l10n.resetPasswordCodeStepTitle,
+        context.l10n.resetPasswordCodeStepSubtitle(_sentToEmail),
       ),
       _ResetStep.password => (
         Icons.password_rounded,
-        'Neues Passwort',
-        'Wähl ein neues Passwort — mindestens '
-            '${AppInputLimits.passwordMinLength} Zeichen.',
+        context.l10n.authNewPassword,
+        context.l10n.resetPasswordNewStepSubtitle(
+          AppInputLimits.passwordMinLength,
+        ),
       ),
       _ResetStep.done => (
         Icons.check_circle_rounded,
-        'Passwort geändert',
-        'Dein neues Passwort ist aktiv und du bist angemeldet. '
-            'Beim nächsten Login nutzt du das neue Passwort.',
+        context.l10n.resetPasswordDoneTitle,
+        context.l10n.resetPasswordDoneSubtitle,
       ),
     };
 
@@ -419,18 +421,18 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label('E-Mail Adresse'),
+        _label(context.l10n.authEmailLabel),
         _inputField(
           controller: _emailCtrl,
           icon: Icons.email_outlined,
-          hint: 'deine@email.de',
+          hint: context.l10n.authEmailHint,
           keyboardType: TextInputType.emailAddress,
           maxLength: AppInputLimits.emailMaxLength,
           autofillHints: const [AutofillHints.email],
           onSubmitted: (_) => _busy ? null : _sendCode(),
         ),
         const SizedBox(height: 26),
-        _primaryButton('Code senden', _sendCode, brand),
+        _primaryButton(context.l10n.resetPasswordSendCode, _sendCode, brand),
       ],
     );
   }
@@ -439,7 +441,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label('6-stelliger Code'),
+        _label(context.l10n.resetPasswordCodeLabel),
         Container(
           decoration: _fieldBox(),
           child: TextField(
@@ -473,15 +475,15 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
           ),
         ),
         const SizedBox(height: 10),
-        const Row(
+        Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.info_outline, color: _authTextMuted, size: 16),
-            SizedBox(width: 6),
+            const Icon(Icons.info_outline, color: _authTextMuted, size: 16),
+            const SizedBox(width: 6),
             Expanded(
               child: Text(
-                'Keine Mail erhalten? Sieh auch im Spam-Ordner nach.',
-                style: TextStyle(
+                context.l10n.resetPasswordSpamHint,
+                style: const TextStyle(
                   color: _authTextMuted,
                   fontSize: 12.5,
                   height: 1.35,
@@ -501,8 +503,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               ),
               child: Text(
                 _resendIn > 0
-                    ? 'Code erneut senden ($_resendIn s)'
-                    : 'Code erneut senden',
+                    ? context.l10n.resetPasswordResendIn(_resendIn)
+                    : context.l10n.resetPasswordResend,
                 style: TextStyle(
                   color: _resendIn > 0 ? _authTextMuted : brand,
                   fontWeight: FontWeight.w700,
@@ -518,9 +520,9 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text(
-                'E-Mail-Adresse ändern',
-                style: TextStyle(
+              child: Text(
+                context.l10n.resetPasswordChangeEmail,
+                style: const TextStyle(
                   color: _authTextMuted,
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
@@ -539,11 +541,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _label('Neues Passwort'),
+        _label(context.l10n.authNewPassword),
         _inputField(
           controller: _passwordCtrl,
           icon: Icons.lock_outline,
-          hint: '••••••••',
+          hint: context.l10n.authPasswordHint,
           obscure: _obscure,
           maxLength: AppInputLimits.passwordMaxLength,
           autofocus: true,
@@ -557,24 +559,24 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
           ),
         ),
         const SizedBox(height: 18),
-        _label('Neues Passwort bestätigen'),
+        _label(context.l10n.authNewPasswordConfirm),
         _inputField(
           controller: _passwordRepeatCtrl,
           icon: Icons.lock_outline,
-          hint: 'Passwort wiederholen',
+          hint: context.l10n.authPasswordRepeatHint,
           obscure: _obscure,
           maxLength: AppInputLimits.passwordMaxLength,
           autofillHints: const [AutofillHints.newPassword],
           onSubmitted: (_) => _busy ? null : _savePassword(),
         ),
         const SizedBox(height: 26),
-        _primaryButton('Passwort speichern', _savePassword, brand),
+        _primaryButton(context.l10n.resetPasswordSave, _savePassword, brand),
       ],
     );
   }
 
   Widget _doneStep(Color brand) {
-    return _primaryButton('Weiter zur App', _finish, brand);
+    return _primaryButton(context.l10n.resetPasswordToApp, _finish, brand);
   }
 
   Widget _primaryButton(String text, VoidCallback onPressed, Color brand) {

@@ -13,6 +13,10 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/app_locale_provider.dart';
+import 'package:cruise_connect/core/l10n_extension.dart';
+import 'package:cruise_connect/l10n/app_localizations.dart';
+import 'package:cruise_connect/presentation/pages/language_choice_page.dart';
 import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
@@ -394,16 +398,27 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
+        // 2026-08-03 (vucko Sprachumschaltung): Deutsch/English.
+        ChangeNotifierProvider(create: (_) => AppLocaleProvider()..load()),
         // 2026-05-23 (vucko): Notification-Service als Provider —
         // Realtime-Subscription wird in HomePage initState gestartet.
         ChangeNotifierProvider<NotificationService>.value(
           value: NotificationService.instance,
         ),
       ],
-      child: Consumer<AppAccentProvider>(
-        builder: (context, accentProvider, _) {
+      child: Consumer2<AppAccentProvider, AppLocaleProvider>(
+        builder: (context, accentProvider, localeProvider, _) {
           final accent = accentProvider.color;
           return MaterialApp(
+            locale: localeProvider.locale,
+            supportedLocales: AppLocalizations.supportedLocales,
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            // Übersetzungen für Code ohne BuildContext (Services) bereitstellen,
+            // sobald der Baum steht bzw. die Sprache wechselt.
+            builder: (context, child) {
+              L10n.update(AppLocalizations.of(context));
+              return child ?? const SizedBox.shrink();
+            },
             navigatorKey: rootNavigatorKey,
             // Trackt jeden Seitenwechsel automatisch als "screen_view"
             // (Basis für Sitzungsdauer/Screen-Nutzung in Firebase Analytics).
@@ -437,11 +452,38 @@ class _MyAppState extends State<MyApp> {
                 foregroundColor: Colors.white,
               ),
             ),
-            home: const _CruiseLaunchGate(child: AuthPage()),
+            home: const _CruiseLaunchGate(
+              child: _LanguageChoiceGate(child: AuthPage()),
+            ),
           );
         },
       ),
     );
+  }
+}
+
+/// Zeigt beim allerersten Start die Sprachwahl, danach direkt die App.
+///
+/// 2026-08-03 (vucko Sprachumschaltung): Bewusst als Gate im Baum statt als
+/// Navigator-Push — sobald der Nutzer bestätigt, meldet der Provider die
+/// Änderung und dieser Gate baut auf [child] um. Kein Routen-Handling nötig,
+/// und ein Zurück-Wisch kann die Wahl nicht überspringen.
+class _LanguageChoiceGate extends StatelessWidget {
+  const _LanguageChoiceGate({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final localeProvider = context.watch<AppLocaleProvider>();
+    // Solange die gespeicherte Wahl noch gelesen wird, nichts entscheiden —
+    // sonst blitzt die Sprachwahl bei jedem Start kurz auf. Der Launch-Screen
+    // liegt in dieser Zeit ohnehin darüber.
+    if (!localeProvider.isLoaded) {
+      return const ColoredBox(color: Color(0xFF0D141E), child: SizedBox.expand());
+    }
+    if (!localeProvider.hasChosen) return const LanguageChoicePage();
+    return child;
   }
 }
 

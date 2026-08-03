@@ -66,6 +66,9 @@ Supabase Dashboard → **Authentication → Email Templates → „Reset Passwor
 Das Standard-Template enthält nur `{{ .ConfirmationURL }}` (Link). Die App
 erwartet einen **6-stelligen Code** → `{{ .Token }}` muss rein:
 
+Die aktuelle, zweisprachige Fassung im Layout der übrigen Mails steht in
+`docs/SPRACHUMSCHALTUNG.md`. Minimal reicht:
+
 ```html
 <h2>Passwort zurücksetzen</h2>
 <p>Dein Code für Cruise Connector:</p>

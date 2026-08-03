@@ -10,6 +10,7 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
@@ -73,22 +74,23 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
     final next = _newCtrl.text;
 
     if (_hasPassword && current.isEmpty) {
-      setState(() => _errorMsg = 'Bitte gib dein aktuelles Passwort ein.');
+      setState(() => _errorMsg = context.l10n.changePasswordErrorCurrentMissing);
       return;
     }
     if (!AppInputLimits.isValidPassword(next)) {
       setState(
-        () => _errorMsg =
-            'Passwort muss mindestens ${AppInputLimits.passwordMinLength} Zeichen haben.',
+        () => _errorMsg = context.l10n.authPasswordTooShort(
+          AppInputLimits.passwordMinLength,
+        ),
       );
       return;
     }
     if (next != _repeatCtrl.text) {
-      setState(() => _errorMsg = 'Passwörter stimmen nicht überein.');
+      setState(() => _errorMsg = context.l10n.authPasswordsDoNotMatch);
       return;
     }
     if (_hasPassword && current == next) {
-      setState(() => _errorMsg = 'Das neue Passwort ist dein bisheriges.');
+      setState(() => _errorMsg = context.l10n.changePasswordErrorSameAsOld);
       return;
     }
 
@@ -101,7 +103,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         final ok = await AuthService.verifyCurrentPassword(current);
         if (!ok) {
           if (mounted) {
-            setState(() => _errorMsg = 'Aktuelles Passwort ist falsch.');
+            setState(() => _errorMsg = context.l10n.changePasswordErrorCurrentWrong);
           }
           return;
         }
@@ -112,8 +114,8 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
         SnackBar(
           content: Text(
             _hasPassword
-                ? 'Passwort geändert.'
-                : 'Passwort gesetzt. Du kannst dich jetzt auch mit E-Mail anmelden.',
+                ? context.l10n.changePasswordChanged
+                : context.l10n.changePasswordSet,
           ),
         ),
       );
@@ -123,7 +125,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       if (mounted) {
         setState(
           () => _errorMsg =
-              'Passwort konnte nicht gespeichert werden. Bitte erneut versuchen.',
+              context.l10n.authPasswordSaveFailed,
         );
       }
     } finally {
@@ -158,7 +160,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
           onPressed: _busy ? null : () => Navigator.pop(context),
         ),
         title: Text(
-          _hasPassword ? 'Passwort ändern' : 'Passwort festlegen',
+          _hasPassword ? context.l10n.changePasswordTitle : context.l10n.changePasswordSetTitle,
           style: const TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.bold,
@@ -176,9 +178,8 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                   children: [
                     Text(
                       _hasPassword
-                          ? 'Zur Sicherheit brauchen wir einmal dein aktuelles Passwort.'
-                          : 'Dein Konto läuft bisher über Google oder Apple. Leg ein '
-                                'Passwort fest, um dich zusätzlich mit E-Mail anmelden zu können.',
+                          ? context.l10n.changePasswordHintCurrent
+                          : context.l10n.changePasswordHintSocial,
                       style: const TextStyle(
                         color: _muted,
                         fontSize: 14.5,
@@ -188,7 +189,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                     const SizedBox(height: 24),
 
                     if (_hasPassword) ...[
-                      _label('Aktuelles Passwort'),
+                      _label(context.l10n.authCurrentPassword),
                       _field(
                         controller: _currentCtrl,
                         hint: '••••••••',
@@ -208,9 +209,9 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          child: const Text(
-                            'Passwort vergessen?',
-                            style: TextStyle(
+                          child: Text(
+                            context.l10n.authForgotPassword,
+                            style: const TextStyle(
                               fontSize: 13.5,
                               fontWeight: FontWeight.w700,
                             ),
@@ -220,7 +221,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                       const SizedBox(height: 12),
                     ],
 
-                    _label('Neues Passwort'),
+                    _label(context.l10n.authNewPassword),
                     _field(
                       controller: _newCtrl,
                       hint: '••••••••',
@@ -236,10 +237,10 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                     ),
                     const SizedBox(height: 16),
 
-                    _label('Neues Passwort bestätigen'),
+                    _label(context.l10n.authNewPasswordConfirm),
                     _field(
                       controller: _repeatCtrl,
-                      hint: 'Passwort wiederholen',
+                      hint: context.l10n.authPasswordRepeatHint,
                       obscure: _obscure,
                       autofillHints: const [AutofillHints.newPassword],
                       onSubmitted: (_) => _busy ? null : _save(),
@@ -305,8 +306,8 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                               )
                             : Text(
                                 _hasPassword
-                                    ? 'Passwort ändern'
-                                    : 'Passwort festlegen',
+                                    ? context.l10n.changePasswordTitle
+                                    : context.l10n.changePasswordSetTitle,
                                 style: const TextStyle(
                                   fontSize: 16.5,
                                   fontWeight: FontWeight.bold,

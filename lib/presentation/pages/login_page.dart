@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/presentation/pages/forgot_password_page.dart';
@@ -52,7 +53,7 @@ class _LoginPageState extends State<LoginPage> {
     final password = _passwordController.text;
 
     if (email.isEmpty || password.isEmpty) {
-      setState(() => _errorMsg = 'Bitte E-Mail und Passwort eingeben.');
+      setState(() => _errorMsg = context.l10n.loginErrorMissingFields);
       return;
     }
 
@@ -81,9 +82,7 @@ class _LoginPageState extends State<LoginPage> {
       });
     } catch (e) {
       debugPrint('[Login] Unerwarteter Fehler: $e');
-      setState(
-        () => _errorMsg = 'Login fehlgeschlagen. Bitte erneut versuchen.',
-      );
+      setState(() => _errorMsg = context.l10n.loginErrorFailed);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -135,9 +134,7 @@ class _LoginPageState extends State<LoginPage> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Anmeldung geöffnet. Kehre danach zur App zurück.'),
-          ),
+          SnackBar(content: Text(context.l10n.authSocialOpened)),
         );
       }
     } on AuthException catch (e) {
@@ -145,9 +142,7 @@ class _LoginPageState extends State<LoginPage> {
     } catch (e) {
       debugPrint('[Login] Social Login Fehler: $e');
       if (mounted) {
-        setState(
-          () => _errorMsg = 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.',
-        );
+        setState(() => _errorMsg = context.l10n.authErrorSignInFailed);
       }
     } finally {
       if (mounted) setLoading(false);
@@ -157,7 +152,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _resendVerificationEmail() async {
     final email = _emailController.text.trim();
     if (email.isEmpty) {
-      setState(() => _errorMsg = 'Bitte E-Mail eintragen.');
+      setState(() => _errorMsg = context.l10n.loginErrorEmailMissing);
       return;
     }
 
@@ -166,19 +161,14 @@ class _LoginPageState extends State<LoginPage> {
       await AuthService.resendVerificationEmail(email);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Bestätigungs-E-Mail an $email erneut gesendet.'),
-        ),
+        SnackBar(content: Text(context.l10n.loginVerificationResent(email))),
       );
     } on AuthException catch (e) {
       if (mounted) setState(() => _errorMsg = _translateError(e.message));
     } catch (e) {
       debugPrint('[Login] Verification resend Fehler: $e');
       if (mounted) {
-        setState(
-          () => _errorMsg =
-              'E-Mail konnte nicht erneut gesendet werden. Bitte kurz warten.',
-        );
+        setState(() => _errorMsg = context.l10n.loginResendFailed);
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -197,26 +187,28 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   String _translateError(String msg) {
+    // Erkennung weiterhin an den Original-Meldungen (GoTrue englisch,
+    // AuthService deutsch) — nur die Anzeige ist übersetzt.
     final m = msg.toLowerCase();
     if (m.contains('invalid login') || m.contains('invalid credentials')) {
-      return 'E-Mail oder Passwort falsch.';
+      return context.l10n.loginErrorInvalidCredentials;
     }
     if (m.contains('email not confirmed')) {
-      return 'Bitte bestätige zuerst deine E-Mail.';
+      return context.l10n.loginErrorEmailNotConfirmed;
     }
     if (m.contains('abgebrochen') || m.contains('cancel')) {
-      return 'Anmeldung abgebrochen.';
+      return context.l10n.authErrorCancelled;
     }
     if (m.contains('google login ist noch nicht konfiguriert')) {
-      return 'Google Login ist noch nicht fertig konfiguriert.';
+      return context.l10n.authErrorGoogleNotConfigured;
     }
     if (m.contains('apple') && m.contains('nicht verfügbar')) {
-      return 'Apple Anmeldung ist auf diesem Gerät nicht verfügbar.';
+      return context.l10n.authErrorAppleUnavailable;
     }
     if (m.contains('too many requests')) {
-      return 'Zu viele Versuche. Bitte kurz warten.';
+      return context.l10n.authErrorTooManyAttempts;
     }
-    return 'Login fehlgeschlagen. Bitte erneut versuchen.';
+    return context.l10n.loginErrorFailed;
   }
 
   @override
@@ -352,10 +344,10 @@ class _LoginPageState extends State<LoginPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 40),
-                      const Center(
+                      Center(
                         child: Text(
-                          'Willkommen zurück',
-                          style: TextStyle(
+                          context.l10n.loginTitle,
+                          style: const TextStyle(
                             fontSize: 26,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
@@ -363,29 +355,32 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                       ),
                       const SizedBox(height: 5),
-                      const Center(
+                      Center(
                         child: Text(
-                          'Melde dich an, um fortzufahren',
-                          style: TextStyle(fontSize: 15, color: _authTextMuted),
+                          context.l10n.loginSubtitle,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            color: _authTextMuted,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 30),
 
-                      _label('E-Mail Adresse'),
+                      _label(context.l10n.authEmailLabel),
                       _inputField(
                         controller: _emailController,
                         icon: Icons.email_outlined,
-                        hint: 'deine@email.de',
+                        hint: context.l10n.authEmailHint,
                         keyboardType: TextInputType.emailAddress,
                         maxLength: AppInputLimits.emailMaxLength,
                       ),
                       const SizedBox(height: 18),
 
-                      _label('Passwort'),
+                      _label(context.l10n.authPasswordLabel),
                       _inputField(
                         controller: _passwordController,
                         icon: Icons.lock_outline,
-                        hint: '••••••••',
+                        hint: context.l10n.authPasswordHint,
                         obscure: _obscure,
                         maxLength: AppInputLimits.passwordMaxLength,
                         suffixIcon: IconButton(
@@ -414,9 +409,9 @@ class _LoginPageState extends State<LoginPage> {
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          child: const Text(
-                            'Passwort vergessen?',
-                            style: TextStyle(
+                          child: Text(
+                            context.l10n.authForgotPassword,
+                            style: const TextStyle(
                               fontSize: 13.5,
                               fontWeight: FontWeight.w700,
                             ),
@@ -472,7 +467,7 @@ class _LoginPageState extends State<LoginPage> {
                                 ? null
                                 : _resendVerificationEmail,
                             icon: const Icon(Icons.mark_email_unread_outlined),
-                            label: const Text('E-Mail erneut senden'),
+                            label: Text(context.l10n.loginResendVerification),
                             style: TextButton.styleFrom(foregroundColor: brand),
                           ),
                         ),
@@ -503,9 +498,9 @@ class _LoginPageState extends State<LoginPage> {
                                     strokeWidth: 2.5,
                                   ),
                                 )
-                              : const Text(
-                                  'Anmelden',
-                                  style: TextStyle(
+                              : Text(
+                                  context.l10n.authSignIn,
+                                  style: const TextStyle(
                                     fontSize: 17,
                                     fontWeight: FontWeight.bold,
                                   ),
@@ -543,7 +538,7 @@ class _LoginPageState extends State<LoginPage> {
                                 horizontal: 12,
                               ),
                               child: Text(
-                                'oder',
+                                context.l10n.commonOr,
                                 style: TextStyle(
                                   color: _authTextMuted.withValues(alpha: 0.72),
                                   fontSize: 13,
@@ -576,14 +571,14 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                           child: RichText(
                             text: TextSpan(
-                              text: 'Noch kein Konto? ',
+                              text: context.l10n.loginNoAccountPrefix,
                               style: const TextStyle(
                                 color: _authTextMuted,
                                 fontSize: 14,
                               ),
                               children: [
                                 TextSpan(
-                                  text: 'Jetzt registrieren',
+                                  text: context.l10n.loginRegisterNow,
                                   style: TextStyle(
                                     color: brand,
                                     fontWeight: FontWeight.bold,

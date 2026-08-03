@@ -1,0 +1,4020 @@
+{
+ "lib/presentation/pages/edit_profile_page.dart": [
+  {
+   "line": 52,
+   "text": "alfa romeo"
+  },
+  {
+   "line": 55,
+   "text": "aston martin"
+  },
+  {
+   "line": 85,
+   "text": "land rover"
+  },
+  {
+   "line": 93,
+   "text": "mercedes benz"
+  },
+  {
+   "line": 103,
+   "text": "rolls royce"
+  },
+  {
+   "line": 334,
+   "text": "Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben."
+  },
+  {
+   "line": 335,
+   "text": "Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben."
+  },
+  {
+   "line": 363,
+   "text": "Upload fehlgeschlagen"
+  },
+  {
+   "line": 384,
+   "text": "Upload fehlgeschlagen: $e"
+  },
+  {
+   "line": 429,
+   "text": "Upload fehlgeschlagen"
+  },
+  {
+   "line": 482,
+   "text": "Profilbild zuschneiden"
+  },
+  {
+   "line": 483,
+   "text": "Banner zuschneiden"
+  },
+  {
+   "line": 484,
+   "text": "Fahrzeug-Foto zuschneiden"
+  },
+  {
+   "line": 541,
+   "text": "Username ist in der Testversion gesperrt."
+  },
+  {
+   "line": 559,
+   "text": "Username noch gesperrt"
+  },
+  {
+   "line": 563,
+   "text": "Du hast deinen Benutzernamen kürzlich geändert. Du kannst ihn "
+  },
+  {
+   "line": 564,
+   "text": "erst wieder ab dem $formatted ändern."
+  },
+  {
+   "line": 589,
+   "text": "Username ändern?"
+  },
+  {
+   "line": 593,
+   "text": "Bist du sicher, dass du deinen Benutzernamen ändern möchtest?\\n\\n"
+  },
+  {
+   "line": 594,
+   "text": "Du kannst deinen Benutzernamen nur einmal pro Monat ändern."
+  },
+  {
+   "line": 601,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 608,
+   "text": "Ja, ändern"
+  },
+  {
+   "line": 680,
+   "text": "Speichern fehlgeschlagen: $e"
+  },
+  {
+   "line": 822,
+   "text": "Fahrzeugkarte löschen?"
+  },
+  {
+   "line": 826,
+   "text": "Es wird nur \"$title\" aus deiner Garage entfernt. Andere Karten bleiben erhalten."
+  },
+  {
+   "line": 833,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 840,
+   "text": "Löschen"
+  },
+  {
+   "line": 866,
+   "text": "Fahrzeugkarte entfernt. Speichern übernimmt die Änderung."
+  },
+  {
+   "line": 940,
+   "text": "Profil bearbeiten"
+  },
+  {
+   "line": 956,
+   "text": "Speichern"
+  },
+  {
+   "line": 996,
+   "text": "Username ist für die heutige Testversion gesperrt."
+  },
+  {
+   "line": 998,
+   "text": "Du kannst deinen Benutzernamen erst wieder ab dem "
+  },
+  {
+   "line": 1001,
+   "text": "${_nextUsernameChange!.year} ändern."
+  },
+  {
+   "line": 1002,
+   "text": "Du kannst deinen Benutzernamen nur einmal pro Monat ändern."
+  },
+  {
+   "line": 1028,
+   "text": "Bio-Überschrift"
+  },
+  {
+   "line": 1031,
+   "text": "z.B. Über mich"
+  },
+  {
+   "line": 1039,
+   "text": "Erzähl etwas über dich…"
+  },
+  {
+   "line": 1075,
+   "text": "Meine Garage"
+  },
+  {
+   "line": 1307,
+   "text": "Fahrzeug hinzufügen"
+  },
+  {
+   "line": 1390,
+   "text": "Karte $position von $total"
+  },
+  {
+   "line": 1401,
+   "text": "Nur diese Fahrzeugkarte löschen"
+  },
+  {
+   "line": 1412,
+   "text": "Löschen"
+  },
+  {
+   "line": 1562,
+   "text": "Top Speed"
+  },
+  {
+   "line": 1695,
+   "text": "Fahrzeug-Foto ändern"
+  },
+  {
+   "line": 1696,
+   "text": "Fahrzeug-Foto hinzufügen"
+  },
+  {
+   "line": 1893,
+   "text": "Keine Marke gefunden"
+  },
+  {
+   "line": 1918,
+   "text": "Erst Marke wählen"
+  },
+  {
+   "line": 1919,
+   "text": "Modell manuell eingeben"
+  },
+  {
+   "line": 1966,
+   "text": "Lade Fahrzeugdaten..."
+  },
+  {
+   "line": 1982,
+   "text": "API gerade nicht erreichbar. Manuelle Eingabe bleibt möglich."
+  }
+ ],
+ "lib/presentation/pages/legal_gate_page.dart": [
+  {
+   "line": 111,
+   "text": "Rechtliches konnte nicht geprüft werden."
+  },
+  {
+   "line": 121,
+   "text": "Bitte prüfe die Verbindung oder ob die Legal-Migration bereits in Supabase deployed ist."
+  },
+  {
+   "line": 133,
+   "text": "Erneut versuchen"
+  }
+ ],
+ "lib/presentation/pages/home_content_page.dart": [
+  {
+   "line": 244,
+   "text": "Street Rookie"
+  },
+  {
+   "line": 331,
+   "text": "XP Anzeige"
+  },
+  {
+   "line": 332,
+   "text": "Level, Fortschritt und Gesamtwerte"
+  },
+  {
+   "line": 339,
+   "text": "Heute für dich"
+  },
+  {
+   "line": 340,
+   "text": "Route, Trip-Fortsetzung und Fahren-CTA"
+  },
+  {
+   "line": 348,
+   "text": "Neue Fahrer separat anzeigen"
+  },
+  {
+   "line": 355,
+   "text": "Öffentliche Gruppen separat anzeigen"
+  },
+  {
+   "line": 362,
+   "text": "Events separat anzeigen"
+  },
+  {
+   "line": 369,
+   "text": "Wochenkilometer und aktive Tage"
+  },
+  {
+   "line": 376,
+   "text": "XP-Multiplikator für heute"
+  },
+  {
+   "line": 384,
+   "text": "Direkt in den Fahrmodus"
+  },
+  {
+   "line": 391,
+   "text": "Gespeicherte Routen"
+  },
+  {
+   "line": 392,
+   "text": "Deine gemerkten Strecken"
+  },
+  {
+   "line": 398,
+   "text": "Profil"
+  },
+  {
+   "line": 399,
+   "text": "Account, Badges und Garage"
+  },
+  {
+   "line": 407,
+   "text": "Kilometer, Fahrten und Wochen im Monat"
+  },
+  {
+   "line": 414,
+   "text": "Wähle ein Badge, das du aktiv jagen willst"
+  },
+  {
+   "line": 421,
+   "text": "KM, Strecken, Badges und XP kompakt"
+  },
+  {
+   "line": 1524,
+   "text": "Willkommen zurück"
+  },
+  {
+   "line": 1698,
+   "text": "XP GESAMT"
+  },
+  {
+   "line": 1709,
+   "text": "KM GEFAHREN"
+  },
+  {
+   "line": 1803,
+   "text": "Maximallevel erreicht"
+  },
+  {
+   "line": 1804,
+   "text": "Noch $xpToNextLevel XP bis Level ${userLevel + 1}"
+  },
+  {
+   "line": 1859,
+   "text": "Widgets hinzufügen"
+  },
+  {
+   "line": 1866,
+   "text": "Fertig"
+  },
+  {
+   "line": 1882,
+   "text": "Home anpassen"
+  },
+  {
+   "line": 2063,
+   "text": "Home bearbeiten"
+  },
+  {
+   "line": 2075,
+   "text": "Die Home ist deine Live-Vorschau. Ziehe Kacheln links auf ein Widget zum Verschieben oder rechts auf ein passendes Widget, um es in einen Ordner oder ein Carousel zu legen. Community gibt es jetzt als Kontakte, Gruppen und Events einzeln."
+  },
+  {
+   "line": 2084,
+   "text": "Auf der Home"
+  },
+  {
+   "line": 2128,
+   "text": "Alle Widgets sind gerade auf der Home Page."
+  },
+  {
+   "line": 2570,
+   "text": "Live-Vorschau: links verschiebt, rechts fügt hinzu."
+  },
+  {
+   "line": 2620,
+   "text": "Widgets aus der Auswahl hinzufügen."
+  },
+  {
+   "line": 2621,
+   "text": "Dashboard ist leer."
+  },
+  {
+   "line": 2833,
+   "text": "Rechts: ins Carousel"
+  },
+  {
+   "line": 3202,
+   "text": "Groß"
+  },
+  {
+   "line": 3321,
+   "text": "Gruppe benennen"
+  },
+  {
+   "line": 3358,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 3365,
+   "text": "Speichern"
+  },
+  {
+   "line": 3681,
+   "text": "Aus Ordner entfernen"
+  },
+  {
+   "line": 3801,
+   "text": "Noch keine Fahrten"
+  },
+  {
+   "line": 3802,
+   "text": "$activeDays aktive ${activeDays == 1 ? "
+  },
+  {
+   "line": 3891,
+   "text": "XP Anzeige"
+  },
+  {
+   "line": 3924,
+   "text": "Maximallevel erreicht"
+  },
+  {
+   "line": 3925,
+   "text": "Noch $xpToNextLevel XP bis Level ${userLevel + 1}"
+  },
+  {
+   "line": 3934,
+   "text": "${_formatThousands(totalXp)} XP gesamt"
+  },
+  {
+   "line": 3996,
+   "text": "XP GESAMT"
+  },
+  {
+   "line": 4005,
+   "text": "KM GEFAHREN"
+  },
+  {
+   "line": 4064,
+   "text": "Maximallevel erreicht"
+  },
+  {
+   "line": 4065,
+   "text": "Noch $xpToNextLevel XP bis Level ${userLevel + 1}"
+  },
+  {
+   "line": 4133,
+   "text": "Route planen und direkt losfahren."
+  },
+  {
+   "line": 4188,
+   "text": "1 Route gemerkt"
+  },
+  {
+   "line": 4189,
+   "text": "$savedCount Routen gemerkt"
+  },
+  {
+   "line": 4221,
+   "text": "Gespeicherte Routen"
+  },
+  {
+   "line": 4233,
+   "text": "1 Route gemerkt"
+  },
+  {
+   "line": 4234,
+   "text": "$savedCount Routen gemerkt"
+  },
+  {
+   "line": 4385,
+   "text": "Aktive Tage"
+  },
+  {
+   "line": 4475,
+   "text": "Alle bekannten Badge-Ziele sind geschafft."
+  },
+  {
+   "line": 4736,
+   "text": "Fahrt"
+  },
+  {
+   "line": 4737,
+   "text": "Schließe deine erste Route ab."
+  },
+  {
+   "line": 4745,
+   "text": "Sammle XP bis Level 10."
+  },
+  {
+   "line": 4753,
+   "text": "Fahre insgesamt 500 km."
+  },
+  {
+   "line": 4761,
+   "text": "Speichere 5 verschiedene Routen."
+  },
+  {
+   "line": 4769,
+   "text": "Erreiche Level 25."
+  },
+  {
+   "line": 4777,
+   "text": "Fahre insgesamt 2.500 km."
+  },
+  {
+   "line": 4785,
+   "text": "Erreiche Level 50."
+  },
+  {
+   "line": 4793,
+   "text": "Fahre insgesamt 10.000 km."
+  },
+  {
+   "line": 4801,
+   "text": "Erreiche Level ${UserLevel.maxLevel}."
+  },
+  {
+   "line": 4866,
+   "text": "Badge-Jagd wählen"
+  },
+  {
+   "line": 4875,
+   "text": "Dieses Ziel erscheint als Widget auf deiner Home."
+  },
+  {
+   "line": 5067,
+   "text": "vor $ageMinutes Min"
+  },
+  {
+   "line": 5074,
+   "text": "${ride.distanceKm.toStringAsFixed(0)} km Route • "
+  },
+  {
+   "line": 5075,
+   "text": "${ride.drivenKm.toStringAsFixed(0)} km gefahren • ${ride.style}"
+  },
+  {
+   "line": 5117,
+   "text": "FAHRT UNTERBROCHEN"
+  },
+  {
+   "line": 5140,
+   "text": "Rundkurs fortsetzen"
+  },
+  {
+   "line": 5140,
+   "text": "Fahrt fortsetzen"
+  },
+  {
+   "line": 5162,
+   "text": "Noch ~${remainingKm.toStringAsFixed(0)} km offen — die Route "
+  },
+  {
+   "line": 5163,
+   "text": "wird an deiner Position wieder aufgenommen."
+  },
+  {
+   "line": 5304,
+   "text": "Tour pausiert"
+  },
+  {
+   "line": 5304,
+   "text": "Tour aktiv"
+  },
+  {
+   "line": 5306,
+   "text": "Multi-Stop Tour"
+  },
+  {
+   "line": 5435,
+   "text": "Tour fortsetzen"
+  },
+  {
+   "line": 5435,
+   "text": "Tour öffnen"
+  },
+  {
+   "line": 5451,
+   "text": "Tour abbrechen"
+  },
+  {
+   "line": 5523,
+   "text": "Tour abbrechen?"
+  },
+  {
+   "line": 5527,
+   "text": "Die Tour wird aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert."
+  },
+  {
+   "line": 5534,
+   "text": "Zurück"
+  },
+  {
+   "line": 5541,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 5564,
+   "text": "Tour abgebrochen"
+  },
+  {
+   "line": 5574,
+   "text": "Tour konnte nicht abgebrochen werden"
+  },
+  {
+   "line": 5588,
+   "text": "$prefix gerade eben"
+  },
+  {
+   "line": 5589,
+   "text": "$prefix seit $mins Min"
+  },
+  {
+   "line": 5591,
+   "text": "$prefix seit ${h}h"
+  },
+  {
+   "line": 5592,
+   "text": "$prefix seit ${h ~/ 24}d"
+  },
+  {
+   "line": 5599,
+   "text": "läuft"
+  },
+  {
+   "line": 5684,
+   "text": "HEUTE FÜR DICH"
+  },
+  {
+   "line": 5931,
+   "text": "Heute für dich"
+  },
+  {
+   "line": 5940,
+   "text": "Starte deine erste Route"
+  },
+  {
+   "line": 5950,
+   "text": "Sobald eine Empfehlung verfügbar ist, erscheint sie hier als kompakte Featured-Route."
+  },
+  {
+   "line": 6093,
+   "text": "Route gespeichert"
+  },
+  {
+   "line": 6122,
+   "text": "Route konnte nicht gespeichert werden"
+  },
+  {
+   "line": 6296,
+   "text": "$_streakDays Tage Streak"
+  },
+  {
+   "line": 6306,
+   "text": "Heute fahren: ${mulNext.toStringAsFixed(2)}× XP"
+  },
+  {
+   "line": 6423,
+   "text": "$_streakDays Tage Streak"
+  },
+  {
+   "line": 6424,
+   "text": "Keine aktive Streak"
+  },
+  {
+   "line": 6437,
+   "text": "Heute fahren: ${mulNext.toStringAsFixed(2)}× XP"
+  },
+  {
+   "line": 6438,
+   "text": "Starte eine Fahrt und beginne deinen Streak."
+  },
+  {
+   "line": 6602,
+   "text": "Noch keine Fahrten"
+  },
+  {
+   "line": 6603,
+   "text": "$activeDays aktive ${activeDays == 1 ? "
+  }
+ ],
+ "lib/presentation/pages/liked_posts_page.dart": [
+  {
+   "line": 125,
+   "text": "Gefällt mir"
+  },
+  {
+   "line": 147,
+   "text": "Noch keine Likes"
+  },
+  {
+   "line": 157,
+   "text": "Posts, die dir gefallen, erscheinen hier."
+  },
+  {
+   "line": 184,
+   "text": "gerade eben"
+  },
+  {
+   "line": 189,
+   "text": "$months Mon."
+  },
+  {
+   "line": 245,
+   "text": "Gefällt dir · ${timeAgo(like["
+  },
+  {
+   "line": 343,
+   "text": "Like entfernen"
+  }
+ ],
+ "lib/presentation/pages/notifications_page.dart": [
+  {
+   "line": 54,
+   "text": "Alle gelesen"
+  },
+  {
+   "line": 211,
+   "text": "Dieser Beitrag ist nicht mehr verfügbar."
+  },
+  {
+   "line": 244,
+   "text": "Diese Gruppe ist nicht mehr verfügbar."
+  },
+  {
+   "line": 270,
+   "text": "Nicht mehr verfügbar"
+  },
+  {
+   "line": 394,
+   "text": "Hier ist es ruhig"
+  },
+  {
+   "line": 403,
+   "text": "Folge anderen Cruisern oder \\nlike Posts — dann landen hier neue Updates"
+  }
+ ],
+ "lib/presentation/pages/group_lobby_page.dart": [
+  {
+   "line": 322,
+   "text": "Start fehlgeschlagen."
+  },
+  {
+   "line": 343,
+   "text": "Rolle konnte nicht gespeichert werden."
+  },
+  {
+   "line": 552,
+   "text": "Verbindung wird hergestellt …"
+  },
+  {
+   "line": 557,
+   "text": "Die Gruppe lädt automatisch, sobald du wieder online bist."
+  },
+  {
+   "line": 569,
+   "text": "Jetzt erneut versuchen"
+  },
+  {
+   "line": 584,
+   "text": "Gruppe nicht gefunden"
+  },
+  {
+   "line": 590,
+   "text": "Zurück"
+  },
+  {
+   "line": 646,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 697,
+   "text": "Meine Rolle"
+  },
+  {
+   "line": 750,
+   "text": "Treffpunkt & Tempo mit der Gruppe klären"
+  },
+  {
+   "line": 807,
+   "text": "Eure gefahrene Strecke & Top-Speed"
+  },
+  {
+   "line": 1005,
+   "text": "Code kopieren"
+  },
+  {
+   "line": 1012,
+   "text": "Code kopiert"
+  },
+  {
+   "line": 1042,
+   "text": "Gruppe teilen"
+  },
+  {
+   "line": 1051,
+   "text": "In die Community posten oder Link versenden"
+  },
+  {
+   "line": 1058,
+   "text": "Link teilen"
+  },
+  {
+   "line": 1095,
+   "text": "Gruppe"
+  },
+  {
+   "line": 1099,
+   "text": "Komm in meine Gruppe „$name\" bei CruiseConnect: $link"
+  },
+  {
+   "line": 1120,
+   "text": "Offene Beitritts-Anfragen (${_pendingRequests.length})"
+  },
+  {
+   "line": 1202,
+   "text": "Anfrage konnte nicht bearbeitet werden."
+  },
+  {
+   "line": 1324,
+   "text": "Mitglied verwalten"
+  },
+  {
+   "line": 1384,
+   "text": "Meine Fahrrolle ändern"
+  },
+  {
+   "line": 1384,
+   "text": "Fahrrolle ändern"
+  },
+  {
+   "line": 1391,
+   "text": "Owner geben"
+  },
+  {
+   "line": 1398,
+   "text": "Owner wegnehmen"
+  },
+  {
+   "line": 1405,
+   "text": "Aus Gruppe entfernen"
+  },
+  {
+   "line": 1468,
+   "text": "Aktion fehlgeschlagen."
+  },
+  {
+   "line": 1570,
+   "text": "Zur laufenden Route"
+  },
+  {
+   "line": 1572,
+   "text": "Route starten"
+  },
+  {
+   "line": 1573,
+   "text": "Warten auf Owner..."
+  },
+  {
+   "line": 1618,
+   "text": "Einladung fehlgeschlagen."
+  },
+  {
+   "line": 1653,
+   "text": "Kein Kontakt"
+  },
+  {
+   "line": 1686,
+   "text": "Freunde einladen"
+  },
+  {
+   "line": 1705,
+   "text": "User suchen…"
+  },
+  {
+   "line": 1741,
+   "text": "Du folgst noch niemandem.\\nNutze die Suche."
+  }
+ ],
+ "lib/presentation/pages/welcome_page.dart": [
+  {
+   "line": 208,
+   "text": "Cruise Connector"
+  }
+ ],
+ "lib/presentation/pages/saved_route_bookmarks_page.dart": [
+  {
+   "line": 66,
+   "text": "Gespeicherte Routen"
+  },
+  {
+   "line": 88,
+   "text": "Noch keine Routen gespeichert"
+  },
+  {
+   "line": 98,
+   "text": "Merke dir geteilte Strecken aus der Community für später."
+  },
+  {
+   "line": 129,
+   "text": "Route umbenennen"
+  },
+  {
+   "line": 139,
+   "text": "Name der Route"
+  },
+  {
+   "line": 154,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 161,
+   "text": "Speichern"
+  },
+  {
+   "line": 225,
+   "text": "Übersicht"
+  },
+  {
+   "line": 238,
+   "text": "Nochmal fahren"
+  },
+  {
+   "line": 248,
+   "text": "Route umbenennen"
+  },
+  {
+   "line": 257,
+   "text": "Als Post teilen"
+  },
+  {
+   "line": 266,
+   "text": "Extern als Bild teilen"
+  },
+  {
+   "line": 275,
+   "text": "Löschen"
+  },
+  {
+   "line": 300,
+   "text": "Route und zugehörige Posts wurden entfernt."
+  },
+  {
+   "line": 308,
+   "text": "Route konnte nicht entfernt werden."
+  },
+  {
+   "line": 322,
+   "text": "Route entfernen?"
+  },
+  {
+   "line": 326,
+   "text": "Wenn du \"${route.name ?? route.style}\" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts."
+  },
+  {
+   "line": 333,
+   "text": "Abbrechen"
+  }
+ ],
+ "lib/presentation/pages/analytics_page.dart": [
+  {
+   "line": 34,
+   "text": "März"
+  },
+  {
+   "line": 556,
+   "text": "Starte deine erste Fahrt und fülle dein Dashboard."
+  },
+  {
+   "line": 557,
+   "text": "Dein Fahrprofil, Fortschritt und deine besten Momente."
+  },
+  {
+   "line": 670,
+   "text": "$_totalXp XP gesamt · Maximallevel"
+  },
+  {
+   "line": 671,
+   "text": "$_totalXp XP gesamt · noch ${_level.xpToNextLevel} XP"
+  },
+  {
+   "line": 796,
+   "text": "$_streakDays Tage Streak"
+  },
+  {
+   "line": 797,
+   "text": "Noch kein aktiver Streak"
+  },
+  {
+   "line": 809,
+   "text": "Nächste Fahrt bringt ${nextMultiplier.toStringAsFixed(2)}x XP."
+  },
+  {
+   "line": 810,
+   "text": "Eine Fahrt startet deine Serie."
+  },
+  {
+   "line": 969,
+   "text": "$xpInLevel / $xpSpan XP in Level ${_level.level}"
+  },
+  {
+   "line": 1030,
+   "text": "Level Fortschritt"
+  },
+  {
+   "line": 1087,
+   "text": "$_totalXp XP gesamt"
+  },
+  {
+   "line": 1126,
+   "text": "$levelProgressLabel · noch ${_level.xpToNextLevel} XP bis Level ${_level.level + 1}"
+  },
+  {
+   "line": 1150,
+   "text": "Nächstes Level"
+  },
+  {
+   "line": 1207,
+   "text": "Abgeschlossene Fahrten, lange Strecken und aktive Streaks bringen am meisten XP."
+  },
+  {
+   "line": 1295,
+   "text": "Noch $xpNeeded XP"
+  },
+  {
+   "line": 1518,
+   "text": "Diese Woche"
+  },
+  {
+   "line": 1586,
+   "text": "Fahrt"
+  },
+  {
+   "line": 1621,
+   "text": "\\u{1F525} $_streakDays Tage Streak"
+  },
+  {
+   "line": 1622,
+   "text": "Kein Streak"
+  },
+  {
+   "line": 2120,
+   "text": "Meiste Kilometer insgesamt."
+  },
+  {
+   "line": 2121,
+   "text": "Meiste Kilometer seit Montag."
+  },
+  {
+   "line": 2122,
+   "text": "Meiste Kilometer in diesem Monat."
+  },
+  {
+   "line": 2145,
+   "text": "Noch keine Fahrten in diesem Zeitraum."
+  },
+  {
+   "line": 2547,
+   "text": "Letzte Fahrten"
+  },
+  {
+   "line": 2551,
+   "text": "Deine letzten Fahrten erscheinen hier, sobald du losgefahren bist."
+  },
+  {
+   "line": 2558,
+   "text": "Letzte Fahrten"
+  },
+  {
+   "line": 2680,
+   "text": "Badge Sammlung"
+  },
+  {
+   "line": 2833,
+   "text": "Fahrt abgeschlossen"
+  },
+  {
+   "line": 2834,
+   "text": "Fahrt aufgezeichnet"
+  }
+ ],
+ "lib/presentation/pages/post_detail_page.dart": [
+  {
+   "line": 197,
+   "text": "Cruise Connector"
+  },
+  {
+   "line": 252,
+   "text": "Noch keine Kommentare"
+  },
+  {
+   "line": 301,
+   "text": "Kommentar schreiben..."
+  }
+ ],
+ "lib/presentation/pages/community_chats_tab.dart": [
+  {
+   "line": 51,
+   "text": "Communities konnten nicht geladen werden."
+  },
+  {
+   "line": 136,
+   "text": "Community verlassen?"
+  },
+  {
+   "line": 141,
+   "text": "Wenn du gehst, wird automatisch das Mitglied Admin, das als nächstes beigetreten ist."
+  },
+  {
+   "line": 142,
+   "text": "Du verlässt diese Community und kannst danach nicht mehr mitschreiben."
+  },
+  {
+   "line": 148,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 179,
+   "text": "Community löschen?"
+  },
+  {
+   "line": 183,
+   "text": "Diese Community, alle Mitglieder und Nachrichten werden dauerhaft gelöscht."
+  },
+  {
+   "line": 189,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 194,
+   "text": "Löschen"
+  },
+  {
+   "line": 224,
+   "text": "Aktion gerade nicht möglich."
+  },
+  {
+   "line": 266,
+   "text": "Meine Communities"
+  },
+  {
+   "line": 271,
+   "text": "Noch keine Community"
+  },
+  {
+   "line": 272,
+   "text": "Erstelle eine Community oder tritt mit einem Code bei."
+  },
+  {
+   "line": 284,
+   "text": "Öffentliche Communities"
+  },
+  {
+   "line": 291,
+   "text": "Nichts Neues gefunden"
+  },
+  {
+   "line": 292,
+   "text": "Öffentliche Communities tauchen hier im Entdecken auf."
+  },
+  {
+   "line": 323,
+   "text": "Community-Code suchen (CCC-XXXXXX)"
+  },
+  {
+   "line": 580,
+   "text": "$memberCount Mitglieder"
+  },
+  {
+   "line": 656,
+   "text": "Community löschen"
+  },
+  {
+   "line": 677,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 739,
+   "text": "Community erstellen"
+  },
+  {
+   "line": 767,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 812,
+   "text": "Nur Owner darf schreiben"
+  },
+  {
+   "line": 918,
+   "text": "Mit Code beitreten"
+  }
+ ],
+ "lib/presentation/pages/create_post_page.dart": [
+  {
+   "line": 108,
+   "text": "Fehler beim Erstellen des Posts"
+  },
+  {
+   "line": 218,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 271,
+   "text": "Alle"
+  }
+ ],
+ "lib/presentation/pages/community_page.dart": [
+  {
+   "line": 471,
+   "text": "Dein Feed ist leer"
+  },
+  {
+   "line": 480,
+   "text": "Folge anderen Nutzern oder lade Freunde ein, um Posts zu sehen."
+  },
+  {
+   "line": 491,
+   "text": "Freunde einladen"
+  },
+  {
+   "line": 515,
+   "text": "Freunde suchen"
+  },
+  {
+   "line": 572,
+   "text": "Hier geht es um Gruppenfahrten mit Route und Startzeit."
+  },
+  {
+   "line": 580,
+   "text": "Beigetretene öffentliche Gruppenfahrten"
+  },
+  {
+   "line": 584,
+   "text": "Du bist noch in keiner öffentlichen Gruppenfahrt. Erstelle eine Fahrt oder tritt weiter unten einer bei."
+  },
+  {
+   "line": 607,
+   "text": "Weitere Gruppenfahrten entdecken"
+  },
+  {
+   "line": 645,
+   "text": "Gerade keine offenen Gruppen in Sicht."
+  },
+  {
+   "line": 650,
+   "text": "Keine Treffer — probier andere Filter."
+  },
+  {
+   "line": 700,
+   "text": "Suche nach Gruppe oder User..."
+  },
+  {
+   "line": 727,
+   "text": "Umkreis-Filter aus"
+  },
+  {
+   "line": 753,
+   "text": "Standort wird geladen... (Berechtigung erforderlich)"
+  },
+  {
+   "line": 801,
+   "text": "Noch keine Posts in der Community"
+  },
+  {
+   "line": 991,
+   "text": "Keine aktiven Gruppen in der Nähe"
+  },
+  {
+   "line": 1005,
+   "text": "Starte selbst eine — andere können beitreten."
+  },
+  {
+   "line": 1027,
+   "text": "Aktive Gruppe erstellen"
+  },
+  {
+   "line": 1074,
+   "text": "Freunde einladen"
+  },
+  {
+   "line": 1088,
+   "text": "Noch mehr Fahrer? Lade deine Crew zu Cruise Connector ein."
+  },
+  {
+   "line": 1104,
+   "text": "Einladungslink teilen"
+  },
+  {
+   "line": 1129,
+   "text": "Komm mit auf Cruise Connector — Routen planen, cruisen & sharen. $link"
+  },
+  {
+   "line": 1130,
+   "text": "Join Cruise Connector"
+  },
+  {
+   "line": 1147,
+   "text": "Post von @$name auf Cruise Connector: $link"
+  },
+  {
+   "line": 1148,
+   "text": "Cruise Connector Post"
+  },
+  {
+   "line": 1158,
+   "text": "Leute, denen du folgen könntest"
+  },
+  {
+   "line": 1175,
+   "text": "Gruppen entdecken"
+  },
+  {
+   "line": 1349,
+   "text": "Folgen"
+  },
+  {
+   "line": 1474,
+   "text": "Löschen"
+  },
+  {
+   "line": 1494,
+   "text": "Beitrag melden"
+  },
+  {
+   "line": 1511,
+   "text": "Benutzer melden"
+  },
+  {
+   "line": 1528,
+   "text": "Benutzer blockieren"
+  },
+  {
+   "line": 1665,
+   "text": "Post löschen?"
+  },
+  {
+   "line": 1669,
+   "text": "Dieser Post wird unwiderruflich gelöscht."
+  },
+  {
+   "line": 1676,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1683,
+   "text": "Löschen"
+  },
+  {
+   "line": 1738,
+   "text": "Du folgst jetzt $name"
+  },
+  {
+   "line": 1752,
+   "text": "Folgen"
+  },
+  {
+   "line": 1861,
+   "text": "Noch keine Kommentare"
+  },
+  {
+   "line": 1910,
+   "text": "Kommentar löschen?"
+  },
+  {
+   "line": 1915,
+   "text": "Dein Kommentar (und Antworten darauf) wird dauerhaft entfernt."
+  },
+  {
+   "line": 1923,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1929,
+   "text": "Löschen"
+  },
+  {
+   "line": 1964,
+   "text": "Antwort an @$replyToName"
+  },
+  {
+   "line": 2017,
+   "text": "Antwort schreiben..."
+  },
+  {
+   "line": 2018,
+   "text": "Kommentar schreiben — @ erwähnt Follower"
+  },
+  {
+   "line": 2195,
+   "text": "Antworten"
+  },
+  {
+   "line": 2209,
+   "text": "Löschen"
+  },
+  {
+   "line": 2333,
+   "text": "Gruppe löschen?"
+  },
+  {
+   "line": 2337,
+   "text": "Die Gruppe wird unwiderruflich gelöscht — auch für alle Mitglieder."
+  },
+  {
+   "line": 2344,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 2351,
+   "text": "Löschen"
+  },
+  {
+   "line": 2378,
+   "text": "Löschen"
+  },
+  {
+   "line": 2437,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 2502,
+   "text": "$memberCount Fahrer"
+  },
+  {
+   "line": 2596,
+   "text": "Benutzer oder Gruppen-Code (CC-XXXXXX)..."
+  },
+  {
+   "line": 2621,
+   "text": "Suche nach Benutzernamen oder Gruppen-Code"
+  },
+  {
+   "line": 2622,
+   "text": "Keine Ergebnisse"
+  },
+  {
+   "line": 2719,
+   "text": "Gruppe"
+  },
+  {
+   "line": 2740,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 2798,
+   "text": "Öffnen"
+  },
+  {
+   "line": 2861,
+   "text": "Beitritts-Anfrage gesendet"
+  },
+  {
+   "line": 2912,
+   "text": "Gruppe"
+  },
+  {
+   "line": 2979,
+   "text": "Beitreten nicht möglich: $e"
+  },
+  {
+   "line": 2998,
+   "text": "Beitreten nicht möglich: $e"
+  },
+  {
+   "line": 3116,
+   "text": "Folge ich"
+  },
+  {
+   "line": 3121,
+   "text": "Folgen"
+  }
+ ],
+ "lib/presentation/pages/login_page.dart": [
+  {
+   "line": 77,
+   "text": "email not confirmed"
+  },
+  {
+   "line": 279,
+   "text": "Cruise Connector"
+  }
+ ],
+ "lib/presentation/pages/forgot_password_page.dart": [
+  {
+   "line": 535,
+   "text": "Weiter"
+  }
+ ],
+ "lib/presentation/pages/blocked_users_page.dart": [
+  {
+   "line": 55,
+   "text": "Der Nutzer kann dann wieder deine Inhalte sehen und du seine."
+  },
+  {
+   "line": 62,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 95,
+   "text": "Entblocken fehlgeschlagen: $e"
+  },
+  {
+   "line": 116,
+   "text": "Blockierte Nutzer"
+  },
+  {
+   "line": 133,
+   "text": "Du hast niemanden blockiert."
+  }
+ ],
+ "lib/presentation/pages/community_chat_detail_page.dart": [
+  {
+   "line": 96,
+   "text": "Community konnte nicht geladen werden."
+  },
+  {
+   "line": 155,
+   "text": "Route geteilt"
+  },
+  {
+   "line": 199,
+   "text": "Nachricht konnte nicht gesendet werden."
+  },
+  {
+   "line": 267,
+   "text": "Aktion gerade nicht möglich."
+  },
+  {
+   "line": 296,
+   "text": "Code kopiert."
+  },
+  {
+   "line": 360,
+   "text": "Nachricht kopiert."
+  },
+  {
+   "line": 381,
+   "text": "Nachricht konnte nicht gelöscht werden."
+  },
+  {
+   "line": 410,
+   "text": "Post angepinnt."
+  },
+  {
+   "line": 410,
+   "text": "Pin entfernt."
+  },
+  {
+   "line": 413,
+   "text": "Pin konnte nicht gespeichert werden."
+  },
+  {
+   "line": 448,
+   "text": "Antworten"
+  },
+  {
+   "line": 465,
+   "text": "Pin entfernen"
+  },
+  {
+   "line": 474,
+   "text": "Löschen"
+  },
+  {
+   "line": 523,
+   "text": "Route anhängen"
+  },
+  {
+   "line": 544,
+   "text": "Noch keine gespeicherten Routen."
+  },
+  {
+   "line": 652,
+   "text": "Community verlassen?"
+  },
+  {
+   "line": 657,
+   "text": "Wenn du gehst, wird automatisch das Mitglied Admin, das als nächstes beigetreten ist."
+  },
+  {
+   "line": 658,
+   "text": "Du verlässt diese Community und kannst danach nicht mehr mitschreiben."
+  },
+  {
+   "line": 664,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 683,
+   "text": "Community konnte nicht verlassen werden."
+  },
+  {
+   "line": 693,
+   "text": "Community löschen?"
+  },
+  {
+   "line": 697,
+   "text": "Diese Community, alle Mitglieder und Nachrichten werden dauerhaft gelöscht."
+  },
+  {
+   "line": 703,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 708,
+   "text": "Löschen"
+  },
+  {
+   "line": 722,
+   "text": "Community konnte nicht gelöscht werden."
+  },
+  {
+   "line": 745,
+   "text": "Einstellung konnte nicht gespeichert werden."
+  },
+  {
+   "line": 801,
+   "text": "Alle schreiben lassen"
+  },
+  {
+   "line": 802,
+   "text": "Nur Owner schreibt"
+  },
+  {
+   "line": 836,
+   "text": "Community löschen"
+  },
+  {
+   "line": 890,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 899,
+   "text": "$memberCount Mitglieder"
+  },
+  {
+   "line": 1025,
+   "text": "Geteilte Routen"
+  },
+  {
+   "line": 1152,
+   "text": "Noch keine Posts"
+  },
+  {
+   "line": 1153,
+   "text": "Keine passenden Posts"
+  },
+  {
+   "line": 1163,
+   "text": "Nutze Tags wie @Gruppenfahrt oder @Gruppenfahrten."
+  },
+  {
+   "line": 1165,
+   "text": "Hänge eine gespeicherte Route an deinen Post."
+  },
+  {
+   "line": 1166,
+   "text": "Schreib den ersten Post in diese Community."
+  },
+  {
+   "line": 1340,
+   "text": "Antwort anzeigen"
+  },
+  {
+   "line": 1400,
+   "text": "$replies Antworten"
+  },
+  {
+   "line": 1405,
+   "text": "Antworten"
+  },
+  {
+   "line": 1473,
+   "text": "Antwort auf Post"
+  },
+  {
+   "line": 1482,
+   "text": "Route am Post"
+  },
+  {
+   "line": 1510,
+   "text": "Nur Admins können hier posten."
+  },
+  {
+   "line": 1545,
+   "text": "Route anhängen"
+  },
+  {
+   "line": 1562,
+   "text": "Post schreiben"
+  },
+  {
+   "line": 1855,
+   "text": "Aktion gerade nicht möglich."
+  },
+  {
+   "line": 1942,
+   "text": "Nur Admins können in diesem Chat schreiben."
+  }
+ ],
+ "lib/presentation/pages/route_share_page.dart": [
+  {
+   "line": 199,
+   "text": "Foto entfernen?"
+  },
+  {
+   "line": 203,
+   "text": "Bist du dir sicher, dass du das Hintergrund-Foto entfernen möchtest?"
+  },
+  {
+   "line": 210,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 276,
+   "text": "Bild konnte nicht erstellt werden. Bitte erneut versuchen."
+  },
+  {
+   "line": 292,
+   "text": "${widget.data.title} · $dist — mit Cruise Connector"
+  },
+  {
+   "line": 293,
+   "text": "${widget.data.title} — mit Cruise Connector"
+  },
+  {
+   "line": 297,
+   "text": "Cruise Connector Route"
+  },
+  {
+   "line": 301,
+   "text": "Teilen ist auf diesem Gerät nicht verfügbar."
+  },
+  {
+   "line": 324,
+   "text": "Route teilen"
+  },
+  {
+   "line": 463,
+   "text": "Foto ändern"
+  },
+  {
+   "line": 506,
+   "text": "Transparenter Sticker — leg ihn in der Story-App über dein eigenes Foto."
+  },
+  {
+   "line": 508,
+   "text": "Echte Karte mit deiner Route — direkt teilen."
+  },
+  {
+   "line": 510,
+   "text": "Dein Foto als Hintergrund — Karte drüber frei ziehen & skalieren."
+  },
+  {
+   "line": 511,
+   "text": "Foto/Selfie als Hintergrund hinzufügen — oder dunkel lassen für Chats."
+  },
+  {
+   "line": 535,
+   "text": "Ziehen zum Verschieben · 2 Finger zum Skalieren"
+  },
+  {
+   "line": 555,
+   "text": "Zurücksetzen"
+  },
+  {
+   "line": 589,
+   "text": "Teilen"
+  },
+  {
+   "line": 731,
+   "text": "CRUISE CONNECTOR"
+  }
+ ],
+ "lib/presentation/pages/home_page.dart": [
+  {
+   "line": 218,
+   "text": "versuche es beim nächsten App-Start erneut."
+  },
+  {
+   "line": 235,
+   "text": "${verify.repairedNow} repariert, ${verify.stillMissing} fehlen weiterhin."
+  }
+ ],
+ "lib/presentation/pages/create_group_page.dart": [
+  {
+   "line": 50,
+   "text": "Aktueller Standort"
+  },
+  {
+   "line": 51,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 54,
+   "text": "Öffentlich (Für jeden)"
+  },
+  {
+   "line": 118,
+   "text": "Standort ist deaktiviert."
+  },
+  {
+   "line": 125,
+   "text": "Standort-Berechtigung fehlt."
+  },
+  {
+   "line": 142,
+   "text": "Adresse nicht gefunden."
+  },
+  {
+   "line": 156,
+   "text": "Route wird berechnet"
+  },
+  {
+   "line": 170,
+   "text": "Setze mindestens einen Stopp oder lass Stopps vorschlagen."
+  },
+  {
+   "line": 171,
+   "text": "Bitte nutze maximal 5 Stopps (Trip-Modus)."
+  },
+  {
+   "line": 219,
+   "text": "Wir prüfen weitere Routenvorschläge im Hintergrund. Bitte versuche es gleich erneut."
+  },
+  {
+   "line": 226,
+   "text": "Route konnte nicht generiert werden. Bitte versuche es erneut."
+  },
+  {
+   "line": 278,
+   "text": "Bitte wähle ein Ziel aus."
+  },
+  {
+   "line": 279,
+   "text": "Group route generation missing destination."
+  },
+  {
+   "line": 307,
+   "text": "Aktueller Standort"
+  },
+  {
+   "line": 364,
+   "text": "Die Route enthält zu wenige Punkte."
+  },
+  {
+   "line": 365,
+   "text": "Group route result has fewer than 2 coordinates."
+  },
+  {
+   "line": 392,
+   "text": "Route bereit"
+  },
+  {
+   "line": 410,
+   "text": "Gespeicherte Routen konnten nicht geladen werden."
+  },
+  {
+   "line": 415,
+   "text": "Du hast noch keine gespeicherte Route."
+  },
+  {
+   "line": 431,
+   "text": "Diese Route hat zu wenige Punkte."
+  },
+  {
+   "line": 445,
+   "text": "Gespeicherte Route übernommen"
+  },
+  {
+   "line": 451,
+   "text": "Route konnte nicht übernommen werden."
+  },
+  {
+   "line": 505,
+   "text": "Gespeicherte Route verwenden"
+  },
+  {
+   "line": 520,
+   "text": "Wir prüfen Live-Varianten"
+  },
+  {
+   "line": 601,
+   "text": "Kleiner Umweg"
+  },
+  {
+   "line": 602,
+   "text": "Mittlerer Umweg"
+  },
+  {
+   "line": 603,
+   "text": "Großer Umweg"
+  },
+  {
+   "line": 698,
+   "text": "Bitte zuerst eine Route generieren."
+  },
+  {
+   "line": 702,
+   "text": "Bitte Gruppennamen eingeben."
+  },
+  {
+   "line": 706,
+   "text": "Gruppenname ist zu lang."
+  },
+  {
+   "line": 711,
+   "text": "Beschreibung ist zu lang."
+  },
+  {
+   "line": 715,
+   "text": "Bitte Datum & Uhrzeit wählen."
+  },
+  {
+   "line": 743,
+   "text": "Öffentlich (Für jeden)"
+  },
+  {
+   "line": 759,
+   "text": "Gruppe konnte nicht erstellt werden: $e"
+  },
+  {
+   "line": 810,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 843,
+   "text": "Maximal 3 Stopps möglich."
+  },
+  {
+   "line": 902,
+   "text": "Tippe auf die Karte, um Stopp ${index + 1} neu zu setzen."
+  },
+  {
+   "line": 935,
+   "text": "Aktueller Standort noch nicht verfügbar."
+  },
+  {
+   "line": 1115,
+   "text": "Aktueller Standort"
+  },
+  {
+   "line": 1407,
+   "text": "Stopps vorschlagen"
+  },
+  {
+   "line": 1415,
+   "text": "Letzten löschen"
+  },
+  {
+   "line": 1421,
+   "text": "Alle löschen"
+  },
+  {
+   "line": 1483,
+   "text": "$km km"
+  },
+  {
+   "line": 1524,
+   "text": "Start per Adresse:"
+  },
+  {
+   "line": 1529,
+   "text": "Adresse aktiv"
+  },
+  {
+   "line": 1530,
+   "text": "Adresse wählen"
+  },
+  {
+   "line": 1534,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 1536,
+   "text": "Tippe auf die Karte, um den Startpunkt zu setzen."
+  },
+  {
+   "line": 1594,
+   "text": "Adresse oder Ort"
+  },
+  {
+   "line": 1653,
+   "text": "Beschreibe deine Gruppe..."
+  },
+  {
+   "line": 1695,
+   "text": "Wählen"
+  },
+  {
+   "line": 1758,
+   "text": "Zugänglichkeit"
+  },
+  {
+   "line": 1765,
+   "text": "Nur Kontakte"
+  },
+  {
+   "line": 1765,
+   "text": "Öffentlich (Für jeden)"
+  },
+  {
+   "line": 1857,
+   "text": "Neue Route"
+  },
+  {
+   "line": 2005,
+   "text": "Gespeicherte Route wählen"
+  }
+ ],
+ "lib/presentation/pages/ride_detail_page.dart": [
+  {
+   "line": 78,
+   "text": "Mär"
+  },
+  {
+   "line": 213,
+   "text": "Foto gespeichert ✓"
+  },
+  {
+   "line": 213,
+   "text": "Foto-Speichern fehlgeschlagen"
+  },
+  {
+   "line": 225,
+   "text": "Foto-Upload fehlgeschlagen — bitte erneut versuchen."
+  },
+  {
+   "line": 235,
+   "text": "Foto konnte nicht gespeichert werden."
+  },
+  {
+   "line": 291,
+   "text": "$curves Kurven"
+  },
+  {
+   "line": 313,
+   "text": "Fahrt"
+  },
+  {
+   "line": 319,
+   "text": "Teilen"
+  },
+  {
+   "line": 604,
+   "text": "Foto zu dieser Fahrt hinzufügen"
+  },
+  {
+   "line": 775,
+   "text": "Noch keine Ranglisten-Daten für diese Gruppe."
+  }
+ ],
+ "lib/presentation/pages/settings_page.dart": [
+  {
+   "line": 83,
+   "text": "Automatisch nur im WLAN"
+  },
+  {
+   "line": 84,
+   "text": "Automatisch auch mit mobilen Daten"
+  },
+  {
+   "line": 99,
+   "text": "Konto privat machen?"
+  },
+  {
+   "line": 99,
+   "text": "Konto öffentlich machen?"
+  },
+  {
+   "line": 104,
+   "text": "Wenn dein Konto privat ist, können nur deine Follower deine Posts sehen. "
+  },
+  {
+   "line": 105,
+   "text": "Deine Posts erscheinen nicht mehr im Entdecken-Bereich für andere User."
+  },
+  {
+   "line": 106,
+   "text": "Wenn dein Konto öffentlich ist, kann jeder deine Posts im Entdecken-Bereich sehen."
+  },
+  {
+   "line": 113,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 120,
+   "text": "Privat machen"
+  },
+  {
+   "line": 120,
+   "text": "Öffentlich machen"
+  },
+  {
+   "line": 152,
+   "text": "Dein Konto ist jetzt privat"
+  },
+  {
+   "line": 153,
+   "text": "Dein Konto ist jetzt öffentlich"
+  },
+  {
+   "line": 166,
+   "text": "Fehler beim Speichern"
+  },
+  {
+   "line": 182,
+   "text": "Konto endgültig löschen?"
+  },
+  {
+   "line": 186,
+   "text": "Dadurch werden dein Profil, deine Routen, Posts, Gruppen-Daten, "
+  },
+  {
+   "line": 187,
+   "text": "Fahrzeuge, Medien und lokale App-Daten entfernt. Diese Aktion kann "
+  },
+  {
+   "line": 188,
+   "text": "nicht rückgängig gemacht werden."
+  },
+  {
+   "line": 198,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 205,
+   "text": "Weiter"
+  },
+  {
+   "line": 244,
+   "text": "Supabase ist gerade nicht erreichbar. Verbindung prüfen."
+  },
+  {
+   "line": 277,
+   "text": "${document.title} konnte nicht geöffnet werden."
+  },
+  {
+   "line": 304,
+   "text": "löschen"
+  },
+  {
+   "line": 309,
+   "text": "Letzte Bestätigung"
+  },
+  {
+   "line": 317,
+   "text": "Tippe Löschen ein, um dein Konto wirklich komplett zu entfernen."
+  },
+  {
+   "line": 335,
+   "text": "Löschen"
+  },
+  {
+   "line": 362,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 381,
+   "text": "Konto löschen"
+  },
+  {
+   "line": 403,
+   "text": "Bitte melde dich neu an und versuche es nochmal."
+  },
+  {
+   "line": 410,
+   "text": "Supabase ist gerade nicht erreichbar. Verbindung prüfen."
+  },
+  {
+   "line": 413,
+   "text": "Datenbank-Verknüpfung blockiert. Migration bitte nochmal ausführen."
+  },
+  {
+   "line": 416,
+   "text": "RPC-Rechte fehlen. Migration bitte nochmal ausführen."
+  },
+  {
+   "line": 419,
+   "text": "Account-Löschfunktion ist noch nicht in Supabase deployed."
+  },
+  {
+   "line": 421,
+   "text": "Konto konnte nicht gelöscht werden. Bitte erneut versuchen."
+  },
+  {
+   "line": 439,
+   "text": "Einstellungen"
+  },
+  {
+   "line": 448,
+   "text": "KONTO & PRIVATSPHÄRE"
+  },
+  {
+   "line": 451,
+   "text": "Privates Konto"
+  },
+  {
+   "line": 455,
+   "text": "Nur Follower sehen deine Posts"
+  },
+  {
+   "line": 456,
+   "text": "Jeder kann deine Posts sehen"
+  },
+  {
+   "line": 461,
+   "text": "Passwort ändern"
+  },
+  {
+   "line": 463,
+   "text": "Neues Passwort setzen oder zurücksetzen"
+  },
+  {
+   "line": 523,
+   "text": "Metrische Einheiten (km)"
+  },
+  {
+   "line": 548,
+   "text": "Haftung, Routenmodi, Wegpunkte und Sicherheit nachlesen"
+  },
+  {
+   "line": 557,
+   "text": "Keine Veranstaltung, Verantwortung und sichere Gruppenregeln"
+  },
+  {
+   "line": 563,
+   "text": "Standort im Hintergrund"
+  },
+  {
+   "line": 566,
+   "text": "Warum „Immer erlauben\" für aktive Fahrten wichtig ist"
+  },
+  {
+   "line": 589,
+   "text": "POIs AUF DER KARTE"
+  },
+  {
+   "line": 616,
+   "text": "🔧  Motorrad-Werkstätten"
+  },
+  {
+   "line": 637,
+   "text": "Neue Follower"
+  },
+  {
+   "line": 643,
+   "text": "Likes auf deine Posts"
+  },
+  {
+   "line": 649,
+   "text": "Reposts deiner Posts"
+  },
+  {
+   "line": 690,
+   "text": "Automatischer Download"
+  },
+  {
+   "line": 707,
+   "text": "Tutorial nochmal anschauen"
+  },
+  {
+   "line": 709,
+   "text": "Home, Community, Cruise, Analytics und Profil"
+  },
+  {
+   "line": 729,
+   "text": "Konto löschen"
+  },
+  {
+   "line": 737,
+   "text": "Account wird gelöscht..."
+  },
+  {
+   "line": 738,
+   "text": "Profil, Routen, Posts und Medien entfernen"
+  },
+  {
+   "line": 845,
+   "text": "DACH offline verfügbar"
+  },
+  {
+   "line": 848,
+   "text": "Tippe „Prüfen\" zur Verifikation"
+  },
+  {
+   "line": 852,
+   "text": "Karte wird geladen…"
+  },
+  {
+   "line": 859,
+   "text": "Download fehlgeschlagen"
+  },
+  {
+   "line": 860,
+   "text": "Unbekannter Fehler"
+  },
+  {
+   "line": 864,
+   "text": "DACH noch nicht geladen"
+  },
+  {
+   "line": 865,
+   "text": "Karte (~30 MB) für Offline-Cruising vorbereiten"
+  },
+  {
+   "line": 934,
+   "text": "Prüfen"
+  },
+  {
+   "line": 952,
+   "text": "Löschen"
+  },
+  {
+   "line": 961,
+   "text": "Bitte App geöffnet lassen…"
+  },
+  {
+   "line": 974,
+   "text": "Erneut versuchen"
+  },
+  {
+   "line": 975,
+   "text": "Jetzt herunterladen"
+  },
+  {
+   "line": 998,
+   "text": "DACH-Karte wird im Hintergrund geladen…"
+  },
+  {
+   "line": 1012,
+   "text": "DACH-Karte ist jetzt offline verfügbar 🗺️"
+  },
+  {
+   "line": 1027,
+   "text": "Karte wird geprüft — fehlende Tiles werden nachgeladen…"
+  },
+  {
+   "line": 1038,
+   "text": "✅ ${result.repairedNow} Tiles repariert — Karte ist komplett."
+  },
+  {
+   "line": 1039,
+   "text": "✅ Karte ist komplett (${result.ok} Tiles)."
+  },
+  {
+   "line": 1047,
+   "text": "⚠️ ${result.stillMissing} Tiles fehlen weiterhin — Netzverbindung prüfen."
+  },
+  {
+   "line": 1061,
+   "text": "DACH-Cache löschen?"
+  },
+  {
+   "line": 1065,
+   "text": "Die Übersichts-Karte muss beim nächsten Cruise-Start neu geladen werden."
+  },
+  {
+   "line": 1072,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1079,
+   "text": "Löschen"
+  },
+  {
+   "line": 1093,
+   "text": "$deleted Tiles gelöscht — Cache leer"
+  }
+ ],
+ "lib/presentation/pages/user_profile_page.dart": [
+  {
+   "line": 294,
+   "text": "Benutzer melden"
+  },
+  {
+   "line": 311,
+   "text": "Blockieren"
+  },
+  {
+   "line": 387,
+   "text": "Noch keine Posts"
+  },
+  {
+   "line": 403,
+   "text": "Noch keine Reposts"
+  },
+  {
+   "line": 431,
+   "text": "Folgst du"
+  },
+  {
+   "line": 436,
+   "text": "Folgen"
+  },
+  {
+   "line": 483,
+   "text": "Anfrage gesendet"
+  },
+  {
+   "line": 1118,
+   "text": "Repost von @$authorName"
+  },
+  {
+   "line": 1248,
+   "text": "Dieses Konto ist privat"
+  },
+  {
+   "line": 1257,
+   "text": "Sende eine Anfrage und warte, bis sie angenommen wird, um Posts und Reposts zu sehen."
+  },
+  {
+   "line": 1269,
+   "text": "Du hast diesen Nutzer blockiert"
+  },
+  {
+   "line": 1270,
+   "text": "Ihr habt euch blockiert"
+  },
+  {
+   "line": 1271,
+   "text": "Dieses Profil ist nicht verfügbar"
+  },
+  {
+   "line": 1275,
+   "text": "Du findest diesen Nutzer erst wieder, wenn du ihn im Menü entblockst."
+  },
+  {
+   "line": 1277,
+   "text": "Ihr seid füreinander unsichtbar, bis die Blockierung aufgehoben wird."
+  },
+  {
+   "line": 1278,
+   "text": "Profilinhalte, Garage und Statistiken sind nicht sichtbar."
+  },
+  {
+   "line": 1375,
+   "text": "Noch keine Follower"
+  },
+  {
+   "line": 1376,
+   "text": "Folgt noch niemandem"
+  }
+ ],
+ "lib/presentation/pages/follow_requests_page.dart": [
+  {
+   "line": 68,
+   "text": "Anfrage konnte nicht geändert werden"
+  },
+  {
+   "line": 106,
+   "text": "Keine offenen Anfragen"
+  },
+  {
+   "line": 158,
+   "text": "möchte dir folgen"
+  }
+ ],
+ "lib/presentation/pages/cruise_mode_page.dart": [
+  {
+   "line": 324,
+   "text": "Aktueller Standort"
+  },
+  {
+   "line": 334,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 1017,
+   "text": "Suche abgebrochen"
+  },
+  {
+   "line": 1019,
+   "text": "Wir übernehmen keine Route aus dieser Suche. Du kannst jederzeit neu starten."
+  },
+  {
+   "line": 1035,
+   "text": "Route gefunden"
+  },
+  {
+   "line": 1036,
+   "text": "Die Route ist bereit."
+  },
+  {
+   "line": 2675,
+   "text": "nicht vorderstes Fahrzeug "
+  },
+  {
+   "line": 3408,
+   "text": "Diese Tour hat keine gültigen Wegpunkte mehr — wird geschlossen."
+  },
+  {
+   "line": 3443,
+   "text": "Alle Stopps dieser Tour sind bereits abgefahren."
+  },
+  {
+   "line": 3465,
+   "text": "Trip wird fortgesetzt — ${waypoints.length} Stopps geladen"
+  },
+  {
+   "line": 3481,
+   "text": "Tour konnte nicht geladen werden."
+  },
+  {
+   "line": 3872,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 3878,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 3888,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 4043,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 4063,
+   "text": "Startpunkt gesetzt"
+  },
+  {
+   "line": 4073,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 4079,
+   "text": "Tippe auf die Karte für deinen Startpunkt"
+  },
+  {
+   "line": 4134,
+   "text": "Max 8 Stopps technisch möglich. Aktiviere Trip-Modus für 5, sonst max 3."
+  },
+  {
+   "line": 4199,
+   "text": "Du planst eine Route mit Stopps. Hier dein Cheat-Sheet:"
+  },
+  {
+   "line": 4206,
+   "text": "Bis zu 3 Stopps für eine schnelle Tour"
+  },
+  {
+   "line": 4212,
+   "text": "Bis zu 5 Stopps, mit Pause/Resume — perfekt für Mehrtages-Touren"
+  },
+  {
+   "line": 4218,
+   "text": "Trip wird gespeichert, du kannst später im Homescreen weitermachen"
+  },
+  {
+   "line": 4236,
+   "text": "Trip-Modus aktivieren (5 Stopps)"
+  },
+  {
+   "line": 4251,
+   "text": "Bei 3 Stopps bleiben"
+  },
+  {
+   "line": 4290,
+   "text": "Zu viele Stopps"
+  },
+  {
+   "line": 4324,
+   "text": "Trip-Modus aktivieren"
+  },
+  {
+   "line": 4340,
+   "text": "OK, ich entferne Stopps"
+  },
+  {
+   "line": 4468,
+   "text": "Tippe auf die Karte, um Stopp ${selected + 1} neu zu setzen."
+  },
+  {
+   "line": 4484,
+   "text": "Aktueller Standort noch nicht verfügbar."
+  },
+  {
+   "line": 4729,
+   "text": "Route wird vorbereitet"
+  },
+  {
+   "line": 4731,
+   "text": "Wegpunkte werden verbunden"
+  },
+  {
+   "line": 4733,
+   "text": "Route wird berechnet"
+  },
+  {
+   "line": 4734,
+   "text": "Rundkurs wird berechnet"
+  },
+  {
+   "line": 4735,
+   "text": "Route gefunden"
+  },
+  {
+   "line": 4739,
+   "text": "Gerade keine gute Route gefunden. Wir suchen weiter im Hintergrund."
+  },
+  {
+   "line": 5003,
+   "text": "Gruppenfahrt verlassen?"
+  },
+  {
+   "line": 5007,
+   "text": "Du verlässt die Navigation. Die Gruppe läuft für andere weiter."
+  },
+  {
+   "line": 5013,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 5077,
+   "text": "Gruppenroute wird geladen …"
+  },
+  {
+   "line": 5086,
+   "text": "Du fährst die Route der Gruppe"
+  },
+  {
+   "line": 5192,
+   "text": "Zurück"
+  },
+  {
+   "line": 5199,
+   "text": "Neu setzen"
+  },
+  {
+   "line": 5206,
+   "text": "Löschen"
+  },
+  {
+   "line": 5327,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 5517,
+   "text": "Route bestätigen"
+  },
+  {
+   "line": 5564,
+   "text": "Route ändern"
+  },
+  {
+   "line": 5593,
+   "text": "Wegpunkte planen"
+  },
+  {
+   "line": 5595,
+   "text": "Strecke planen"
+  },
+  {
+   "line": 5596,
+   "text": "Route planen"
+  },
+  {
+   "line": 5749,
+   "text": "Runterwischen zum Schließen"
+  },
+  {
+   "line": 6039,
+   "text": "sport mode"
+  },
+  {
+   "line": 6063,
+   "text": "$mins min"
+  },
+  {
+   "line": 6084,
+   "text": "Route berechnet"
+  },
+  {
+   "line": 6100,
+   "text": "$distKm km"
+  },
+  {
+   "line": 6366,
+   "text": "GPS-Signal schwach"
+  },
+  {
+   "line": 6372,
+   "text": "Keine Internetverbindung"
+  },
+  {
+   "line": 6463,
+   "text": "Zurück zur Gruppe"
+  },
+  {
+   "line": 6464,
+   "text": "Zurück zum Strecken-Setup"
+  },
+  {
+   "line": 6488,
+   "text": "Zurück zur Gruppe"
+  },
+  {
+   "line": 6489,
+   "text": "Zurück zum Strecken-Setup"
+  },
+  {
+   "line": 6809,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 7076,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 7302,
+   "text": "Route bestätigen"
+  },
+  {
+   "line": 7350,
+   "text": "Suche abbrechen"
+  },
+  {
+   "line": 7359,
+   "text": "Wegpunkt-Route suchen"
+  },
+  {
+   "line": 7361,
+   "text": "Rundkurs suchen"
+  },
+  {
+   "line": 7362,
+   "text": "Route berechnen"
+  },
+  {
+   "line": 7431,
+   "text": "Speichern"
+  },
+  {
+   "line": 7431,
+   "text": "Tour zwischenspeichern"
+  },
+  {
+   "line": 7465,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 7541,
+   "text": "Trip-Modus aktiv · bis 5 Stopps, beliebig weit"
+  },
+  {
+   "line": 7542,
+   "text": "Standard · bis 3 Stopps für schnelle Rundkurse"
+  },
+  {
+   "line": 7937,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 7968,
+   "text": "Standort aktivieren"
+  },
+  {
+   "line": 7969,
+   "text": "Für die Navigation muss GPS auf deinem Gerät aktiviert sein."
+  },
+  {
+   "line": 7970,
+   "text": "Standort öffnen"
+  },
+  {
+   "line": 7987,
+   "text": "Standort blockiert"
+  },
+  {
+   "line": 7989,
+   "text": "Bitte erlaube Cruise Connector den Standortzugriff in den App-Einstellungen."
+  },
+  {
+   "line": 7990,
+   "text": "Einstellungen öffnen"
+  },
+  {
+   "line": 8000,
+   "text": "Standortberechtigung wurde nicht erteilt."
+  },
+  {
+   "line": 8016,
+   "text": "Standort im Hintergrund?"
+  },
+  {
+   "line": 8018,
+   "text": "Damit deine Gruppenfahrt weiterläuft, wenn du z. B. zu Spotify wechselst, braucht Cruise Connector die Freigabe \"Immer erlauben\"."
+  },
+  {
+   "line": 8020,
+   "text": "Einstellungen öffnen"
+  },
+  {
+   "line": 8021,
+   "text": "Jetzt erlauben"
+  },
+  {
+   "line": 8022,
+   "text": "Nur in App"
+  },
+  {
+   "line": 8028,
+   "text": "Gruppenfahrt startet. Im Hintergrund läuft Tracking erst mit \"Immer erlauben\"."
+  },
+  {
+   "line": 8043,
+   "text": "Gruppenfahrt startet. Im Hintergrund läuft Tracking erst mit \"Immer erlauben\"."
+  },
+  {
+   "line": 8134,
+   "text": "prüfe letzten bekannten Fix"
+  },
+  {
+   "line": 8140,
+   "text": "Bitte erlaube den Standortzugriff in deinen Browser-/Geräteeinstellungen und lade die Seite neu."
+  },
+  {
+   "line": 8166,
+   "text": "GPS-Fix ist zu alt oder zu ungenau. Bitte kurz warten und erneut versuchen."
+  },
+  {
+   "line": 8167,
+   "text": "No fresh start fix available within age/accuracy gate."
+  },
+  {
+   "line": 8178,
+   "text": "Standort wählen"
+  },
+  {
+   "line": 8199,
+   "text": "Aktueller Standort"
+  },
+  {
+   "line": 8204,
+   "text": "Bitte aktiviere GPS/Standort in deinen Geräteeinstellungen."
+  },
+  {
+   "line": 8212,
+   "text": "Standortberechtigung verweigert."
+  },
+  {
+   "line": 8216,
+   "text": "Standortberechtigung dauerhaft verweigert."
+  },
+  {
+   "line": 8234,
+   "text": "verfügbar, nutze Default-Koordinate"
+  },
+  {
+   "line": 8263,
+   "text": "Im Trip-Modus max 5 Stopps. Du hast $extra zu viel."
+  },
+  {
+   "line": 8264,
+   "text": "Im Standard max 3 Stopps. Aktiviere Trip-Modus für bis zu 5, oder entferne $extra Stopp${extra > 1 ? \"s\" : \"\"}."
+  },
+  {
+   "line": 8316,
+   "text": "Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp."
+  },
+  {
+   "line": 8317,
+   "text": "Standard erlaubt max $_currentMaxWaypoints Stopps. Aktiviere Trip-Modus oben für bis zu 5."
+  },
+  {
+   "line": 8321,
+   "text": "Setze mindestens einen Stopp oder lass Vorschläge erzeugen."
+  },
+  {
+   "line": 8326,
+   "text": "Setze mindestens einen Stopp oder lass Vorschläge erzeugen."
+  },
+  {
+   "line": 8427,
+   "text": "Konnte Zieladresse nicht finden."
+  },
+  {
+   "line": 8446,
+   "text": "Bitte wähle ein Ziel aus der Vorschlagsliste aus."
+  },
+  {
+   "line": 8459,
+   "text": "Start und Ziel liegen zu nah beieinander."
+  },
+  {
+   "line": 8465,
+   "text": "Kleiner Umweg"
+  },
+  {
+   "line": 8466,
+   "text": "Mittlerer Umweg"
+  },
+  {
+   "line": 8467,
+   "text": "Großer Umweg"
+  },
+  {
+   "line": 8556,
+   "text": "Kleiner Umweg"
+  },
+  {
+   "line": 8557,
+   "text": "Mittlerer Umweg"
+  },
+  {
+   "line": 8558,
+   "text": "Großer Umweg"
+  },
+  {
+   "line": 8737,
+   "text": "starte genau einen Retry mit frischem getCurrentPosition-Fix"
+  },
+  {
+   "line": 8787,
+   "text": "Wir prüfen weitere Routenvorschläge im Hintergrund. Bitte versuche es gleich erneut."
+  },
+  {
+   "line": 8789,
+   "text": "Persistent search session polling timed out: $sessionId."
+  },
+  {
+   "line": 8859,
+   "text": "Route konnte nicht generiert werden. Bitte versuche es erneut."
+  },
+  {
+   "line": 9369,
+   "text": "Diese Route startet zu weit entfernt. Bitte wähle eine lokale Route."
+  },
+  {
+   "line": 9451,
+   "text": "Sport Mode"
+  },
+  {
+   "line": 9927,
+   "text": "Aktuelle Strecke bleibt"
+  },
+  {
+   "line": 9929,
+   "text": "Wir bereiten im Hintergrund neue Vorschläge vor."
+  },
+  {
+   "line": 9930,
+   "text": "Keine neue Variante gefunden — deine Route passt."
+  },
+  {
+   "line": 9938,
+   "text": "Wir bereiten bessere Routen vor"
+  },
+  {
+   "line": 9940,
+   "text": "Alternativen werden geprüft"
+  },
+  {
+   "line": 9941,
+   "text": "Keine passende Route gefunden"
+  },
+  {
+   "line": 9943,
+   "text": "Wir bereiten automatisch neue Vorschläge für diese Einstellung vor."
+  },
+  {
+   "line": 9946,
+   "text": "Wir prüfen weitere Varianten und verfeinern die Strecke."
+  },
+  {
+   "line": 9948,
+   "text": "Die Suche läuft weiter. Beim nächsten Versuch prüfen wir neue Vorschläge."
+  },
+  {
+   "line": 9950,
+   "text": "Gerade war keine sichere Route dabei."
+  },
+  {
+   "line": 9952,
+   "text": "Die gefundenen Varianten waren noch nicht sauber genug."
+  },
+  {
+   "line": 9953,
+   "text": "Gerade war keine sichere Route dabei."
+  },
+  {
+   "line": 9996,
+   "text": "Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp und versuche es erneut."
+  },
+  {
+   "line": 9997,
+   "text": "Standard erlaubt max $_currentMaxWaypoints Stopps. Tippe oben auf \"Trip-Modus\" für bis zu 5 Stopps."
+  },
+  {
+   "line": 10000,
+   "text": "Wir konnten die Stopps noch nicht sauber an Straßen anbinden. Setze einen Stopp näher an eine Straße oder lass neue Stopps vorschlagen."
+  },
+  {
+   "line": 10002,
+   "text": "Zwei Stopps liegen zu nah beieinander. Verschiebe einen Punkt oder entferne ihn."
+  },
+  {
+   "line": 10004,
+   "text": "Setze mindestens einen Stopp oder lass passende Stopps vorschlagen."
+  },
+  {
+   "line": 10007,
+   "text": "Diese Stopps ergeben gerade keine sichere Strecke. Bearbeite sie auf der Karte oder lass neue Stopps vorschlagen."
+  },
+  {
+   "line": 10015,
+   "text": "Stopps prüfen"
+  },
+  {
+   "line": 10075,
+   "text": "Route noch nicht verfügbar"
+  },
+  {
+   "line": 10080,
+   "text": "Einstellungen ändern"
+  },
+  {
+   "line": 10085,
+   "text": "Direkte Route nehmen"
+  },
+  {
+   "line": 10089,
+   "text": "Nochmal suchen"
+  },
+  {
+   "line": 10216,
+   "text": "Fahrt verlassen?"
+  },
+  {
+   "line": 10220,
+   "text": "Bist du sicher, dass du die Fahrt verlassen willst?"
+  },
+  {
+   "line": 10227,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 10286,
+   "text": "Tour abbrechen?"
+  },
+  {
+   "line": 10290,
+   "text": "Die Tour wird beendet und aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert."
+  },
+  {
+   "line": 10297,
+   "text": "Zurück"
+  },
+  {
+   "line": 10304,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 10323,
+   "text": "Tour abgebrochen"
+  },
+  {
+   "line": 10333,
+   "text": "Tour konnte nicht abgebrochen werden"
+  },
+  {
+   "line": 10371,
+   "text": "Tour zwischengespeichert — auf Home fortsetzen"
+  },
+  {
+   "line": 10393,
+   "text": "Hauptroute erreicht. Navigation läuft normal weiter."
+  },
+  {
+   "line": 10442,
+   "text": "Nur Wichtiges"
+  },
+  {
+   "line": 10443,
+   "text": "Alle Ansagen"
+  },
+  {
+   "line": 10629,
+   "text": "Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route."
+  },
+  {
+   "line": 10917,
+   "text": "Reroute verworfen: Server-Route startete zu weit entfernt — folge der Linie, nächster Versuch kommt automatisch"
+  },
+  {
+   "line": 10921,
+   "text": "Reroute gerade nicht möglich (Netz/Server) — folge der Linie, nächster Versuch kommt automatisch"
+  },
+  {
+   "line": 10924,
+   "text": "Reroute-Server meldet einen Fehler — folge der Linie, nächster Versuch kommt automatisch"
+  },
+  {
+   "line": 10927,
+   "text": "Keine Anschlussroute gefunden — folge der Linie, wende erst bei sicherer Möglichkeit"
+  },
+  {
+   "line": 10929,
+   "text": "Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit"
+  },
+  {
+   "line": 10967,
+   "text": "Keine sichere Reroute — folge der Linie, wende erst bei sicherer Möglichkeit"
+  },
+  {
+   "line": 11017,
+   "text": "Offline — gespeicherte Route bleibt sichtbar"
+  },
+  {
+   "line": 11082,
+   "text": "zu stark schrumpfen "
+  },
+  {
+   "line": 11245,
+   "text": "Bitte wenden, sobald es möglich ist."
+  },
+  {
+   "line": 11431,
+   "text": "Route hat nicht genug Koordinaten."
+  },
+  {
+   "line": 11503,
+   "text": "Route konnte nicht geladen werden."
+  },
+  {
+   "line": 11758,
+   "text": "Navigation läuft - dein Standort bleibt für die Route aktiv."
+  },
+  {
+   "line": 11759,
+   "text": "Navigation läuft - dein Standort wird mit der Gruppe geteilt."
+  },
+  {
+   "line": 11768,
+   "text": "Cruise Connector Navigation"
+  },
+  {
+   "line": 11770,
+   "text": "Cruise Connector Navigation"
+  },
+  {
+   "line": 12648,
+   "text": "${frozenFor.inSeconds}s eingefroren bei "
+  },
+  {
+   "line": 12649,
+   "text": "${watchdogSpeedMps.toStringAsFixed(0)}m/s → Reroute erzwungen"
+  },
+  {
+   "line": 13176,
+   "text": "Erst eine Route berechnen."
+  },
+  {
+   "line": 13204,
+   "text": "Die ${poi.type.label} liegt schon direkt an deiner Route."
+  },
+  {
+   "line": 13215,
+   "text": "${poi.type.label} liegt ${(minDistMeters / 1000).toStringAsFixed(1)} km abseits — bitte als neuen Stopp planen."
+  },
+  {
+   "line": 13224,
+   "text": "Route wird minimal über die ${poi.type.label} angepasst…"
+  },
+  {
+   "line": 13270,
+   "text": "patch empty"
+  },
+  {
+   "line": 13328,
+   "text": "Route führt jetzt über die ${poi.type.label} (${minDistMeters.round()} m Detour)."
+  },
+  {
+   "line": 13337,
+   "text": "Route konnte nicht angepasst werden — versuch es nochmal."
+  },
+  {
+   "line": 13386,
+   "text": "${poi.type.label} entfernt — Route wird neu berechnet…"
+  },
+  {
+   "line": 13403,
+   "text": "⛽ Tankstellen erscheinen automatisch auf der Karte — Filter in Einstellungen"
+  },
+  {
+   "line": 13466,
+   "text": "${onRoute.length} auf Route."
+  },
+  {
+   "line": 13615,
+   "text": "Keine POIs im sichtbaren Bereich."
+  },
+  {
+   "line": 13779,
+   "text": "Erst eine Route berechnen"
+  },
+  {
+   "line": 13804,
+   "text": "Keine POIs entlang dieser Route gefunden"
+  },
+  {
+   "line": 13810,
+   "text": "${pois.length} POIs auf der Karte sichtbar"
+  },
+  {
+   "line": 13859,
+   "text": "${_routePois.length} POIs entlang der Route"
+  },
+  {
+   "line": 13968,
+   "text": "In $rounded Metern $raw"
+  },
+  {
+   "line": 14175,
+   "text": "ohne Commit → harter Reset des „Neuberechnung\"-Status"
+  },
+  {
+   "line": 14186,
+   "text": "Reroute dauert zu lange — bitte weiterfahren, ich versuche es gleich erneut"
+  },
+  {
+   "line": 14239,
+   "text": "(Basis ${smootherAgeMs}ms alt): ${_describeStartFix(retryPosition)}"
+  },
+  {
+   "line": 14250,
+   "text": "fresh reroute fix stale/inaccurate: ${_describeStartFix(retryPosition)}"
+  },
+  {
+   "line": 14260,
+   "text": "($e) — kein Retry mit alter Position"
+  },
+  {
+   "line": 14268,
+   "text": "Reroute gerade nicht möglich: GPS ist noch nicht präzise genug — bitte weiterfahren"
+  },
+  {
+   "line": 14298,
+   "text": "#$_chainedRerouteCount mit frischer Position"
+  },
+  {
+   "line": 14449,
+   "text": "— Kandidat verworfen"
+  },
+  {
+   "line": 14522,
+   "text": "— Kandidat verworfen"
+  },
+  {
+   "line": 14732,
+   "text": "— Kandidat verworfen"
+  },
+  {
+   "line": 14908,
+   "text": "— Re-Dock verworfen, alte Route bleibt"
+  },
+  {
+   "line": 14974,
+   "text": "Route neu berechnet — zurück auf Kurs"
+  },
+  {
+   "line": 15018,
+   "text": "(Netz-Notnagel) — Endlos-Neuberechnung gebrochen"
+  },
+  {
+   "line": 15252,
+   "text": "Route neu berechnet!"
+  },
+  {
+   "line": 15375,
+   "text": "Route wird neu berechnet"
+  },
+  {
+   "line": 15378,
+   "text": "Der Route folgen"
+  },
+  {
+   "line": 15774,
+   "text": "Im Kreisverkehr weiterfahren"
+  },
+  {
+   "line": 16090,
+   "text": "$minutes min"
+  },
+  {
+   "line": 16422,
+   "text": "Fehler beim Speichern. Bitte erneut versuchen."
+  },
+  {
+   "line": 16662,
+   "text": "${waypoints.length}-Stop Tour"
+  }
+ ],
+ "lib/presentation/pages/legal_acceptance_page.dart": [
+  {
+   "line": 64,
+   "text": "${document.title} konnte nicht geöffnet werden. Bitte prüfe die Verbindung."
+  },
+  {
+   "line": 101,
+   "text": "Legal-Bestätigung konnte nicht gespeichert werden. Bitte erneut versuchen."
+  },
+  {
+   "line": 112,
+   "text": "Bitte zuerst $label öffnen."
+  },
+  {
+   "line": 142,
+   "text": "Bitte bestätige die aktuellen Rechtstexte."
+  },
+  {
+   "line": 152,
+   "text": "AGB und Datenschutz werden getrennt behandelt. Es gibt keine Newsletter- oder Marketing-Einwilligung in diesem Schritt."
+  },
+  {
+   "line": 166,
+   "text": "Ich habe die AGB / Terms of Service gelesen und akzeptiere sie."
+  },
+  {
+   "line": 172,
+   "text": "die AGB"
+  },
+  {
+   "line": 180,
+   "text": "Ich habe die Datenschutzerklärung gelesen und zur Kenntnis genommen."
+  },
+  {
+   "line": 188,
+   "text": "die Datenschutzerklärung"
+  },
+  {
+   "line": 235,
+   "text": "Weiter"
+  },
+  {
+   "line": 236,
+   "text": "Bestätigen und fortfahren"
+  }
+ ],
+ "lib/presentation/pages/profile_page.dart": [
+  {
+   "line": 175,
+   "text": "Profilbild ändern"
+  },
+  {
+   "line": 234,
+   "text": "Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben."
+  },
+  {
+   "line": 235,
+   "text": "Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben."
+  },
+  {
+   "line": 265,
+   "text": "Upload fehlgeschlagen"
+  },
+  {
+   "line": 288,
+   "text": "Upload fehlgeschlagen: $e"
+  },
+  {
+   "line": 306,
+   "text": "Profilbild zuschneiden"
+  },
+  {
+   "line": 318,
+   "text": "Profilbild zuschneiden"
+  },
+  {
+   "line": 604,
+   "text": "Profil bearbeiten"
+  },
+  {
+   "line": 687,
+   "text": "Folge ich"
+  },
+  {
+   "line": 778,
+   "text": "Noch keine Posts"
+  },
+  {
+   "line": 808,
+   "text": "Noch keine Reposts"
+  },
+  {
+   "line": 869,
+   "text": "Repost von @$authorName"
+  },
+  {
+   "line": 915,
+   "text": "Repost entfernen"
+  },
+  {
+   "line": 984,
+   "text": "Noch keine Routen gespeichert"
+  },
+  {
+   "line": 989,
+   "text": "Fahre los und bestätige deine erste Route!"
+  },
+  {
+   "line": 1011,
+   "text": "Noch keiner Gruppe beigetreten"
+  },
+  {
+   "line": 1123,
+   "text": "Post löschen"
+  },
+  {
+   "line": 1190,
+   "text": "$commentsCount Kommentare"
+  },
+  {
+   "line": 1210,
+   "text": "Post löschen?"
+  },
+  {
+   "line": 1214,
+   "text": "Dieser Post wird unwiderruflich gelöscht."
+  },
+  {
+   "line": 1221,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1228,
+   "text": "Löschen"
+  },
+  {
+   "line": 1264,
+   "text": "Folge ich"
+  },
+  {
+   "line": 1305,
+   "text": "Noch keine Follower"
+  },
+  {
+   "line": 1306,
+   "text": "Du folgst noch niemandem"
+  },
+  {
+   "line": 1395,
+   "text": "Follower entfernen"
+  },
+  {
+   "line": 1404,
+   "text": "Blockieren"
+  },
+  {
+   "line": 1542,
+   "text": "Löschen"
+  },
+  {
+   "line": 1600,
+   "text": "Übersicht"
+  },
+  {
+   "line": 1613,
+   "text": "Nochmal fahren"
+  },
+  {
+   "line": 1623,
+   "text": "Route umbenennen"
+  },
+  {
+   "line": 1632,
+   "text": "Als Post teilen"
+  },
+  {
+   "line": 1641,
+   "text": "Extern als Bild teilen"
+  },
+  {
+   "line": 1650,
+   "text": "Löschen"
+  },
+  {
+   "line": 1687,
+   "text": "Route und zugehörige Posts wurden entfernt."
+  },
+  {
+   "line": 1696,
+   "text": "Route konnte nicht entfernt werden."
+  },
+  {
+   "line": 1710,
+   "text": "Route entfernen?"
+  },
+  {
+   "line": 1714,
+   "text": "Wenn du \"${route.name ?? route.style}\" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts."
+  },
+  {
+   "line": 1721,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1746,
+   "text": "Route umbenennen"
+  },
+  {
+   "line": 1756,
+   "text": "Name der Route"
+  },
+  {
+   "line": 1771,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 1778,
+   "text": "Speichern"
+  },
+  {
+   "line": 1844,
+   "text": "$curves Kurven"
+  },
+  {
+   "line": 1865,
+   "text": "Menü"
+  },
+  {
+   "line": 1877,
+   "text": "Einstellungen"
+  },
+  {
+   "line": 1909,
+   "text": "Blockierte Nutzer"
+  },
+  {
+   "line": 1920,
+   "text": "Gespeicherte Routen"
+  },
+  {
+   "line": 1935,
+   "text": "Gefällt mir"
+  },
+  {
+   "line": 2085,
+   "text": "Profil vollständig"
+  },
+  {
+   "line": 2086,
+   "text": "Profil vervollständigen"
+  },
+  {
+   "line": 2097,
+   "text": "${completion.completed}/${completion.total} vollständig"
+  },
+  {
+   "line": 2121,
+   "text": "Alles erledigt."
+  },
+  {
+   "line": 2203,
+   "text": "Meine Garage"
+  },
+  {
+   "line": 2280,
+   "text": "Gruppe"
+  },
+  {
+   "line": 2352,
+   "text": "Fahrt abgeschlossen"
+  },
+  {
+   "line": 2406,
+   "text": "Öffentlich"
+  },
+  {
+   "line": 2427,
+   "text": "Gruppe verlassen"
+  },
+  {
+   "line": 2459,
+   "text": "$count Fahrer"
+  },
+  {
+   "line": 2559,
+   "text": "Aktion fehlgeschlagen: $e"
+  },
+  {
+   "line": 2568,
+   "text": "Gruppe löschen?"
+  },
+  {
+   "line": 2568,
+   "text": "Gruppe verlassen?"
+  },
+  {
+   "line": 2570,
+   "text": "Achtung: Du bist der einzige Admin. Wenn du die Gruppe verlässt, "
+  },
+  {
+   "line": 2571,
+   "text": "wird sie vollständig gelöscht. Ernenne vorher einen neuen Admin, "
+  },
+  {
+   "line": 2572,
+   "text": "wenn die Gruppe bestehen bleiben soll."
+  },
+  {
+   "line": 2574,
+   "text": "Es gibt weitere Owner – die Gruppe bleibt bestehen, du "
+  },
+  {
+   "line": 2575,
+   "text": "verlierst nur deine Mitgliedschaft."
+  },
+  {
+   "line": 2576,
+   "text": "Du verlässt diese Gruppe. Beitritt später wieder möglich, "
+  },
+  {
+   "line": 2577,
+   "text": "solange sie öffentlich ist."
+  },
+  {
+   "line": 2578,
+   "text": "Gruppe löschen"
+  },
+  {
+   "line": 2615,
+   "text": "Abbrechen"
+  }
+ ],
+ "lib/presentation/pages/cruise/route_loading_phases.dart": [
+  {
+   "line": 12,
+   "text": "Wir suchen eine passende Route"
+  },
+  {
+   "line": 13,
+   "text": "Alternativen werden geprüft"
+  },
+  {
+   "line": 14,
+   "text": "Route verfeinern"
+  },
+  {
+   "line": 15,
+   "text": "Strecke final prüfen"
+  },
+  {
+   "line": 16,
+   "text": "Fast fertig"
+  },
+  {
+   "line": 20,
+   "text": "Stopps verbinden"
+  },
+  {
+   "line": 21,
+   "text": "Nächste Straßen finden"
+  },
+  {
+   "line": 22,
+   "text": "Stil anwenden"
+  },
+  {
+   "line": 23,
+   "text": "Route final prüfen"
+  },
+  {
+   "line": 24,
+   "text": "Fast fertig"
+  },
+  {
+   "line": 28,
+   "text": "Ziel prüfen"
+  },
+  {
+   "line": 29,
+   "text": "Straßen finden"
+  },
+  {
+   "line": 30,
+   "text": "Stil anwenden"
+  },
+  {
+   "line": 31,
+   "text": "Route final prüfen"
+  },
+  {
+   "line": 32,
+   "text": "Fast fertig"
+  },
+  {
+   "line": 36,
+   "text": "Andockpunkt finden"
+  },
+  {
+   "line": 37,
+   "text": "Anfahrt berechnen"
+  },
+  {
+   "line": 38,
+   "text": "Route verbinden"
+  },
+  {
+   "line": 39,
+   "text": "Rückweg vorbereiten"
+  },
+  {
+   "line": 40,
+   "text": "Fast fertig"
+  },
+  {
+   "line": 44,
+   "text": "Route abstimmen"
+  },
+  {
+   "line": 45,
+   "text": "Gruppe synchronisieren"
+  },
+  {
+   "line": 46,
+   "text": "Fast fertig"
+  }
+ ],
+ "lib/presentation/pages/onboarding/onboarding_wizard_page.dart": [
+  {
+   "line": 113,
+   "text": "Österreich"
+  },
+  {
+   "line": 119,
+   "text": "Anderes Land"
+  },
+  {
+   "line": 260,
+   "text": "Bitte E-Mail und Passwort eingeben."
+  },
+  {
+   "line": 264,
+   "text": "Passwort muss mindestens 6 Zeichen haben."
+  },
+  {
+   "line": 268,
+   "text": "Passwörter stimmen nicht überein."
+  },
+  {
+   "line": 284,
+   "text": "Bitte AGB und Datenschutzerklärung bestätigen, um dein Konto zu erstellen."
+  },
+  {
+   "line": 323,
+   "text": "Registrierung fehlgeschlagen. Bitte erneut versuchen."
+  },
+  {
+   "line": 335,
+   "text": "Diese E-Mail ist bereits registriert. Melde dich stattdessen an."
+  },
+  {
+   "line": 338,
+   "text": "Zu viele Versuche in kurzer Zeit. Bitte warte ein paar Minuten."
+  },
+  {
+   "line": 341,
+   "text": "Passwort zu schwach. Mindestens 6 Zeichen."
+  },
+  {
+   "line": 344,
+   "text": "Registrierung fehlgeschlagen. Bitte erneut versuchen."
+  },
+  {
+   "line": 365,
+   "text": "Bitte gib einen Anzeigenamen ein."
+  },
+  {
+   "line": 377,
+   "text": "Bitte wähle deine Region."
+  },
+  {
+   "line": 406,
+   "text": "Bitte gib den 6-stelligen Code ein."
+  },
+  {
+   "line": 420,
+   "text": "Code ungültig oder abgelaufen."
+  },
+  {
+   "line": 434,
+   "text": "Bestätigung fehlgeschlagen. Bitte erneut versuchen."
+  },
+  {
+   "line": 445,
+   "text": "Der Code ist abgelaufen. Fordere einen neuen an."
+  },
+  {
+   "line": 448,
+   "text": "Der Code stimmt nicht. Bitte prüfe die Ziffern."
+  },
+  {
+   "line": 450,
+   "text": "Bestätigung fehlgeschlagen. Bitte erneut versuchen."
+  },
+  {
+   "line": 482,
+   "text": "Neuer Code gesendet. Schau in dein Postfach."
+  },
+  {
+   "line": 496,
+   "text": "Zu viele E-Mails in kurzer Zeit. Bitte warte ein paar Minuten und "
+  },
+  {
+   "line": 497,
+   "text": "versuche es dann erneut."
+  },
+  {
+   "line": 501,
+   "text": "Konnte keinen neuen Code senden. Bitte kurz warten."
+  },
+  {
+   "line": 505,
+   "text": "Konnte gerade keinen neuen Code senden. Bitte kurz warten."
+  },
+  {
+   "line": 542,
+   "text": "Onboarding abbrechen?"
+  },
+  {
+   "line": 546,
+   "text": "Bist du dir sicher, dass du das Onboarding abbrechen willst? Du wirst "
+  },
+  {
+   "line": 547,
+   "text": "abgemeldet und kannst es später jederzeit neu starten."
+  },
+  {
+   "line": 554,
+   "text": "Weiter einrichten"
+  },
+  {
+   "line": 561,
+   "text": "Abbrechen"
+  },
+  {
+   "line": 799,
+   "text": "Überspringen"
+  },
+  {
+   "line": 854,
+   "text": "Los geht\\'s"
+  },
+  {
+   "line": 856,
+   "text": "Konto erstellen"
+  },
+  {
+   "line": 858,
+   "text": "Bestätigen"
+  },
+  {
+   "line": 860,
+   "text": "App starten"
+  },
+  {
+   "line": 862,
+   "text": "Weiter"
+  },
+  {
+   "line": 934,
+   "text": "Willkommen bei\\nCruise Connector"
+  },
+  {
+   "line": 944,
+   "text": "In wenigen Schritten ist dein Profil bereit und du kannst sofort losfahren."
+  },
+  {
+   "line": 951,
+   "text": "Entdecke die schönsten Routen"
+  },
+  {
+   "line": 952,
+   "text": "Kurvenreich, scenic, auf dich zugeschnitten."
+  },
+  {
+   "line": 957,
+   "text": "Cruise mit Freunden"
+  },
+  {
+   "line": 958,
+   "text": "Live-Standort, Gruppen-Navigation, gemeinsam fahren."
+  },
+  {
+   "line": 963,
+   "text": "Sammle XP & teile Fahrten"
+  },
+  {
+   "line": 964,
+   "text": "Streaks, Statistiken und Story-Sharing."
+  },
+  {
+   "line": 1020,
+   "text": "Erstelle dein Konto"
+  },
+  {
+   "line": 1022,
+   "text": "E-Mail und Passwort, damit wir dein Profil und deine Fahrten sichern."
+  },
+  {
+   "line": 1026,
+   "text": "E-Mail Adresse"
+  },
+  {
+   "line": 1067,
+   "text": "Passwort bestätigen"
+  },
+  {
+   "line": 1079,
+   "text": "Passwort wiederholen"
+  },
+  {
+   "line": 1126,
+   "text": "Bestätige deine E-Mail"
+  },
+  {
+   "line": 1128,
+   "text": "Wir haben dir einen 6-stelligen Code an $_pendingEmail geschickt. "
+  },
+  {
+   "line": 1129,
+   "text": "Gib ihn hier ein — du bleibst angemeldet und machst direkt weiter."
+  },
+  {
+   "line": 1133,
+   "text": "6-stelliger Code"
+  },
+  {
+   "line": 1173,
+   "text": "Keine Mail erhalten? Sieh auch im Spam-Ordner nach."
+  },
+  {
+   "line": 1191,
+   "text": "Code erneut senden ($_resendIn s)"
+  },
+  {
+   "line": 1192,
+   "text": "Code erneut senden"
+  },
+  {
+   "line": 1210,
+   "text": "E-Mail-Adresse ändern"
+  },
+  {
+   "line": 1255,
+   "text": "Wähl deinen @-Namen"
+  },
+  {
+   "line": 1257,
+   "text": "Dein eindeutiger Handle, daran finden dich andere. 3 bis 20 Zeichen, "
+  },
+  {
+   "line": 1258,
+   "text": "Buchstaben, Zahlen und _."
+  },
+  {
+   "line": 1293,
+   "text": "Vorschläge:"
+  },
+  {
+   "line": 1365,
+   "text": "@${_usernameCtrl.text.trim()} ist frei 🎉"
+  },
+  {
+   "line": 1368,
+   "text": "Schon vergeben, probier einen Vorschlag."
+  },
+  {
+   "line": 1369,
+   "text": "Dieser Name ist reserviert."
+  },
+  {
+   "line": 1372,
+   "text": "(kein __, nicht mit _ beginnen oder enden)."
+  },
+  {
+   "line": 1375,
+   "text": "Prüfe Verfügbarkeit…"
+  },
+  {
+   "line": 1376,
+   "text": "Konnte gerade nicht prüfen."
+  },
+  {
+   "line": 1387,
+   "text": "Wie sollen dich\\nandere sehen?"
+  },
+  {
+   "line": 1389,
+   "text": "Dein Anzeigename ohne @. Den kannst du jederzeit ändern, der "
+  },
+  {
+   "line": 1390,
+   "text": "@-Name bleibt fest."
+  },
+  {
+   "line": 1400,
+   "text": "Max Mustermann"
+  },
+  {
+   "line": 1409,
+   "text": "Wo cruisst du?"
+  },
+  {
+   "line": 1410,
+   "text": "Hilft uns, dir die besten Routen in deiner Nähe zu zeigen."
+  },
+  {
+   "line": 1459,
+   "text": "Zeig dich"
+  },
+  {
+   "line": 1460,
+   "text": "Ein Profilbild macht dein Profil persönlich. (Optional)"
+  },
+  {
+   "line": 1490,
+   "text": "Foto auswählen"
+  },
+  {
+   "line": 1490,
+   "text": "Foto ändern"
+  },
+  {
+   "line": 1504,
+   "text": "Was fährst du?"
+  },
+  {
+   "line": 1505,
+   "text": "Füg dein erstes Fahrzeug zur Garage hinzu. (Optional)"
+  },
+  {
+   "line": 1560,
+   "text": "Alles bereit!"
+  },
+  {
+   "line": 1570,
+   "text": "Dein Profil steht. Finde Freunde in der Community, plane deine "
+  },
+  {
+   "line": 1571,
+   "text": "erste Route und ab auf die Straße."
+  }
+ ]
+}
