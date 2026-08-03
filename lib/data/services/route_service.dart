@@ -2498,6 +2498,14 @@ class RouteService {
     bool returnToSessionOrigin = false,
     bool rebaseClosedLoop = false,
     bool joinNearestForward = false,
+    /// 2026-07-29 (vucko „wenn ich den Rundkurs fortsetze, soll der Endpunkt
+    /// trotzdem zuhause sein"): Normalerweise schliesst sich ein Rundkurs
+    /// dort, wo die Sitzung BEGINNT — also an der aktuellen Position. Beim
+    /// FORTSETZEN einer unterbrochenen Fahrt ist das falsch: gestartet wurde
+    /// zuhause, dort soll die Runde auch enden, auch wenn man inzwischen
+    /// 20 km weiter steht. Wer hier einen Punkt uebergibt, bestimmt das Ende
+    /// der Runde explizit; ohne Angabe bleibt es beim bisherigen Verhalten.
+    List<double>? explicitSessionOrigin,
   }) async {
     if (existingRoute.coordinates.length < 2) {
       throw const RouteServiceException(
@@ -2528,10 +2536,9 @@ class RouteService {
       );
       final logicalOrigin = _copyCoordinate(existingRoute.coordinates.first);
       final logicalEnd = _copyCoordinate(existingRoute.coordinates.last);
-      final sessionOrigin = [
-        currentPosition.longitude,
-        currentPosition.latitude,
-      ];
+      final sessionOrigin = explicitSessionOrigin != null
+          ? _copyCoordinate(explicitSessionOrigin)
+          : [currentPosition.longitude, currentPosition.latitude];
       final routeStartDistanceMeters = _distanceBetweenCoordinates(
         sessionOrigin,
         existingRoute.coordinates.first,

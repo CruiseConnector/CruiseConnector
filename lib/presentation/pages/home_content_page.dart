@@ -437,7 +437,28 @@ class _HomeContentPageState extends State<HomeContentPage>
     // beim App-Start Level + Wochen-Chart + Lite-Recommendation sofort
     // sichtbar sind statt Skeleton — der Refresh läuft im Hintergrund.
     unawaited(_hydrateFromHomeSnapshot());
+    // 2026-07-29 (vucko „ich hatte erst rund 15 Sekunden danach die Option,
+    // den Rundkurs fortzusetzen"): Der Fahrt-Snapshot liegt LOKAL und ist
+    // sofort da — er wurde aber ganz am Ende der Lade-Kette in _loadStats
+    // geholt, hinter zwei Netzwerk-Abfragen (Routen-Empfehlung und
+    // Trip-Status). Wer nach einem Absturz zurueckkommt, will genau EINS
+    // sofort sehen: dass seine Fahrt noch da ist. Deshalb laeuft das jetzt
+    // ganz vorn und voellig unabhaengig.
+    unawaited(_ladeUnterbrocheneFahrtSofort());
     _loadStats();
+  }
+
+  /// Holt den lokalen Fahrt-Snapshot sofort, ohne auf irgendetwas zu warten.
+  /// [_loadStats] setzt spaeter denselben Wert nochmal — das ist gewollt und
+  /// unschaedlich (gleicher Inhalt, nur frischer).
+  Future<void> _ladeUnterbrocheneFahrtSofort() async {
+    try {
+      final snapshot = await ActiveRideSnapshotService.load();
+      if (!mounted || snapshot == null) return;
+      setState(() => _resumableRide = snapshot);
+    } catch (e) {
+      debugPrint('[Home] Fahrt-Snapshot (sofort) laden fehlgeschlagen: $e');
+    }
   }
 
   /// 2026-05-28 (vucko Task #68): Schneller initial-Render aus dem letzten
@@ -5193,12 +5214,37 @@ class _HomeContentPageState extends State<HomeContentPage>
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
+                  // 2026-07-29 (vucko „ob man die alte Tour fortsetzen,
+                  // verwerfen ODER speichern moechte"): Bisher gab es nur
+                  // fortsetzen oder wegwerfen. Wer gerade keine Zeit hat, war
+                  // gezwungen, seine Fahrt zu vernichten. „Spaeter" blendet
+                  // die Karte nur aus, der Snapshot bleibt bis zu seiner
+                  // regulaeren Frist erhalten und ist beim naechsten Start
+                  // wieder da.
+                  SizedBox(
+                    height: 44,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white.withValues(alpha: 0.75),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                      ),
+                      onPressed: _spaeterEntscheiden,
+                      child: const Text(
+                        'Später',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
                   SizedBox(
                     height: 44,
                     child: TextButton(
                       style: TextButton.styleFrom(
                         foregroundColor: Colors.white.withValues(alpha: 0.55),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
                       ),
                       onPressed: _dismissInterruptedRide,
                       child: const Text(
@@ -5215,6 +5261,23 @@ class _HomeContentPageState extends State<HomeContentPage>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// „Spaeter": Karte ausblenden, Fahrt aber AUFHEBEN. Bewusst OHNE
+  /// ActiveRideSnapshotService.clear() — genau das ist der Unterschied zu
+  /// „Verwerfen".
+  void _spaeterEntscheiden() {
+    if (!mounted) return;
+    setState(() => _resumableRide = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Fahrt bleibt gespeichert, du findest sie beim nächsten Start wieder.',
+        ),
+        backgroundColor: Colors.grey.shade800,
+        duration: const Duration(seconds: 4),
       ),
     );
   }

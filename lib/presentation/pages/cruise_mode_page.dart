@@ -11031,6 +11031,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         avoidHighways: _effectiveNavigationAvoidHighways,
         returnToSessionOrigin: _isRoundTrip,
         rebaseClosedLoop: _isRoundTrip,
+        // 2026-07-29 (vucko „beim Rundkurs-Fortsetzen soll der Endpunkt
+        // trotzdem zuhause sein"): Bei einer FORTGESETZTEN Runde ist der
+        // Startpunkt der Fahrt nicht dort, wo man gerade steht, sondern dort,
+        // wo die Runde urspruenglich begann. Ohne das schloss sich die
+        // Schleife am neuen Standort — man kam also nie mehr heim.
+        // Nur bei fortgesetzten Rundkursen; eine frische Suche bleibt
+        // unveraendert (dort IST die aktuelle Position der Start).
+        explicitSessionOrigin: (_isRoundTrip && _isExistingRouteSession)
+            ? _copyCoord(sourceRoute.coordinates.first)
+            : null,
       );
       _logAccessLegMeta(accessPlan);
     } catch (e) {
@@ -17215,6 +17225,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (restMinutes == 0) return '${hours}h';
     return '${hours}h ${restMinutes}min';
   }
+
+  /// Flache Kopie einer Koordinate — die Originalliste darf nicht
+  /// versehentlich mitveraendert werden.
+  static List<double> _copyCoord(List<double> c) =>
+      [c[0], c[1], if (c.length > 2) c[2]];
 
   _CruiseCompletionSnapshot _buildCompletionSnapshot({
     required bool isEarlyStop,
