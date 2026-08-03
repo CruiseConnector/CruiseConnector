@@ -726,17 +726,27 @@ class RouteShareCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 9),
+              // 2026-07-28 (vucko „das Layout passt gar nicht"): Der
+              // Markenname wurde bei schmalen Formaten abgeschnitten — im
+              // geteilten Bild stand dann „CRUISE CONN…". Den eigenen Namen
+              // abzuschneiden ist das Unschoenste, was ein Export machen kann.
+              // FittedBox verkleinert ihn stattdessen so weit, dass er ganz
+              // hineinpasst; abgeschnitten wird gar nicht mehr.
               const Flexible(
-                child: Text(
-                  'CRUISE CONNECTOR',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.4,
-                    shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'CRUISE CONNECTOR',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.4,
+                      shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+                    ),
                   ),
                 ),
               ),

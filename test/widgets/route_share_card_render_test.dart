@@ -106,6 +106,40 @@ void main() {
     await ablegen(tester, 'breit_normal');
   });
 
+  testWidgets('Markenname wird verkleinert, NIE abgeschnitten', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // Schmalstes realistisches Format. Vorher stand hier „CRUISE CONN…".
+    await tester.pumpWidget(rahmen(260, daten('Kurviger Sonntagabend')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+
+    final marke = tester.widget<Text>(
+      find.descendant(
+        of: find.byType(RouteShareCard),
+        matching: find.text('CRUISE CONNECTOR'),
+      ),
+    );
+    expect(
+      marke.overflow,
+      isNot(TextOverflow.ellipsis),
+      reason: 'Der eigene Markenname darf nie mit „…" enden',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(RouteShareCard),
+        matching: find.byType(FittedBox),
+      ),
+      findsWidgets,
+      reason: 'Statt abzuschneiden muss verkleinert werden',
+    );
+  });
+
   testWidgets('extrem langes Einzelwort läuft nicht über', (tester) async {
     tester.view.physicalSize = const Size(1200, 2000);
     tester.view.devicePixelRatio = 1.0;
