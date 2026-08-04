@@ -47,6 +47,11 @@ import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
+// 2026-08-04: Foto-Upload und die Level-/Badge-Feier liefen frueher im
+// Abschluss-Sheet. Seit das sofort schliesst, gehoeren sie hierher.
+import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:cruise_connect/presentation/widgets/xp_level_progress_popup.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_android_notification_service.dart';
 import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
@@ -11163,24 +11168,20 @@ class _CruiseModePageState extends State<CruiseModePage>
         avgSpeedKmh: snapshot.avgSpeedKmh,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-        onSave: (rating, tags, title, photoUrl) async {
-          final result = await _saveRouteAndSyncXp(
+        canPublish: true,
+        onSave: (rating, tags, title, photoBytes, publish) {
+          _starteHintergrundSpeichern(
+            verwerfen: false,
+            completed: true,
             rating: rating,
             ratingTags: tags,
             title: title,
-            completed: true,
-            photoUrl: photoUrl,
+            photoBytes: photoBytes,
+            publish: publish,
           );
-          _resetAfterCompletion();
-          return result;
         },
-        onPublish: _publishRecordedRoute,
-        onDiscard: () async {
-          try {
-            await _recordDriveSessionForCurrentRoute(completed: true);
-          } finally {
-            _resetAfterCompletion();
-          }
+        onDiscard: () {
+          _starteHintergrundSpeichern(verwerfen: true, completed: true);
         },
       ),
     );
@@ -17543,10 +17544,78 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   // ═══════════════════════ ROUTE COMPLETION ═════════════════════════════════
 
+  /// 2026-08-04 (vucko „wenn man Speichern oder Verwerfen klickt, dauert es
+  /// 15-20 Sekunden"): Ab jetzt laeuft die gesamte Speicher-Kette im
+  /// Hintergrund, waehrend die Oberflaeche sofort weitermacht.
+  ///
+  /// Das geht nur mit diesem eingefrorenen Stand. Sonst passiert Folgendes:
+  /// `_resetAfterCompletion()` leert unmittelbar nach dem Tap den
+  /// Track-Recorder und die Routen-Ergebnisse. Der Hintergrund-Auftrag wuerde
+  /// danach nachlesen, einen LEEREN Track finden,
+  /// `_buildAdjustedCompletionResult()` gaebe `null` zurueck — und damit wuerde
+  /// der GESAMTE Speicherblock stillschweigend uebersprungen. Die Fahrt waere
+  /// verloren, obwohl die App laengst „gespeichert" gemeldet hat.
+  ///
+  /// Deshalb: Ist dieses Feld gesetzt, liefern alle Abschluss-Berechnungen den
+  /// eingefrorenen Wert statt den (bereits zurueckgesetzten) Live-Zustand.
+  _AbschlussStand? _eingefrorenerAbschluss;
+
+  /// Friert alles ein, was die Speicher-Kette braucht. Muss VOR jedem Reset
+  /// laufen und wird genau einmal je Fahrt aufgerufen.
+  _AbschlussStand _friereAbschlussEin() {
+    // Wichtig: noch im Live-Zustand rechnen — `_eingefrorenerAbschluss` ist
+    // hier garantiert null, sonst wuerden die Getter unten im Kreis laufen.
+    final ergebnis = _buildAdjustedCompletionResult();
+    final xpKoordinaten = _buildCompletionCoordinates();
+    return _AbschlussStand(
+      ergebnis: ergebnis,
+      geplant: _completionRouteResult,
+      fortschritt: _calculateCompletionProgressFraction(
+        ergebnis?.distanceMeters,
+      ),
+      xpKoordinaten: xpKoordinaten,
+      xpKurven: _estimateCompletionCurves(xpKoordinaten),
+      trackGeometrie: _drivenTrackRecorder.snapshot().coordinates,
+      stil: _selectedStyle,
+      istRundkurs: _isRoundTrip,
+      istAufzeichnung: _isRecordingMode,
+      autobahnGemieden: _activeAvoidHighways || _avoidHighways,
+      streakTage: _xpStreakDays,
+      topSpeedKmh: _maxSpeedMps * 3.6,
+    );
+  }
+
+  // Ab hier: Zugriffe, die im Hintergrund den eingefrorenen Wert bevorzugen.
+  String get _abschlussStil => _eingefrorenerAbschluss?.stil ?? _selectedStyle;
+  bool get _abschlussIstRundkurs =>
+      _eingefrorenerAbschluss?.istRundkurs ?? _isRoundTrip;
+  bool get _abschlussIstAufzeichnung =>
+      _eingefrorenerAbschluss?.istAufzeichnung ?? _isRecordingMode;
+  bool get _abschlussAutobahnGemieden =>
+      _eingefrorenerAbschluss?.autobahnGemieden ??
+      (_activeAvoidHighways || _avoidHighways);
+  int get _abschlussStreakTage =>
+      _eingefrorenerAbschluss?.streakTage ?? _xpStreakDays;
+  double get _abschlussTopSpeedKmh =>
+      _eingefrorenerAbschluss?.topSpeedKmh ?? (_maxSpeedMps * 3.6);
+  List<List<double>> get _abschlussTrackGeometrie =>
+      _eingefrorenerAbschluss?.trackGeometrie ??
+      _drivenTrackRecorder.snapshot().coordinates;
+  int get _abschlussXpKurven =>
+      _eingefrorenerAbschluss?.xpKurven ??
+      _estimateCompletionCurves(_buildCompletionCoordinates());
+
+  double _abschlussFortschritt(RouteResult? ergebnis) =>
+      _eingefrorenerAbschluss?.fortschritt ??
+      _calculateCompletionProgressFraction(ergebnis?.distanceMeters);
+
   RouteResult? get _completionRouteResult =>
-      _sessionRouteResult ?? _lastRouteResult;
+      _eingefrorenerAbschluss?.geplant ?? _sessionRouteResult ?? _lastRouteResult;
 
   RouteResult? _buildAdjustedCompletionResult() {
+    final eingefroren = _eingefrorenerAbschluss;
+    if (eingefroren != null) return eingefroren.ergebnis;
+
     // 2026-08-03 (vucko Route-Aufzeichnen): Beim Aufzeichnen gibt es keine
     // geplante Route — der Track IST das Ergebnis. Ohne diesen Zweig würde die
     // Methode unten an `result == null` aussteigen und nichts gespeichert.
@@ -17815,27 +17884,22 @@ class _CruiseModePageState extends State<CruiseModePage>
         avgSpeedKmh: snapshot.avgSpeedKmh,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-        onSave: (rating, tags, title, photoUrl) async {
-          final result = await _saveRouteAndSyncXp(
+        onSave: (rating, tags, title, photoBytes, publish) {
+          _starteHintergrundSpeichern(
+            verwerfen: false,
+            completed: true,
             rating: rating,
             ratingTags: tags,
             title: title,
-            completed: true,
-            photoUrl: photoUrl,
+            photoBytes: photoBytes,
           );
-          _resetAfterCompletion();
-          return result;
         },
-        onDiscard: () async {
-          try {
-            await _recordDriveSessionForCurrentRoute(completed: true);
-            await _recordRouteCompletionCandidate(
-              completed: true,
-              discarded: true,
-            );
-          } finally {
-            _resetAfterCompletion();
-          }
+        onDiscard: () {
+          _starteHintergrundSpeichern(
+            verwerfen: true,
+            completed: true,
+            kandidatBeimVerwerfenMelden: true,
+          );
         },
       ),
     );
@@ -17884,29 +17948,256 @@ class _CruiseModePageState extends State<CruiseModePage>
         belowMinimum: snapshot.belowMinimum,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
-        onSave: (rating, tags, title, photoUrl) async {
-          final result = await _saveRouteAndSyncXp(
+        onSave: (rating, tags, title, photoBytes, publish) {
+          _starteHintergrundSpeichern(
+            verwerfen: false,
+            completed: false,
+            tripGoalReached: false,
             rating: rating,
             ratingTags: tags,
             title: title,
-            photoUrl: photoUrl,
+            photoBytes: photoBytes,
           );
-          _resetAfterCompletion(tripGoalReached: false);
-          return result;
         },
-        onDiscard: () async {
-          try {
-            await _recordDriveSessionForCurrentRoute(completed: false);
-            await _recordRouteCompletionCandidate(
-              completed: false,
-              discarded: true,
-            );
-          } finally {
-            _resetAfterCompletion(tripGoalReached: false);
-          }
+        onDiscard: () {
+          _starteHintergrundSpeichern(
+            verwerfen: true,
+            completed: false,
+            tripGoalReached: false,
+            kandidatBeimVerwerfenMelden: true,
+          );
         },
       ),
     );
+  }
+
+  /// 2026-08-04 (vucko): „Wenn man Speichern oder Verwerfen klickt, dauert es
+  /// 15-20 Sekunden, bis reagiert wird, und dann können die User die App nicht
+  /// richtig benutzen. Die UI soll direkt reagieren und das Backend soll sich
+  /// seine Zeit nehmen."
+  ///
+  /// Genau diese Reihenfolge steht hier, und sie ist nicht beliebig:
+  ///
+  ///   1. EINFRIEREN — alles kopieren, was die Kette braucht.
+  ///   2. ZURÜCKSETZEN — die Oberfläche ist sofort wieder frei.
+  ///   3. HINTERGRUND — Foto-Upload, acht Supabase-Aufrufe, XP-Abgleich.
+  ///
+  /// Wären 2 und 3 vertauscht oder liefe 1 nicht zuerst, würde der Reset den
+  /// Track-Recorder leeren, bevor der Hintergrund ihn liest — und die Fahrt
+  /// verschwände stillschweigend. Siehe [_AbschlussStand].
+  /// Läuft gerade ein Abschluss im Hintergrund? Dann muss der nächste warten.
+  ///
+  /// Sonst passiert Folgendes: Fahrt 1 speichert noch, der Nutzer startet eine
+  /// zweite Fahrt und beendet sie sofort wieder. Das Einfrieren von Fahrt 2
+  /// würde `_eingefrorenerAbschluss` überschreiben — Fahrt 1 bekäme die Zahlen
+  /// von Fahrt 2 in die Datenbank, und Fahrt 2 fände anschließend gar nichts
+  /// mehr vor und würde stillschweigend verworfen. Beim Testen ist das keine
+  /// Theorie: „Beenden" direkt nach dem Start ist ein Tastendruck.
+  Future<void>? _laufenderAbschluss;
+
+  void _starteHintergrundSpeichern({
+    required bool verwerfen,
+    required bool completed,
+    bool tripGoalReached = true,
+    bool kandidatBeimVerwerfenMelden = false,
+    int? rating,
+    List<String> ratingTags = const [],
+    String? title,
+    Uint8List? photoBytes,
+    bool publish = false,
+  }) {
+    Future<void> lauf() => _friereEinUndSpeichere(
+      verwerfen: verwerfen,
+      completed: completed,
+      tripGoalReached: tripGoalReached,
+      kandidatBeimVerwerfenMelden: kandidatBeimVerwerfenMelden,
+      rating: rating,
+      ratingTags: ratingTags,
+      title: title,
+      photoBytes: photoBytes,
+      publish: publish,
+    );
+
+    final vorheriger = _laufenderAbschluss;
+    late final Future<void> dieser;
+    if (vorheriger == null) {
+      // Der Normalfall: nichts läuft, es geht sofort los.
+      dieser = lauf();
+    } else {
+      debugPrint(
+        '[CruiseMode] Vorheriger Abschluss läuft noch, diese Fahrt wird '
+        'danach gespeichert.',
+      );
+      dieser = vorheriger.then((_) => lauf());
+    }
+    _laufenderAbschluss = dieser;
+    unawaited(
+      dieser.whenComplete(() {
+        // Nur zurücksetzen, wenn seither keine weitere Fahrt eingereiht wurde.
+        if (identical(_laufenderAbschluss, dieser)) _laufenderAbschluss = null;
+      }),
+    );
+  }
+
+  /// Die eigentliche Reihenfolge: einfrieren, freigeben, im Hintergrund
+  /// erledigen. Wirft nie — ein Fehler hier würde sonst die nächste
+  /// eingereihte Fahrt mitreißen.
+  Future<void> _friereEinUndSpeichere({
+    required bool verwerfen,
+    required bool completed,
+    required bool tripGoalReached,
+    required bool kandidatBeimVerwerfenMelden,
+    int? rating,
+    List<String> ratingTags = const [],
+    String? title,
+    Uint8List? photoBytes,
+    bool publish = false,
+  }) async {
+    try {
+      // 1. Einfrieren, solange der Live-Zustand noch steht.
+      _eingefrorenerAbschluss = _friereAbschlussEin();
+
+      // 2. Oberfläche sofort freigeben.
+      _resetAfterCompletion(tripGoalReached: tripGoalReached);
+
+      // 3. Der Rest läuft, während der Nutzer schon weitermacht.
+      await _erledigeAbschlussImHintergrund(
+        verwerfen: verwerfen,
+        completed: completed,
+        kandidatBeimVerwerfenMelden: kandidatBeimVerwerfenMelden,
+        rating: rating,
+        ratingTags: ratingTags,
+        title: title,
+        photoBytes: photoBytes,
+        publish: publish,
+      );
+    } catch (error, stack) {
+      debugPrint('[CruiseMode] Abschluss abgebrochen: $error');
+      if (kDebugMode) debugPrint('$stack');
+    }
+  }
+
+  Future<void> _erledigeAbschlussImHintergrund({
+    required bool verwerfen,
+    required bool completed,
+    bool kandidatBeimVerwerfenMelden = false,
+    int? rating,
+    List<String> ratingTags = const [],
+    String? title,
+    Uint8List? photoBytes,
+    bool publish = false,
+  }) async {
+    try {
+      if (verwerfen) {
+        await _recordDriveSessionForCurrentRoute(completed: completed);
+        if (kandidatBeimVerwerfenMelden) {
+          await _recordRouteCompletionCandidate(
+            completed: completed,
+            discarded: true,
+          );
+        }
+        // Holt nach, was frueher am Ende von _recordDriveSessionForCurrentRoute
+        // stand. Beim Speichern-Pfad erledigt das _saveRouteAndSyncXp.
+        await GamificationService.calculateAndSync();
+        return;
+      }
+
+      // Das Foto zuerst: Es haengt am user_drive_sessions-Insert und an der
+      // gespeicherten Route. Schlaegt der Upload fehl, wird die Fahrt trotzdem
+      // gespeichert — nur eben ohne Bild.
+      final photoUrl = await _ladeAbschlussFotoHoch(photoBytes);
+
+      final result = await _saveRouteAndSyncXp(
+        rating: rating,
+        ratingTags: ratingTags,
+        title: title,
+        completed: completed,
+        photoUrl: photoUrl,
+      );
+      if (!mounted || _disposed) return;
+
+      if (photoBytes != null && photoUrl == null) {
+        TopToast.show(
+          context,
+          message: 'Fahrt gespeichert, das Foto ging leider nicht durch.',
+          icon: Icons.image_not_supported_outlined,
+          duration: const Duration(seconds: 3),
+        );
+      }
+      if (!result.success) return;
+
+      await _zeigeAbschlussFeier(result);
+
+      // Veroeffentlichen kommt ganz zum Schluss: Der Post-Editor darf erst
+      // aufgehen, wenn die Route wirklich eine ID hat.
+      if (!publish || !mounted || _disposed) return;
+      final savedRouteId = result.savedRouteId;
+      if (savedRouteId == null) {
+        TopToast.show(
+          context,
+          message:
+              'Strecke gespeichert. Veröffentlichen geht über deine '
+              'gespeicherten Routen.',
+          icon: Icons.info_outline_rounded,
+          duration: const Duration(seconds: 4),
+        );
+        return;
+      }
+      await _publishRecordedRoute(savedRouteId);
+    } catch (error, stack) {
+      debugPrint('[CruiseMode] Abschluss im Hintergrund fehlgeschlagen: $error');
+      if (kDebugMode) debugPrint('$stack');
+      if (!mounted || _disposed) return;
+      TopToast.show(
+        context,
+        message: 'Die Fahrt konnte nicht gespeichert werden.',
+        icon: Icons.error_outline_rounded,
+        duration: const Duration(seconds: 4),
+      );
+    } finally {
+      // Der eingefrorene Stand hat seinen Zweck erfüllt. Bleibt er stehen,
+      // würde die NÄCHSTE Fahrt die Werte der vorigen benutzen.
+      _eingefrorenerAbschluss = null;
+    }
+  }
+
+  /// Laedt das Abschluss-Foto hoch. Lief frueher im Abschluss-Sheet und war
+  /// dort mit bis zu drei Versuchen à 25 s der laengste einzelne Block vor dem
+  /// Speichern. Ein Fehler darf die Fahrt nie kosten.
+  Future<String?> _ladeAbschlussFotoHoch(Uint8List? bytes) async {
+    if (bytes == null) return null;
+    try {
+      return await SocialService.uploadUserAsset(
+        bucket: 'ride-photos',
+        bytes: bytes,
+        fileName: 'ride_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        contentType: 'image/jpeg',
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] Foto-Upload fehlgeschlagen: $e');
+      return null;
+    }
+  }
+
+  /// Level- und Badge-Feier. Lief frueher im Sheet; da das jetzt sofort
+  /// schliesst, erscheint sie hier auf der Cruise-Seite, sobald der Abgleich
+  /// durch ist.
+  Future<void> _zeigeAbschlussFeier(CruiseCompletionActionResult result) async {
+    try {
+      if (result.hasXpProgress && mounted && !_disposed) {
+        await showXpLevelProgressPopup(
+          context: context,
+          previousTotalXp: result.previousTotalXp!,
+          newTotalXp: result.newTotalXp!,
+          xpEarned: result.xpEarned ?? 0,
+        );
+      }
+      if (result.newBadges.isNotEmpty && mounted && !_disposed) {
+        await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+      }
+    } catch (error) {
+      debugPrint('[CruiseMode] Feier uebersprungen: $error');
+    }
   }
 
   /// Speichert optional die Route und synchronisiert XP/Level/Badges.
@@ -17945,20 +18236,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       final adjustedResult = _buildAdjustedCompletionResult();
       if (adjustedResult != null) {
-        final progressFraction = _calculateCompletionProgressFraction(
-          adjustedResult.distanceMeters,
-        );
+        final progressFraction = _abschlussFortschritt(adjustedResult);
         final creditEligible = progressFraction >= _minProgressForXpCredit;
         final drivenKm = adjustedResult.distanceKm ?? 0;
-        final xpCoordinates = _buildCompletionCoordinates();
-        final xpCurves = _estimateCompletionCurves(xpCoordinates);
+        final xpCurves = _abschlussXpKurven;
         final xpBreakdown = _calculateCompletionXpBreakdown(
           creditedDistanceKm: creditEligible ? drivenKm : 0.0,
           curves: creditEligible ? xpCurves : 0,
         );
         xpAwardedForResult = xpBreakdown.totalXp;
         debugPrint(
-          '[CruiseMode] Saving route: style=$_selectedStyle, roundTrip=$_isRoundTrip, '
+          '[CruiseMode] Saving route: style=$_abschlussStil, roundTrip=$_abschlussIstRundkurs, '
           'distKm=${adjustedResult.distanceKm}, durationSec=${adjustedResult.durationSeconds?.round()}, '
           'progress=${(progressFraction * 100).round()}%, '
           'xp=${xpBreakdown.totalXp}',
@@ -17969,8 +18257,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         savedRouteId = await SavedRoutesService.saveRoute(
           result: adjustedResult,
-          style: _selectedStyle,
-          isRoundTrip: _isRoundTrip,
+          style: _abschlussStil,
+          isRoundTrip: _abschlussIstRundkurs,
           customName: title,
           rating: rating,
           drivenKm: adjustedResult.distanceKm,
@@ -18008,12 +18296,12 @@ class _CruiseModePageState extends State<CruiseModePage>
         // GENERIERTEN Routen (Qualitäts-Scoring, Wiederverwendung für andere
         // Nutzer). Ein selbst aufgezeichneter GPS-Track gehört dort nicht rein —
         // er hat weder Planungs-Parameter noch ein Quality-Tier.
-        if (!_isRecordingMode) {
+        if (!_abschlussIstAufzeichnung) {
           await RouteCompletionCandidateService.submitCandidate(
             result: adjustedResult,
-            style: _selectedStyle,
-            isRoundTrip: _isRoundTrip,
-            avoidHighways: _activeAvoidHighways || _avoidHighways,
+            style: _abschlussStil,
+            isRoundTrip: _abschlussIstRundkurs,
+            avoidHighways: _abschlussAutobahnGemieden,
             savedByUser: true,
             discardedByUser: false,
             completedAtEnd: completed,
@@ -18119,9 +18407,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (adjustedResult == null) return;
     final drivenKm = adjustedResult.distanceKm ?? 0;
     if (drivenKm <= 0) return;
-    final progressFraction = _calculateCompletionProgressFraction(
-      adjustedResult.distanceMeters,
-    );
+    final progressFraction = _abschlussFortschritt(adjustedResult);
     if (progressFraction < _minProgressForXpCredit) return;
 
     // 2026-06-15 (vucko): Streak-Multiplikator FIX aufs Konto anrechnen — die
@@ -18132,25 +18418,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     final xpBreakdown = GamificationService.calculateRouteXpBreakdown(
       distanceKm: drivenKm,
       curves: 0,
-      style: _selectedStyle,
-      streakDays: _xpStreakDays,
+      style: _abschlussStil,
+      streakDays: _abschlussStreakTage,
     );
     final recordedSession = await GamificationService.recordDriveSession(
       distanceKm: drivenKm,
       durationSeconds: adjustedResult.durationSeconds?.round() ?? 0,
       completedAtEnd: completed,
-      routeStyle: _selectedStyle,
-      routeType: _isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
+      routeStyle: _abschlussStil,
+      routeType: _abschlussIstRundkurs ? 'ROUND_TRIP' : 'POINT_TO_POINT',
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
       xpAwarded: xpBreakdown.totalXp,
       // 2026-06-23 (vucko X3): Gruppen-Fahrt taggen + Top-Speed mitschreiben
       // -> speist die deterministische Gruppen-Rangliste in der Lobby.
       groupId: widget.groupId,
-      topSpeedKmh: _maxSpeedMps * 3.6,
+      topSpeedKmh: _abschlussTopSpeedKmh,
       // 2026-06-25 (vucko Routen-Detail-Page): den GEFAHRENEN Track mitspeichern
       // → die Detailseite zeigt die echte gefahrene Strecke akkurat (wie Strava).
-      trackGeometry: _drivenTrackRecorder.snapshot().coordinates,
+      trackGeometry: _abschlussTrackGeometrie,
       // 2026-06-25 (vucko Foto-Persistenz): Foto aus dem Abschluss-Sheet direkt
       // beim Insert mitspeichern → erscheint sofort in „zuletzt gefahren",
       // Detailseite, Share (verschwindet nicht mehr).
@@ -18158,15 +18444,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     _recordedDriveSessionId = recordedSession?.id;
     _driveSessionRecordedForCompletion = true;
-    await GamificationService.calculateAndSync();
+    // 2026-08-04: Frueher stand hier ein zweites `calculateAndSync()`. Der
+    // Aufrufer `_saveRouteAndSyncXp` ruft es unmittelbar danach ohnehin auf,
+    // und jeder Durchlauf laedt ALLE Drive-Sessions des Nutzers. Der Aufruf
+    // war also einmal zu viel — beim Verwerfen-Pfad, der nicht ueber
+    // _saveRouteAndSyncXp laeuft, holen wir ihn unten gezielt nach.
   }
 
   bool _completionProgressBelowXpMinimum({required bool completed}) {
     final adjustedResult = _buildAdjustedCompletionResult();
-    final progressFraction = _calculateCompletionProgressFraction(
-      adjustedResult?.distanceMeters,
-    );
-    return progressFraction < _minProgressForXpCredit;
+    return _abschlussFortschritt(adjustedResult) < _minProgressForXpCredit;
   }
 
   Future<void> _recordRouteCompletionCandidate({
@@ -18176,9 +18463,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     try {
       final adjustedResult = _buildAdjustedCompletionResult();
       if (adjustedResult == null) return;
-      final progressFraction = _calculateCompletionProgressFraction(
-        adjustedResult.distanceMeters,
-      );
+      final progressFraction = _abschlussFortschritt(adjustedResult);
       if (discarded) {
         await RouteRatingService.saveRating(
           result: adjustedResult,
@@ -18192,9 +18477,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       }
       await RouteCompletionCandidateService.submitCandidate(
         result: adjustedResult,
-        style: _selectedStyle,
-        isRoundTrip: _isRoundTrip,
-        avoidHighways: _activeAvoidHighways || _avoidHighways,
+        style: _abschlussStil,
+        isRoundTrip: _abschlussIstRundkurs,
+        avoidHighways: _abschlussAutobahnGemieden,
         savedByUser: false,
         discardedByUser: discarded,
         completedAtEnd: completed,
@@ -18762,3 +19047,51 @@ class _FabBubble extends StatelessWidget {
   }
 }
 
+
+/// Eingefrorener Stand einer beendeten Fahrt.
+///
+/// 2026-08-04 (vucko): „Wenn man Speichern oder Verwerfen klickt, soll die UI
+/// direkt reagieren und das Backend soll sich seine Zeit nehmen."
+///
+/// Damit das gefahrlos geht, muss der Hintergrund-Auftrag unabhaengig vom
+/// Seiten-Zustand arbeiten. `_resetAfterCompletion()` leert direkt nach dem Tap
+/// den Track-Recorder (`_drivenTrackRecorder.reset()`) und die Routen-
+/// Ergebnisse (`_lastRouteResult`, `_sessionRouteResult`). Wuerde die
+/// Speicher-Kette danach noch live nachlesen, faende sie nichts mehr und
+/// uebersprünge ihren gesamten Block ohne Fehlermeldung. Die Fahrt waere weg,
+/// obwohl die App „gespeichert" gesagt hat.
+///
+/// Alle Felder sind deshalb Kopien, keine Verweise auf lebende Objekte.
+class _AbschlussStand {
+  const _AbschlussStand({
+    required this.ergebnis,
+    required this.geplant,
+    required this.fortschritt,
+    required this.xpKoordinaten,
+    required this.xpKurven,
+    required this.trackGeometrie,
+    required this.stil,
+    required this.istRundkurs,
+    required this.istAufzeichnung,
+    required this.autobahnGemieden,
+    required this.streakTage,
+    required this.topSpeedKmh,
+  });
+
+  /// Die tatsaechlich gefahrene Strecke (Track auf die geplante Route gelegt).
+  final RouteResult? ergebnis;
+
+  /// Die urspruenglich geplante Route — Grundlage fuer den Fortschritt.
+  final RouteResult? geplant;
+
+  final double fortschritt;
+  final List<List<double>> xpKoordinaten;
+  final int xpKurven;
+  final List<List<double>> trackGeometrie;
+  final String stil;
+  final bool istRundkurs;
+  final bool istAufzeichnung;
+  final bool autobahnGemieden;
+  final int streakTage;
+  final double topSpeedKmh;
+}

@@ -2,7 +2,6 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
 // XFile (PNG-Share-Export) — kam zuvor über image_picker; share_plus
 // re-exportiert XFile und ist die passende direkte Dependency dafür.
@@ -11,8 +10,6 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/completion_title_generator.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
-import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
-import 'package:cruise_connect/presentation/widgets/xp_level_progress_popup.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
@@ -117,7 +114,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.isRoundTrip = true,
     this.topSpeedKmh = 0,
     this.avgSpeedKmh = 0,
-    this.onPublish,
+    this.canPublish = false,
   });
 
   final double distanceKm;
@@ -141,23 +138,32 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int? baseXp;
   final int streakDays;
   final double xpMultiplier;
-  final Future<CruiseCompletionActionResult> Function(
+  /// 2026-08-04 (vucko „wenn man Speichern oder Verwerfen klickt, dauert es
+  /// 15-20 Sekunden, bis reagiert wird"): Der Rückruf gibt NICHTS mehr zurück
+  /// und wird NICHT mehr abgewartet. Das Sheet schließt sofort; die Seite
+  /// darunter erledigt Foto-Upload, Speichern und XP im Hintergrund und zeigt
+  /// die Level-/Badge-Feier dann dort.
+  ///
+  /// Deshalb wandern auch die Foto-BYTES hinaus statt einer fertigen URL: Der
+  /// Upload (bis zu drei Versuche à 25 s) war der längste einzelne Block vor
+  /// dem Speichern und hat hier nichts mehr verloren.
+  final void Function(
     int? rating,
     List<String> tags,
     String? title,
-    String? photoUrl,
+    Uint8List? photoBytes,
+    bool publish,
   )
   onSave;
-  final Future<void> Function() onDiscard;
+  final void Function() onDiscard;
   final bool isEarlyStop;
   final bool belowMinimum;
 
-  /// 2026-08-03 (vucko Route-Aufzeichnen): Wenn gesetzt, erscheint zusätzlich
-  /// „Speichern & veröffentlichen" — die Strecke wird gespeichert und danach als
-  /// Community-Post angeboten. Wird NUR für selbst aufgezeichnete Strecken
-  /// übergeben; bei normalen Fahrten ist der Callback null und der Button
-  /// existiert gar nicht.
-  final Future<void> Function(String savedRouteId)? onPublish;
+  /// 2026-08-03 (vucko Route-Aufzeichnen): Ist das gesetzt, erscheint
+  /// zusätzlich „Speichern & veröffentlichen" — die Strecke wird gespeichert
+  /// und danach als Community-Post angeboten. Nur für selbst aufgezeichnete
+  /// Strecken; sonst existiert der Knopf gar nicht.
+  final bool canPublish;
 
   @override
   State<CruiseCompletionDialog> createState() => _CruiseCompletionDialogState();
@@ -169,17 +175,20 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   late final AnimationController _xpController;
   late final Animation<int> _xpAnimation;
   bool _isExportMode = false;
-  bool _isSaving = false;
   bool _isSharing = false;
+  /// 2026-08-04: Ersetzt das frühere `_isSaving`. Da das Sheet jetzt sofort
+  /// schließt, gibt es keinen „Speichert..."-Zustand mehr — es braucht nur noch
+  /// einen Schutz gegen den zweiten Tap in derselben Millisekunde.
+  bool _abgeschickt = false;
   bool _showRatingDetails = false;
   int _selectedRating = 0;
   final Set<String> _selectedTags = <String>{};
   // 2026-05-31 (vucko): Editierbarer Auto-Titel + optionales Foto fürs Teilen.
   late final TextEditingController _titleController;
+  /// 2026-08-04: Nur noch die BYTES. Hochgeladen wird im Hintergrund auf der
+  /// Cruise-Seite, nicht mehr hier — der Upload (bis zu 3 Versuche à 25 s) war
+  /// der längste einzelne Block vor dem Speichern.
   Uint8List? _photoBytes;
-  // 2026-06-25 (vucko Foto-Persistenz): hochgeladene Public-URL cachen, damit
-  // ein erneutes Speichern (Retry) das gleiche Foto nicht doppelt hochlädt.
-  String? _uploadedPhotoUrl;
   bool _isPickingPhoto = false;
 
   @override
@@ -215,23 +224,12 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   /// Ausmaß gezeigt wird). Fließt in die teilbare Share-Card UND wird beim
   /// Speichern dauerhaft an der Fahrt persistiert (nicht nur im RAM).
   Future<void> _pickPhoto() async {
-    if (_isPickingPhoto || _isSaving || _isSharing) return;
+    if (_isPickingPhoto || _abgeschickt || _isSharing) return;
     setState(() => _isPickingPhoto = true);
     try {
       final bytes = await pickAndCropRidePhoto(context, lockedAspect: 4 / 3);
       if (bytes != null && mounted) {
-        final stale = _uploadedPhotoUrl;
-        setState(() {
-          _photoBytes = bytes;
-          _uploadedPhotoUrl = null; // neu zugeschnitten → neu hochladen
-        });
-        // Eine evtl. bereits hochgeladene Vorversion (Save-Retry) entfernen.
-        if (stale != null) {
-          await SocialService.deleteUserAsset(
-            bucket: 'ride-photos',
-            publicUrl: stale,
-          );
-        }
+        setState(() => _photoBytes = bytes);
       }
     } catch (e) {
       debugPrint('[CruiseCompletion] Foto wählen fehlgeschlagen: $e');
@@ -240,159 +238,61 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     }
   }
 
-  Future<void> _removePhoto() async {
-    final uploaded = _uploadedPhotoUrl;
-    setState(() {
-      _photoBytes = null;
-      _uploadedPhotoUrl = null;
-    });
-    // Falls das Foto schon hochgeladen war (z.B. Speichern schlug fehl und der
-    // User entfernt es danach), die verwaiste Datei wieder aus dem Storage
-    // löschen → kein Müll.
-    if (uploaded != null) {
-      await SocialService.deleteUserAsset(
-        bucket: 'ride-photos',
-        publicUrl: uploaded,
-      );
-    }
+  /// 2026-08-04: Solange das Sheet offen ist, liegt das Foto nur im Speicher.
+  /// Hochgeladen wird erst im Hintergrund nach dem Speichern — es kann hier
+  /// also keine verwaiste Datei mehr im Storage geben, die aufzuräumen wäre.
+  void _removePhoto() {
+    setState(() => _photoBytes = null);
   }
 
-  /// Lädt das gewählte Foto (falls vorhanden) in den public `ride-photos`-Bucket
-  /// und gibt die Public-URL zurück. Best-effort: ein Upload-Fehler darf das
-  /// Speichern der Fahrt NIE blockieren (Foto ist optional). Gecacht, damit ein
-  /// Retry nicht doppelt hochlädt.
-  Future<String?> _ensurePhotoUploaded() async {
-    final bytes = _photoBytes;
-    if (bytes == null) return null;
-    if (_uploadedPhotoUrl != null) return _uploadedPhotoUrl;
-    try {
-      final url = await SocialService.uploadUserAsset(
-        bucket: 'ride-photos',
-        bytes: bytes,
-        fileName: 'ride_${DateTime.now().millisecondsSinceEpoch}.jpg',
-        contentType: 'image/jpeg',
-      );
-      _uploadedPhotoUrl = url;
-      return url;
-    } catch (e) {
-      debugPrint(
-        '[CruiseCompletion] Foto-Upload fehlgeschlagen '
-        '(Fahrt wird trotzdem gespeichert): $e',
-      );
-      return null;
-    }
-  }
-
-  /// [publish] = nach dem Speichern direkt in den Post-Editor (nur verfügbar,
-  /// wenn [CruiseCompletionDialog.onPublish] gesetzt ist — also beim
-  /// Aufzeichnen). Ohne das Flag verhält sich die Methode exakt wie bisher.
-  Future<void> _handleSave({bool publish = false}) async {
-    if (_isSaving || _isSharing) return;
-    setState(() => _isSaving = true);
+  /// 2026-08-04 (vucko): „Wenn man Speichern oder Verwerfen klickt, dauert es
+  /// 15-20 Sekunden, bis wirklich reagiert wird, und dann können die User die
+  /// App nicht richtig benutzen. Die UI soll direkt reagieren und das Backend
+  /// soll sich seine Zeit nehmen."
+  ///
+  /// Genau das passiert hier: Wir geben die Eingaben nach draußen und schließen
+  /// SOFORT. Kein await, kein „Speichert..."-Knopf mehr. Foto-Upload, die acht
+  /// Supabase-Aufrufe und die XP-Synchronisierung laufen auf der Seite darunter
+  /// weiter; die Level- und Badge-Feier erscheint dort, sobald sie fertig ist.
+  ///
+  /// [publish] führt nach dem Hintergrund-Speichern in den Post-Editor.
+  void _handleSave({bool publish = false}) {
+    if (_abgeschickt || _isSharing) return;
+    _abgeschickt = true;
     final title = _titleController.text.trim();
+    // Das Schliessen steht im finally: Wirft der Rueckruf, darf der Nutzer
+    // trotzdem nicht in einem Sheet festsitzen, das sich nicht mehr schliessen
+    // laesst. Genau dafuer gibt es den Test „schliesst auch wenn der Sync
+    // fehlschlaegt".
     try {
-      // Foto dauerhaft sichern, BEVOR die Fahrt gespeichert wird → fließt mit in
-      // den user_drive_sessions-Insert (taucht danach in „zuletzt gefahren",
-      // Detailseite, Share auf — verschwindet nicht mehr).
-      final photoUrl = await _ensurePhotoUploaded();
-      final result = await widget.onSave(
+      widget.onSave(
         _selectedRating > 0 ? _selectedRating : null,
         _selectedTags.toList(growable: false),
         title.isEmpty ? null : title,
-        photoUrl,
+        _photoBytes,
+        publish,
       );
-      if (!mounted) return;
-      setState(() => _isSaving = false);
-      if (!result.success) return;
-
-      // 2026-06-25 (vucko #179): Foto gewählt, aber Upload nach 3 Versuchen
-      // gescheitert → ehrlich melden (Fahrt ist gespeichert, nur ohne Bild),
-      // statt das Foto stillschweigend „verschwinden" zu lassen.
-      if (_photoBytes != null && _uploadedPhotoUrl == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Fahrt gespeichert, Foto konnte nicht hochgeladen werden.'),
-            backgroundColor: Color(0xFF1C1F26),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-
-      try {
-        if (result.hasXpProgress) {
-          await showXpLevelProgressPopup(
-            context: context,
-            previousTotalXp: result.previousTotalXp!,
-            newTotalXp: result.newTotalXp!,
-            xpEarned: result.xpEarned ?? widget.xpEarned,
-          );
-        }
-        if (!mounted) return;
-        if (result.newBadges.isNotEmpty) {
-          await showBadgeUnlockPopup(
-            context: context,
-            badges: result.newBadges,
-          );
-        }
-      } catch (error) {
-        debugPrint('[CruiseCompletion] Celebration skipped: $error');
-      }
-
-      // 2026-08-03 (vucko Route-Aufzeichnen): Veröffentlichen erst NACH dem
-      // Schliessen des Sheets, damit der Post-Editor nicht darüber aufgeht.
-      // Ohne Routen-ID (Insert kam ohne Rückgabe zurück) wird ehrlich gesagt,
-      // dass die Strecke gespeichert ist und über die gespeicherten Routen
-      // veröffentlicht werden kann — statt kommentarlos nichts zu tun.
-      final publishCallback = publish ? widget.onPublish : null;
-      final savedRouteId = result.savedRouteId;
-      if (publishCallback != null && savedRouteId == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Strecke gespeichert. Veröffentlichen geht über deine '
-              'gespeicherten Routen.',
-            ),
-            backgroundColor: Color(0xFF1C1F26),
-            duration: Duration(seconds: 4),
-          ),
-        );
-      }
-
-      if (mounted) Navigator.of(context).pop();
-
-      if (publishCallback != null && savedRouteId != null) {
-        await publishCallback(savedRouteId);
-      }
-    } catch (error, stack) {
-      debugPrint('[CruiseCompletion] Speichern fehlgeschlagen: $error');
-      debugPrint('$stack');
-      if (!mounted) return;
-      setState(() => _isSaving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Speichern fehlgeschlagen. Bitte erneut versuchen.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } catch (error) {
+      debugPrint('[CruiseCompletion] Speichern-Rueckruf warf: $error');
+    } finally {
+      Navigator.of(context).pop();
     }
   }
 
-  Future<void> _handleDiscard() async {
-    if (_isSaving || _isSharing) return;
-    setState(() => _isSaving = true);
+  void _handleDiscard() {
+    if (_abgeschickt || _isSharing) return;
+    _abgeschickt = true;
     try {
-      await widget.onDiscard();
+      widget.onDiscard();
     } catch (error) {
-      debugPrint(
-        '[CruiseCompletion] Verwerfen konnte nicht synchronisieren: $error',
-      );
+      debugPrint('[CruiseCompletion] Verwerfen-Rueckruf warf: $error');
     } finally {
-      if (mounted) Navigator.of(context).pop();
+      Navigator.of(context).pop();
     }
   }
 
   Future<void> _handleShare() async {
-    if (_isSaving || _isSharing) return;
+    if (_abgeschickt || _isSharing) return;
     final pixelRatio = MediaQuery.of(context).devicePixelRatio.clamp(2.0, 3.0);
     setState(() {
       _isSharing = true;
@@ -694,7 +594,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   /// „Foto hinzufügen/ändern" + optional „Entfernen". Nur interaktiv.
   Widget _buildPhotoControl() {
     final hasPhoto = _photoBytes != null;
-    final busy = _isPickingPhoto || _isSaving || _isSharing;
+    final busy = _isPickingPhoto || _abgeschickt || _isSharing;
     return Row(
       children: [
         Expanded(
@@ -716,7 +616,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               icon: Icons.delete_outline_rounded,
               label: 'Entfernen',
               onTap: _removePhoto,
-              disabled: _isSaving || _isSharing,
+              disabled: _abgeschickt || _isSharing,
             ),
           ),
         ],
@@ -859,18 +759,18 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
   Widget _buildActionRow() {
     // 2026-08-03 (vucko Route-Aufzeichnen): Eigene Zeile statt vierter Button in
     // der Reihe — zu viert wären die Labels nicht mehr lesbar. Nur sichtbar,
-    // wenn onPublish gesetzt ist (= aufgezeichnete Strecke).
-    if (widget.onPublish != null) {
+    // wenn canPublish gesetzt ist (= aufgezeichnete Strecke).
+    if (widget.canPublish) {
       return Column(
         children: [
           SizedBox(
             width: double.infinity,
             child: _ActionButton(
               icon: Icons.public_rounded,
-              label: _isSaving ? 'Speichert...' : 'Speichern & veröffentlichen',
+              label: 'Speichern & veröffentlichen',
               onTap: () => _handleSave(publish: true),
               filled: true,
-              disabled: _isSaving || _isSharing,
+              disabled: _abgeschickt || _isSharing,
             ),
           ),
           const SizedBox(height: 10),
@@ -887,10 +787,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
         Expanded(
           child: _ActionButton(
             icon: Icons.check_rounded,
-            label: _isSaving ? 'Speichert...' : 'Speichern',
+            label: 'Speichern',
             onTap: _handleSave,
-            filled: widget.onPublish == null,
-            disabled: _isSaving || _isSharing,
+            filled: !widget.canPublish,
+            disabled: _abgeschickt || _isSharing,
           ),
         ),
         const SizedBox(width: 10),
@@ -899,7 +799,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             icon: Icons.north_rounded,
             label: _isSharing ? 'Teilt...' : 'Teilen',
             onTap: _handleShare,
-            disabled: _isSaving || _isSharing,
+            disabled: _abgeschickt || _isSharing,
           ),
         ),
         const SizedBox(width: 10),
@@ -908,7 +808,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
             icon: Icons.close_rounded,
             label: 'Verwerfen',
             onTap: _handleDiscard,
-            disabled: _isSaving || _isSharing,
+            disabled: _abgeschickt || _isSharing,
           ),
         ),
       ],
@@ -1183,7 +1083,11 @@ class _ActionButton extends StatelessWidget {
 
   final IconData icon;
   final String label;
-  final Future<void> Function() onTap;
+
+  /// 2026-08-04: War `Future<void> Function()`. Seit Speichern und Verwerfen
+  /// sofort zurückkehren, sind es einfache Rückrufe; „Teilen" ist weiterhin
+  /// asynchron und passt trotzdem (Dart erlaubt jeden Rückgabetyp für void).
+  final VoidCallback onTap;
   final bool filled;
   final bool disabled;
 
