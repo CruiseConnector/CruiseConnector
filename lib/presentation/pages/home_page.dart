@@ -12,6 +12,8 @@ import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
+import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
+import 'package:cruise_connect/presentation/widgets/ride_rating_sheet.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/widgets/app_tutorial_overlay.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
@@ -335,6 +337,40 @@ class _HomePageState extends State<HomePage> {
       _refreshCounter++;
       _visitedTabs.add(index);
     });
+    if (index == 0) unawaited(_pruefeBewertungsPopup());
+  }
+
+  /// 2026-08-04 (vucko): „Nachdem sie die Fahrt abgeschlossen und dann
+  /// entweder gespeichert oder verworfen haben, kommen sie wieder ins
+  /// Home-Menü, und da möchte ich, dass sie ein Popup bekommen. Auf gar keinen
+  /// Fall während der Fahrt."
+  ///
+  /// Genau deshalb hängt der Auslöser HIER und nirgends sonst: Der Home-Tab
+  /// ist der einzige Ort, an dem man sicher nicht fährt. „Nicht während der
+  /// Fahrt" ist damit keine Bedingung, die jemand vergessen kann, sondern eine
+  /// Eigenschaft des Auslösepunkts.
+  ///
+  /// Die drei zusätzlichen Wächter fangen die Randfälle ab: eine noch laufende
+  /// Vollbild-Navigation, ein bereits offenes Blatt (sonst stapeln sich zwei),
+  /// und ein zwischenzeitlich abgebautes Widget.
+  bool _bewertungsPopupOffen = false;
+
+  Future<void> _pruefeBewertungsPopup() async {
+    if (_bewertungsPopupOffen) return;
+    if (CruiseModePage.isFullscreen.value) return;
+    if (!await RideRatingPromptService.instance.shouldPrompt()) return;
+    if (!mounted || _selectedIndex != 0) return;
+
+    _bewertungsPopupOffen = true;
+    // Erst zählen, dann zeigen. Wer das Blatt wegwischt, hat es trotzdem
+    // gesehen — sonst käme es beim nächsten Tab-Wechsel sofort wieder.
+    await RideRatingPromptService.instance.markPromptShown();
+    try {
+      if (!mounted) return;
+      await showRideRatingSheet(context);
+    } finally {
+      _bewertungsPopupOffen = false;
+    }
   }
 
   void _onTutorialCommunitySectionChange(int index) {

@@ -46,6 +46,7 @@ import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
 import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geo_distance.dart';
+import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/navigation_android_notification_service.dart';
 import 'package:cruise_connect/data/services/navigation_live_activity_service.dart';
@@ -8650,6 +8651,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// läuft parallel weiter und wird durchs Video nie blockiert.
   void _onSearchButtonPressed() {
     _showRouteSearchRewardedVideoIfDue();
+    // 2026-08-04 (vucko Bewertungs-Popup): „alle drei Routen, die man sucht
+    // oder fährt oder mitfährt". Das hier ist das „sucht".
+    unawaited(RideRatingPromptService.instance.registerRouteEvent());
     unawaited(_generateRoute());
   }
 
@@ -11125,7 +11129,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         icon: Icons.info_outline_rounded,
         duration: const Duration(milliseconds: 3000),
       );
-      _resetAfterCompletion();
+      _resetAfterCompletion(zaehltAlsAbgeschlosseneFahrt: false);
       return;
     }
 
@@ -18207,7 +18211,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopIdlePositionStream();
   }
 
-  void _resetAfterCompletion({bool tripGoalReached = true}) {
+  /// [zaehltAlsAbgeschlosseneFahrt] steuert das Bewertungs-Popup.
+  ///
+  /// 2026-08-04 (vucko): Gefragt wird „erst nach der ersten Fahrt, nachdem sie
+  /// sie abgeschlossen und dann entweder gespeichert oder verworfen haben".
+  /// Beide Wege laufen hier zusammen, deshalb sitzt der Zähler an dieser
+  /// einen Stelle statt an sechs Rückrufen. Der Abbruchpfad „zu wenig
+  /// aufgezeichnet" übergibt bewusst `false` — dort gab es nichts zu bewerten.
+  void _resetAfterCompletion({
+    bool tripGoalReached = true,
+    bool zaehltAlsAbgeschlosseneFahrt = true,
+  }) {
+    if (zaehltAlsAbgeschlosseneFahrt) {
+      unawaited(RideRatingPromptService.instance.registerCompletedRide());
+    }
     // 2026-06-15 (vucko M5): Map wieder aktivieren — die Page bleibt nach dem
     // Sheet am Leben, _setCameraToPosition unten + der (von _stopNavigationTracking
     // neu gestartete) Idle-Stream brauchen eine aktive Karte.

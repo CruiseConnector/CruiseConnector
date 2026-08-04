@@ -106,6 +106,8 @@ dependencies:
   characters: ^1.4.1
   wakelock_plus: ^1.5.2
   floating: ^6.0.0
+  in_app_review: ^2.0.12
+  package_info_plus: ^9.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
