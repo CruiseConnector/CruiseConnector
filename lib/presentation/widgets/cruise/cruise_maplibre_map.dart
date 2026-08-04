@@ -265,6 +265,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.lines = const [],
     this.markers = const [],
     this.onMapClick,
+    this.onMapLongClick,
     this.onControllerReady,
     this.onCameraMoved,
     this.onUserGestureEnd,
@@ -286,6 +287,10 @@ class CruiseMapLibreMap extends StatefulWidget {
   final List<CruiseMapLine> lines;
   final List<CruiseMapMarker> markers;
   final void Function(ll.LatLng point)? onMapClick;
+  /// 2026-08-04 (vucko „langer Druck auf die Karte soll nach A nach B
+  /// wechseln"): Langer Druck auf einen Kartenpunkt. Das Plugin liefert das
+  /// Ereignis nativ, es wurde bisher nur nicht durchgereicht.
+  final void Function(ll.LatLng point)? onMapLongClick;
   final void Function(CruiseMapLibreController controller)? onControllerReady;
   final VoidCallback? onCameraMoved;
 
@@ -1550,6 +1555,10 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                   onMapClick: (point, latLng) => widget.onMapClick?.call(
                     ll.LatLng(latLng.latitude, latLng.longitude),
                   ),
+                  onMapLongClick: (point, latLng) =>
+                      widget.onMapLongClick?.call(
+                        ll.LatLng(latLng.latitude, latLng.longitude),
+                      ),
                   onCameraMove: _onCameraMove,
                   onCameraIdle: _onCameraIdle,
                   onMapIdle: _onMapIdle,

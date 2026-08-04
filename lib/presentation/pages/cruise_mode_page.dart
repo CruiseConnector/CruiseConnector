@@ -655,6 +655,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   // separaten Reroute-Toast mehr (das obere Banner zeigt „Neuberechnung").
   DateTime? _lastRerouteTime; // Cooldown zwischen Reroutes
   bool _lastRerouteFailed = false;
+  /// 2026-08-04 (vucko „ein Zaehler bis fuenf, und wenn er wirklich gar nichts
+  /// findet, dann automatisch wie A nach B nach Hause"): Zaehlt NUR echte
+  /// Fehlschlaege in Folge — also Faelle, in denen die Neuberechnung KEINE
+  /// Route liefert. Findet sie eine und der Fahrer nimmt sie nur nicht, ist
+  /// das ausdruecklich etwas anderes und zaehlt nicht mit.
+  int _failedRerouteStreak = 0;
+  /// Verhindert, dass die Heimweg-Eskalation mehrfach hintereinander feuert.
+  bool _homeFallbackActive = false;
+  static const int _failedRerouteEscalationThreshold = 5;
   int _offRouteCount = 0; // Zählt aufeinanderfolgende Off-Route-Updates
   // 2026-06-15 (vucko N-Runde-2, Geräte-Video: 3 Phantom-Reroutes MITTEN in der
   // Fahrt bei dead-on Puck): Mapbox-/Google-Regel — Zähler aufeinanderfolgender
@@ -6943,6 +6952,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (!_mapReady) _onMapReady();
       },
       onMapClick: (p) => _handleMapTap(null, p),
+      onMapLongClick: _fragNachZielAufDerKarte,
       onCameraMoved: () {
         // 2026-07-22 (vucko Free-Cam-Kompass): Gesten-START stempeln — Auto-
         // Rotate pausiert, während der Nutzer die Karte selbst bewegt.
@@ -9663,6 +9673,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _lastRerouteFailed = false;
+      _failedRerouteStreak = 0;
+      _homeFallbackActive = false;
       _remainingDistance = null;
       _remainingDuration = null;
       _distanceToFinalTargetMeters = null;
@@ -10514,6 +10526,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _routeSearchNoticeTitle = null;
       _routeSearchNoticeMessage = null;
       _lastRerouteFailed = false;
+      _failedRerouteStreak = 0;
+      _homeFallbackActive = false;
       _routeGeoJson = null;
       _routeDistance = null;
       _routeDuration = null;
@@ -10549,6 +10563,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _offRouteCount = 0;
       _lastRerouteTime = null;
       _lastRerouteFailed = false;
+      _failedRerouteStreak = 0;
+      _homeFallbackActive = false;
       _isRerouting = false;
       _originalRouteDistance = null;
       _originalRouteDuration = null;
@@ -11388,6 +11404,165 @@ class _CruiseModePageState extends State<CruiseModePage>
     return 'exception(${e.runtimeType})';
   }
 
+  /// 2026-08-04 (vucko): „Ein Zaehler bis fuenf. Und wenn er wirklich gar
+  /// nichts findet, dann soll beim sechsten Mal die Strecke so neu berechnet
+  /// werden, dass man nicht mehr auf die alte kommt — einfach als waere das
+  /// eigene Zuhause die Adresse und A nach B eingeschaltet, nur automatisch."
+  ///
+  /// Zaehlt AUSSCHLIESSLICH echte Fehlschlaege: die Neuberechnung hat keine
+  /// Route geliefert. Findet sie eine und der Fahrer folgt ihr nur nicht, ist
+  /// das etwas anderes und zaehlt bewusst nicht mit — sonst wuerde die App
+  /// einem Fahrer, der bloss eine Abzweigung verpasst, seine Runde wegnehmen.
+  void _registriereRerouteFehlschlag() {
+    _failedRerouteStreak++;
+    debugPrint(
+      '[CruiseMode][Reroute] Fehlschlag $_failedRerouteStreak/'
+      '$_failedRerouteEscalationThreshold in Folge',
+    );
+    if (_failedRerouteStreak < _failedRerouteEscalationThreshold) return;
+    if (_homeFallbackActive || !_isRoundTrip || !_isRouteConfirmed) return;
+    unawaited(_baueHeimwegAlsAnachB());
+  }
+
+  /// Baut eine direkte Route von hier zum urspruenglichen Startpunkt — mit den
+  /// Einstellungen des Fahrers (Stil und Autobahn an/aus), aber OHNE Bindung an
+  /// die alte, offenbar unerreichbare Strecke.
+  Future<void> _baueHeimwegAlsAnachB() async {
+    if (_homeFallbackActive) return;
+    _homeFallbackActive = true;
+    final ziel = _finalNavigationTargetCoordinate();
+    final position = _userLocation;
+    if (ziel == null || ziel.length < 2 || position == null) {
+      _homeFallbackActive = false;
+      return;
+    }
+    if (mounted) {
+      TopToast.show(
+        context,
+        message: 'Kein Weg zurück auf die Route. Ich bringe dich direkt heim.',
+        icon: Icons.home_rounded,
+        duration: const Duration(seconds: 5),
+      );
+    }
+    try {
+      final heim = await _routeService.generatePointToPoint(
+        startPosition: position,
+        destinationLat: ziel[1],
+        destinationLng: ziel[0],
+        // Stil und Autobahn-Einstellung des Fahrers bleiben erhalten.
+        mode: _selectedStyle,
+        avoidHighways: _effectiveNavigationAvoidHighways,
+        navigationReroute: true,
+        forceFreshVariant: true,
+      );
+      if (!mounted || _disposed) return;
+      // Ab hier ist es keine Runde mehr, sondern ein Heimweg. Das muss die
+      // Navigation wissen, sonst sucht sie weiter die alte Schleife.
+      _safeSetState(() {
+        _isRoundTrip = false;
+        _activeDestinationCoordinate = [ziel[0], ziel[1]];
+        _failedRerouteStreak = 0;
+      });
+      await _commitRerouteResult(result: heim, position: position);
+    } catch (e) {
+      debugPrint('[CruiseMode][Reroute] Heimweg-Eskalation gescheitert: $e');
+      // Erneut zulassen — beim naechsten Fehlschlag-Fuenfer wird es nochmal
+      // versucht, statt den Fahrer endgueltig haengen zu lassen.
+      _homeFallbackActive = false;
+      _failedRerouteStreak = 0;
+    }
+  }
+
+  /// 2026-08-04 (vucko): „Wenn man lange auf einen Punkt auf der Karte
+  /// drueckt, soll gefragt werden: Moechtest du zu dem Punkt fahren? Bei Ja
+  /// wechselt sie in den A-nach-B-Modus und fuellt die Adresse automatisch
+  /// ein. Bei Nein passiert gar nichts."
+  ///
+  /// Bisher konnte man auf der Karte nur den START setzen, nie das ZIEL —
+  /// was vucko zu Recht als unlogisch empfand.
+  ///
+  /// Bewusst zurueckhaltend: waehrend einer laufenden Navigation und waehrend
+  /// einer Suche passiert nichts, sonst waere ein versehentliches Halten
+  /// mitten in der Fahrt eine Stoerung.
+  Future<void> _fragNachZielAufDerKarte(LatLng punkt) async {
+    if (!mounted || _disposed) return;
+    if (_isRouteConfirmed || _isLoading || _isWaypointPlanning) return;
+    HapticFeedback.mediumImpact();
+
+    // Adresse im Hintergrund holen — der Dialog kommt sofort, der Name wird
+    // nachgereicht. Warten waere hier das Falsche: der Fahrer hat gerade den
+    // Finger gehoben und will eine Antwort sehen.
+    final adresseFuture = _geocodingService
+        .reverseGeocode(punkt.latitude, punkt.longitude)
+        .timeout(const Duration(seconds: 6), onTimeout: () => null)
+        .catchError((Object _) => null);
+
+    final ja = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26),
+        title: const Text(
+          'Dorthin fahren?',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        content: FutureBuilder<String?>(
+          future: adresseFuture,
+          builder: (context, snap) {
+            final adresse = snap.data;
+            return Text(
+              adresse != null && adresse.trim().isNotEmpty
+                  ? 'Route nach „$adresse" planen?'
+                  : 'Route zu diesem Punkt auf der Karte planen?',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.75)),
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(
+              'Nein',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(
+              'Ja, dorthin',
+              style: TextStyle(
+                color: AppAccentColors.accent,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ja != true || !mounted || _disposed) return;
+
+    final adresse = await adresseFuture;
+    final name = (adresse != null && adresse.trim().isNotEmpty)
+        ? adresse.trim()
+        : 'Punkt auf der Karte';
+    _safeSetState(() {
+      _isRoundTrip = false; // A nach B einschalten
+      _selectedDestination = PlaceSuggestion(
+        placeName: name,
+        coordinates: [punkt.longitude, punkt.latitude],
+      );
+      _destinationController.text = name;
+      _configCollapsed = false; // Setup aufklappen, damit man es sieht
+    });
+    if (mounted) {
+      TopToast.show(
+        context,
+        message: 'Ziel übernommen: $name',
+        icon: Icons.flag_rounded,
+        duration: const Duration(seconds: 3),
+      );
+    }
+  }
+
   String _rerouteFailureUserMessage(List<String> causes) {
     if (causes.any((c) => c.startsWith('start_offset'))) {
       return 'Reroute verworfen: Server-Route startete zu weit entfernt. Folge der Linie, der nächste Versuch kommt automatisch.';
@@ -11431,6 +11606,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // eine alte aktive Linie stehen lassen. Der Off-Route-Loop nutzt dafür den
     // kurzen Failure-Cooldown.
     _lastRerouteTime = DateTime.now();
+    _registriereRerouteFehlschlag();
     _lastRerouteFailed =
         true; // 2026-06-06 (vucko P6): Meldung NUR oben (TopToast), nicht mehr als orange
     // SnackBar unten. P7 deckelt automatisch auf ≤5s + Swipe-to-dismiss.
@@ -11786,6 +11962,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _accessLegMainRouteResult = null;
       _lastRerouteTime = DateTime.now();
       _lastRerouteFailed = false;
+      _failedRerouteStreak = 0;
+      _homeFallbackActive = false;
+      // Eine erfolgreiche Neuberechnung setzt die Serie zurueck — der Zaehler
+      // meint ausschliesslich „findet gar nichts", nicht „Fahrer folgt nicht".
+      _failedRerouteStreak = 0;
       _offRouteGapMeters = 0.0;
       // 2026-06-15 (vucko N1, Verify-Hygiene): Overshoot-Tracker auf der frisch
       // gebauten Route zurücksetzen — der alte „min<35 gesehen"-Latch zeigt sonst
@@ -15132,13 +15313,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRerouting = false;
       _rerouteStartedAt = null;
       _lastRerouteTime = DateTime.now();
+      _registriereRerouteFehlschlag();
       _lastRerouteFailed = true;
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         TopToast.show(
           context,
-          message:
-              'Reroute dauert zu lange, bitte weiterfahren, ich versuche es gleich erneut',
+          // 2026-08-04: Der Satz war laenger als die Zeile und endete im
+          // Screenshot mitten im Wort („ich versuche es gleic…"). Kurz und
+          // vollstaendig ist besser als lang und abgeschnitten.
+          message: 'Neuberechnung dauert. Fahr weiter, ich versuche es gleich erneut.',
           icon: Icons.refresh_rounded,
           isError: true,
           duration: const Duration(milliseconds: 4000),
