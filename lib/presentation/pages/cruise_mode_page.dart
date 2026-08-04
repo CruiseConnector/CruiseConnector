@@ -8521,6 +8521,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (_isFreshStartFix(fresh)) {
         return fresh;
       }
+      // 2026-08-04: Merken statt wegwerfen. Dieser Fix ist zwar nicht frisch
+      // genug fuer die strenge Schwelle, aber meist trotzdem der BESTE, den
+      // das Geraet hat — besser als ein noch aelterer getLastKnownPosition.
+      _letzterAbgelehnterStartFix = fresh;
       debugPrint(
         '[CruiseMode][StartFix] source=getCurrentPosition rejected '
         '${_describeStartFix(fresh)} '
@@ -8545,27 +8549,103 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!kIsWeb) {
       fallback = await geo.Geolocator.getLastKnownPosition();
     }
-    fallback ??= _userLocation;
-    if (fallback != null) {
-      if (_isFreshStartFix(fallback)) {
-        debugPrint(
-          '[CruiseMode][StartFix] source=freshFallback '
-          '${_describeStartFix(fallback)}',
-        );
-        return fallback;
-      }
+    if (fallback != null && _isFreshStartFix(fallback)) {
       debugPrint(
-        '[CruiseMode][StartFix] source=staleFallback '
-        '${_describeStartFix(fallback)} — ABGELEHNT',
+        '[CruiseMode][StartFix] source=freshFallback '
+        '${_describeStartFix(fallback)}',
       );
+      return fallback;
     }
+
+    // ── Ab hier erreicht KEIN Fix die strenge Schwelle. ────────────────────
+    //
+    // 2026-08-04 (vucko): „Manchmal kommt GPS ist zu alt. Das macht gar keinen
+    // Sinn, wenn man dauerhaft die GPS-Freigabe gegeben hat. Ich will, dass
+    // man immer eine Route suchen kann ohne diesen Fehler."
+    //
+    // Er hat recht, und der Grund ist: Die Freigabe garantiert das RECHT auf
+    // den Standort, nicht die QUALITAET des Signals. Drinnen, in der
+    // Tiefgarage oder direkt nach dem Oeffnen der Seite (der Positions-Stream
+    // startet erst mit der Karte) gibt es schlicht keinen Fix, der zugleich
+    // juenger als 10 s und genauer als 50 m ist. Frueher endete das hier mit
+    // einer Ausnahme, und die Suche war blockiert — mit einem Zielort im Feld
+    // und ohne Knopf zum Wiederholen.
+    //
+    // Die strenge Schwelle bleibt und entscheidet weiterhin, welcher Fix
+    // BEVORZUGT wird. Nur ihr Scheitern ist kein Abbruch mehr: Wir nehmen den
+    // besten vorhandenen und sagen ehrlich, dass er ungenau ist. Das ist
+    // vertretbar, weil die NAVIGATION ohnehin immer am echten Standort
+    // ansetzt (_acceptGeneratedRouteResult) — ungenau ist hier nur der
+    // Ausgangspunkt der Suche.
+    final beste = _besterVerfuegbarerFix([
+      fallback,
+      _userLocation,
+      _letzterAbgelehnterStartFix,
+    ]);
+    if (beste != null) {
+      final abweichung = _moeglicheAbweichungMeter(beste);
+      debugPrint(
+        '[CruiseMode][StartFix] source=degraded ${_describeStartFix(beste)} '
+        'moeglicheAbweichung=${abweichung.toStringAsFixed(0)}m',
+      );
+      if (mounted && !_disposed && abweichung > _startFixHinweisAbMeter) {
+        TopToast.show(
+          context,
+          message:
+              'Standort noch ungenau (rund ${abweichung.round()} m). Die Suche '
+              'startet ungefähr hier und wird beim Losfahren scharf.',
+          icon: Icons.gps_not_fixed_rounded,
+          duration: const Duration(seconds: 3),
+        );
+      }
+      return beste;
+    }
+
+    // Wirklich gar keine Position — das ist etwas anderes als ein ungenauer
+    // Fix und verdient auch eine andere Meldung.
     throw const RouteServiceException(
       type: RouteErrorType.validation,
       userMessage:
-          'GPS-Fix ist zu alt oder zu ungenau. Bitte kurz warten und erneut versuchen.',
-      debugMessage: 'No fresh start fix available within age/accuracy gate.',
-      edgeMeta: {'response_code': 'fresh_start_fix_unavailable'},
+          'Noch kein Standort empfangen. Geh kurz ins Freie oder prüfe, ob die '
+          'Ortung eingeschaltet ist.',
+      debugMessage: 'No position available at all (no stream, no last known).',
+      edgeMeta: {'response_code': 'no_position_at_all'},
     );
+  }
+
+  /// Ab dieser moeglichen Abweichung sagen wir dem Nutzer Bescheid. Darunter
+  /// ist der Versatz kleiner als eine Strassenbreite und faellt nicht auf.
+  static const double _startFixHinweisAbMeter = 60.0;
+
+  /// Der zuletzt von `getCurrentPosition` gelieferte, aber als zu ungenau
+  /// abgelehnte Fix. Er ist oft der BESTE vorhandene — ihn wegzuwerfen und
+  /// stattdessen einen noch aelteren `getLastKnownPosition` zu nehmen, waere
+  /// verkehrt herum.
+  geo.Position? _letzterAbgelehnterStartFix;
+
+  /// Wie weit kann diese Position hoechstens danebenliegen? Genauigkeit plus
+  /// die Strecke, die man seit dem Fix zurueckgelegt haben kann. Genau die
+  /// Groesse, die den Nutzer interessiert.
+  double _moeglicheAbweichungMeter(geo.Position p) => possibleOffsetMeters(
+    accuracyMeters: p.accuracy,
+    speedMetersPerSecond: p.speed,
+    age: DateTime.now().difference(p.timestamp),
+  );
+
+  /// Waehlt aus den Kandidaten den mit der kleinsten moeglichen Abweichung.
+  geo.Position? _besterVerfuegbarerFix(List<geo.Position?> kandidaten) {
+    geo.Position? beste;
+    var besteAbweichung = double.infinity;
+    for (final k in kandidaten) {
+      if (k == null) continue;
+      if (!k.latitude.isFinite || !k.longitude.isFinite) continue;
+      final a = _moeglicheAbweichungMeter(k);
+      if (a < besteAbweichung) {
+        besteAbweichung = a;
+        beste = k;
+      }
+    }
+    return beste;
   }
 
   Future<geo.Position> _getStartCoordinates({

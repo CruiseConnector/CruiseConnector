@@ -872,3 +872,36 @@ bool _containsExclude(String excludes, String token) {
       .map((entry) => entry.trim().toLowerCase())
       .contains(token);
 }
+
+/// Wie weit kann eine GPS-Position hoechstens danebenliegen?
+///
+/// 2026-08-04 (vucko „manchmal kommt GPS ist zu alt, das macht gar keinen Sinn,
+/// wenn man dauerhaft die GPS-Freigabe gegeben hat"): Die Routensuche brach ab,
+/// sobald kein Fix zugleich juenger als 10 s und genauer als 50 m war. Statt
+/// abzubrechen nimmt sie jetzt den BESTEN vorhandenen Fix — und „bester" heisst
+/// genau das hier: die kleinste moegliche Abweichung in Metern.
+///
+/// Die Formel addiert zwei unabhaengige Fehlerquellen:
+///   * die gemeldete Ungenauigkeit des Fixes selbst, und
+///   * die Strecke, die man seit dem Fix zurueckgelegt haben kann (Tempo mal
+///     Alter). Bei 100 km/h ist ein 10 s alter Fix rund 280 m daneben, im
+///     Stand dagegen gar nicht.
+///
+/// Fehlt die Genauigkeit (0 oder unendlich, kommt auf manchen Geraeten vor),
+/// rechnen wir mit [fallbackAccuracyMeters] statt sie zu verschenken —
+/// „unbekannt" darf nicht als „perfekt" durchgehen.
+double possibleOffsetMeters({
+  required double accuracyMeters,
+  required double speedMetersPerSecond,
+  required Duration age,
+  double fallbackAccuracyMeters = 100.0,
+}) {
+  final accuracy = accuracyMeters.isFinite && accuracyMeters > 0
+      ? accuracyMeters
+      : fallbackAccuracyMeters;
+  final speed = speedMetersPerSecond.isFinite && speedMetersPerSecond > 0
+      ? speedMetersPerSecond
+      : 0.0;
+  final ageSeconds = age.inMilliseconds.abs() / 1000.0;
+  return accuracy + speed * ageSeconds;
+}
