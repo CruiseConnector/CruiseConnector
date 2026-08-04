@@ -756,17 +756,26 @@ class RouteShareCard extends StatelessWidget {
           // Routen-Skizze (im Karte-Modus aus → sonst doppelte Route). Kompakter
           // gehalten, damit die Karte im Quadrat (1:1) nicht über den Rahmen geht.
           if (showSketch && data.segments.isNotEmpty)
-            Container(
-              height: 94,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: CustomPaint(
-                painter: _RouteLinePainter(
-                  segments: data.segments,
-                  accent: accent,
+            // 2026-08-04 (vucko „beim Quadrat sieht das Layout komisch aus"):
+            // Die Box hatte eine FESTE Hoehe von 94 und war im Quadrat sehr
+            // breit. Die Route wurde da hineingepasst und liess links und
+            // rechts grosse tote Flaechen — die Strecke wirkte winzig und
+            // verloren. Jetzt folgt die Box dem Seitenverhaeltnis der Route
+            // selbst, die Zeichnung fuellt sie also aus. Gedeckelt, damit eine
+            // extrem lange oder extrem hohe Route das Layout nicht sprengt.
+            AspectRatio(
+              aspectRatio: _sketchAspectRatio(data.segments),
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: CustomPaint(
+                  painter: _RouteLinePainter(
+                    segments: data.segments,
+                    accent: accent,
+                  ),
                 ),
               ),
             ),
@@ -795,9 +804,12 @@ class RouteShareCard extends StatelessWidget {
             const SizedBox(height: 14),
             // Wrap statt Row → bricht bei schmaler Breite (Sticker/Quadrat,
             // kleines Display, viele Stats) defensiv um statt zu overflowen.
+            // Zentriert: bricht die letzte Zeile um (z.B. 2 + 1), steht der
+            // einzelne Chip mittig statt schief am linken Rand.
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 7,
+              runSpacing: 7,
+              alignment: WrapAlignment.center,
               children: [
                 for (final s in stats) _statChip(s.$1, s.$2, accent),
               ],
@@ -808,9 +820,36 @@ class RouteShareCard extends StatelessWidget {
     );
   }
 
+  /// Seitenverhaeltnis (Breite zu Hoehe) der Routen-Skizze.
+  ///
+  /// Gerechnet in DERSELBEN Ebene, in der auch [_RouteLinePainter] zeichnet —
+  /// die Segmente sind bereits projizierte Punkte. Dadurch passt die Box genau
+  /// um die Zeichnung, statt sie in einem festen breiten Rahmen schweben zu
+  /// lassen. Gedeckelt auf 1,1 bis 2,3: fadenduenn oder turmhoch soll die
+  /// Karte nicht sprengen.
+  static double _sketchAspectRatio(List<List<Offset>> segments) {
+    double? minX, maxX, minY, maxY;
+    for (final seg in segments) {
+      for (final p in seg) {
+        minX = (minX == null || p.dx < minX) ? p.dx : minX;
+        maxX = (maxX == null || p.dx > maxX) ? p.dx : maxX;
+        minY = (minY == null || p.dy < minY) ? p.dy : minY;
+        maxY = (maxY == null || p.dy > maxY) ? p.dy : maxY;
+      }
+    }
+    if (minX == null || maxX == null || minY == null || maxY == null) {
+      return 1.9;
+    }
+    final breite = maxX - minX;
+    final hoehe = maxY - minY;
+    if (hoehe <= 1e-9) return 2.3;
+    if (breite <= 1e-9) return 1.1;
+    return (breite / hoehe).clamp(1.1, 2.3);
+  }
+
   Widget _statChip(IconData icon, String label, Color accent) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(11),
