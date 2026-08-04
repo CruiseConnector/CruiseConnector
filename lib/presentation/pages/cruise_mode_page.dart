@@ -11805,6 +11805,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         : 'Punkt auf der Karte';
     _safeSetState(() {
       _isRoundTrip = false; // A nach B einschalten
+      // 2026-08-04 (Merge Route-Aufzeichnen): Der Planungs-Typ MUSS mit
+      // zurueck. Sonst bliebe bei „Aufzeichnen" `_isRecordingMode` stehen —
+      // der Start-Knopf hiesse weiterhin „Aufzeichnung starten" und wuerde
+      // gar keine Route zum eben gesetzten Ziel berechnen. Genau das macht
+      // `_handleRouteModeChanged` beim Umschalten auf A nach B auch.
+      _planningType = 'Zufall';
+      _roundTripWaypoints.clear();
       _selectedDestination = PlaceSuggestion(
         placeName: name,
         coordinates: [punkt.longitude, punkt.latitude],
