@@ -127,4 +127,111 @@ void main() {
       );
     });
   });
+
+  /// 2026-08-04 (vucko „manchmal kommt während der Route auf einmal ein starkes
+  /// Rerouting"): Die Analyse fand die wahrscheinlichste Ursache — und sie lag
+  /// in genau diesem Zähler.
+  ///
+  /// Der Watchdog beendet nach 22 s den Zustand `_isRerouting` und zählt einen
+  /// Fehlschlag. Die laufenden HTTP-Aufrufe kann er NICHT abbrechen, Dart-
+  /// Futures lassen sich nicht abbrechen. Meldete dieser verwaiste Zyklus
+  /// danach doch noch „keine Route", zählte derselbe Vorfall ein ZWEITES Mal.
+  /// Und weil schon 3 s später ein neuer Versuch erlaubt ist, stapelten sich
+  /// während EINER Funklochphase mehrere Zyklen: Der Fünferzähler war nach ein
+  /// bis zwei Minuten schlechtem Empfang voll — statt nach fünf wirklich
+  /// getrennten Ereignissen. Dann baut die App ungefragt den Heimweg, obwohl
+  /// mit der Route gar nichts ist.
+  ///
+  /// Die Regel heißt jetzt: EIN Zyklus darf HÖCHSTENS EINEN Fehlschlag zählen.
+  group('Ein Zyklus zählt höchstens einmal', () {
+    /// Bildet die Generations-Prüfung aus `_registriereRerouteFehlschlag` ab.
+    ({int streak, int zuletztGezaehlt}) melde({
+      required int streakVorher,
+      required int generation,
+      required int zuletztGezaehlt,
+    }) {
+      if (generation == zuletztGezaehlt) {
+        return (streak: streakVorher, zuletztGezaehlt: zuletztGezaehlt);
+      }
+      return (streak: streakVorher + 1, zuletztGezaehlt: generation);
+    }
+
+    test('der verwaiste Zyklus nach dem Watchdog zählt NICHT nochmal', () {
+      // Watchdog zählt Generation 1 ...
+      var r = melde(streakVorher: 0, generation: 1, zuletztGezaehlt: -1);
+      expect(r.streak, 1);
+      // ... und dreht danach weiter, damit der hängende Zyklus abgehakt ist.
+      const generationNachWatchdog = 2;
+      const abgehakt = 2;
+      // Der hängende Aufruf meldet jetzt doch noch „keine Route":
+      final r2 = melde(
+        streakVorher: r.streak,
+        generation: generationNachWatchdog,
+        zuletztGezaehlt: abgehakt,
+      );
+      expect(
+        r2.streak,
+        1,
+        reason: 'Sonst wäre EIN Funkloch schon zwei Fehlschläge wert',
+      );
+    });
+
+    test('fünf getrennte Zyklen zählen weiterhin fünfmal', () {
+      var streak = 0;
+      var zuletzt = -1;
+      for (var generation = 1; generation <= 5; generation++) {
+        final r = melde(
+          streakVorher: streak,
+          generation: generation,
+          zuletztGezaehlt: zuletzt,
+        );
+        streak = r.streak;
+        zuletzt = r.zuletztGezaehlt;
+      }
+      expect(
+        streak,
+        5,
+        reason: 'Der Schutz darf die Sicherheitsfunktion nicht lahmlegen',
+      );
+    });
+
+    test('drei Meldungen aus demselben Zyklus bleiben ein Fehlschlag', () {
+      var streak = 0;
+      var zuletzt = -1;
+      for (var i = 0; i < 3; i++) {
+        final r = melde(
+          streakVorher: streak,
+          generation: 7,
+          zuletztGezaehlt: zuletzt,
+        );
+        streak = r.streak;
+        zuletzt = r.zuletztGezaehlt;
+      }
+      expect(streak, 1);
+    });
+
+    test('eine Funklochphase mit Ueberlappung erreicht die Fuenf nicht mehr', () {
+      // Nachgestellt: drei echte Zyklen, jeder meldet zusaetzlich verspaetet.
+      var streak = 0;
+      var zuletzt = -1;
+      for (var generation = 1; generation <= 3; generation++) {
+        for (var wiederholung = 0; wiederholung < 2; wiederholung++) {
+          final r = melde(
+            streakVorher: streak,
+            generation: generation,
+            zuletztGezaehlt: zuletzt,
+          );
+          streak = r.streak;
+          zuletzt = r.zuletztGezaehlt;
+        }
+      }
+      expect(
+        streak,
+        3,
+        reason: 'Frueher waeren daraus sechs geworden und der Heimweg haette '
+            'gefeuert',
+      );
+      expect(streak < 5, isTrue);
+    });
+  });
 }

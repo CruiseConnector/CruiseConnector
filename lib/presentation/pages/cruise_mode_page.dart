@@ -668,6 +668,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Route liefert. Findet sie eine und der Fahrer nimmt sie nur nicht, ist
   /// das ausdruecklich etwas anderes und zaehlt nicht mit.
   int _failedRerouteStreak = 0;
+
+  /// Laufende Nummer der Neuberechnung. Steigt bei JEDEM Start eines
+  /// Reroute-Zyklus und beim Zwangs-Reset durch den Watchdog.
+  ///
+  /// Sie ist der Schluessel gegen Doppelzaehlung: Ein verwaister Zyklus, der
+  /// nach dem Watchdog-Reset noch antwortet, traegt eine Generation, die schon
+  /// abgehakt ist — siehe [_registriereRerouteFehlschlag].
+  int _rerouteGeneration = 0;
+  int _zuletztGezaehlteRerouteGeneration = -1;
   /// Verhindert, dass die Heimweg-Eskalation mehrfach hintereinander feuert.
   bool _homeFallbackActive = false;
   static const int _failedRerouteEscalationThreshold = 5;
@@ -11796,10 +11805,32 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// das etwas anderes und zaehlt bewusst nicht mit — sonst wuerde die App
   /// einem Fahrer, der bloss eine Abzweigung verpasst, seine Runde wegnehmen.
   void _registriereRerouteFehlschlag() {
+    // 2026-08-04 (vucko „manchmal kommt waehrend der Route auf einmal ein
+    // starkes Rerouting"): Ein Zyklus darf HOECHSTENS EINEN Fehlschlag zaehlen.
+    //
+    // Warum das noetig ist: Der Watchdog beendet nach 22 s den Zustand
+    // `_isRerouting` und zaehlt einen Fehlschlag — die laufenden HTTP-Aufrufe
+    // kann er dabei NICHT abbrechen, Dart-Futures lassen sich nicht
+    // abbrechen. Meldet dieser verwaiste Zyklus danach doch noch „keine
+    // Route", zaehlte derselbe Off-Route-Vorfall ein ZWEITES Mal. Und weil
+    // schon 3 s spaeter ein neuer Versuch erlaubt ist, konnten sich waehrend
+    // EINER Funklochphase mehrere Zyklen stapeln. Der Fuenferzaehler war dann
+    // nach ein bis zwei Minuten schlechtem Empfang voll — statt nach fuenf
+    // wirklich getrennten Ereignissen. Und dann baut die App ungefragt den
+    // Heimweg, obwohl mit der Route gar nichts ist.
+    if (_rerouteGeneration == _zuletztGezaehlteRerouteGeneration) {
+      debugPrint(
+        '[CruiseMode][Reroute] Fehlschlag derselben Neuberechnung '
+        '(Generation $_rerouteGeneration) — wird nicht doppelt gezaehlt',
+      );
+      return;
+    }
+    _zuletztGezaehlteRerouteGeneration = _rerouteGeneration;
     _failedRerouteStreak++;
     debugPrint(
       '[CruiseMode][Reroute] Fehlschlag $_failedRerouteStreak/'
-      '$_failedRerouteEscalationThreshold in Folge',
+      '$_failedRerouteEscalationThreshold in Folge '
+      '(Generation $_rerouteGeneration)',
     );
     if (_failedRerouteStreak < _failedRerouteEscalationThreshold) return;
     if (_homeFallbackActive || !_isRoundTrip || !_isRouteConfirmed) return;
@@ -15726,6 +15757,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _rerouteToOriginalRoute(geo.Position position) async {
     if (_isRerouting) return;
     _isRerouting = true;
+    _rerouteGeneration++;
     _rerouteStartedAt = DateTime.now();
     _pendingChainedReroute = false;
     // 2026-06-22 (vucko Reroute-Hang): Harter Watchdog. Alle await-Stellen sind
@@ -15745,7 +15777,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRerouting = false;
       _rerouteStartedAt = null;
       _lastRerouteTime = DateTime.now();
+      // Erst zaehlen (fuer DIESE Generation), dann weiterdrehen. Was der
+      // haengende Zyklus spaeter noch meldet, gehoert zu einer Generation, die
+      // bereits abgehakt ist, und zaehlt nicht noch einmal.
       _registriereRerouteFehlschlag();
+      _rerouteGeneration++;
+      _zuletztGezaehlteRerouteGeneration = _rerouteGeneration;
       _lastRerouteFailed = true;
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
