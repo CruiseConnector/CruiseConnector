@@ -874,7 +874,45 @@ class _CruiseModePageState extends State<CruiseModePage>
       1.0; // Nur echte Zielankunft zählt als abgeschlossen.
   static const double _minProgressForAutomaticCompletion = 0.95;
   static const double _roundTripFinishArmProgress = 0.80;
+
+  /// Radius fuer das Ankunfts-BANNER („Ziel erreicht"). Bleibt bei 50 m: Die
+  /// Ansage soll frueh genug kommen, damit man sich auf das Anhalten
+  /// einstellen kann.
   static const double _arrivalRadiusMeters = 50.0;
+
+  /// 2026-08-04 (vucko): „Die Route wird gestoppt, bevor man wirklich am Ziel
+  /// ist. Ich möchte, dass man im Radius von 10 m sein muss, damit die Route
+  /// dann wirklich zaehlt."
+  ///
+  /// Frueher teilten sich Banner und Abschluss denselben 50-m-Wert. Das Banner
+  /// braucht ihn, der Abschluss nicht — deshalb sind es jetzt zwei Zahlen.
+  static const double _completionRadiusMeters = 10.0;
+
+  /// Zugabe fuer die GPS-Ungenauigkeit, gedeckelt.
+  ///
+  /// Ohne sie waere der Fix nicht besser, sondern unbrauchbar: Der
+  /// Ankunfts-Check hat KEINEN Genauigkeitsfilter, und an anderer Stelle
+  /// behandelt derselbe Code 35 bis 50 m Ungenauigkeit ausdruecklich als
+  /// normal beim Fahren. Ein starrer 10-m-Radius waere in einer Haeuserschlucht
+  /// oder an einer Tiefgarageneinfahrt nie erreichbar — die Fahrt wuerde NIE
+  /// automatisch enden und der Nutzer saesse ohne Abschluss-Sheet fest.
+  ///
+  /// Also: 10 m plus die tatsaechliche Ungenauigkeit, hoechstens aber 25 m
+  /// Zugabe. Bei gutem Empfang (5 m) sind das echte 15 m statt 50; bei
+  /// schlechtem hoechstens 35 m — immer noch deutlich strenger als vorher.
+  static const double _completionAccuracySlackCapMeters = 25.0;
+
+  /// Notausgang: Wer nah genug dran ist und laenger steht, ist angekommen.
+  ///
+  /// Auch mit der Zugabe kann ein Ziel bei ganz schlechtem Empfang unerreichbar
+  /// bleiben. Ein Mensch wuerde in dieser Lage sagen: Das Auto steht seit einer
+  /// halben Minute dreissig Meter vom Ziel — der ist da. Genau das macht diese
+  /// Regel, und sie verhindert, dass jemand ohne Abschluss-Sheet festsitzt.
+  static const double _arrivalStandstillSpeedMps = 1.5;
+  static const Duration _arrivalStandstillDuration = Duration(seconds: 20);
+
+  /// Seit wann steht das Fahrzeug in Zielnaehe? `null` = faehrt noch.
+  DateTime? _stehtSeitAmZiel;
   int _lastDrawnRouteIndex =
       0; // Letzter Index bei dem die Route neu gezeichnet wurde
   double _distanceSinceLastRedraw = 0.0;
@@ -11098,6 +11136,9 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _startNavigationFlow() async {
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
+    // 2026-08-04: Steh-Uhr der VORIGEN Fahrt loeschen. Sonst koennte ein alter
+    // Zeitstempel den Steh-Notausgang sofort ausloesen.
+    _stehtSeitAmZiel = null;
     final hasLocationPermission = await _ensureNavigationLocationPermission();
     if (!hasLocationPermission) return;
     // 2026-07-27 (Review-Fund): Ab hier laeuft eine echte Fahrt. Das Flag
@@ -11171,6 +11212,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _clearLiveRouteWindowForOffRoute();
 
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet
+    _stehtSeitAmZiel = null; // 2026-08-04: Steh-Uhr der vorigen Fahrt weg
     _navigationStartTime = null; // erzwingt eine frische Drive-Session
     await _prepareXpStreakContext();
     if (!mounted || _disposed) return;
@@ -13055,22 +13097,53 @@ class _CruiseModePageState extends State<CruiseModePage>
     return distance;
   }
 
+  /// Wie nah muss man diesem Fix zufolge wirklich sein? 10 m plus die
+  /// gemeldete Ungenauigkeit, hoechstens 25 m Zugabe.
+  double _abschlussRadiusFuer(geo.Position position) {
+    final genauigkeit =
+        position.accuracy.isFinite && position.accuracy > 0
+        ? position.accuracy
+        : _completionAccuracySlackCapMeters;
+    return _completionRadiusMeters +
+        math.min(genauigkeit, _completionAccuracySlackCapMeters);
+  }
+
+  /// Steht das Fahrzeug lange genug in Zielnaehe, um als angekommen zu gelten?
+  /// Der Notausgang fuer schlechten Empfang, siehe
+  /// [_arrivalStandstillDuration].
+  bool _stehtLangGenugAmZiel(geo.Position position, double distanceToTarget) {
+    final nahGenug = distanceToTarget <= _arrivalRadiusMeters;
+    final tempo = position.speed.isFinite ? position.speed.abs() : 0.0;
+    if (!nahGenug || tempo > _arrivalStandstillSpeedMps) {
+      _stehtSeitAmZiel = null;
+      return false;
+    }
+    final seit = _stehtSeitAmZiel ??= DateTime.now();
+    return DateTime.now().difference(seit) >= _arrivalStandstillDuration;
+  }
+
   bool _canCompleteNavigationAtCurrentPosition(geo.Position position) {
     final distanceToTarget =
         _updateDistanceToFinalTarget(position) ?? double.infinity;
     final plannedDistanceMeters =
         _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+    // 2026-08-04: War `_arrivalRadiusMeters` (50 m) und damit derselbe Wert wie
+    // fuers Banner. Jetzt der strenge Abschluss-Radius mit GPS-Zugabe — oder,
+    // wenn das Fahrzeug in Zielnaehe steht, der Banner-Radius als Notausgang.
+    final radius = _stehtLangGenugAmZiel(position, distanceToTarget)
+        ? _arrivalRadiusMeters
+        : _abschlussRadiusFuer(position);
     final canComplete = shouldCompleteNavigation(
       isRoundTrip: _isRoundTrip,
       distanceToFinalTargetMeters: distanceToTarget,
       drivenDistanceMeters: _totalDistanceDriven,
       plannedDistanceMeters: plannedDistanceMeters,
-      completionRadiusMeters: _arrivalRadiusMeters,
+      completionRadiusMeters: radius,
       minRoundTripProgress: _minProgressForAutomaticCompletion,
     );
     if (canComplete) return true;
 
-    if (_isRoundTrip && distanceToTarget <= _arrivalRadiusMeters) {
+    if (_isRoundTrip && distanceToTarget <= radius) {
       final progress =
           plannedDistanceMeters == null || plannedDistanceMeters <= 0
           ? 1.0
@@ -13787,8 +13860,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // shouldCompleteNavigation) bleibt der eigentliche Wächter: A→B nur ≤Radius,
     // Rundkurs erst ab ≥95% gefahren → kein verfrühter Abschluss.
     final lastIndex = _fullRouteCoordinates.length - 1;
+    // 2026-08-04 (vucko „die Route wird gestoppt, bevor man wirklich am Ziel
+    // ist"): Hier stand die ROHE `position` statt der geglaetteten. Der
+    // Abstand zum Ziel rauschte damit bei jedem Fix um mehrere Meter — genau
+    // die Groessenordnung, um die es bei einem 10-m-Radius geht. Ueberall
+    // sonst in dieser Funktion wird laengst `effectivePosition` verwendet.
     final distanceToTarget =
-        _updateDistanceToFinalTarget(position) ?? double.infinity;
+        _updateDistanceToFinalTarget(effectivePosition) ?? double.infinity;
     final plannedForArrival =
         _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
     final drivenMostOfRoute =
@@ -13797,9 +13875,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         _totalDistanceDriven >= plannedForArrival * 0.80;
     final arrivedAtRouteEnd =
         _currentRouteIndex >= lastIndex - 1 || drivenMostOfRoute;
+    // Der 50-m-Wert hier war die zweite Haelfte des gemeldeten Problems: Selbst
+    // wenn der Waechter unten strenger wurde, liess diese Zeile den Abschluss
+    // schon 50 m vor dem Ziel durch.
+    final abschlussRadius =
+        _stehtLangGenugAmZiel(effectivePosition, distanceToTarget)
+        ? _arrivalRadiusMeters
+        : _abschlussRadiusFuer(effectivePosition);
     if (arrivedAtRouteEnd &&
-        distanceToTarget <= _arrivalRadiusMeters &&
-        _canCompleteNavigationAtCurrentPosition(position)) {
+        distanceToTarget <= abschlussRadius &&
+        _canCompleteNavigationAtCurrentPosition(effectivePosition)) {
       _stopNavigationTracking();
       _stopSimulation(restartLiveTracking: false);
       _onRouteCompleted();
@@ -18607,6 +18692,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     CruiseModePage.isFullscreen.value = false;
     _xpStreakDays = 1;
     _recordingActive = false; // 2026-08-03 (vucko Route-Aufzeichnen)
+    _stehtSeitAmZiel = null; // 2026-08-04: Steh-Uhr fuer die Ankunft
     _drivenTrackRecorder.reset();
     _resetGeneratedRouteUiState();
     // 2026-05-24 (vucko Task #53): Trip in DB als completed markieren
