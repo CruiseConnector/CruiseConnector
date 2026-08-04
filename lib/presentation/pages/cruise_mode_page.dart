@@ -18591,6 +18591,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     // User-Aktion (Beenden/Verwerfen/Speichern) — Resume-Snapshot entfernen,
     // sonst bietet der Homescreen eine bereits abgeschlossene Fahrt an.
     unawaited(ActiveRideSnapshotService.clear());
+    // 2026-08-04 (Achtung bei kuenftigen Aenderungen): Dieses Flag wird von
+    // `_resetAfterCompletion()` zurueckgesetzt — und das laeuft seit dem
+    // Umbau auf den Hintergrund-Abschluss VOR dieser Methode. Heute ist das
+    // harmlos, weil die Drive-Session ausschliesslich hier aufgezeichnet wird
+    // und pro Fahrt genau ein Aufruf stattfindet (Speichern ODER Verwerfen).
+    // Wer je eine Aufzeichnung WAEHREND der Fahrt ergaenzt, muss das Flag in
+    // `_AbschlussStand` mit einfrieren — sonst entsteht hier eine zweite
+    // Session mit doppeltem XP.
     if (_driveSessionRecordedForCompletion) {
       // Session wurde bereits (über einen anderen Pfad) aufgenommen — ein Foto,
       // das der User erst im Abschluss-Sheet hinzufügt, nachtragen (greift dank
