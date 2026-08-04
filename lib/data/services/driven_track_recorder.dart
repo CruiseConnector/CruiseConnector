@@ -193,6 +193,42 @@ class DrivenTrackSnapshot {
     return const {'type': 'LineString', 'coordinates': <List<double>>[]};
   }
 
+  /// Baut aus dem reinen GPS-Track eine [RouteResult] — OHNE geplante Route.
+  ///
+  /// 2026-08-03 (vucko Route-Aufzeichnen): Gegenstück zu [toRouteResult]. Beim
+  /// Selbst-Aufzeichnen gibt es keine Quell-Route, aus der Manöver, Tempolimits
+  /// oder Meta übernommen werden könnten — die Strecke IST das Ergebnis.
+  /// Liefert `null`, solange kein zeichenbarer Track existiert (z. B. Fahrt
+  /// sofort wieder beendet), damit der Aufrufer gar nicht erst speichert.
+  RouteResult? toStandaloneRouteResult({required double? durationSeconds}) {
+    if (!hasDrawableTrack) return null;
+
+    final trackGeometry = geometry;
+    return RouteResult(
+      geoJson: jsonEncode(trackGeometry),
+      geometry: trackGeometry,
+      coordinates: coordinates,
+      maneuvers: const [],
+      distanceMeters: distanceMeters,
+      durationSeconds: durationSeconds,
+      distanceKm: distanceMeters / 1000.0,
+      edgeMeta: <String, dynamic>{
+        'route_source': 'recorded_track',
+        'source': 'recorded_track',
+        'geometry_source': 'gps_track',
+        'final_geometry_source': 'gps_track',
+        'driven_track': true,
+        'recorded_track': true,
+        'driven_track_segments': segments.length,
+        'driven_track_gap_count': gapCount,
+        'driven_track_coordinate_count': coordinates.length,
+        'max_display_segment_m': maxSegmentMeters,
+        'distance_meters': distanceMeters,
+        'distance_km': distanceMeters / 1000.0,
+      },
+    );
+  }
+
   RouteResult? toRouteResult({
     required RouteResult source,
     required double? durationSeconds,

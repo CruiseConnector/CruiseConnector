@@ -1,0 +1,15 @@
+# Sprachumschaltung Deutsch / English (2026-08-03, vucko)
+#
+# Vorlage ist app_de.arb, weil die App deutsch GESCHRIEBEN ist — die deutschen
+# Texte sind das Original, Englisch ist die Übersetzung.
+#
+# untranslated-messages-file ist der wichtigste Eintrag hier: Bei jedem Build
+# landet in untranslated.json, welcher Schlüssel im Englischen noch fehlt. Das
+# ist der maschinelle Nachweis der Vollständigkeit — bei ~2.000 Strings kann das
+# kein Mensch im Kopf behalten.
+arb-dir: lib/l10n
+template-arb-file: app_de.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+untranslated-messages-file: untranslated.json
+nullable-getter: false

@@ -36,6 +36,13 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # 2026-08-03 (vucko Sprachumschaltung): Deutsch/English. flutter_localizations
+  # liefert die Material-/Cupertino-Übersetzungen (Datumsauswahl, „Abbrechen"
+  # in System-Dialogen usw.), intl die Datums- und Zahlenformate pro Sprache.
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
@@ -135,6 +142,10 @@ flutter_launcher_icons:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # 2026-08-03 (vucko Sprachumschaltung): erzeugt AppLocalizations aus den
+  # ARB-Dateien in lib/l10n (Konfiguration: l10n.yaml im Projektwurzel).
+  generate: true
+
   # Flutter 3.44 enables SwiftPM by default. This project is still CocoaPods-
   # based; Xcode 26 hangs resolving the generated package graph here.
   config:

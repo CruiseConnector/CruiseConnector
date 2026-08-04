@@ -450,7 +450,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     return 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.';
   }
 
-  void _startResendCooldown([int seconds = 45]) {
+  // 2026-08-02 (vucko): 60 s statt 45 s — Supabase erlaubt laut SMTP-Setting
+  // („Minimum interval per user") nur alle 60 s eine Mail an denselben Nutzer.
+  // Mit 45 s sah der Button aktiv aus und lief in ein 429.
+  void _startResendCooldown([int seconds = 60]) {
     _cancelResendTimer();
     setState(() => _resendIn = seconds);
     _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {

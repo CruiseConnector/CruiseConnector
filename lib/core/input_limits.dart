@@ -24,6 +24,9 @@ class AppInputLimits {
   static const int searchQueryMaxLength = 64;
   static const int emailMaxLength = 254;
   static const int passwordMaxLength = 128;
+  // Supabase erzwingt serverseitig min. 6 Zeichen — die App prüft das vorher,
+  // damit der Nutzer keinen englischen GoTrue-Fehler zu sehen bekommt.
+  static const int passwordMinLength = 6;
   static const int reportDetailsMaxLength = 280;
   static const int vehicleDescriptionMaxLength = 500;
   static const int vehicleTuningMaxLength = 500;
@@ -41,6 +44,19 @@ class AppInputLimits {
 
   static bool isValidUsername(String value) {
     return usernameRegExp.hasMatch(value.trim());
+  }
+
+  /// Passwort-Regel der App (bewusst NICHT trimmen — Leerzeichen sind erlaubt).
+  static bool isValidPassword(String value) {
+    return value.length >= passwordMinLength &&
+        value.length <= passwordMaxLength;
+  }
+
+  /// Grobe E-Mail-Plausibilitaet fuer Formulare (kein RFC-Parser).
+  static bool looksLikeEmail(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || trimmed.length > emailMaxLength) return false;
+    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$').hasMatch(trimmed);
   }
 
   static String normalizeUsernameFallback(String value) {

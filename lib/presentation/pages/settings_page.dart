@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/application/providers/app_locale_provider.dart';
+import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
@@ -12,9 +14,11 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/presentation/pages/change_password_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/language_picker.dart';
 import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/login_options_section.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
@@ -453,7 +457,18 @@ class _SettingsPageState extends State<SettingsPage> {
                         : 'Jeder kann deine Posts sehen',
                   ),
                   const Divider(color: Colors.white10, height: 1),
-                  _buildNavTile('Passwort ändern', Icons.lock_outline),
+                  // 2026-08-02 (vucko): War ein toter Menüpunkt (kein onTap).
+                  _buildNavTile(
+                    'Passwort ändern',
+                    Icons.lock_outline,
+                    subtitle: 'Neues Passwort setzen oder zurücksetzen',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const ChangePasswordPage(),
+                      ),
+                    ),
+                  ),
                 ]),
 
                 const SizedBox(height: 24),
@@ -466,6 +481,15 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 _buildSectionHeader('APP-EINSTELLUNGEN'),
                 _buildSectionContainer([
+                  // 2026-08-03 (vucko Sprachumschaltung): Sprache ganz oben —
+                  // wer die App in der falschen Sprache erwischt, sucht hier.
+                  _buildNavTile(
+                    context.l10n.settingsLanguage,
+                    Icons.language_rounded,
+                    subtitle: context.watch<AppLocaleProvider>().language.label,
+                    onTap: () => showLanguagePicker(context),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
                   ListTile(
                     leading: Container(
                       width: 28,

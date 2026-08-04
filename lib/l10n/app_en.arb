@@ -1,0 +1,117 @@
+{
+  "@@locale": "en",
+
+  "languageChoiceTitle": "Choose your language",
+  "languageChoiceSubtitle": "Which language would you like to use Cruise Connector in? You can change this any time in the settings.",
+  "languageChoiceContinue": "Continue",
+  "languageGerman": "Deutsch",
+  "languageEnglish": "English",
+  "languageSystemHint": "Suggested based on your device language",
+
+  "settingsLanguage": "Language",
+  "settingsLanguageSubtitle": "App language",
+
+  "welcomeTitle": "Welcome back!",
+  "welcomeCreateAccount": "Create account",
+  "welcomeOrContinueWith": "or continue with",
+
+  "loginTitle": "Welcome back",
+  "loginSubtitle": "Sign in to continue",
+  "loginNoAccountPrefix": "No account yet? ",
+  "loginRegisterNow": "Sign up now",
+  "loginResendVerification": "Resend email",
+  "loginVerificationResent": "Confirmation email sent to {email} again.",
+  "@loginVerificationResent": {
+    "placeholders": { "email": { "type": "String" } }
+  },
+  "loginResendFailed": "The email could not be sent again. Please wait a moment.",
+  "loginErrorMissingFields": "Please enter your email and password.",
+  "loginErrorEmailMissing": "Please enter your email address.",
+  "loginErrorInvalidCredentials": "Wrong email or password.",
+  "loginErrorEmailNotConfirmed": "Please confirm your email address first.",
+  "loginErrorFailed": "Sign-in failed. Please try again.",
+
+  "authSignIn": "Sign in",
+  "authEmailLabel": "Email address",
+  "authEmailHint": "you@email.com",
+  "authPasswordLabel": "Password",
+  "authPasswordHint": "••••••••",
+  "authForgotPassword": "Forgot password?",
+  "authSocialOpened": "Sign-in opened. Come back to the app afterwards.",
+  "authErrorSignInFailed": "Sign-in failed. Please try again.",
+  "authErrorCancelled": "Sign-in cancelled.",
+  "authErrorGoogleNotConfigured": "Google sign-in is not fully configured yet.",
+  "authErrorAppleUnavailable": "Apple sign-in is not available on this device.",
+  "authErrorTooManyAttempts": "Too many attempts. Please wait a moment.",
+
+  "authCurrentPassword": "Current password",
+  "authNewPassword": "New password",
+  "authNewPasswordConfirm": "Confirm new password",
+  "authPasswordRepeatHint": "Repeat password",
+  "authPasswordsDoNotMatch": "Passwords do not match.",
+  "authPasswordTooShort": "Password must be at least {min} characters.",
+  "@authPasswordTooShort": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "authPasswordTooWeak": "Password too weak. At least {min} characters.",
+  "@authPasswordTooWeak": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "authPasswordSaveFailed": "The password could not be saved. Please try again.",
+
+  "changePasswordTitle": "Change password",
+  "changePasswordSetTitle": "Set password",
+  "changePasswordHintCurrent": "For your security we need your current password once.",
+  "changePasswordHintSocial": "Your account currently uses Google or Apple. Set a password so you can also sign in with your email address.",
+  "changePasswordErrorCurrentMissing": "Please enter your current password.",
+  "changePasswordErrorCurrentWrong": "Current password is wrong.",
+  "changePasswordErrorSameAsOld": "That is already your current password.",
+  "changePasswordChanged": "Password changed.",
+  "changePasswordSet": "Password set. You can now also sign in with your email address.",
+
+  "resetPasswordTitle": "Reset password",
+  "resetPasswordEnterEmail": "Enter your email address. We'll send you a 6-digit code to set a new password.",
+  "resetPasswordCodeStepTitle": "Enter code",
+  "resetPasswordCodeStepSubtitle": "If an account exists for {email}, we've sent you a 6-digit code.",
+  "@resetPasswordCodeStepSubtitle": {
+    "placeholders": { "email": { "type": "String" } }
+  },
+  "resetPasswordNewStepSubtitle": "Choose a new password — at least {min} characters.",
+  "@resetPasswordNewStepSubtitle": {
+    "placeholders": { "min": { "type": "int" } }
+  },
+  "resetPasswordDoneTitle": "Password changed",
+  "resetPasswordDoneSubtitle": "Your new password is active and you are signed in. Use it the next time you log in.",
+  "resetPasswordSendCode": "Send code",
+  "resetPasswordCodeLabel": "6-digit code",
+  "resetPasswordSpamHint": "No email? Check your spam folder too.",
+  "resetPasswordResend": "Send code again",
+  "resetPasswordResendIn": "Send code again ({seconds} s)",
+  "@resetPasswordResendIn": {
+    "placeholders": { "seconds": { "type": "int" } }
+  },
+  "resetPasswordChangeEmail": "Change email address",
+  "resetPasswordSave": "Save password",
+  "resetPasswordToApp": "Continue to the app",
+  "resetPasswordErrorInvalidEmail": "Please enter a valid email address.",
+  "resetPasswordErrorSendFailed": "The code could not be sent. Please try again.",
+  "resetPasswordCodeSent": "New code sent. Check your inbox.",
+  "resetPasswordErrorResendFailed": "Could not send a new code. Please wait a moment.",
+  "resetPasswordErrorCodeMissing": "Please enter the 6-digit code.",
+  "resetPasswordErrorCodeInvalid": "Code invalid or expired.",
+  "resetPasswordErrorVerifyFailed": "Verification failed. Please try again.",
+  "resetPasswordErrorRateLimited": "Too many emails in a short time. Please wait a few minutes.",
+  "resetPasswordErrorCodeExpired": "The code has expired. Request a new one.",
+  "resetPasswordErrorCodeWrong": "That code doesn't match. Please check the digits.",
+  "resetPasswordErrorSamePassword": "That is your previous password. Please choose a new one.",
+  "resetPasswordErrorSessionExpired": "Session expired. Please request a new code.",
+  "resetPasswordErrorGeneric": "That didn't work. Please try again.",
+
+  "commonCancel": "Cancel",
+  "commonOr": "or",
+  "commonSave": "Save",
+  "commonBack": "Back",
+  "commonContinue": "Continue",
+  "commonRetry": "Try again",
+  "commonClose": "Close"
+}

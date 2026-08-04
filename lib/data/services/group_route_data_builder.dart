@@ -89,6 +89,34 @@ class GroupRouteDataBuilder {
     };
   }
 
+  // ── Gemeinsame Aufzeichnung ───────────────────────────────────────────────
+  // 2026-08-03 (vucko Route-Aufzeichnen): Bei einer aufgezeichneten Gruppenfahrt
+  // gibt es keine geplante Route, die man teilen könnte — jedes Mitglied
+  // zeichnet seinen EIGENEN GPS-Track auf. Geteilt wird darum nur ein Marker,
+  // an dem die Mitglieder erkennen: „ab jetzt wird aufgezeichnet, nicht
+  // navigiert". Bewusst OHNE Geometrie — die Route-Anwendung der Mitglieder
+  // steigt bei fehlenden Koordinaten ohnehin aus, der Marker wird also nie
+  // versehentlich als Route interpretiert.
+
+  static const String recordingPlanningType = 'Aufzeichnen';
+
+  static Map<String, dynamic> buildRecordingSession({String? startedByUserId}) {
+    return <String, dynamic>{
+      'planning_type': recordingPlanningType,
+      'recording_session': true,
+      'route_type': 'ROUND_TRIP',
+      'coordinates': const <List<double>>[],
+      if (startedByUserId != null) 'started_by_user_id': startedByUserId,
+    };
+  }
+
+  /// Ob diese Gruppen-Route-Daten eine gemeinsame Aufzeichnung markieren.
+  static bool isRecordingSession(Map<String, dynamic>? routeData) {
+    if (routeData == null) return false;
+    return routeData['recording_session'] == true ||
+        routeData['planning_type'] == recordingPlanningType;
+  }
+
   static Map<String, dynamic> replaceRoutePayload({
     required RouteResult route,
     required Map<String, dynamic>? previousRouteData,

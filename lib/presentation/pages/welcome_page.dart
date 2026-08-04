@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
@@ -77,9 +78,7 @@ class _WelcomePageState extends State<WelcomePage> {
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Anmeldung geöffnet. Kehre danach zur App zurück.'),
-          ),
+          SnackBar(content: Text(context.l10n.authSocialOpened)),
         );
       }
     } on AuthException catch (e) {
@@ -87,9 +86,7 @@ class _WelcomePageState extends State<WelcomePage> {
     } catch (e) {
       debugPrint('[Welcome] Social Login Fehler: $e');
       if (mounted) {
-        setState(
-          () => _errorMsg = 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.',
-        );
+        setState(() => _errorMsg = context.l10n.authErrorSignInFailed);
       }
     } finally {
       if (mounted) setLoading(false);
@@ -97,15 +94,18 @@ class _WelcomePageState extends State<WelcomePage> {
   }
 
   String _translateAuthError(String message) {
+    // 2026-08-03 (vucko Sprachumschaltung): Die Erkennung läuft weiter über die
+    // deutschen Original-Meldungen aus dem AuthService — nur die ANZEIGE wird
+    // übersetzt. Die Service-Meldungen selbst werden in Welle 6 umgestellt.
     final lower = message.toLowerCase();
     if (lower.contains('abgebrochen') || lower.contains('cancel')) {
-      return 'Anmeldung abgebrochen.';
+      return context.l10n.authErrorCancelled;
     }
     if (lower.contains('google login ist noch nicht konfiguriert')) {
-      return 'Google Login ist noch nicht fertig konfiguriert.';
+      return context.l10n.authErrorGoogleNotConfigured;
     }
     if (lower.contains('apple') && lower.contains('nicht verfügbar')) {
-      return 'Apple Anmeldung ist auf diesem Gerät nicht verfügbar.';
+      return context.l10n.authErrorAppleUnavailable;
     }
     return message;
   }
@@ -213,9 +213,9 @@ class _WelcomePageState extends State<WelcomePage> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        'Willkommen zurück!',
-                        style: TextStyle(
+                      Text(
+                        context.l10n.welcomeTitle,
+                        style: const TextStyle(
                           fontSize: 18,
                           color: _authTextMuted,
                           fontWeight: FontWeight.w500,
@@ -224,7 +224,7 @@ class _WelcomePageState extends State<WelcomePage> {
                       const SizedBox(height: 32),
                       _buildButton(
                         context,
-                        text: 'Konto erstellen',
+                        text: context.l10n.welcomeCreateAccount,
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(
@@ -237,7 +237,7 @@ class _WelcomePageState extends State<WelcomePage> {
                       const SizedBox(height: 14),
                       _buildButton(
                         context,
-                        text: 'Anmelden',
+                        text: context.l10n.authSignIn,
                         filled: false,
                         onTap: () => Navigator.push(
                           context,
@@ -255,7 +255,7 @@ class _WelcomePageState extends State<WelcomePage> {
                                 horizontal: 12,
                               ),
                               child: Text(
-                                'oder weiter mit',
+                                context.l10n.welcomeOrContinueWith,
                                 style: TextStyle(
                                   color: _authTextMuted.withValues(alpha: 0.72),
                                   fontSize: 13,

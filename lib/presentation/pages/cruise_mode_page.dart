@@ -103,6 +103,7 @@ import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/group_member.dart';
+import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
 class CruiseModePage extends StatefulWidget {
@@ -2416,6 +2417,25 @@ class _CruiseModePageState extends State<CruiseModePage>
     required String source,
     required bool autoConfirm,
   }) async {
+    // 2026-08-03 (vucko Route-Aufzeichnen): Der Leader hat eine gemeinsame
+    // Aufzeichnung gestartet — es gibt bewusst keine Route zum Anwenden. Dieses
+    // Gerät schaltet in den Aufzeichnungs-Modus und zeichnet seinen EIGENEN
+    // Track auf. Muss VOR dem Koordinaten-Check stehen, weil die Marker-Payload
+    // keine Geometrie hat und sonst still verworfen würde.
+    if (GroupRouteDataBuilder.isRecordingSession(routeData)) {
+      _activeGroupRouteData = Map<String, dynamic>.from(routeData);
+      _groupRouteRevision = math.max(_groupRouteRevision, revision).toInt();
+      // autoConfirm wird hier bewusst ignoriert: Es geht nicht darum, eine
+      // fremde Route zu übernehmen, sondern darum, dass die Gruppenfahrt
+      // beginnt — wie beim Aktivieren einer normalen Gruppenroute. Wer schon
+      // fährt (eigene Aufzeichnung oder bestätigte Route), wird NICHT
+      // herausgerissen.
+      if (!_recordingActive && !_isRouteConfirmed) {
+        await _joinGroupRecordingSession();
+      }
+      return;
+    }
+
     final result = GroupRouteDataBuilder.parseRouteResult(routeData);
     if (result == null || result.coordinates.length < 2) return;
     if (!mounted || _disposed) return;
@@ -4080,6 +4100,18 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   bool get _isWaypointPlanning => _isRoundTrip && _planningType == 'Wegpunkte';
 
+  // ═══════════════════════ ROUTE SELBST AUFZEICHNEN ═════════════════════════
+  // 2026-08-03 (vucko): Aufzeichnungs-Modus. Es wird KEINE Route berechnet —
+  // der Nutzer fährt los, der ohnehin laufende _drivenTrackRecorder sammelt den
+  // Track, und am Ende entsteht daraus die Strecke. Alles, was eine geplante
+  // Route voraussetzt (Manöver, Kurvenwarnung, Off-Route/Rerouting, Ansagen,
+  // Rest-Distanz/ETA), wird über diesen Getter abgeschaltet. Ist er false,
+  // verhält sich die Seite exakt wie vor diesem Feature.
+  bool get _isRecordingMode => _planningType == kRecordingPlanningType;
+
+  /// Läuft gerade eine Aufzeichnung (gestartet, noch nicht beendet)?
+  bool _recordingActive = false;
+
   LatLng? get _pointToPointDestinationMarkerPoint {
     if (_isRoundTrip || _isRouteConfirmed) return null;
     final active = _activeDestinationCoordinate;
@@ -4109,7 +4141,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _handlePlanningTypeChanged(String planningType) {
-    if (_isLoading) return;
+    // Während einer laufenden Aufzeichnung nicht den Modus unter der Fahrt
+    // wegziehen (2026-08-03, vucko Route-Aufzeichnen).
+    if (_isLoading || _recordingActive) return;
     setState(() {
       _planningType = planningType;
       if (planningType == 'Zufall') {
@@ -4122,6 +4156,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
     _dismissTransientRouteUi();
     _resetGeneratedRouteUiState();
+    // 2026-08-03 (vucko Route-Aufzeichnen): _resetGeneratedRouteUiState() räumt
+    // den Routen-State, lässt aber die Live-Fenster-Layer (bright/dim) stehen —
+    // eine bereits GEFAHRENE Route blieb dadurch nach dem Moduswechsel sichtbar
+    // auf der Karte liegen. Der Helfer steigt früh aus, wenn die Layer ohnehin
+    // leer sind (also im Normalfall „Route berechnet, aber nie gestartet"),
+    // ändert dort also nichts.
+    if (_clearLiveRouteWindowForOffRoute()) {
+      _safeSetState(() {});
+    }
   }
 
   String _roundTripWaypointSignature([List<LatLng>? waypoints]) {
@@ -6699,16 +6742,36 @@ class _CruiseModePageState extends State<CruiseModePage>
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: CruiseNavigationInfoPanel(
-                    durationSeconds: _remainingDuration ?? _routeDuration,
-                    distanceMeters: _remainingDistance ?? _routeDistance,
-                  ),
+                  // 2026-08-03 (vucko Route-Aufzeichnen): Beim Aufzeichnen gibt
+                  // es keine Rest-Strecke — stattdessen zeigen wir, was bisher
+                  // zusammengekommen ist (Fahrzeit + aufgezeichnete Distanz).
+                  child: _isRecordingMode
+                      ? CruiseNavigationInfoPanel(
+                          durationSeconds: _elapsedNavigationSeconds(),
+                          distanceMeters: _totalDistanceDriven,
+                        )
+                      : CruiseNavigationInfoPanel(
+                          durationSeconds: _remainingDuration ?? _routeDuration,
+                          distanceMeters: _remainingDistance ?? _routeDistance,
+                        ),
                 ),
                 const SizedBox(height: 4),
                 DriveControlPanel(
+                  // 2026-08-03 (vucko Route-Aufzeichnen): gleiche Steuerung,
+                  // nur ehrlichere Beschriftung — es wird nicht navigiert,
+                  // sondern aufgezeichnet.
+                  startLabel: _isRecordingMode ? 'Aufzeichnung starten' : null,
+                  stopLabel: _isRecordingMode ? 'Aufzeichnung beenden' : null,
+                  startIcon: _isRecordingMode
+                      ? Icons.fiber_manual_record_rounded
+                      : null,
                   onStart: () async {
                     _closePauseWindow();
                     _setGroupPaused(false);
+                    if (_isRecordingMode) {
+                      await _startRecordingSession();
+                      return;
+                    }
                     await _startNavigationFlow();
                   },
                   onPause: () {
@@ -6730,6 +6793,10 @@ class _CruiseModePageState extends State<CruiseModePage>
                     _setGroupPaused(false);
                     _stopNavigationTracking();
                     _stopSimulation(restartLiveTracking: false);
+                    if (_isRecordingMode) {
+                      _onRecordingStopped();
+                      return;
+                    }
                     _onRouteEarlyStopped();
                   },
                 ),
@@ -7651,7 +7718,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           child: ElevatedButton(
             onPressed: _isLoading
                 ? _cancelRouteGeneration
-                : _onSearchButtonPressed,
+                // Aufzeichnen berechnet nichts — es startet sofort die Fahrt.
+                // Sonst ueber _onSearchButtonPressed (nicht _generateRoute
+                // direkt): dort haengt der gemeinsame Such-Hook.
+                : (_isRecordingMode
+                      ? _startRecordingSession
+                      : _onSearchButtonPressed),
             style: ElevatedButton.styleFrom(
               backgroundColor: _isLoading
                   ? const Color(0xFFB9443A)
@@ -7674,7 +7746,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                     ),
                   )
                 : Text(
-                    _isWaypointPlanning
+                    _isRecordingMode
+                        ? 'Aufzeichnung starten'
+                        : _isWaypointPlanning
                         ? 'Wegpunkt-Route suchen'
                         : _isRoundTrip
                         ? 'Rundkurs suchen'
@@ -10978,6 +11052,187 @@ class _CruiseModePageState extends State<CruiseModePage>
       'type': 'LineString',
       'coordinates': _fullRouteCoordinates,
     }, animateCamera: false);
+  }
+
+  /// Startet eine freie Aufzeichnung — ohne geplante Route.
+  ///
+  /// 2026-08-03 (vucko Route-Aufzeichnen): Bewusst NICHT über
+  /// [_startNavigationFlow], weil dort alles auf eine vorhandene Route zeigt
+  /// (Access-Leg, Sprachansagen, Live-Activity, _drawRoute der vollen Linie).
+  /// Hier wird nur das GPS-Tracking scharf gemacht — den Rest erledigt der
+  /// ohnehin laufende _drivenTrackRecorder.
+  Future<void> _startRecordingSession() async {
+    if (_recordingActive || _isLoading) return;
+
+    final hasLocationPermission = await _ensureNavigationLocationPermission();
+    if (!hasLocationPermission || !mounted || _disposed) return;
+
+    // 2026-08-03 (vucko Route-Aufzeichnen): Eine vorher berechnete Route MUSS
+    // hier weg. Erstens optisch (sie lag sonst weiter auf der Karte), zweitens
+    // — und das ist der wichtigere Teil — weil der gesamte Aufzeichnungs-Modus
+    // darauf baut, dass die Navigations-Pipeline mangels Route aussteigt
+    // (`_fullRouteCoordinates.length < 2` in _onLocationUpdate). Mit einer
+    // Rest-Route im State liefen Off-Route-Erkennung und Rerouting gegen eine
+    // Strecke, die gar nicht gefahren wird.
+    //
+    // _resetGeneratedRouteUiState() räumt den Routen-State, lässt aber die
+    // Live-Fenster-Layer (bright/dim) stehen — die kommen von
+    // _clearLiveRouteWindowForOffRoute() dazu.
+    _resetGeneratedRouteUiState();
+    _clearLiveRouteWindowForOffRoute();
+
+    _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet
+    _navigationStartTime = null; // erzwingt eine frische Drive-Session
+    await _prepareXpStreakContext();
+    if (!mounted || _disposed) return;
+
+    _safeSetState(() {
+      _recordingActive = true;
+      _isRouteConfirmed = true;
+    });
+
+    _startNavigationTracking();
+    _isCameraLocked = true;
+    await _activateNavigationCamera();
+
+    // Gruppenfahrt: den anderen mitteilen, dass jetzt aufgezeichnet wird —
+    // jeder zeichnet dann seinen eigenen Track auf.
+    await _publishGroupRecordingSessionIfAllowed();
+
+    if (mounted && !_disposed) {
+      TopToast.show(
+        context,
+        message: 'Aufzeichnung läuft — gute Fahrt!',
+        icon: Icons.fiber_manual_record_rounded,
+        duration: const Duration(milliseconds: 2400),
+      );
+    }
+  }
+
+  /// „Aufzeichnung beenden" — baut das Ergebnis allein aus dem GPS-Track.
+  void _onRecordingStopped() {
+    if (!mounted || _disposed) return;
+
+    final drivenSnap = _drivenTrackRecorder.snapshot();
+    _recordingActive = false;
+
+    // Zu kurz oder gar nichts aufgezeichnet (sofort wieder gestoppt, kein GPS):
+    // ehrlich sagen statt ein leeres Abschluss-Sheet zu zeigen.
+    if (!drivenSnap.hasDrawableTrack) {
+      TopToast.show(
+        context,
+        message: 'Zu wenig aufgezeichnet — keine Strecke gespeichert.',
+        icon: Icons.info_outline_rounded,
+        duration: const Duration(milliseconds: 3000),
+      );
+      _resetAfterCompletion();
+      return;
+    }
+
+    final groupId = widget.groupId;
+    if (groupId != null) {
+      unawaited(CruiseGroupService.closeGroup(groupId));
+    }
+
+    final snapshot = _buildCompletionSnapshot(
+      isEarlyStop: false,
+      belowMinimum: false,
+      completed: true,
+    );
+    _freezeMapForCompletion();
+
+    _presentCompletionSheet(
+      CruiseCompletionDialog(
+        distanceKm: snapshot.distanceKm,
+        durationText: snapshot.durationText,
+        curves: snapshot.curves,
+        xpEarned: snapshot.xpEarned,
+        baseXp: snapshot.xpBreakdown.baseXp,
+        streakDays: snapshot.xpBreakdown.streakDays,
+        xpMultiplier: snapshot.xpBreakdown.multiplier,
+        routeCoordinates: snapshot.coordinates,
+        routeSegments: snapshot.segments,
+        drivenSegments: drivenSnap.segments.isEmpty
+            ? null
+            : drivenSnap.segments,
+        topSpeedKmh: snapshot.topSpeedKmh,
+        avgSpeedKmh: snapshot.avgSpeedKmh,
+        routeStyle: _selectedStyle,
+        isRoundTrip: _isRoundTrip,
+        onSave: (rating, tags, title, photoUrl) async {
+          final result = await _saveRouteAndSyncXp(
+            rating: rating,
+            ratingTags: tags,
+            title: title,
+            completed: true,
+            photoUrl: photoUrl,
+          );
+          _resetAfterCompletion();
+          return result;
+        },
+        onPublish: _publishRecordedRoute,
+        onDiscard: () async {
+          try {
+            await _recordDriveSessionForCurrentRoute(completed: true);
+          } finally {
+            _resetAfterCompletion();
+          }
+        },
+      ),
+    );
+  }
+
+  /// Teilt der Gruppe mit, dass ab jetzt aufgezeichnet wird.
+  ///
+  /// Bewusst fehlertolerant: Klappt das Schreiben nicht (Revisions-Konflikt,
+  /// Netz weg), läuft die EIGENE Aufzeichnung trotzdem weiter — sie hängt an
+  /// nichts Serverseitigem. Die anderen steigen dann eben manuell ein.
+  Future<void> _publishGroupRecordingSessionIfAllowed() async {
+    final groupId = widget.groupId;
+    if (groupId == null || !_canPublishGroupRoute) return;
+
+    final meId = Supabase.instance.client.auth.currentUser?.id;
+    final routeData = GroupRouteDataBuilder.buildRecordingSession(
+      startedByUserId: meId,
+    );
+    try {
+      final update = await CruiseGroupService.updateCurrentRoute(
+        groupId: groupId,
+        expectedRevision: _groupRouteRevision,
+        routeData: routeData,
+      );
+      if (update == null) {
+        debugPrint(
+          '[CruiseMode] Aufzeichnungs-Session nicht geschrieben: revision_conflict',
+        );
+        return;
+      }
+      _groupRouteRevision = update.routeRevision;
+      _activeGroupRouteData = routeData;
+      debugPrint(
+        '[CruiseMode] Aufzeichnungs-Session geteilt: revision=${update.routeRevision}',
+      );
+    } catch (e) {
+      debugPrint('[CruiseMode] Aufzeichnungs-Session nicht geteilt: $e');
+    }
+  }
+
+  /// Mitglied steigt in eine vom Leader gestartete Aufzeichnung ein.
+  Future<void> _joinGroupRecordingSession() async {
+    if (_recordingActive || !mounted || _disposed) return;
+    _safeSetState(() => _planningType = kRecordingPlanningType);
+    await _startRecordingSession();
+  }
+
+  /// Gespeicherte Aufzeichnung als Community-Post anbieten. Nutzt denselben
+  /// Weg wie „Route teilen" bei den gespeicherten Routen.
+  Future<void> _publishRecordedRoute(String savedRouteId) async {
+    if (!mounted || _disposed) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CreatePostPage(sharedRouteId: savedRouteId),
+      ),
+    );
   }
 
   Future<void> _prepareXpStreakContext() async {
@@ -17281,6 +17536,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       _sessionRouteResult ?? _lastRouteResult;
 
   RouteResult? _buildAdjustedCompletionResult() {
+    // 2026-08-03 (vucko Route-Aufzeichnen): Beim Aufzeichnen gibt es keine
+    // geplante Route — der Track IST das Ergebnis. Ohne diesen Zweig würde die
+    // Methode unten an `result == null` aussteigen und nichts gespeichert.
+    if (_isRecordingMode) {
+      final recordedSnapshot = _drivenTrackRecorder.snapshot();
+      return recordedSnapshot.toStandaloneRouteResult(
+        durationSeconds: _elapsedNavigationSeconds(),
+      );
+    }
+
     final result = _completionRouteResult;
     if (result == null) return null;
 
@@ -17300,7 +17565,20 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// Reine Fahrtdauer seit dem Start (Sekunden), unabhängig von einer Planung.
+  double? _elapsedNavigationSeconds() {
+    final start = _navigationStartTime;
+    if (start == null) return null;
+    final seconds = DateTime.now().difference(start).inSeconds.toDouble();
+    return seconds > 0 ? seconds : null;
+  }
+
   double _calculateCompletionProgressFraction(double? drivenDistanceMeters) {
+    // Aufgezeichnete Strecken haben keine Soll-Distanz — was gefahren wurde,
+    // IST die Strecke. Ohne diesen Zweig käme 0.0 heraus und damit kein XP.
+    if (_isRecordingMode) {
+      return (drivenDistanceMeters ?? 0) > 0 ? 1.0 : 0.0;
+    }
     final plannedDistanceMeters =
         _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
     if (drivenDistanceMeters == null || drivenDistanceMeters <= 0) {
@@ -17632,6 +17910,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     int? previousLevel;
     int? previousTotalXp;
     var xpAwardedForResult = 0;
+    // 2026-08-03 (vucko Route-Aufzeichnen): ID der gespeicherten Route, damit
+    // das Abschluss-Sheet direkt veröffentlichen kann.
+    String? savedRouteId;
     final userId = Supabase.instance.client.auth.currentUser?.id;
     if (userId != null) {
       try {
@@ -17675,7 +17956,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           completed: completed,
           photoUrl: photoUrl,
         );
-        await SavedRoutesService.saveRoute(
+        savedRouteId = await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _selectedStyle,
           isRoundTrip: _isRoundTrip,
@@ -17712,18 +17993,24 @@ class _CruiseModePageState extends State<CruiseModePage>
           durationSeconds: adjustedResult.durationSeconds,
           qualityTier: adjustedResult.edgeMeta['quality_tier']?.toString(),
         );
-        await RouteCompletionCandidateService.submitCandidate(
-          result: adjustedResult,
-          style: _selectedStyle,
-          isRoundTrip: _isRoundTrip,
-          avoidHighways: _activeAvoidHighways || _avoidHighways,
-          savedByUser: true,
-          discardedByUser: false,
-          completedAtEnd: completed,
-          rating: rating,
-          ratingTags: ratingTags,
-          completionPercent: progressFraction * 100,
-        );
+        // 2026-08-03 (vucko Route-Aufzeichnen): Der Kandidaten-Pool speist die
+        // GENERIERTEN Routen (Qualitäts-Scoring, Wiederverwendung für andere
+        // Nutzer). Ein selbst aufgezeichneter GPS-Track gehört dort nicht rein —
+        // er hat weder Planungs-Parameter noch ein Quality-Tier.
+        if (!_isRecordingMode) {
+          await RouteCompletionCandidateService.submitCandidate(
+            result: adjustedResult,
+            style: _selectedStyle,
+            isRoundTrip: _isRoundTrip,
+            avoidHighways: _activeAvoidHighways || _avoidHighways,
+            savedByUser: true,
+            discardedByUser: false,
+            completedAtEnd: completed,
+            rating: rating,
+            ratingTags: ratingTags,
+            completionPercent: progressFraction * 100,
+          );
+        }
         debugPrint('[CruiseMode] Route saved successfully!');
       }
       final gamResult = await GamificationService.calculateAndSync();
@@ -17738,6 +18025,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         previousTotalXp: oldTotalXp,
         newTotalXp: gamResult.totalXp,
         xpEarned: xpAwardedForResult,
+        savedRouteId: savedRouteId,
       );
     } catch (e, stack) {
       debugPrint('Route speichern / XP sync fehlgeschlagen: $e');
@@ -17929,6 +18217,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _stopNavigationTracking();
     CruiseModePage.isFullscreen.value = false;
     _xpStreakDays = 1;
+    _recordingActive = false; // 2026-08-03 (vucko Route-Aufzeichnen)
     _drivenTrackRecorder.reset();
     _resetGeneratedRouteUiState();
     // 2026-05-24 (vucko Task #53): Trip in DB als completed markieren

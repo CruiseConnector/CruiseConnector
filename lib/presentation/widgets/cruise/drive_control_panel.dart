@@ -10,7 +10,22 @@ class DriveControlPanel extends StatefulWidget {
   final VoidCallback? onPause;
   final VoidCallback? onStop;
 
-  const DriveControlPanel({super.key, this.onStart, this.onPause, this.onStop});
+  // 2026-08-03 (vucko Route-Aufzeichnen): Beschriftungen überschreibbar, damit
+  // im Aufzeichnungs-Modus „Aufzeichnung starten/beenden" statt „Fahrt
+  // starten/Beenden" steht. Ohne Override bleibt alles wie bisher.
+  final String? startLabel;
+  final String? stopLabel;
+  final IconData? startIcon;
+
+  const DriveControlPanel({
+    super.key,
+    this.onStart,
+    this.onPause,
+    this.onStop,
+    this.startLabel,
+    this.stopLabel,
+    this.startIcon,
+  });
 
   @override
   State<DriveControlPanel> createState() => _DriveControlPanelState();
@@ -74,10 +89,10 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
           height: 52,
           child: ElevatedButton.icon(
             onPressed: _handleStart,
-            icon: const Icon(Icons.navigation_rounded, size: 22),
-            label: const Text(
-              'Fahrt starten',
-              style: TextStyle(
+            icon: Icon(widget.startIcon ?? Icons.navigation_rounded, size: 22),
+            label: Text(
+              widget.startLabel ?? 'Fahrt starten',
+              style: const TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
@@ -136,9 +151,12 @@ class _DriveControlPanelState extends State<DriveControlPanel> {
                 child: ElevatedButton.icon(
                   onPressed: _handleStop,
                   icon: const Icon(Icons.stop_rounded, size: 22),
-                  label: const Text(
-                    'Beenden',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  label: Text(
+                    widget.stopLabel ?? 'Beenden',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppAccentColors.accent,
