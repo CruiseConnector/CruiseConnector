@@ -18583,14 +18583,41 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// Zeichnet die beendete Fahrt auf und raeumt ERST DANACH den
+  /// Wiederaufnahme-Schnappschuss weg.
+  ///
+  /// 2026-08-05 (vucko fragte nach: „meinst du damit, dass man dann nicht mehr
+  /// bei der Route weitermachen kann, wo man davor dran war?"):
+  ///
+  /// Das Aufraeumen stand vorher GANZ AM ANFANG — der Schnappschuss war also
+  /// weg, bevor irgendetwas beim Server angekommen war. Solange das
+  /// Abschluss-Sheet blockierte, war das egal: Der Nutzer stand davor und
+  /// konnte nicht weg. Seit dem Umbau auf das Speichern im Hintergrund
+  /// (04.08.) ist er frei — er kann die App wegwischen, das Betriebssystem
+  /// kann sie abraeumen. Trifft das genau dieses Fenster, waere beides
+  /// verloren: die Fahrt nicht gespeichert UND der Schnappschuss geloescht.
+  ///
+  /// Jetzt in der richtigen Reihenfolge. Geht unterwegs etwas schief, bleibt
+  /// dem Nutzer wenigstens das Angebot, die Fahrt fortzusetzen.
   Future<void> _recordDriveSessionForCurrentRoute({
     required bool completed,
     String? photoUrl,
   }) async {
-    // 2026-07-06 (vucko Fahrt-Resume): Die Fahrt endet hier durch bewusste
-    // User-Aktion (Beenden/Verwerfen/Speichern) — Resume-Snapshot entfernen,
-    // sonst bietet der Homescreen eine bereits abgeschlossene Fahrt an.
-    unawaited(ActiveRideSnapshotService.clear());
+    try {
+      await _zeichneDriveSessionAuf(completed: completed, photoUrl: photoUrl);
+    } finally {
+      // Laeuft auf JEDEM regulaeren Weg — auch bei den fruehen Ausstiegen
+      // („zu wenig gefahren", „kein Ergebnis"), denn auch dort ist die Fahrt
+      // vorbei und der Homescreen soll sie nicht weiter anbieten. Wird die App
+      // vorher abgeraeumt, laeuft es NICHT. Genau das ist der Sinn.
+      unawaited(ActiveRideSnapshotService.clear());
+    }
+  }
+
+  Future<void> _zeichneDriveSessionAuf({
+    required bool completed,
+    String? photoUrl,
+  }) async {
     // 2026-08-04 (Achtung bei kuenftigen Aenderungen): Dieses Flag wird von
     // `_resetAfterCompletion()` zurueckgesetzt — und das laeuft seit dem
     // Umbau auf den Hintergrund-Abschluss VOR dieser Methode. Heute ist das
