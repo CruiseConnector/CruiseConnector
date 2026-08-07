@@ -213,6 +213,14 @@ function renderPush(
         title: 'Trip wartet',
         body: 'Dein gestarteter Trip wartet auf Fortsetzung',
       };
+    // 2026-08-07 (vucko Monitoring-Zugangsschutz): Der Alarm bringt seinen
+    // Text selbst mit — er beschreibt einen Vorfall, nicht eine soziale
+    // Aktion, und passt in kein Muster der Faelle darueber.
+    case 'monitor_alarm':
+      return {
+        title: String(payload.title ?? 'Monitoring: unberechtigter Zugriff'),
+        body: String(payload.body ?? 'Jemand hat versucht, das Dashboard zu oeffnen.'),
+      };
     default:
       return { title: 'Benachrichtigung', body: name };
   }
