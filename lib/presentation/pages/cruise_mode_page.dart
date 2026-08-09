@@ -2504,6 +2504,55 @@ class _CruiseModePageState extends State<CruiseModePage>
         ? null
         : _accessLegJoinIndexForPlan(accessPlan);
     final accessLegMainRoute = accessPlan?.sessionRoute;
+    // ── 2026-08-09 (vucko, Gruppen-Video): Index beim Übernehmen NIE blind auf 0
+    //
+    // Der Fehler: Weiter unten stand `_currentRouteIndex = resumeState?.routeIndex ?? 0;`.
+    // `_resumeGroupRouteStateForCurrentPosition` liefert aber null, sobald der
+    // Fahrer weiter als 160 m von der neuen Leader-Geometrie weg ist — also
+    // genau dann, wenn der Anführer gerade woanders hin rerouted hat. Mitten in
+    // der Fahrt sprang der Index damit auf den ROUTENANFANG.
+    //
+    // Folge (im Video belegt): Die Kamera peilt fortan einen festen Punkt am
+    // Routenanfang an und dreht sich stetig weiter; Restmeter frieren ein oder
+    // wachsen; es feuern Neuberechnungen im Sekundentakt. Und der Zustand heilt
+    // NIE: Der Rücksprung auf den echten Index gilt als „unplausibler" Sprung
+    // und wird jeden Tick verworfen — der Index klebt für den Rest der Fahrt
+    // bei 0. Solo gibt es das nicht: `_commitRerouteResult` setzt den Index nur,
+    // wenn der Treffer nah genug ist, sonst bleibt der alte stehen.
+    //
+    // Jetzt: erst auf der NEUEN Geometrie einen echten Index suchen. Klappt das
+    // nicht, wird zwar 0 gesetzt, aber gleichzeitig `_offRouteSince` gemerkt —
+    // dann schaltet `_routeTangentCameraBearing` die Tangente sauber ab und die
+    // Kamera nutzt den GPS-Kurs, statt eine Falschpeilung zu liefern.
+    const groupReanchorCorridorMeters = 400.0;
+    var groupRouteIndex = resumeState?.routeIndex ?? 0;
+    var groupIndexUnanchored = false;
+    if (resumeState == null && wasConfirmed) {
+      final here = _userLocation;
+      if (here != null) {
+        final match = findNearestOnRoutePreferIndex(
+          position: here,
+          coordinates: activeResult.coordinates,
+          referenceIndex: 0,
+          corridorMeters: groupReanchorCorridorMeters,
+        );
+        if (match.distanceMeters.isFinite &&
+            match.distanceMeters <= groupReanchorCorridorMeters) {
+          groupRouteIndex = match.index
+              .clamp(0, activeResult.coordinates.length - 1)
+              .toInt();
+        } else {
+          groupIndexUnanchored = true;
+        }
+      } else {
+        groupIndexUnanchored = true;
+      }
+      debugPrint(
+        '[CruiseMode][GruppenRoute] Index-Neuanker: idx=$groupRouteIndex '
+        'unanchored=$groupIndexUnanchored punkte=${activeResult.coordinates.length}',
+      );
+    }
+
     _applyingGroupRouteUpdate = true;
     try {
       _lastRouteResult = activeResult;
@@ -2531,8 +2580,26 @@ class _CruiseModePageState extends State<CruiseModePage>
         _dimRemainingLatLngs = const [];
         _lastDimHead = null;
         _maneuvers = activeResult.maneuvers;
-        _currentRouteIndex = resumeState?.routeIndex ?? 0;
+        _currentRouteIndex = groupRouteIndex;
         _lastDrawnRouteIndex = _currentRouteIndex;
+        // Konnte kein echter Index gefunden werden, ist die Tangente wertlos —
+        // ehrlich als off-route markieren statt eine Falschpeilung zu rechnen.
+        if (groupIndexUnanchored) {
+          _offRouteSince ??= DateTime.now();
+        } else if (wasConfirmed) {
+          _offRouteSince = null;
+        }
+        // Dieselben Stabilisatoren, die der Solo-Reroute-Commit setzt. Ohne sie
+        // geht der Render-Lock ohne Gnadenfenster in die Neu-Akquise, deren
+        // Richtungsfilter erst ab 8 m/s greift — bei Gruppentempo also gar nicht.
+        if (wasConfirmed) {
+          _consecutiveOffRouteFixes = 0;
+          _routeLockedOn = false;
+          _onRouteLockStreak = 0;
+          _postRerouteGraceUntil = DateTime.now().add(
+            const Duration(seconds: 6),
+          );
+        }
         _updateActiveManeuver();
         _distanceSinceLastRedraw = 0.0;
         _announcedManeuverIndices.clear();
@@ -10201,6 +10268,34 @@ class _CruiseModePageState extends State<CruiseModePage>
     final coords = _fullRouteCoordinates;
     if (coords.length < 2) return null;
     final idx = _currentRouteIndex.clamp(0, coords.length - 2).toInt();
+    // 2026-08-09 (vucko, Gruppen-Video): Die Tangente MUSS am Fahrer hängen.
+    //
+    // Der Fehler, den das verhindert: Steht `_currentRouteIndex` nicht zum
+    // Fahrzeug (im Gruppenmodus sprang er beim Übernehmen der Leader-Route auf
+    // 0, also auf den Routenanfang), dann läuft die Schleife unten ab einem
+    // Punkt los, der kilometerweit weg liegt. Der erste Abstand `head → coords[idx+1]`
+    // überspringt sofort `lookAheadMeters`, und interpoliert wird ein Punkt
+    // 30 m vom FAHRER Richtung dieses fernen Ziels. Heraus kommt die Peilung
+    // auf einen FESTEN geografischen Punkt — und wer daran vorbeifährt, dessen
+    // Karte dreht sich stetig weiter, obwohl er geradeaus fährt. Genau das war
+    // im Video zu sehen (mehrfach ~180° in 2 s, auch im Stand).
+    //
+    // Die bisherige Prüfung unten (`dist < 5.0`) misst nur die LÄNGE des
+    // Vorausschau-Vektors, nicht ob der Fahrer überhaupt bei diesem Segment
+    // ist — eine Fernpeilung rutscht dort glatt durch.
+    //
+    // 80 m liegt komfortabel über dem breitesten Off-Route-Korridor, echte
+    // Fahrten werden also nie beschnitten. Greift die Sperre, fällt die Kamera
+    // auf den ohnehin vorhandenen GPS-Kurs-Fallback zurück (siehe Aufrufer).
+    final anchorLat = coords[idx][1];
+    final anchorLng = coords[idx][0];
+    final anchorGap = geo.Geolocator.distanceBetween(
+      head.latitude,
+      head.longitude,
+      anchorLat,
+      anchorLng,
+    );
+    if (!anchorGap.isFinite || anchorGap > 80.0) return null;
     var acc = 0.0;
     var prevLat = head.latitude;
     var prevLng = head.longitude;
@@ -13699,17 +13794,29 @@ class _CruiseModePageState extends State<CruiseModePage>
       _maybePullFollowerGroupRouteBackfill(position);
     }
 
+    // 2026-06-21 (vucko Feldkirch-Gruppen-Reroute-Hang): Ein NICHT-führender
+    // Gruppen-Follower reroutet NICHT selbst — er folgt der geteilten Leader-
+    // Route zurück (G4). Sonst fighten lokale Reroutes die Leader-Updates →
+    // 38s-„Neuberechnung"-Churn.
+    //
+    // 2026-08-09 (vucko, Gruppen-Video): Diese Prüfung stand bis jetzt IN der
+    // if-Bedingung. Damit landete ein abweichender Follower im else-Zweig, und
+    // der setzt `_offRouteSince = null` — behandelt ihn also, als wäre er auf
+    // der Route. Folge: Die einzige Notbremse gegen eine unbrauchbare
+    // Routentangente (`_routeTangentCameraBearing` steigt bei `_offRouteSince
+    // != null` aus) war im Gruppenmodus systematisch abgeschaltet, und die
+    // Kamera rechnete munter weiter mit einer Route, auf der das Fahrzeug gar
+    // nicht ist. Solo setzt hier korrekt `_offRouteSince`.
+    //
+    // Jetzt getrennt: Die Off-Route-Buchführung läuft für ALLE, nur der
+    // AUSLÖSER `_rerouteToOriginalRoute` wird beim deferrenden Follower
+    // übersprungen. „Nicht selbst rerouten" heißt nicht mehr „ist auf der Route".
+    final followerDefersReroute = _groupFollowerShouldDeferReroute(position);
     if (isOutsideCorridor &&
         !approachingDestination &&
         !nearRouteEnd &&
         !makingForwardProgress &&
-        rerouteMayVote &&
-        // 2026-06-21 (vucko Feldkirch-Gruppen-Reroute-Hang): Ein NICHT-führender
-        // Gruppen-Follower reroutet NICHT selbst — er folgt der geteilten Leader-
-        // Route zurück (G4). Sonst fighten lokale Reroutes die Leader-Updates →
-        // 38s-„Neuberechnung"-Churn. Sicher per Konstruktion (solo/Leader/allein
-        // unverändert). Off-Route wird dann wie „im Korridor" behandelt (else).
-        !_groupFollowerShouldDeferReroute(position)) {
+        rerouteMayVote) {
       // Ehrliche Banner-Meter: Luftlinie zur Route fließt in die Anzeige ein.
       _offRouteGapMeters = offRouteDecisionMatch.distanceMeters.isFinite
           ? offRouteDecisionMatch.distanceMeters
@@ -13743,7 +13850,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           _consecutiveOffRouteFixes >= effRequiredOffFixes ||
           (rerouteDecision.clearlyOffRoute && rerouteDecision.sustained) ||
           rerouteDecision.maximumWaitExceeded;
-      if (offRouteDeclared && rerouteDecision.shouldTrigger) {
+      if (offRouteDeclared &&
+          rerouteDecision.shouldTrigger &&
+          !followerDefersReroute) {
         _lastRerouteTime = rerouteDecisionAt;
         _offRouteCount = 0;
         _consecutiveOffRouteFixes = 0;
