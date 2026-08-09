@@ -430,10 +430,26 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
   //                    Bonus, kompakte Loops (55)
   // - ABENDRUNDE:      Hauptstraßen, curve-averse, direkter Weg (300)
   // - ENTDECKER:       Variety-Mix, kein curvature-Bonus, mittlere Distanz
+  // 2026-08-09 (vucko „die Modi muessen sich unterscheiden"): Jede Regel steht
+  // jetzt auf ZWEI Beinen — road_class UND max_speed. Grund: `curvature` gibt es
+  // nur auf einem der beiden Mini-PCs (siehe serverCapabilities). Auf dem
+  // anderen wurden die curvature-Regeln weggeschnitten, und road_class allein
+  // trennt zu schwach: eine Messreihe ueber 45-km-Rundkurse ab Feldkirch ergab
+  // 287 / 292 / 296 Kurven pro 50 km fuer Kurvenjagd / Sport / Abendrunde — also
+  // praktisch dieselbe Route. max_speed ist auf BEIDEN Servern vorhanden und
+  // trennt den Charakter zuverlaessig:
+  //   <= 60 km/h  Ortsdurchfahrt, enge Bergstrasse, Serpentine
+  //   70-80 km/h  klassische kurvige Landstrasse
+  //   >= 90 km/h  gestreckte Hauptstrasse, fliessend
+  //
+  // Bergpassage ist derzeit NICHT direkt messbar: Der Graph ist ohne Hoehendaten
+  // importiert (elevation=false, kein average_slope). Bis zu einem Reimport mit
+  // Hoehendaten dient das Paar „kleine Strassenklasse + niedriges Tempolimit"
+  // als Naeherung fuer den Bergpass — Kurvenjagd sucht ihn, Abendrunde meidet ihn.
   switch (profile) {
     case 'motorcycle_kurvenjagd':
-      // MAX Kurven, kleine technische Straßen, Bergpässe.
-      // PRIMARY bewusst penalisiert — zu gerade, zu wenig Fahr-Spaß.
+      // MAX Kurven, kleine technische Strassen, Bergpaesse.
+      // PRIMARY bewusst penalisiert — zu gerade, zu wenig Fahr-Spass.
       return {
         priority: [
           { if: 'road_class == TERTIARY', multiply_by: '1.7' },
@@ -441,47 +457,59 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
           { if: 'road_class == SECONDARY', multiply_by: '1.15' },
           { if: 'road_class == PRIMARY', multiply_by: '0.7' },
           { if: 'road_class == RESIDENTIAL', multiply_by: '0.3' },
+          // Bergpass-Naeherung: langsame kleine Strassen sind das Ziel.
+          { if: 'max_speed < 75', multiply_by: '1.6' },
+          { if: 'max_speed < 55', multiply_by: '1.8' },
+          // Gestreckte Schnellstrassen sind das Gegenteil dieses Modus.
+          { if: 'max_speed >= 95', multiply_by: '0.35' },
           { if: 'curvature < 0.7', multiply_by: '1.9' },
           { if: 'curvature < 0.5', multiply_by: '2.4' },
         ],
-        // 2026-06-10 (vucko): GH-Server erzwingt seit heute >=200 (HTTP 400:
+        // 2026-06-10 (vucko): GH-Server erzwingt >=200 (HTTP 400:
         // "CustomModel in query can only use distance_influence bigger or
-        // equal to 200.0") — 55/170 liessen ALLE Requests dieser Profile
-        // platzen -> Notfall-Mini-Routen ("katastrophal"-Screenshot). Wert
-        // serverkonform angehoben; Feintuning gehoert in die Server-Config
-        // (routing.max_distance_influence).
+        // equal to 200.0"). Feintuning gehoert in die Server-Config.
         distance_influence: 200,
       };
     case 'motorcycle_scenic':
-      // Sport: offene Genuss-Kurven, breite gut ausgebaute Straßen.
-      // TERTIARY/UNCLASSIFIED leicht penalisiert (zu schmal für Genuss).
-      // Geringer curvature-Bonus — Charakter über Straßentyp, nicht Krümmung.
+      // Sport: offene Genuss-Kurven, breite gut ausgebaute Strassen, wenig Berg.
+      // Der Auftrag lautet „mehr Geraden, wenig Bergpassage" — deshalb wird das
+      // langsame Bergprofil hier aktiv abgewertet statt nur nicht belohnt.
       return {
         priority: [
           { if: 'road_class == SECONDARY', multiply_by: '1.6' },
           { if: 'road_class == PRIMARY', multiply_by: '1.4' },
           { if: 'road_class == TERTIARY', multiply_by: '0.85' },
-          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.75' },
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.6' },
           { if: 'road_class == RESIDENTIAL', multiply_by: '0.4' },
+          // Fliessendes Tempo ist der Kern dieses Modus.
+          { if: 'max_speed >= 80', multiply_by: '1.5' },
+          { if: 'max_speed < 60', multiply_by: '0.45' },
           { if: 'curvature < 0.75', multiply_by: '1.15' },
         ],
         distance_influence: 200,
       };
     case 'motorcycle_abendrunde':
-      // Hauptstraßen, ruhig, direkter Weg zurück — curve-averse.
+      // Gemuetlich durch Staedte, Doerfer und Nebenstrassen — ausdruecklich
+      // OHNE Bergpassage. Ortsdurchfahrten sind hier gewollt (das unterscheidet
+      // die Abendrunde von Sport), die enge Serpentine ist es nicht.
       return {
         priority: [
-          { if: 'road_class == PRIMARY', multiply_by: '1.5' },
           { if: 'road_class == SECONDARY', multiply_by: '1.6' },
+          { if: 'road_class == PRIMARY', multiply_by: '1.4' },
+          { if: 'road_class == RESIDENTIAL', multiply_by: '1.15' },
+          { if: 'road_class == LIVING_STREET', multiply_by: '1.05' },
           { if: 'road_class == TERTIARY', multiply_by: '0.8' },
-          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.5' },
+          // Bergpass-Naeherung ausschliessen: kleine Strasse + langsam.
+          { if: 'road_class == UNCLASSIFIED', multiply_by: '0.35' },
+          { if: 'max_speed < 55', multiply_by: '0.5' },
+          { if: 'max_speed >= 100', multiply_by: '0.6' },
           { if: 'curvature < 0.5', multiply_by: '0.7' },
         ],
         distance_influence: 300,
       };
     case 'motorcycle_entdecker':
-      // Variety: kleinere Straßen + Mix, KEIN curvature-Bonus
-      // (Erkundung über Straßenvielfalt, nicht über Krümmung).
+      // Variety: kleinere Strassen + Mix, KEIN curvature-Bonus
+      // (Erkundung ueber Strassenvielfalt, nicht ueber Kruemmung).
       return {
         priority: [
           { if: 'road_class == TERTIARY', multiply_by: '1.45' },
@@ -658,6 +686,97 @@ function minTurnsPerKmForProfile(profile: string): number {
   }
 }
 
+// ───────────────── Server-Faehigkeiten (Encoded Values / Profile) ──────────
+//
+// 2026-08-09 (vucko „die Modi differenzieren sich nicht"): ROOT CAUSE gefunden.
+// Die beiden Mini-PCs waren nicht synchron und BEIDE unvollstaendig:
+//   PC2 (:8989)  kennt das Profil 'car',  hat aber KEIN 'curvature'
+//   PC1          kennt 'curvature',       hat aber KEIN 'car'-Profil
+// Drei der vier Stil-Overlays (Sport, Kurvenjagd, Abendrunde) enthalten
+// `curvature`-Regeln. Auf dem Server ohne diesen Encoded Value antwortet
+// GraphHopper mit HTTP 400: „Cannot compile expression: … 'curvature' not
+// available" — die KOMPLETTE Anfrage stirbt, nicht nur die eine Regel. Ergebnis:
+// Der Stil kam nie beim Router an, alle Modi lieferten dieselbe Geometrie.
+//
+// Der Fix hat drei Stufen, damit ein Server-Zustand nie wieder eine Route
+// kosten kann:
+//   1. Wir fragen einmal pro Server /info ab und merken uns, was er kann.
+//   2. Regeln, die auf einen unbekannten Encoded Value zeigen, fliegen raus —
+//      der Rest des Stils wirkt weiterhin.
+//   3. Sollte trotzdem ein Compile-Fehler kommen, wird EINMAL ohne Overlay
+//      wiederholt. Eine Route ohne Stil ist immer besser als gar keine Route.
+interface ServerCaps {
+  encodedValues: Set<string>;
+  profiles: Set<string>;
+  bis: number;
+}
+
+const CAPS_TTL_MS = 10 * 60 * 1000;
+const capsCache = new Map<string, ServerCaps>();
+
+async function serverCapabilities(baseUrl: string): Promise<ServerCaps | null> {
+  const jetzt = Date.now();
+  const bekannt = capsCache.get(baseUrl);
+  if (bekannt && bekannt.bis > jetzt) return bekannt;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${baseUrl}/info`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return null;
+    // deno-lint-ignore no-explicit-any
+    const d: any = await res.json();
+    const ev = d?.encoded_values;
+    const evNames: string[] = Array.isArray(ev)
+      ? ev.map((x: unknown) => (typeof x === 'string' ? x : Object.keys(x as object)[0]))
+      : ev && typeof ev === 'object'
+      ? Object.keys(ev)
+      : [];
+    const caps: ServerCaps = {
+      encodedValues: new Set(evNames.filter(Boolean)),
+      // deno-lint-ignore no-explicit-any
+      profiles: new Set((d?.profiles ?? []).map((p: any) => p?.name).filter(Boolean)),
+      bis: jetzt + CAPS_TTL_MS,
+    };
+    capsCache.set(baseUrl, caps);
+    return caps;
+  } catch (_) {
+    // Kein /info erreichbar: lieber nichts filtern als eine Route verlieren.
+    // Stufe 3 (Retry ohne Overlay) faengt den Rest ab.
+    return null;
+  }
+}
+
+/// Alle Bezeichner links von einem Vergleich in einer Custom-Model-Bedingung.
+/// `road_class == TERTIARY && max_speed < 70` → ['road_class', 'max_speed'].
+function bedingungsFelder(ausdruck: string): string[] {
+  const felder: string[] = [];
+  for (const teil of ausdruck.split(/&&|\|\|/)) {
+    const m = teil.trim().match(/^([a-z_][a-z0-9_]*)\s*(==|!=|<=|>=|<|>)/i);
+    if (m) felder.push(m[1]);
+  }
+  return felder;
+}
+
+/// Entfernt Regeln, die auf einen dem Server unbekannten Encoded Value zeigen.
+function overlayAufServerZuschneiden<T extends { if: string }>(
+  regeln: T[],
+  caps: ServerCaps | null,
+): { behalten: T[]; entfernt: string[] } {
+  if (caps == null || caps.encodedValues.size === 0) {
+    return { behalten: regeln, entfernt: [] };
+  }
+  const behalten: T[] = [];
+  const entfernt: string[] = [];
+  for (const regel of regeln) {
+    const felder = bedingungsFelder(regel.if);
+    const fehlend = felder.filter((f) => !caps.encodedValues.has(f));
+    if (fehlend.length === 0) behalten.push(regel);
+    else entfernt.push(`${regel.if} (fehlt: ${fehlend.join(',')})`);
+  }
+  return { behalten, entfernt };
+}
+
 async function callGraphHopper(opts: {
   startLat: number;
   startLng: number;
@@ -695,6 +814,10 @@ async function callGraphHopper(opts: {
   // die ganze Route mit HTTP 400 sterben zu lassen. Dieses Feld merkt sich das
   // ursprüngliche Profil, damit der Retry nicht endlos läuft.
   _profileFallbackFrom?: string;
+  // 2026-08-09 (vucko): Zweiter Rekursions-Guard. Wenn der Server das
+  // Stil-Overlay nicht uebersetzen kann, wird EINMAL ohne Overlay wiederholt —
+  // eine Route ohne Stil schlaegt „keine Route".
+  _ohneOverlay?: boolean;
 }): Promise<RouteResult | { error: string }> {
   // 2026-06-03 (vucko ROOT-CAUSE-FIX): GraphHopper wird jetzt per POST mit
   // JSON-Body angesprochen, NICHT mehr per GET-Query. Live-Test an PC1+PC2
@@ -877,12 +1000,44 @@ async function callGraphHopper(opts: {
       }
     }
   }
-  if (overlay.priority.length > 0 || overlay.distance_influence != null || overlay.speed != null) {
+  const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
+
+  // 2026-08-09 (vucko): Overlay auf das zuschneiden, was DIESER Server kann.
+  // Regeln mit unbekanntem Encoded Value (z. B. `curvature` auf PC2) wuerden
+  // sonst die ganze Anfrage mit HTTP 400 killen — genau das war die Ursache
+  // dafuer, dass sich die Fahrstile nicht unterschieden haben.
+  const caps = await serverCapabilities(baseUrl);
+  if (caps != null) {
+    const prio = overlayAufServerZuschneiden(overlay.priority, caps);
+    const spd = overlayAufServerZuschneiden(overlay.speed ?? [], caps);
+    if (prio.entfernt.length > 0 || spd.entfernt.length > 0) {
+      console.warn(
+        `[OVERLAY-TRIM] ${baseUrl} kennt Teile des Stil-Modells nicht — ` +
+        `${[...prio.entfernt, ...spd.entfernt].join(' | ')}`,
+      );
+    }
+    overlay.priority = prio.behalten;
+    overlay.speed = spd.behalten;
+    // Profil proaktiv ersetzen statt auf den 400 zu warten.
+    if (caps.profiles.size > 0 && !caps.profiles.has(ghBody.profile)) {
+      const ersatz = ghBody.profile === 'car'
+        ? (caps.profiles.has('motorcycle_abendrunde') ? 'motorcycle_abendrunde' : [...caps.profiles][0])
+        : (caps.profiles.has('motorcycle_scenic') ? 'motorcycle_scenic' : [...caps.profiles][0]);
+      console.warn(
+        `[PROFILE-TRIM] ${baseUrl} kennt '${ghBody.profile}' nicht — nutze '${ersatz}'`,
+      );
+      ghBody.profile = ersatz;
+    }
+  }
+  if (
+    !opts._ohneOverlay &&
+    (overlay.priority.length > 0 || overlay.distance_influence != null ||
+      (overlay.speed?.length ?? 0) > 0)
+  ) {
     // Objekt, NICHT JSON.stringify — geht jetzt im POST-Body an GraphHopper.
     ghBody.custom_model = overlay;
   }
 
-  const baseUrl = opts.serverUrl ?? GRAPHHOPPER_URL;
   const url = `${baseUrl}/route`;
   // 2026-06-02 (vucko): Per-Call-Timeout + externes Abort-Signal. Ein hängender
   // GraphHopper-Call wird nach GH_FETCH_TIMEOUT_MS hart abgebrochen (statt die
@@ -931,6 +1086,22 @@ async function callGraphHopper(opts: {
           profile: fallbackProfile,
           _profileFallbackFrom: opts.profile,
         });
+      }
+      // 2026-08-09 (vucko): Letzte Stufe. Wenn der Server das Stil-Modell nicht
+      // uebersetzen kann (unbekannter Encoded Value, geaenderte Server-Config),
+      // wird EINMAL ohne Overlay wiederholt. Eine Route ohne Stil ist immer
+      // besser als eine Fehlermeldung — der Auftrag lautet „immer eine Route".
+      if (
+        res.status === 400 &&
+        /Cannot compile expression|not available|custom_model/i.test(bodyText) &&
+        !opts._ohneOverlay
+      ) {
+        clearTimeout(timeoutId);
+        console.warn(
+          `[OVERLAY-FALLBACK] ${baseUrl} lehnt das Stil-Modell ab — retry ohne ` +
+          `Overlay. Body: ${bodyText.slice(0, 140)}`,
+        );
+        return await callGraphHopper({ ...opts, _ohneOverlay: true });
       }
       return { error: `GraphHopper HTTP ${res.status}: ${bodyText.slice(0, 200)}` };
     }

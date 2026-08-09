@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:cruise_connect/core/kurven_zaehler.dart';
 import 'package:cruise_connect/data/services/route_semantics.dart';
 
 /// Konfiguration für die 4 Fahrstile — bestimmt Waypoint-Muster,
@@ -41,8 +42,17 @@ class RouteStyleConfig {
   final int retryAttempts;
   final double minStyleFitScore;
 
-  /// Mindest-Kurven pro 50km (Bearing-Änderungen >15°).
-  /// Nur für Kurvenjagd relevant — null = kein Check.
+  /// Mindest-Kurven pro 50 km, gezaehlt mit [KurvenZaehler] — also mit
+  /// derselben Zahl, die dem Nutzer angezeigt wird.
+  /// Nur fuer Kurvenjagd relevant — null = kein Check.
+  ///
+  /// 2026-08-09 (vucko „akkurate Kurvenzaehlung"): Vorher zaehlte hier ein
+  /// eigener Index-Zaehler (jeder 3. Punkt, Schwelle 15 Grad). Der lieferte auf
+  /// echten GraphHopper-Routen 250-350 „Kurven" pro 50 km, weil er jeden
+  /// Geometrie-Zacken mitnahm — die Schwelle 18 war damit nie erfuellt oder
+  /// verfehlt, sie war schlicht wirkungslos. Der akkurate Zaehler misst auf
+  /// denselben Routen (18 Rundkurse, 5 Staedte, beide Server) 58-182 fuer
+  /// Kurvenjagd und ab 38 fuer Sport. Daraus die neue Schwelle: 55.
   final int? minCurvesPer50km;
 
   /// Maximale Durchschnittsgeschwindigkeit (km/h) die die Route implizieren darf.
@@ -87,7 +97,7 @@ class RouteStyleConfig {
     maxRoundTripKm: 100,
     retryAttempts: 5,
     minStyleFitScore: 52.0,
-    minCurvesPer50km: 18,
+    minCurvesPer50km: 55,
     zigzagWaypoints: true,
   );
 
@@ -148,15 +158,13 @@ class RouteStyleConfig {
     required double distanceKm,
     double? durationSeconds,
   }) {
-    // Kurvenjagd: Bearing-Änderungen zählen
+    // Kurvenjagd: echte Kurven zaehlen (20-m-Resampling, Boegen gruppiert) —
+    // dieselbe Zahl, die dem Nutzer spaeter angezeigt wird.
     if (minCurvesPer50km != null && coordinates.length >= 20) {
-      final curveCount = _countBearingChanges(
+      final curvesNormalized = KurvenZaehler.proFuenfzigKm(
         coordinates,
-        thresholdDegrees: 15,
+        distanceKm,
       );
-      final curvesNormalized = distanceKm > 0
-          ? (curveCount / distanceKm) * 50.0
-          : 0.0;
       if (curvesNormalized < minCurvesPer50km!) {
         return false;
       }
@@ -638,43 +646,11 @@ class RouteStyleConfig {
     };
   }
 
-  /// Zählt Bearing-Änderungen die größer als [thresholdDegrees] sind.
-  /// Nutzt Sampling (jeden 5. Punkt) für Performance.
-  static int _countBearingChanges(
-    List<List<double>> coordinates, {
-    required double thresholdDegrees,
-  }) {
-    if (coordinates.length < 4) return 0;
-
-    var count = 0;
-    // Feinerer Step (3) fängt alpine Switchbacks im 250–500m Fenster zuverlässig.
-    // Nur hier sicher: _countBearingChanges wird ausschließlich vom Kurvenjagd-
-    // Hard-Gate genutzt (minCurvesPer50km != null). Sport/Abendrunde/Entdecker
-    // bleiben über _calculateTurnStats (sampleStep=5) unbeeinflusst.
-    const sampleStep = 3;
-
-    for (
-      var i = sampleStep;
-      i < coordinates.length - sampleStep;
-      i += sampleStep
-    ) {
-      final prev = coordinates[i - sampleStep];
-      final curr = coordinates[i];
-      final next =
-          coordinates[math.min(i + sampleStep, coordinates.length - 1)];
-
-      if (prev.length < 2 || curr.length < 2 || next.length < 2) continue;
-
-      final bearing1 = _bearing(prev[1], prev[0], curr[1], curr[0]);
-      final bearing2 = _bearing(curr[1], curr[0], next[1], next[0]);
-      final delta = _angleDiff(bearing1, bearing2).abs();
-
-      if (delta > thresholdDegrees) count++;
-    }
-
-    return count;
-  }
-
+  /// Weiche Form-Kennzahlen fuer den Stil-Score (Kurvendichte, scharfe Kurven,
+  /// Richtungswechsel pro km). Bewusst ein anderer, schneller Zaehler als
+  /// [KurvenZaehler]: Hier geht es um den RELATIVEN Vergleich mehrerer
+  /// Kandidaten untereinander, nicht um die Zahl, die der Nutzer sieht. Das
+  /// harte Kurvenjagd-Gate laeuft ueber [KurvenZaehler].
   static _TurnStats _calculateTurnStats(List<List<double>> coordinates) {
     if (coordinates.length < 4) return const _TurnStats();
 
