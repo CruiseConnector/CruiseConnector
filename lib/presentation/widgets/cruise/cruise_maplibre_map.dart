@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/gestures.dart'
+    show EagerGestureRecognizer, OneSequenceGestureRecognizer;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:latlong2/latlong.dart' as ll;
@@ -280,7 +283,23 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.poiFeatures = const [],
     this.poiImages = const {},
     this.onPoiTapped,
+    this.eagerGestures = false,
   });
+
+  /// Soll die Karte Zieh-Gesten SOFORT beanspruchen, statt sie einem
+  /// scrollenden Vorfahren zu überlassen?
+  ///
+  /// 2026-08-09 (vucko, Gruppe erstellen): „man kann oben in der Karte nicht
+  /// bewegen." Ursache: Liegt die Karte in einem Scroll-View, gewinnt dessen
+  /// vertikaler Zieh-Erkenner die Gesten-Arena — die Seite scrollt, die Karte
+  /// steht still. Ohne eigene Erkenner bekommt die Karte laut Plugin-Doku nur
+  /// die Gesten, die kein anderer beansprucht.
+  ///
+  /// Auf `true` beansprucht die Karte die Geste sofort und gewinnt. Nur dort
+  /// setzen, wo die Karte tatsächlich in einem Scrollable liegt — sonst kann
+  /// man die Seite über der Karte nicht mehr scrollen. Voreinstellung `false`
+  /// lässt alle bestehenden Aufrufstellen unverändert.
+  final bool eagerGestures;
 
   final ll.LatLng initialCenter;
   final double initialZoom;
@@ -1547,6 +1566,16 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                   onMapCreated: _onMapCreated,
                   onStyleLoadedCallback: _onStyleLoaded,
                   trackCameraPosition: true,
+                  // Siehe `eagerGestures` im Konstruktor: Ohne eigene Erkenner
+                  // bekommt die Karte nur Gesten, die kein Vorfahre beansprucht —
+                  // in einem Scroll-View verliert sie damit jedes Ziehen.
+                  gestureRecognizers: widget.eagerGestures
+                      ? const <Factory<OneSequenceGestureRecognizer>>{
+                          Factory<OneSequenceGestureRecognizer>(
+                            EagerGestureRecognizer.new,
+                          ),
+                        }
+                      : const <Factory<OneSequenceGestureRecognizer>>{},
                   rotateGesturesEnabled: widget.rotateGestures,
                   tiltGesturesEnabled: false,
                   compassEnabled: false,

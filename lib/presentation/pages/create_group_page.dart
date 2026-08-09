@@ -53,6 +53,11 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   String _selectedDetour = 'Direkt';
   String _selectedVisibility = 'Öffentlich (Für jeden)';
   DateTime? _selectedDateTime;
+  // 2026-08-09 (vucko): Karte aufziehbar + Rücksprung zur Karte nach dem
+  // Generieren. Vorher war sie fest 280 px hoch und beim Einstellen weg.
+  final ScrollController _scrollCtrl = ScrollController();
+  bool _karteGross = false;
+
   bool _isRoundTrip = true;
   bool _avoidHighways = false;
   PlaceSuggestion? _selectedDestination;
@@ -97,6 +102,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     _descCtrl.dispose();
     _addressCtrl.dispose();
     _destinationCtrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -393,6 +399,20 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       });
     }
     _fitRouteBounds(coords);
+    // Nach dem Generieren zurueck zur Karte: Wer unten im Formular steht, sieht
+    // die frische Route sonst gar nicht. Genau das war Vuckos Beschwerde,
+    // er konnte "nicht nachschauen, wo das Problem ist".
+    _scrollToMap();
+  }
+
+  /// Scrollt den Kopf mit der Karte wieder ins Bild.
+  void _scrollToMap() {
+    if (!mounted || !_scrollCtrl.hasClients) return;
+    _scrollCtrl.animateTo(
+      0,
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   // 2026-07-03 (vucko Gruppe-mit-gespeicherter-Route, Geräte-Video 07-03): Statt
@@ -1063,9 +1083,17 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       body: Stack(
         children: [
           CustomScrollView(
+            controller: _scrollCtrl,
             slivers: [
               SliverAppBar(
-                expandedHeight: 280,
+                // 2026-08-09 (vucko): „ich konnte leider nicht nachschauen, wo
+                // das Problem ist." Die Karte war fest 280 px hoch — zum
+                // Einstellen musste man runterscrollen, und genau dann war sie
+                // weg. Über den Knopf oben rechts lässt sie sich jetzt auf
+                // fast die volle Höhe aufziehen, um die Route zu prüfen.
+                expandedHeight: _karteGross
+                    ? MediaQuery.of(context).size.height * 0.82
+                    : 280,
                 pinned: true,
                 backgroundColor: const Color(0xFF0B0E14),
                 elevation: 0,
@@ -1080,6 +1108,33 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                     onPressed: () => Navigator.pop(context),
                   ),
                 ),
+                actions: [
+                  Container(
+                    margin: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      tooltip: _karteGross
+                          ? 'Karte verkleinern'
+                          : 'Karte vergrößern',
+                      icon: Icon(
+                        _karteGross
+                            ? Icons.close_fullscreen
+                            : Icons.open_in_full,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      onPressed: () {
+                        setState(() => _karteGross = !_karteGross);
+                        // Beim Vergrößern nach oben, sonst bliebe der Kopf
+                        // zusammengefaltet und die Karte trotzdem klein.
+                        if (_karteGross) _scrollToMap();
+                      },
+                    ),
+                  ),
+                ],
                 flexibleSpace: FlexibleSpaceBar(background: _buildMap()),
               ),
               SliverToBoxAdapter(
@@ -1286,6 +1341,14 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
           markers: _buildMapLibreMarkers(),
           onMapClick: _handleMapTap,
           onControllerReady: _handleMapReady,
+          // 2026-08-09 (vucko, „man kann oben in der Karte nicht bewegen"):
+          // Diese Karte sitzt im Kopf eines CustomScrollView. Ohne eigene
+          // Gesten-Erkenner bekommt sie nur, was der Scroll-View übrig lässt —
+          // und der beansprucht jedes vertikale Ziehen. Ergebnis: Die Seite
+          // scrollt, die Karte steht still. Mit `eagerGestures` gewinnt die
+          // Karte die Geste sofort und lässt sich verschieben und zoomen.
+          // Gescrollt wird stattdessen über den Bereich UNTER der Karte.
+          eagerGestures: true,
         ),
         if (_isWaypointPlanning) _buildWaypointActionOverlay(),
       ],
