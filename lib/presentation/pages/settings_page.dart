@@ -15,8 +15,10 @@ import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/presentation/pages/change_password_page.dart';
+import 'package:cruise_connect/presentation/pages/feedback_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
+import 'package:cruise_connect/presentation/widgets/changelog_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/group_safety_notice_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/language_picker.dart';
 import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
@@ -567,6 +569,34 @@ class _SettingsPageState extends State<SettingsPage> {
                         'Warum „Immer erlauben" für aktive Fahrten wichtig ist',
                     onTap: () =>
                         showLocationAlwaysNoticeSheet(context, force: true),
+                  ),
+                ]),
+
+                const SizedBox(height: 24),
+
+                // 2026-08-09 (vucko): „Feedback-Funktion in den Einstellungen
+                // mit einem vorgefertigten Layout und der Moeglichkeit, ein
+                // Foto anzuhaengen" — plus der Update-Log zum Nachlesen.
+                _buildSectionHeader('RUECKMELDUNG & NEUERUNGEN'),
+                _buildSectionContainer([
+                  _buildNavTile(
+                    'Uns schreiben',
+                    Icons.chat_bubble_outline,
+                    subtitle:
+                        'Fehler melden, Idee schicken oder Lob dalassen — mit Foto',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => const FeedbackPage(),
+                      ),
+                    ),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  _buildNavTile(
+                    'Was ist neu?',
+                    Icons.auto_awesome_outlined,
+                    subtitle: 'Die Aenderungen dieser Version nachlesen',
+                    onTap: () => showChangelogAusEinstellungen(context),
                   ),
                 ]),
 

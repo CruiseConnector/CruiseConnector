@@ -13,6 +13,8 @@ import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
+import 'package:cruise_connect/data/services/changelog_service.dart';
+import 'package:cruise_connect/presentation/widgets/changelog_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/ride_rating_sheet.dart';
 import 'package:cruise_connect/presentation/pages/home_content_page.dart';
 import 'package:cruise_connect/presentation/widgets/app_tutorial_overlay.dart';
@@ -355,7 +357,36 @@ class _HomePageState extends State<HomePage> {
   /// und ein zwischenzeitlich abgebautes Widget.
   bool _bewertungsPopupOffen = false;
 
+  /// 2026-08-09 (vucko): „Nach jedem Update soll ein Update-Log kommen."
+  ///
+  /// Haengt aus demselben Grund am Home-Tab wie das Bewertungs-Popup: Das ist
+  /// der einzige Ort, an dem sicher niemand faehrt. Der Update-Hinweis hat
+  /// Vorrang vor der Sterne-Abfrage — wer gerade ein Update bekommen hat, soll
+  /// erst sehen, was neu ist, und nicht direkt nach Sternen gefragt werden.
+  bool _neuerungenOffen = false;
+
+  Future<bool> _pruefeNeuerungen() async {
+    if (_neuerungenOffen) return false;
+    if (CruiseModePage.isFullscreen.value) return false;
+    final eintrag = await ChangelogService.instance.faelligerEintrag();
+    if (eintrag == null) return false;
+    if (!mounted || _selectedIndex != 0) return false;
+
+    _neuerungenOffen = true;
+    // Erst merken, dann zeigen — sonst kaeme das Blatt bei jedem Tab-Wechsel
+    // wieder, falls der Nutzer es wegwischt.
+    await ChangelogService.instance.markiereGesehen(eintrag.version);
+    try {
+      if (!mounted) return true;
+      await showChangelogSheet(context, eintrag);
+    } finally {
+      _neuerungenOffen = false;
+    }
+    return true;
+  }
+
   Future<void> _pruefeBewertungsPopup() async {
+    if (await _pruefeNeuerungen()) return;
     if (_bewertungsPopupOffen) return;
     if (CruiseModePage.isFullscreen.value) return;
     if (!await RideRatingPromptService.instance.shouldPrompt()) return;
