@@ -1767,10 +1767,15 @@ void main() {
         var callCount = 0;
         when(mockInvoker.invoke(any)).thenAnswer((_) async {
           callCount++;
+          // 2026-08-09: Distanzen auf die neue Umweg-Spezifikation gezogen.
+          // Vucko: kleiner Umweg = das DOPPELTE der Ursprungsstrecke. Bei
+          // Dornbirn→Feldkirch (~21 km Luftlinie) sind das ~42 km statt der
+          // früheren ~28 km. Die Zusicherung des Tests bleibt unverändert:
+          // zackige Geometrie wird verworfen, die saubere Alternative gewinnt.
           if (callCount == 1) {
             return _buildZigZagPointToPointResponse(
-              distanceMeters: 28000,
-              durationSeconds: 2200,
+              distanceMeters: 42000,
+              durationSeconds: 3300,
               destinationLat: _feldkirchLat,
               destinationLng: _feldkirchLng,
               startLat: _dornbirnLat,
@@ -1782,12 +1787,12 @@ void main() {
             );
           }
           return _buildPointToPointResponse(
-            distanceMeters: 28500,
-            durationSeconds: 2250,
+            distanceMeters: 47000,
+            durationSeconds: 3700,
             destinationLat: _feldkirchLat,
             destinationLng: _feldkirchLng,
             coordinateCount: 180,
-            bendScale: 0.075,
+            bendScale: 0.22,
             startLat: _dornbirnLat,
             startLng: _dornbirnLng,
             meta: const {
@@ -1818,6 +1823,11 @@ void main() {
         var callCount = 0;
         when(mockInvoker.invoke(any)).thenAnswer((_) async {
           callCount++;
+          // 2026-08-09: Auf die neue Umweg-Spezifikation gezogen. München→
+          // Salzburg sind ~116 km Luftlinie; „kleiner Umweg" zielt jetzt auf
+          // ~232 km (Fenster ~186–313 km) statt früher ~153 km. 640 km liegt
+          // weiterhin klar darüber und muss verworfen werden — genau das prüft
+          // dieser Test. Die 240-km-Alternative erfüllt die neue Vorgabe.
           if (callCount == 1) {
             return _buildPointToPointResponse(
               distanceMeters: 640000,
@@ -1829,12 +1839,12 @@ void main() {
             );
           }
           return _buildPointToPointResponse(
-            distanceMeters: 190000,
-            durationSeconds: 11200,
+            distanceMeters: 251000,
+            durationSeconds: 14600,
             destinationLat: 47.8095,
             destinationLng: 13.0550,
             coordinateCount: 900,
-            bendScale: 0.50,
+            bendScale: 0.95,
           );
         });
 

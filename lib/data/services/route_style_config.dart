@@ -568,10 +568,15 @@ class RouteStyleConfig {
       directDistanceKm: directDistanceKm,
       detourVariant: detourVariant,
     );
+    // 2026-08-09 (vucko): Zielwerte sind jetzt 2× / 3× / 4× der Ursprungsstrecke
+    // (route_service.dart, detourFactor). Die Untergrenze muss mitwachsen, sonst
+    // würde eine 1,14×-Route weiterhin als „kleiner Umweg" durchgehen und sich
+    // von „direkt" kaum unterscheiden. Bewusst mit Luft nach unten zum Ziel
+    // (1,60 statt 2,00), damit in engem Gelände nicht alles verworfen wird.
     final minByDirect = switch (detourVariant) {
-      1 => math.max(directDistanceKm * 1.14, directDistanceKm + 2.5),
-      2 => math.max(directDistanceKm * 1.34, directDistanceKm + 6.0),
-      3 => math.max(directDistanceKm * 1.58, directDistanceKm + 10.0),
+      1 => math.max(directDistanceKm * 1.60, directDistanceKm + 5.0),
+      2 => math.max(directDistanceKm * 2.35, directDistanceKm + 13.0),
+      3 => math.max(directDistanceKm * 3.10, directDistanceKm + 24.0),
       _ => math.max(directDistanceKm * 1.08, directDistanceKm + 2.0),
     };
     final minByReference = switch (detourVariant) {
@@ -599,13 +604,28 @@ class RouteStyleConfig {
     // Bergregionen (Bregenz→Innsbruck via Alpen) und detour=3 nie
     // abgelehnt werden. Direct distance × 4× als hartes Limit reicht
     // selbst für die windigsten Routen.
+    // 2026-08-09 (vucko): Muss ÜBER dem Ziel liegen, nicht darauf. Bei Ziel 3,00×
+    // und Decke 3,00× würde eine Route, die minimal länger ausfällt als geplant,
+    // wieder abgeschnitten — genau das hatte die Umwege künstlich klein gehalten.
+    // „Groß" darf bis 5,2× gehen: Vucko nannte für eine 20-km-Strecke 80–100 km.
     final maxByDirect = switch (detourVariant) {
-      1 => directDistanceKm * 2.20,
-      2 => directDistanceKm * 3.00,
-      3 => directDistanceKm * 4.00,
+      1 => directDistanceKm * 2.70,
+      2 => directDistanceKm * 3.90,
+      3 => directDistanceKm * 5.20,
       _ => directDistanceKm * 1.80,
     };
-    return math.max(directDistanceKm + 20.0, maxByDirect);
+    // Der additive Sockel MUSS über dem Mindest-Zuschlag der jeweiligen Stufe
+    // liegen (route_service.dart: +8 / +20 / +35 km), sonst rutscht bei kurzen
+    // Strecken die Untergrenze über die Obergrenze — und `clamp` wirft dann eine
+    // Ausnahme, statt eine Route zu liefern. Nachgerechnet für 1 bis 200 km
+    // Luftlinie: mit diesen Sockeln bleibt Untergrenze <= Obergrenze überall.
+    final sockelKm = switch (detourVariant) {
+      1 => 20.0,
+      2 => 35.0,
+      3 => 55.0,
+      _ => 20.0,
+    };
+    return math.max(directDistanceKm + sockelKm, maxByDirect);
   }
 
   Map<String, dynamic> toRequestHints() {

@@ -1854,16 +1854,34 @@ class RouteService {
     // Groß 2.10× in [1.75, 2.95]. So bleiben sie deutlich differenziert,
     // ohne dass Mapbox in Bergland (Dornbirn, Bregenzerwald) ständig das
     // Fenster verfehlt und auf "direkt" zurückfällt.
+    // 2026-08-09 (vucko): „bei einer 20 km route bei kleinem Umweg sollte es ca.
+    // 40 km sein, bei mittlerem ca. 60 km und bei großem 80–100." Also das
+    // Doppelte / Dreifache / Vierfache der Ursprungsstrecke.
+    //
+    // Vorher standen hier 1,32 / 1,65 / 2,10 — rund die HÄLFTE davon. Die alte
+    // Begründung im Code lautete, Mapbox verfehle in Bergland sonst das Fenster
+    // und falle auf „direkt" zurück. Mapbox ist seit dem 10.07. komplett aus dem
+    // Projekt (eigener GraphHopper), die Vorsichtsbremse galt also einem
+    // Anbieter, den es hier nicht mehr gibt.
+    //
+    // Warum das gefahrlos ist: Liefert die Suche den Umweg nicht in dieser
+    // Stärke, wirft sie nichts weg — _needsStrongerPointToPointDetour versucht
+    // eine kräftigere Variante und behält andernfalls die beste vorhandene
+    // Route (edgeMeta['detour_downgraded'] = true). Vuckos Regel „es soll immer
+    // eine Route ausgespuckt werden" bleibt damit erfüllt.
     final detourFactor = switch (normalizedVariant) {
-      1 => 1.32,
-      2 => 1.65,
-      3 => 2.10,
+      1 => 2.00,
+      2 => 3.00,
+      3 => 4.00,
       _ => scenic ? 1.15 : 1.0,
     };
+    // Mindest-Zuschlag für kurze Strecken: Bei 3 km Luftlinie wären 2× nur 6 km
+    // — das fühlt sich nach keinem Umweg an. Der Zuschlag hebt die Untergrenze,
+    // ohne lange Strecken zu beeinflussen (dort gewinnt ohnehin der Faktor).
     final detourMinimumExtraKm = switch (normalizedVariant) {
-      1 => 4.0,
-      2 => 10.0,
-      3 => 20.0,
+      1 => 8.0,
+      2 => 20.0,
+      3 => 35.0,
       _ => scenic ? 3.0 : 0.0,
     };
     final directDistanceKm = math.max(
@@ -1877,9 +1895,9 @@ class RouteService {
       1.0,
     );
     final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 1.32,
-      2 => directDistanceKm * 1.65,
-      3 => directDistanceKm * 2.10,
+      1 => directDistanceKm * 2.00,
+      2 => directDistanceKm * 3.00,
+      3 => directDistanceKm * 4.00,
       _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
     };
     final initialTargetDistanceKm = math.max(
