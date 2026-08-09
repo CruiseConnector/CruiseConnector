@@ -93,6 +93,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/nav_distance_format.d
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_navigation_info_panel.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_setup_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/drive_control_panel.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/group_divergence_card.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/construction_alert_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.dart';
@@ -2949,6 +2950,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// (groupId null), Leader und Allein-in-Gruppe geben false → unverändert.
   bool _groupFollowerShouldDeferReroute(geo.Position position) {
     if (widget.groupId == null) return false;
+    // 2026-08-09 (vucko): Hat der Fahrer in der Abkommen-Karte „Eigene Route"
+    // gewählt, wartet er nicht mehr auf den Anführer — ab da reroutet das Gerät
+    // wie solo. Die Gruppe bleibt bestehen (Standorte laufen weiter), nur die
+    // Route ist nicht mehr geteilt.
+    if (_groupDivergenceOwnRouteChosen) return false;
     final now = DateTime.now();
     final hasFreshPeer = _groupMembers.values.any(
       (m) => m.hasFreshLocation(now: now, maxAge: _groupMemberFreshLocationAge),
@@ -2977,6 +2983,84 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Wird NUR im Build aufgerufen, wenn das Reroute-Banner ohnehin aktiv ist
   /// (begrenzte Kosten). Fällt der Leader-Peer weg (>12s stale), greift wieder
   /// das normale „Neuberechnung", weil der Follower dann selbst zurück muss.
+  // ── Gruppen-Abkommen: die drei Wege statt der Sackgasse ──────────────────
+  // 2026-08-09 (vucko, Gruppenfahrt 08.08.): „wir haben nicht gewusst wohin
+  // fahren, dann mussten wir die Route leider abbrechen."
+  DateTime? _groupDivergenceDismissedAt;
+  bool _groupDivergenceBusy = false;
+  /// Gesetzt, sobald der Fahrer „Eigene Route" gewählt hat: Ab dann wartet er
+  /// NICHT mehr auf die Leader-Route, sondern reroutet wie im Solo-Modus.
+  bool _groupDivergenceOwnRouteChosen = false;
+
+  /// Ab wann gilt das Abkommen als echt (nicht als GPS-Zucker)? Bewusst etwas
+  /// über dem Defer-Fenster aus [groupFollowerShouldDeferLocalReroute]
+  /// (10 s / 200 m): Erst wenn das Warten auf den Anführer nachweislich nichts
+  /// gebracht hat, ist eine Frage an den Fahrer berechtigt.
+  static const Duration _groupDivergenceMinDuration = Duration(seconds: 14);
+  static const double _groupDivergenceMinGapMeters = 220.0;
+
+  /// Nach dem Wegwischen eine Weile Ruhe — sonst poppt die Karte bei jedem
+  /// weiteren Fix erneut auf und wird zur Belästigung.
+  static const Duration _groupDivergenceSnooze = Duration(minutes: 2);
+
+  bool get _groupDivergenceCardVisible {
+    if (widget.groupId == null) return false;
+    if (!_isRouteConfirmed) return false;
+    if (_groupRouteRevision <= 0) return false;
+    if (_groupDivergenceOwnRouteChosen) return false;
+    if (_isRecordingMode) return false;
+    final seit = _offRouteSince;
+    if (seit == null) return false;
+    final now = DateTime.now();
+    final wegAn = _groupDivergenceDismissedAt;
+    if (wegAn != null && now.difference(wegAn) < _groupDivergenceSnooze) {
+      return false;
+    }
+    // Führt dieses Gerät die Gruppe, ist nichts zu entscheiden — es reroutet
+    // ohnehin selbst und die anderen folgen.
+    final pos = _userLocation;
+    if (pos != null && _isCurrentDeviceLeadingGroupRoute(pos)) return false;
+    final langGenug = now.difference(seit) >= _groupDivergenceMinDuration;
+    final weitGenug = _offRouteGapMeters >= _groupDivergenceMinGapMeters;
+    return langGenug || weitGenug;
+  }
+
+  Future<void> _handleGroupDivergenceChoice(
+    GroupDivergenceChoice wahl,
+  ) async {
+    if (_groupDivergenceBusy || !mounted || _disposed) return;
+    final pos = _userLocation;
+    if (pos == null) return;
+    _safeSetState(() => _groupDivergenceBusy = true);
+    try {
+      switch (wahl) {
+        case GroupDivergenceChoice.backToRoute:
+          // Zurück auf die bestehende Gruppenroute — derselbe Weg, den ein
+          // Solo-Fahrer beim Verfahren nimmt.
+          _groupDivergenceDismissedAt = DateTime.now();
+          await _rerouteToOriginalRoute(pos);
+        case GroupDivergenceChoice.adoptGroupRoute:
+          // Die AKTUELLE Route der Gruppe von hier aus holen. Der Backfill zieht
+          // die neueste Revision; _applyGroupRouteData ankert sie seit heute an
+          // der echten Position statt am Routenanfang.
+          _groupDivergenceDismissedAt = DateTime.now();
+          _maybePullFollowerGroupRouteBackfill(pos);
+        case GroupDivergenceChoice.ownRoute:
+          // Ab jetzt eigenständig: Der Defer auf den Anführer entfällt, das
+          // Gerät reroutet wie solo. Die Gruppe bleibt bestehen (Standorte
+          // laufen weiter), nur die Route ist nicht mehr geteilt.
+          _groupDivergenceOwnRouteChosen = true;
+          await _rerouteToOriginalRoute(pos);
+      }
+    } catch (e) {
+      debugPrint('[CruiseMode][GruppenAbkommen] Wahl fehlgeschlagen: $e');
+    } finally {
+      if (mounted && !_disposed) {
+        _safeSetState(() => _groupDivergenceBusy = false);
+      }
+    }
+  }
+
   bool _groupFollowerWaitingForLeaderRoute() {
     if (widget.groupId == null || _groupRouteRevision <= 0) return false;
     final pos = _userLocation;
@@ -6860,6 +6944,21 @@ class _CruiseModePageState extends State<CruiseModePage>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // 2026-08-09 (vucko, Gruppenfahrt 08.08.): Wer als Mitfahrer von
+                // der Gruppenroute abkommt, darf nicht mehr ratlos dastehen.
+                // Über den Bedienelementen, verdeckt die Karte nicht, wegwischbar.
+                if (_groupDivergenceCardVisible)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: GroupDivergenceCard(
+                      gapMeters: _offRouteGapMeters,
+                      busy: _groupDivergenceBusy,
+                      onDismiss: () => _safeSetState(() {
+                        _groupDivergenceDismissedAt = DateTime.now();
+                      }),
+                      onChoice: _handleGroupDivergenceChoice,
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   // 2026-08-03 (vucko Route-Aufzeichnen): Beim Aufzeichnen gibt
