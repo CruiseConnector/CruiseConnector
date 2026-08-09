@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
+import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
@@ -1159,42 +1160,58 @@ class _ProfilePageState extends State<ProfilePage>
             const SizedBox(height: 10),
             GroupAttachmentCard(groupId: sharedGroupId, compact: true),
           ],
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(18),
-              onTap: () => _openPostDetailByValues(
-                postId: postId,
-                name: name,
-                handle: handle,
-                content: content,
-                time: time,
-                sharedRouteId: sharedRouteId,
-                sharedGroupId: sharedGroupId,
-                avatarUrl: _avatarUrl,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.chat_bubble_outline,
-                      color: Colors.grey,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      commentsCount > 0
-                          ? '$commentsCount Kommentare'
-                          : 'Kommentieren',
-                      style: const TextStyle(color: Colors.grey, fontSize: 13),
-                    ),
-                  ],
+          const SizedBox(height: 10),
+          // 2026-08-07 (vucko): „schau bitte das man auch likes und reposts
+          // auch sieht von seinem posts bei der profilpage."
+          // Die Zahlen wurden hier schon geladen und sogar als Parameter
+          // hereingereicht, nur nie angezeigt: die Karte hatte allein den
+          // Kommentar-Knopf. Jetzt stehen dieselben drei Knoepfe wie im Feed
+          // nebeneinander, aus einer gemeinsamen Datei.
+          Row(
+            children: [
+              InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () => _openPostDetailByValues(
+                  postId: postId,
+                  name: name,
+                  handle: handle,
+                  content: content,
+                  time: time,
+                  sharedRouteId: sharedRouteId,
+                  sharedGroupId: sharedGroupId,
+                  avatarUrl: _avatarUrl,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.chat_bubble_outline,
+                        color: Colors.grey,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        commentsCount > 0
+                            ? '$commentsCount Kommentare'
+                            : 'Kommentieren',
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 8),
+              PostRepostButton(postId: postId, initialCount: repostsCount),
+              PostLikeButton(postId: postId, initialCount: likesCount),
+            ],
           ),
         ],
       ),

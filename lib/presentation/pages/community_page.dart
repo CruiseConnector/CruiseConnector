@@ -8,6 +8,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
+import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -1819,12 +1820,12 @@ class _CommunityPageState extends State<CommunityPage>
                       ),
                     ),
                     // Repost-Button
-                    _PostRepostButton(
+                    PostRepostButton(
                       postId: post['id'],
                       initialCount: post['reposts_count'] ?? 0,
                     ),
                     // Like-Button
-                    _PostLikeButton(
+                    PostLikeButton(
                       postId: post['id'],
                       initialCount: post['likes_count'] ?? 0,
                     ),
@@ -3350,7 +3351,8 @@ class _FollowButtonState extends State<_FollowButton> {
   }
 }
 
-// ── Post Like Button ──────────────────────────────────────────────────
+
+// ── Route-Merken-Knopf ────────────────────────────────────────────────
 
 class _RouteBookmarkButton extends StatefulWidget {
   const _RouteBookmarkButton({required this.routeId});
@@ -3408,125 +3410,6 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
             saved ? Icons.bookmark : Icons.bookmark_border,
             color: saved ? const Color(0xFFFFD166) : Colors.grey,
             size: 18,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PostLikeButton extends StatefulWidget {
-  final String postId;
-  final int initialCount;
-  const _PostLikeButton({required this.postId, required this.initialCount});
-
-  @override
-  State<_PostLikeButton> createState() => _PostLikeButtonState();
-}
-
-class _PostLikeButtonState extends State<_PostLikeButton> {
-  @override
-  void initState() {
-    super.initState();
-    final provider = context.read<CommunityProvider>();
-    provider.registerPost({
-      'id': widget.postId,
-      'likes_count': widget.initialCount,
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) provider.ensureLikedChecked(widget.postId);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<CommunityProvider>();
-    final liked = provider.isLiked(widget.postId);
-    final count = provider.likeCount(widget.postId);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => context.read<CommunityProvider>().toggleLike(widget.postId),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                liked ? Icons.favorite : Icons.favorite_border,
-                color: liked ? AppAccentColors.accent : Colors.grey,
-                size: 18,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '$count',
-                style: TextStyle(
-                  color: liked ? AppAccentColors.accent : Colors.grey,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Post Repost Button ────────────────────────────────────────────────
-
-class _PostRepostButton extends StatefulWidget {
-  final String postId;
-  final int initialCount;
-  const _PostRepostButton({required this.postId, required this.initialCount});
-
-  @override
-  State<_PostRepostButton> createState() => _PostRepostButtonState();
-}
-
-class _PostRepostButtonState extends State<_PostRepostButton> {
-  @override
-  void initState() {
-    super.initState();
-    final provider = context.read<CommunityProvider>();
-    provider.registerPost({
-      'id': widget.postId,
-      'reposts_count': widget.initialCount,
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) provider.ensureRepostedChecked(widget.postId);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<CommunityProvider>();
-    final reposted = provider.isReposted(widget.postId);
-    final count = provider.repostCount(widget.postId);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () =>
-          context.read<CommunityProvider>().toggleRepost(widget.postId),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 48, minHeight: 44),
-        child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.repeat,
-                color: reposted ? const Color(0xFF34C759) : Colors.grey,
-                size: 18,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '$count',
-                style: TextStyle(
-                  color: reposted ? const Color(0xFF34C759) : Colors.grey,
-                  fontSize: 12,
-                ),
-              ),
-            ],
           ),
         ),
       ),

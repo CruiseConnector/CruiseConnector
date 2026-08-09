@@ -301,27 +301,40 @@ class SocialService {
 
     try {
       final following = await getFollowingIds(uid);
-      if (following.isEmpty) return [];
 
       // Blockierte User in beide Richtungen ausfiltern.
       final blocked = await getBlockedAndBlockerIds();
       final allowedFollowing = following
           .where((id) => !blocked.contains(id))
           .toList();
-      if (allowedFollowing.isEmpty) return [];
+
+      // 2026-08-07 (vucko): „man sieht seine eigenen posts nicht im feed."
+      // Der Feed wurde ausschliesslich aus Accounts gespeist, denen man
+      // folgt — die eigene ID landete nie in dieser Liste, weil sich niemand
+      // selbst folgt. Schlimmer noch: wer niemandem folgte, brach hier
+      // vorher komplett ab (`return []`) und sah nicht einmal die eigenen
+      // Beitraege. Beide Abbrueche sind deshalb weg; eigene Beitraege holt
+      // jetzt eine dritte, eigene Abfrage.
 
       // Mutual = Subset von following, die mir zurück folgen.
       // Nur dann darf ich `visibility='followers'`-Posts (= "Nur Follower")
       // sehen — sonst leakt Privates an einseitige Follower.
-      final back = await _db
-          .from('follows')
-          .select('follower_id')
-          .eq('following_id', uid)
-          .eq('status', 'accepted')
-          .inFilter('follower_id', allowedFollowing);
-      final mutual = (back as List)
-          .map((r) => (r as Map)['follower_id'] as String)
-          .toSet();
+      final Set<String> mutual;
+      if (allowedFollowing.isEmpty) {
+        // Ein leeres inFilter erzeugt `user_id=in.()` und laesst PostgREST
+        // stolpern, deshalb hier gar nicht erst fragen.
+        mutual = <String>{};
+      } else {
+        final back = await _db
+            .from('follows')
+            .select('follower_id')
+            .eq('following_id', uid)
+            .eq('status', 'accepted')
+            .inFilter('follower_id', allowedFollowing);
+        mutual = (back as List)
+            .map((r) => (r as Map)['follower_id'] as String)
+            .toSet();
+      }
 
       // 2026-07-03 (vucko Gruppen-Share): shared_group_id analog zu shared_route_id
       // mitgeladen (kommt über `*` ohnehin mit, hier explizit fürs Muster).
@@ -333,14 +346,15 @@ class SocialService {
       // kommen, falls Mutual fehlt. is_hidden filter ist tolerant: alte
       // Spalten ohne Default werden als null = nicht hidden behandelt.
       final results = await Future.wait([
-        _db
-            .from('posts')
-            .select(select)
-            .inFilter('user_id', allowedFollowing)
-            .eq('visibility', 'public')
-            .neq('is_hidden', true)
-            .order('created_at', ascending: false)
-            .limit(80),
+        if (allowedFollowing.isNotEmpty)
+          _db
+              .from('posts')
+              .select(select)
+              .inFilter('user_id', allowedFollowing)
+              .eq('visibility', 'public')
+              .neq('is_hidden', true)
+              .order('created_at', ascending: false)
+              .limit(80),
         if (mutual.isNotEmpty)
           _db
               .from('posts')
@@ -350,6 +364,17 @@ class SocialService {
               .neq('is_hidden', true)
               .order('created_at', ascending: false)
               .limit(80),
+        // Die eigenen Beitraege, unabhaengig von der Sichtbarkeit: wer einen
+        // Beitrag nur fuer Follower schreibt, will ihn selbst trotzdem sehen.
+        // Ausgeblendete (moderierte) Beitraege bleiben aussen vor, damit der
+        // Feed hier nichts zeigt, was fuer andere unsichtbar ist.
+        _db
+            .from('posts')
+            .select(select)
+            .eq('user_id', uid)
+            .neq('is_hidden', true)
+            .order('created_at', ascending: false)
+            .limit(80),
       ]);
 
       final merged = <String, Map<String, dynamic>>{};
@@ -373,8 +398,10 @@ class SocialService {
 
       final capped = list.take(80).toList();
       await _hydratePostReactionState(capped);
+      final eigene = capped.where((p) => p['user_id'] == uid).length;
       debugPrint(
-        '[Feed] uid=$uid following=${following.length} mutual=${mutual.length} → posts=${capped.length}',
+        '[Feed] uid=$uid following=${following.length} mutual=${mutual.length} '
+        '→ posts=${capped.length} (davon eigene: $eigene)',
       );
       return capped;
     } catch (e) {
