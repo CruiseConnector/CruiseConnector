@@ -469,6 +469,7 @@ main{padding:16px 14px 90px;max-width:1240px}
     </div>
     <div class="navGruppe">Bereiche</div>
     <a href="#ueberblick"  class="aktiv"><span class="sym">&#9673;</span>&Uuml;berblick</a>
+    <a href="#heute"><span class="sym">&#9679;</span>Heute</a>
     <a href="#nutzer"><span class="sym">&#9679;</span>Nutzer</a>
     <a href="#fahrten"><span class="sym">&#9679;</span>Fahrten</a>
     <a href="#community"><span class="sym">&#9679;</span>Community</a>
@@ -559,9 +560,33 @@ var F = { rot:'#FF4D24', rot2:'#FF8B67', blau:'#3B82F6', blau2:'#7DAEFF',
           gruen:'#2ecc71', gelb:'#f6c445', lila:'#A78BFA', tuerkis:'#22D3EE',
           grau:'#8b94a4' };
 
-var TITEL = { ueberblick:'Überblick', nutzer:'Nutzer', fahrten:'Fahrten',
+var TITEL = { ueberblick:'Überblick', heute:'Heute', nutzer:'Nutzer', fahrten:'Fahrten',
               community:'Community', routing:'Routing', infra:'Infrastruktur',
               zugriffe:'Zugriffe' };
+
+/* ── Vergleichsmodus ──────────────────────────────────────────────────────
+   2026-08-09 (vucko): „wenn man sieht, dass man sehr viele Nutzer in den
+   letzten drei Tagen bekommen hat aber dadurch, dass er in den letzten sieben
+   Tagen etwas anders ist da rot ... da moechte ich, dass man so ein Modus hat
+   wirklich mit letzter Woche vergleichen und nicht mit letzter Woche
+   vergleichen."
+
+   Das Problem ist echt: Eine starke Woche NACH einer noch staerkeren sieht rot
+   aus, obwohl gewachsen wurde. Rot heisst dann nicht „schlecht", sondern nur
+   „weniger als davor" — und demotiviert grundlos.
+
+   'vorwoche' = wie bisher, mit Pfeil und Prozent gegen den Zeitraum davor.
+   'ohne'     = nur der reine Zuwachs, neutral eingefaerbt, kein Rot, kein
+                Prozentwert. Die Zahl steht fuer sich.
+   Die Wahl liegt im Browser (localStorage) und ueberlebt das Neuladen. */
+var VERGLEICH = 'vorwoche';
+try { VERGLEICH = localStorage.getItem('cc_vergleich') || 'vorwoche'; } catch(e){}
+function vergleichAn(){ return VERGLEICH === 'vorwoche'; }
+function setzeVergleich(v){
+  VERGLEICH = v;
+  try { localStorage.setItem('cc_vergleich', v); } catch(e){}
+  zeichne();
+}
 
 /* ══ Helfer ═══════════════════════════════════════════════════════════════ */
 function $(id){ return document.getElementById(id); }
@@ -860,6 +885,9 @@ function zuwachsDavor(pfad){
 function deltaHtml(pfad){
   var jetzt=zuwachs(pfad), davor=zuwachsDavor(pfad);
   if(jetzt===null) return '';
+  // Ohne Vergleich: nur der Zuwachs, immer neutral. Kein Rot fuer eine Woche,
+  // die schwaecher als die davor war, aber trotzdem Wachstum gebracht hat.
+  if(!vergleichAn()) return '<div class="delta gleich">+'+z(jetzt)+' im Zeitraum</div>';
   if(davor===null||davor===0) return '<div class="delta gleich">+'+z(jetzt)+' im Zeitraum</div>';
   var p=((jetzt-davor)/Math.abs(davor))*100;
   var kl=p>1?'hoch':(p<-1?'runter':'gleich');
@@ -1348,10 +1376,20 @@ function heatHtml(punkte){
    2 Follows druecken die kleinen Werte auf einen Pixel. Jede Kennzahl wird
    deshalb an SICH SELBST gemessen, nicht an den anderen. */
 function vergleichHtml(felder, jetzt, davor){
+  var mitVergleich = vergleichAn();
   var s='<div class="rang">';
   felder.forEach(function(f){
     var a=Number(jetzt[f[0]])||0, b=Number(davor[f[0]])||0;
-    var max=Math.max(a,b,1);
+    // Ohne Vergleich zeigt der Balken die Kennzahl an SICH SELBST gemessen,
+    // nicht gegen die Vorwoche — sonst waere der Massstab wieder ein Urteil.
+    var max=mitVergleich ? Math.max(a,b,1) : Math.max(a,1);
+    if(!mitVergleich){
+      s+='<div class="rangZeile"><div class="rangKopf"><span>'+esc(f[1])+'</span>'+
+         '<b>'+z(a)+'</b></div>'+
+         '<div class="rangBalken" style="height:6px"><i style="width:'+((a/max)*100).toFixed(1)+'%;background:'+F.rot+'"></i></div>'+
+         '</div>';
+      return;
+    }
     var p = b>0 ? ((a-b)/b)*100 : (a>0?null:0);
     var kl = p===null ? 'gleich' : (p>1?'hoch':(p<-1?'runter':'gleich'));
     var text = p===null ? 'neu' : (p>0?'↑ +':(p<0?'↓ ':'→ '))+z1(Math.abs(p))+'%';
@@ -1555,6 +1593,7 @@ function zeichne(){
   out+=abdeckungshinweis();
 
   if(BEREICH==='ueberblick')      out+=bereichUeberblick(m);
+  else if(BEREICH==='heute')      out+=bereichHeute(m);
   else if(BEREICH==='nutzer')     out+=bereichNutzer(m);
   else if(BEREICH==='fahrten')    out+=bereichFahrten(m);
   else if(BEREICH==='community')  out+=bereichCommunity(m);
@@ -1626,33 +1665,100 @@ function bereichUeberblick(m){
     '<div class="legende"><span><i style="background:'+F.rot+'"></i>Fahrten</span><span><i style="background:'+F.blau+'"></i>Nutzer</span></div>',
     untertitelNachWahl('ueberblick'), umschalter('ueberblick'));
 
-  // 24 Stunden aus today - kam bisher nie zur Anzeige
+  // 7 Tage — mit oder ohne Vergleich zur Vorwoche, siehe VERGLEICH oben.
+  var v=DATEN.compare;
+  if(v && v.cur && v.prev){
+    var felder=[['rides','Fahrten'],['km','Kilometer'],['active','Aktive'],['users_new','Neue Nutzer'],
+                ['posts','Beiträge'],['comments','Kommentare'],['follows','Follows'],['generations','Routen erzeugt']];
+    var mitV = vergleichAn();
+    o+=block(mitV ? 'Letzte 7 Tage gegen die 7 davor' : 'Letzte 7 Tage',
+      vergleichHtml(felder, v.cur, v.prev)+
+      (mitV
+        ? '<div class="legende"><span><i style="background:'+F.rot+'"></i>Letzte 7 Tage</span><span><i style="background:'+F.grau+'"></i>7 Tage davor</span></div>'
+        : '<div class="legende"><span><i style="background:'+F.rot+'"></i>Letzte 7 Tage</span></div>'),
+      mitV ? 'Jede Zeile an sich selbst gemessen, unabhängig vom Filter oben'
+           : 'Reine Zahlen der letzten 7 Tage, ohne Wertung gegen die Vorwoche',
+      vergleichSchalter());
+  }
+
+  o+=block('Routing-Server', infraKurz(), 'Stündlich geprüft');
+  return o;
+}
+
+/* ── Umschalter „mit / ohne Vorwochen-Vergleich" ─────────────────────────── */
+function vergleichSchalter(){
+  function b(wert,text){
+    return '<button class="ubtn'+(VERGLEICH===wert?' aktiv':'')+'" data-vergleich="'+wert+'">'+text+'</button>';
+  }
+  return '<div class="umschalter"><div class="ugruppe">'+
+         b('vorwoche','Mit Vorwoche')+b('ohne','Ohne Vergleich')+
+         '</div></div>';
+}
+document.addEventListener('click',function(e){
+  var b=e.target;
+  if(!b||!b.getAttribute||!b.getAttribute('data-vergleich')) return;
+  setzeVergleich(b.getAttribute('data-vergleich'));
+});
+
+/* ── Heute ────────────────────────────────────────────────────────────────
+   2026-08-09 (vucko): eigene Heute-Ansicht. Die Zahlen stammen aus dem
+   Schnappschuss, der VIERMAL taeglich entsteht (0/6/12/18 Uhr Wien, siehe
+   Migration monitor_vier_schnappschuesse). Es wird also NICHT live gerechnet —
+   genau das war die Ursache der Datenbank-Ueberlastung im Juli.
+
+   Deshalb steht der Stand gross oben drueber: „Stand 12:02 Uhr". Wer das nicht
+   sieht, haelt eine 6 Stunden alte Zahl fuer den Live-Wert. Der Balken der
+   laufenden Stunde ist zwangslaeufig unvollstaendig. */
+function bereichHeute(m){
   var t=DATEN.today;
-  if(t && t.labels && t.rides){
-    var fH=formNachWahl('heute');
-    o+=block('Heute nach Stunden', dia({
-      typ:fH.typ, flaeche:fH.flaeche, hoehe:170, id:0, abNull:true,
+  if(!t || !t.labels){
+    return block('Heute','<div class="leer">Noch kein Schnappschuss für heute. '+
+      'Der nächste entsteht um 0, 6, 12 oder 18 Uhr.</div>');
+  }
+  var k=t.kpi||{};
+  var stand=t.generated_at?new Date(t.generated_at):null;
+  var standText = stand
+    ? 'Stand '+stand.toLocaleTimeString('de-AT',{hour:'2-digit',minute:'2-digit'})+' Uhr'
+    : 'Stand unbekannt';
+
+  // Naechster Schnappschuss: das naechste 6-Stunden-Fenster nach dem Stand.
+  var naechste='';
+  if(stand){
+    var h=stand.getHours();
+    var n=[0,6,12,18].filter(function(x){ return x>h; })[0];
+    naechste = ' · nächste Aktualisierung '+(n===undefined?'0':n)+' Uhr';
+  }
+
+  var o='<div class="hinweisZeile" style="margin-bottom:14px;padding:10px 13px;'+
+        'background:rgba(255,255,255,.04);border-radius:10px;font-size:12.5px;color:var(--grau)">'+
+        '<b style="color:var(--text)">'+esc(standText)+'</b>'+esc(naechste)+
+        ' &middot; Viermal am Tag, damit die Datenbank ruhig bleibt.</div>';
+
+  o+='<div class="raster">'+
+    karte('Neue Nutzer heute', z(k.users_new))+
+    karte('Fahrten heute',     z(k.rides), '<div class="fuss">'+z(k.km)+' km</div>')+
+    karte('Aktive heute',      z(k.active))+
+    karte('Routen erzeugt',    z(k.generations), '<div class="fuss">'+z(k.posts)+' Beiträge</div>')+
+  '</div>';
+
+  var fH=formNachWahl('heuteStunden');
+  o+=block('Nach Stunden', dia({
+      typ:fH.typ, flaeche:fH.flaeche, hoehe:210, id:0, abNull:true,
       reihen:[
-        {name:'Fahrten',   farbe:F.rot,  werte:t.rides},
-        {name:'Beiträge', farbe:F.lila, werte:t.posts||[]}
+        {name:'Fahrten',      farbe:F.rot,  werte:t.rides||[]},
+        {name:'Neue Nutzer',  farbe:F.blau, werte:t.users_new||[]},
+        {name:'Routen',       farbe:F.gruen,werte:t.generations||[]},
+        {name:'Beiträge',    farbe:F.lila, werte:t.posts||[]}
       ],
       marken:t.labels,
       markeKurz:function(x){ return x; },
       markeLang:function(x){ return x+':00 bis '+x+':59 Uhr'; }
     })+
-    '<div class="legende"><span><i style="background:'+F.rot+'"></i>Fahrten</span><span><i style="background:'+F.lila+'"></i>Beiträge</span></div>',
-    'Seit Mitternacht, Ortszeit Wien', umschalter('heute',true));
-  }
-
-  // 7 Tage gegen die 7 davor - kam bisher nie zur Anzeige
-  var v=DATEN.compare;
-  if(v && v.cur && v.prev){
-    var felder=[['rides','Fahrten'],['km','Kilometer'],['active','Aktive'],['users_new','Neue Nutzer'],
-                ['posts','Beiträge'],['comments','Kommentare'],['follows','Follows'],['generations','Routen erzeugt']];
-    o+=block('Letzte 7 Tage gegen die 7 davor', vergleichHtml(felder, v.cur, v.prev)+
-    '<div class="legende"><span><i style="background:'+F.rot+'"></i>Letzte 7 Tage</span><span><i style="background:'+F.grau+'"></i>7 Tage davor</span></div>',
-    'Jede Zeile an sich selbst gemessen, unabhängig vom Filter oben');
-  }
+    '<div class="legende"><span><i style="background:'+F.rot+'"></i>Fahrten</span>'+
+    '<span><i style="background:'+F.blau+'"></i>Neue Nutzer</span>'+
+    '<span><i style="background:'+F.gruen+'"></i>Routen</span>'+
+    '<span><i style="background:'+F.lila+'"></i>Beiträge</span></div>',
+    'Seit Mitternacht, Ortszeit Wien', umschalter('heuteStunden',true));
 
   o+=block('Routing-Server', infraKurz(), 'Stündlich geprüft');
   return o;
