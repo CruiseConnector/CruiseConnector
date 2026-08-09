@@ -260,15 +260,21 @@ function starte(){
 /** Holt den aktuellen Schnappschuss nach, ohne die Ansicht zu leeren.
  *  Faellt der Aufruf durch, bleibt schlicht der letzte bekannte Stand stehen —
  *  eine halb geleerte Seite waere schlechter als eine leicht veraltete. */
-function nachladen(){
-  ruf({aktion:'daten',token:TOKEN}).then(function(a){
-    if(!a || a.error || !a.metrics) return;
+function nachladen(erzwungen){
+  return ruf({aktion:'daten',token:TOKEN}).then(function(a){
+    if(!a || a.error || !a.metrics) return false;
+    // Nur neu zeichnen, wenn wirklich ein neuer Schnappschuss vorliegt —
+    // sonst flackert eine offene Wand-Ansicht bei jedem 20-Minuten-Puls.
+    var neuerStand = !DATEN || a.stand !== DATEN.stand;
     DATEN=a;
     $('standWert').textContent=tagLang(DATEN.stand);
     $('standAlter').textContent=vorWie(DATEN.stand);
     $('fussStand').textContent='Stand '+tagLang(DATEN.stand);
-    zeichne();
-  }).catch(function(){});
+    var ab=DATEN.abdeckung||{};
+    if($('fussPunkte')) $('fussPunkte').textContent=(ab.punkte||0)+' Schnappschüsse gespeichert';
+    if(erzwungen || neuerStand) zeichne();
+    return neuerStand;
+  }).catch(function(){ return false; });
 }
 
 function kopfFuellen(){
@@ -294,12 +300,50 @@ function kopfFuellen(){
   // Schnappschuss gelesen, nicht neu gerechnet. Gerechnet wird nur viermal
   // taeglich im Cron.
   if(!window.__auffrischWecker){
-    window.__auffrischWecker = setInterval(nachladen, 6*60*60*1000);
+    // Alle 20 Minuten den Server FRAGEN, ob ein neuer 6-Stunden-Schnappschuss
+    // vorliegt. Das ist ein billiger, indizierter Lesezugriff — gerechnet wird
+    // weiterhin nur viermal am Tag im Cron. Neu gezeichnet wird nur, wenn sich
+    // der Stand tatsaechlich geaendert hat (nachladen() prueft das selbst).
+    //
+    // Warum 20 Minuten statt „genau nach 6 Stunden": Ein starr alle 6 Stunden
+    // laufender Timer waere an die Ladezeit der Seite gekoppelt, nicht an die
+    // 0/6/12/18-Uhr-Grenzen. Eine um 5 Uhr geoeffnete Wand-Ansicht wuerde den
+    // 6-Uhr-Schnappschuss sonst erst um 11 Uhr sehen. Mit dem 20-Minuten-Puls
+    // ist ein neuer Schnappschuss spaetestens 20 Minuten nach seiner Entstehung
+    // auf dem Schirm — zuverlaessig, ohne dass jemand neu laden muss.
+    window.__auffrischWecker = setInterval(function(){ nachladen(false); }, 20*60*1000);
+
+    // Zusaetzlich beim Zurueckkehren auf den Tab sofort nachsehen — ein Laptop
+    // im Ruhezustand haelt jeden Timer an, sonst stuende am Morgen die Zahl vom
+    // Vorabend auf dem Schirm.
     document.addEventListener('visibilitychange', function(){
-      if(document.visibilityState!=='visible' || !DATEN || !DATEN.stand) return;
-      var alterMs = Date.now() - new Date(DATEN.stand).getTime();
-      if(alterMs > 6*60*60*1000) nachladen();
+      if(document.visibilityState==='visible' && DATEN && DATEN.stand) nachladen(false);
     });
+  }
+
+  // „Jetzt aktualisieren"-Knopf im Kopf — einmalig verdrahten.
+  if(!window.__jetztVerdrahtet){
+    window.__jetztVerdrahtet = true;
+    var jk=$('knopfJetzt');
+    if(jk){
+      jk.addEventListener('click', function(){
+        if(jk.disabled) return;
+        jk.disabled=true; jk.classList.add('dreht');
+        ruf({aktion:'snapshot_jetzt',token:TOKEN}).then(function(a){
+          if(a && a.ok){
+            nachladen(true).then(function(){ melde('Zahlen frisch berechnet.'); });
+          } else if(a && a.grund==='zu_frueh'){
+            melde('Gerade eben schon aktualisiert. In '+(a.wartesekunden||60)+' Sekunden wieder möglich.');
+          } else {
+            melde('Aktualisierung nicht durchgekommen.',true);
+          }
+        }).catch(function(){
+          melde('Aktualisierung fehlgeschlagen.',true);
+        }).then(function(){
+          jk.disabled=false; jk.classList.remove('dreht');
+        });
+      });
+    }
   }
 
   var tot=(DATEN.infra&&DATEN.infra.hosts||[]).filter(function(h){ return h.up===false; });

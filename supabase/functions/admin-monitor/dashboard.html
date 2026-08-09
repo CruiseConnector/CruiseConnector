@@ -143,6 +143,13 @@ button.haupt:disabled{opacity:.55;cursor:default;box-shadow:none}
 .burger:active{transform:scale(.93)}
 .stand{text-align:right;font-size:11px;color:var(--grau);line-height:1.35;white-space:nowrap}
 .stand b{display:block;color:var(--text);font-size:12px;font-weight:600}
+.jetztKnopf{flex:none;margin-left:12px;width:34px;height:34px;border-radius:10px;
+  border:1px solid var(--linie2);background:var(--karte);color:var(--text);
+  font-size:17px;line-height:1;cursor:pointer;transition:background .15s,border-color .15s}
+.jetztKnopf:hover{background:var(--karte2);border-color:var(--gelb)}
+.jetztKnopf:disabled{opacity:.55;cursor:default}
+.jetztKnopf.dreht{animation:jetztDreh .8s linear infinite}
+@keyframes jetztDreh{to{transform:rotate(360deg)}}
 
 nav{
   position:fixed;top:0;left:0;bottom:0;width:250px;z-index:60;
@@ -502,6 +509,7 @@ main{padding:16px 14px 90px;max-width:1240px}
     <img class="logo kopfLogo" src="__LOGO__" alt="Cruise Connector" style="height:26px">
     <h2 id="bereichTitel">&Uuml;berblick</h2>
     <div class="stand"><b id="standWert">&nbsp;</b><span id="standAlter">&nbsp;</span></div>
+    <button class="jetztKnopf" id="knopfJetzt" title="Zahlen jetzt neu berechnen" aria-label="Jetzt aktualisieren">&#8635;</button>
   </div>
 
   <main>

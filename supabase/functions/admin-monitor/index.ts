@@ -287,6 +287,19 @@ Deno.serve(async (req) => {
     return json({ ok, infra: await infraLesen() });
   }
 
+  // ── Sofort-Aktualisierung ────────────────────────────────────────────────
+  // 2026-08-09 (vucko): „eine sofortige Aktualisierung soll auch moeglich
+  // sein." Rechnet den aktuellen Slot neu (mit 90-Sek-Cooldown in der DB gegen
+  // Dauerklicken). Der 6-Stunden-Rhythmus bleibt unberuehrt.
+  if (aktion === 'snapshot_jetzt') {
+    const { data, error } = await db.rpc('admin_monitor_refresh_now');
+    if (error) {
+      return json({ ok: false, grund: 'fehler', meldung: error.message }, 500);
+    }
+    await protokolliere(req, sitzung.name, true, 'snapshot_jetzt');
+    return json(data ?? { ok: false, grund: 'fehler' });
+  }
+
   if (aktion !== 'daten') return json({ error: 'Unbekannte Aktion.' }, 400);
 
   // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
