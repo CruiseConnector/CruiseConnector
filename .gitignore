@@ -65,3 +65,13 @@ secrets/
 output/
 outputs/
 logs/
+
+# Recherche-Material und maschinenlokale Dateien (09.08.2026)
+# Gespeicherte Webseiten aus der Werbe-/Video-Recherche — 3,1 MB, kein Projektcode
+as.html
+sk.html
+yt.html
+# Maschinenspezifischer Pfad zum lokalen Video-Schnitt-Server
+.mcp.json
+# Patch fuer eine SKILL.md ausserhalb dieses Projekts
+ads-mobile-app.patch
