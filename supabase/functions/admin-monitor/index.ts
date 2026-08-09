@@ -292,7 +292,7 @@ Deno.serve(async (req) => {
   // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
   const [schnappschuesse, infra] = await Promise.all([
     db.from('admin_metric_snapshots')
-      .select('taken_at, slot_key, metrics, history, today, compare, analytics')
+      .select('taken_at, slot_key, metrics, history, today, compare, analytics, leute')
       .order('taken_at', { ascending: false })
       .limit(VERLAUF_MAX),
     infraLesen(),
@@ -320,6 +320,10 @@ Deno.serve(async (req) => {
     today: neuester.today,
     compare: neuester.compare,
     analytics: neuester.analytics,
+    // 2026-08-09 (vucko): „wer dazugekommen ist — nur mit In-App-Name — und
+    // wie viele Personen zuletzt gefahren sind." Kommt aus demselben
+    // Schnappschuss wie alles andere, kostet also keine zusaetzliche Abfrage.
+    leute: neuester.leute,
     // Der ganze Tagesverlauf, damit das Dashboard 7 Tage, 14 Tage, 30 Tage,
     // 3 Monate und 1 Jahr sowie Wochenvergleiche RECHNEN kann, ohne je
     // nachzufragen.

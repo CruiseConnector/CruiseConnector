@@ -38,7 +38,7 @@ var F = { rot:'#FF4D24', rot2:'#FF8B67', blau:'#3B82F6', blau2:'#7DAEFF',
           gruen:'#2ecc71', gelb:'#f6c445', lila:'#A78BFA', tuerkis:'#22D3EE',
           grau:'#8b94a4' };
 
-var TITEL = { ueberblick:'Überblick', heute:'Heute', nutzer:'Nutzer', fahrten:'Fahrten',
+var TITEL = { ueberblick:'Überblick', heute:'Heute', leute:'Leute', nutzer:'Nutzer', fahrten:'Fahrten',
               community:'Community', routing:'Routing', infra:'Infrastruktur',
               zugriffe:'Zugriffe' };
 
@@ -257,6 +257,20 @@ function starte(){
   });
 }
 
+/** Holt den aktuellen Schnappschuss nach, ohne die Ansicht zu leeren.
+ *  Faellt der Aufruf durch, bleibt schlicht der letzte bekannte Stand stehen —
+ *  eine halb geleerte Seite waere schlechter als eine leicht veraltete. */
+function nachladen(){
+  ruf({aktion:'daten',token:TOKEN}).then(function(a){
+    if(!a || a.error || !a.metrics) return;
+    DATEN=a;
+    $('standWert').textContent=tagLang(DATEN.stand);
+    $('standAlter').textContent=vorWie(DATEN.stand);
+    $('fussStand').textContent='Stand '+tagLang(DATEN.stand);
+    zeichne();
+  }).catch(function(){});
+}
+
 function kopfFuellen(){
   $('standWert').textContent=tagLang(DATEN.stand);
   $('standAlter').textContent=vorWie(DATEN.stand);
@@ -265,6 +279,28 @@ function kopfFuellen(){
   $('fussPunkte').textContent=(ab.punkte||0)+' Schnappschüsse gespeichert';
   // Alle 30 Sekunden nur die Alterangabe auffrischen. Kein Serveraufruf.
   setInterval(function(){ $('standAlter').textContent=vorWie(DATEN.stand); },30000);
+
+  // 2026-08-09 (vucko): „schau, dass sich das Monitoring-Tool alle 6 Stunden
+  // selber updated." Die Seite holt sich den Schnappschuss also von allein,
+  // ohne dass jemand F5 druecken muss.
+  //
+  // ZWEI Wecker, und beide sind billig: Der eine laeuft nach 6 Stunden ab. Der
+  // andere prueft beim Zurueckkehren auf den Tab, ob der angezeigte Stand
+  // aelter als 6 Stunden ist — ein Laptop im Ruhezustand haelt naemlich auch
+  // jeden Timer an, und ohne diese zweite Pruefung stuende am Morgen die Zahl
+  // vom Vorabend auf dem Schirm.
+  //
+  // Die Datenbank kostet das nichts: Es wird ein bereits berechneter
+  // Schnappschuss gelesen, nicht neu gerechnet. Gerechnet wird nur viermal
+  // taeglich im Cron.
+  if(!window.__auffrischWecker){
+    window.__auffrischWecker = setInterval(nachladen, 6*60*60*1000);
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState!=='visible' || !DATEN || !DATEN.stand) return;
+      var alterMs = Date.now() - new Date(DATEN.stand).getTime();
+      if(alterMs > 6*60*60*1000) nachladen();
+    });
+  }
 
   var tot=(DATEN.infra&&DATEN.infra.hosts||[]).filter(function(h){ return h.up===false; });
   $('infraMarker').style.display = tot.length ? 'inline-block' : 'none';
@@ -1072,6 +1108,7 @@ function zeichne(){
 
   if(BEREICH==='ueberblick')      out+=bereichUeberblick(m);
   else if(BEREICH==='heute')      out+=bereichHeute(m);
+  else if(BEREICH==='leute')      out+=bereichLeute();
   else if(BEREICH==='nutzer')     out+=bereichNutzer(m);
   else if(BEREICH==='fahrten')    out+=bereichFahrten(m);
   else if(BEREICH==='community')  out+=bereichCommunity(m);
@@ -1187,6 +1224,66 @@ document.addEventListener('click',function(e){
    Deshalb steht der Stand gross oben drueber: „Stand 12:02 Uhr". Wer das nicht
    sieht, haelt eine 6 Stunden alte Zahl fuer den Live-Wert. Der Balken der
    laufenden Stunde ist zwangslaeufig unvollstaendig. */
+/* ══ Leute ════════════════════════════════════════════════════════════════
+   2026-08-09 (vucko): „ich moechte sehen, wer dazugekommen ist in die App —
+   nur mit In-App-Name — und wie viele Personen zuletzt gefahren sind, in einer
+   schoenen und klaren und immer geupdateten Ansicht."
+
+   BEWUSST NUR DER IN-APP-NAME. Keine E-Mail, keine ID, kein Standort. Das
+   Dashboard ist ein Betriebswerkzeug, kein Personenverzeichnis — und was hier
+   nicht steht, kann auch nicht versehentlich weitergegeben werden.
+
+   Die Daten kommen aus demselben 6-Stunden-Schnappschuss wie alles andere und
+   kosten keine einzige zusaetzliche Datenbankabfrage. */
+function bereichLeute(){
+  var L = DATEN.leute;
+  if(!L || !L.neue_nutzer){
+    return block('Leute','<div class="leer">Dieser Schnappschuss kennt die Ansicht noch nicht. '+
+      'Sie fuellt sich beim naechsten Lauf um 0, 6, 12 oder 18 Uhr.</div>');
+  }
+  var n=L.neue_nutzer||{}, f=L.gefahren||{};
+
+  var o='<div class="raster">'+
+    karte('Neu in 24 Stunden', z(n.h24))+
+    karte('Neu in 7 Tagen',    z(n.d7))+
+    karte('Neu in 30 Tagen',   z(n.d30))+
+    karte('Nutzer gesamt',     z(n.gesamt))+
+  '</div>';
+
+  o+='<div class="raster" style="margin-top:14px">'+
+    karte('Gefahren, 24 Stunden', z(f.personen_h24),
+          '<div class="fuss">'+z(f.fahrten_h24)+' Fahrten</div>')+
+    karte('Gefahren, 7 Tage',     z(f.personen_d7),
+          '<div class="fuss">'+z(f.fahrten_d7)+' Fahrten &middot; '+z(f.km_d7)+' km</div>')+
+    karte('Gefahren, 30 Tage',    z(f.personen_d30),
+          '<div class="fuss">'+z(f.fahrten_d30)+' Fahrten</div>')+
+  '</div>';
+
+  o+=block('Zuletzt dazugekommen', personenTabelle(n.liste, 'seit', function(e){
+      return vorWie(e.seit);
+    }), 'Die letzten 50 der vergangenen 30 Tage, neueste zuerst');
+
+  o+=block('Zuletzt gefahren', personenTabelle(f.liste, 'zuletzt', function(e){
+      return vorWie(e.zuletzt)+' &middot; '+z(e.fahrten)+'&times; &middot; '+z(e.km)+' km';
+    }), 'Wer in den letzten 30 Tagen unterwegs war, zuletzt Gefahrene zuerst');
+
+  return o;
+}
+
+/** Eine schlichte Namensliste. Zweite Spalte kommt aus [rechts]. */
+function personenTabelle(liste, feld, rechts){
+  if(!liste || !liste.length) return '<div class="leer">Noch niemand in diesem Zeitraum.</div>';
+  var o='<div class="personen">';
+  for(var i=0;i<liste.length;i++){
+    var e=liste[i];
+    o+='<div class="person">'+
+         '<span class="pname">'+esc(e.name||'(ohne Namen)')+'</span>'+
+         '<span class="pwann">'+rechts(e)+'</span>'+
+       '</div>';
+  }
+  return o+'</div>';
+}
+
 function bereichHeute(m){
   var t=DATEN.today;
   if(!t || !t.labels){
