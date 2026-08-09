@@ -1734,10 +1734,14 @@ class SocialService {
     }
 
     try {
+      // 2026-08-09 (vucko): ride_role nur beim ERSTEN Beitritt setzen. Vorher
+      // hat jeder erneute Beitritt (z. B. nach einem Netzabbruch) die in der
+      // Lobby gewaehlte Rolle stillschweigend auf „Fahrer" zurueckgesetzt —
+      // die Mitfahrerin stand danach wieder als eigenes Auto auf der Karte.
       await _db.from('group_members').upsert({
         'group_id': groupId,
         'user_id': uid,
-        'ride_role': 'driver',
+        if (!isAlreadyMember) 'ride_role': 'driver',
       }, onConflict: 'group_id,user_id');
     } on PostgrestException catch (e) {
       if (isDuplicateGroupMemberError(e)) {
@@ -1900,15 +1904,10 @@ class SocialService {
         params: {'p_code': code},
       );
       final groupId = result as String;
-      try {
-        await _db
-            .from('group_members')
-            .update({'ride_role': 'driver'})
-            .eq('group_id', groupId)
-            .eq('user_id', _userId!);
-      } catch (e) {
-        debugPrint('[SocialService] ride_role nach Code-Join fallback: $e');
-      }
+      // 2026-08-09 (vucko): Frueher wurde hier ride_role='driver' nachgetragen.
+      // Das war doppelt gemoppelt (die Spalte hat den Default 'driver', die RPC
+      // legt die Zeile also ohnehin als Fahrer an) und hat beim erneuten
+      // Beitritt die in der Lobby gewaehlte „Mitfahrer"-Rolle ueberschrieben.
       return groupId;
     } on PostgrestException catch (e) {
       throw SocialServiceException(e.message);

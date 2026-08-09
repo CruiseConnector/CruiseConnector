@@ -3147,7 +3147,15 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (row.isEmpty) return;
         _lastGroupRealtimeEventAt = DateTime.now();
         final uid = row['user_id'] as String?;
-        if (uid == null || uid == meId) return;
+        if (uid == null) return;
+        if (uid == meId) {
+          // Eigene Zeile: nur die Rolle interessiert (Rollenwechsel in der
+          // Lobby waehrend die Fahrt schon laeuft).
+          try {
+            _merkeEigeneRolle(GroupMember.fromMap(row).rideRole);
+          } catch (_) {}
+          return;
+        }
         try {
           final changed = _mergeGroupMember(
             GroupMember.fromMap(row),
@@ -3330,14 +3338,20 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _mergeGroupMembers(List<GroupMember> members, {String? meId}) {
     var changed = false;
     for (final member in members) {
-      if (member.userId == meId) continue;
+      if (member.userId == meId) {
+        _merkeEigeneRolle(member.rideRole);
+        continue;
+      }
       changed = _mergeGroupMember(member, meId: meId) || changed;
     }
     return changed;
   }
 
   bool _mergeGroupMember(GroupMember incoming, {String? meId}) {
-    if (incoming.userId == meId) return false;
+    if (incoming.userId == meId) {
+      _merkeEigeneRolle(incoming.rideRole);
+      return false;
+    }
     final existing = _groupMembers[incoming.userId];
     final merged = existing == null
         ? incoming
@@ -3623,7 +3637,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
-  bool _hasGroupMemberLocation(GroupMember m) => m.hasLocation;
+  /// Nur Fahrer sind Fahrzeuge auf der Karte.
+  ///
+  /// 2026-08-09 (vucko): Die Rolle wird hier ausgewertet und nicht erst beim
+  /// Zeichnen — beide Marker-Pfade (MapLibre + Fallback-MarkerLayer) haengen an
+  /// dieser einen Stelle. Wichtig gegen alte App-Versionen: Deren Realtime-
+  /// Broadcast kommt an der Datenbank vorbei; ohne diese Pruefung wuerde die
+  /// Mitfahrerin trotz Trigger wieder als eigenes Auto auftauchen.
+  bool _hasGroupMemberLocation(GroupMember m) => m.istFahrzeugAufKarte;
 
   // 2026-06-24 (vucko Peer-Status, Y3): transienter Zustand der Mitfahrer
   // (pausiert / GPS-schwach), aus den grp_pos-Broadcasts. „Kein Internet" wird
@@ -3639,8 +3660,38 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   bool _positionUploadInFlight = false;
 
+  /// Bin ich in dieser Gruppe Fahrer (also ein Fahrzeug) oder Mitfahrer?
+  ///
+  /// 2026-08-09 (vucko, Gruppenfahrt 08.08.): „ich habe ihr Profilbild waehrend
+  /// der Fahrt gesehen ... ich moechte, dass man Fahrer und Mitfahrer wirklich
+  /// klar differenzieren kann." Die Rolle war in der Lobby zwar waehlbar, hatte
+  /// aber keine Konsequenz: Jedes Mitglied lud seinen Standort hoch und stand
+  /// als eigenes Fahrzeug auf der Karte — auch die Beifahrerin im selben Auto.
+  /// Unbekannte Rolle gilt als Fahrer (bisheriges Verhalten, nichts bricht weg).
+  /// Eigene Rolle in der Gruppe. `_groupMembers` enthaelt bewusst alle ausser
+  /// mir selbst, deshalb wird die eigene Zeile beim Einlesen hier gemerkt.
+  /// Standard ist „Fahrer" — solange die Rolle unbekannt ist, bleibt alles wie
+  /// bisher, niemand verliert versehentlich seinen Standort.
+  RideRole _meineRideRole = RideRole.driver;
+
+  bool get _binIchFahrer => _meineRideRole == RideRole.driver;
+
+  /// Eigene Zeile aus Bootstrap / Realtime / Backfill mitschneiden.
+  void _merkeEigeneRolle(RideRole rolle) {
+    if (_meineRideRole == rolle) return;
+    _meineRideRole = rolle;
+    // Wer gerade zum Mitfahrer wird, soll sofort von der Karte der anderen
+    // verschwinden — die Datenbank raeumt den Standort beim Rollenwechsel
+    // selbst weg, der Broadcast stoppt ab dem naechsten Tick.
+    _safeSetState(() {});
+  }
+
   Future<void> _uploadMyPosition() async {
     if (widget.groupId == null) return;
+    // Mitfahrer sind kein Fahrzeug — kein Standort, kein Marker, kein Verkehr.
+    // Die Datenbank erzwingt dasselbe per Trigger (mitfahrer_ohne_standort),
+    // damit auch aeltere App-Versionen die Regel nicht umgehen koennen.
+    if (!_binIchFahrer) return;
     final pos = _userPosition;
     if (pos == null) return;
     // Fast-Path: Broadcast (kein DB-Roundtrip) — sub-Sekunde, auch wenn der
@@ -3670,6 +3721,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     final ch = _groupMembersCh;
     final uid = _myUserId;
     if (ch == null || uid == null) return;
+    // Auch der schnelle Broadcast-Pfad respektiert die Rolle — sonst waere der
+    // Mitfahrer zwar nicht in der Datenbank, aber trotzdem live auf der Karte.
+    if (!_binIchFahrer) return;
     // Tempo/Heading vom Smoother bzw. GPS-Heading mitschicken, damit Peers
     // sofort extrapolieren können (sonst leiten sie es aus 2 Fixes ab).
     final speed = _nativeSmoother.speed;

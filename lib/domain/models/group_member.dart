@@ -92,6 +92,15 @@ class GroupMember {
       currentLat!.isFinite &&
       currentLng!.isFinite;
 
+  /// Wird dieses Mitglied als eigenes Fahrzeug auf der Karte gezeichnet?
+  ///
+  /// 2026-08-09 (vucko, Gruppenfahrt 08.08.): Nur Fahrer sind Fahrzeuge. Die
+  /// Mitfahrerin sass im selben Auto und erschien trotzdem als zweiter Marker
+  /// mit eigenem Profilbild. Die Datenbank raeumt den Standort von Mitfahrern
+  /// per Trigger weg; diese Pruefung faengt zusaetzlich Realtime-Broadcasts
+  /// alter App-Versionen ab, die an der Datenbank vorbeigehen.
+  bool get istFahrzeugAufKarte => hasLocation && rideRole == RideRole.driver;
+
   Duration? locationAge({DateTime? now}) {
     final updatedAt = lastUpdatedAt;
     if (updatedAt == null) return null;
