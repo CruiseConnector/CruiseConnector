@@ -20,6 +20,12 @@
       "runtimeExecutable": "supabase",
       "runtimeArgs": ["start"],
       "port": 54323
+    },
+    {
+      "name": "monitor-vorschau",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8099", "--directory", "supabase/functions/admin-monitor"],
+      "port": 8099
     }
   ]
 }

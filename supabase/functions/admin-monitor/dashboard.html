@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#080a0f">
+<title>Cruise Connector Monitoring</title>
+<!--
+  ───────────────────────────────────────────────────────────────────────────
+  Monitoring-Dashboard, zweite Fassung.
+
+  2026-08-07 (vucko): „ich möchte auch noch mehr diagramarten haben und wenn
+  ich auf dem display oder mit der maus auf die anzeige tippe den genauen tag
+  haben. und auch noch bei dem filter zwischen 7 tage und 30 tage einmal
+  14 tage … und schau das unser logo oben links ist … Zudem möchte ich das es
+  mehr nutzerfreundlicher ist, mehr ui animationen und elemente hat … und
+  vorallem nicht datenbanklastig."
+
+  WARUM DIESE DATEI JETZT REINES HTML IST:
+  Die Vorgängerin steckte als Template-Literal in seite.ts. Jedes
+  Anführungszeichen im eingebetteten JavaScript musste dort \\" geschrieben
+  werden; ein einzelnes \" zu tippen brach die ausgelieferte Seite, ohne dass
+  der Build meckerte. Dazu kam: kein einziger Backtick und kein ${...} durfte
+  vorkommen. Das ist eine Falle bei jeder Änderung. Hier ist es normales HTML,
+  baue_seite.ts liest die Datei nur noch ein und setzt zwei Platzhalter.
+
+  WAS DAS DASHBOARD NICHT TUT: rechnen lassen. Der Server liefert bei einem
+  Aufruf einen fertigen Schnappschuss (zweimal täglich per pg_cron erzeugt)
+  plus den kompletten Verlauf. Alle Zeiträume, Vergleiche und Diagramme
+  entstehen HIER im Browser. Ein Filterklick löst keine einzige Abfrage aus.
+
+  WAS FRÜHER WEGGEWORFEN WURDE: Der Server schickte history (12 Wochen),
+  today (24 Stunden), compare (7 Tage gegen 7 Tage) und analytics (Trichter,
+  Heatmap, Bindungs-Kohorten, Routing-Laufzeiten) — und der alte Browser-Code
+  las kein einziges davon. Diese Fassung zeigt alles davon an.
+  ───────────────────────────────────────────────────────────────────────────
+-->
+<style>
+:root{
+  --bg:#07090e; --bg2:#0b0e15; --karte:#12161f; --karte2:#171c27;
+  --linie:#222836; --linie2:#2c3444;
+  --text:#eef1f6; --grau:#8b94a4; --grau2:#5f6875;
+  --rot:#FF4D24; --rot2:#FF8B67; --blau:#3B82F6; --blau2:#7DAEFF;
+  --gruen:#2ecc71; --gelb:#f6c445; --lila:#A78BFA; --tuerkis:#22D3EE;
+  --schatten:0 10px 30px rgba(0,0,0,.45);
+  --rund:16px;
+  --weich:cubic-bezier(.22,.9,.28,1);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 620px at 78% -12%, rgba(255,77,36,.11), transparent 62%),
+    radial-gradient(880px 520px at 8% 4%, rgba(59,130,246,.09), transparent 58%),
+    var(--bg);
+  color:var(--text);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:rgba(255,77,36,.35)}
+
+/* ── Bewegungen ─────────────────────────────────────────────────────────── */
+@keyframes rein{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes reinKlein{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes pulsPunkt{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.45}}
+@keyframes schimmer{0%{background-position:-560px 0}100%{background-position:560px 0}}
+@keyframes drehen{to{transform:rotate(360deg)}}
+@keyframes hochzaehlen{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes einblenden{from{opacity:0}to{opacity:1}}
+@keyframes wippen{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+
+/* Wer im Betriebssystem weniger Bewegung eingestellt hat, bekommt keine. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
+
+/* ── Logo ───────────────────────────────────────────────────────────────── */
+.logo{
+  height:34px;width:auto;display:block;
+  filter:drop-shadow(0 5px 16px rgba(255,77,36,.4));
+}
+.logo.gross{height:52px}
+
+/* ── Anmeldung ──────────────────────────────────────────────────────────── */
+.tor{min-height:100dvh;display:grid;place-items:center;padding:24px}
+.torKarte{
+  width:100%;max-width:400px;background:linear-gradient(180deg,var(--karte2),var(--karte));
+  border:1px solid var(--linie);border-radius:22px;padding:32px 26px 26px;
+  box-shadow:var(--schatten);animation:rein .5s var(--weich) both;
+}
+.marke{display:flex;flex-direction:column;align-items:center;gap:12px;margin-bottom:22px;text-align:center}
+.marke h1{font-size:19px;margin:0;letter-spacing:-.2px}
+.marke p{margin:0;color:var(--grau);font-size:13px}
+label{display:block;font-size:12px;color:var(--grau);margin:16px 0 7px;font-weight:600;letter-spacing:.3px;text-transform:uppercase}
+input{
+  width:100%;padding:13px 14px;border-radius:12px;border:1px solid var(--linie2);
+  background:#0a0d14;color:var(--text);font-size:16px;outline:none;
+  transition:border-color .18s,box-shadow .18s;
+}
+input:focus{border-color:var(--rot);box-shadow:0 0 0 3px rgba(255,77,36,.16)}
+.wahl{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.wahlKnopf{
+  padding:15px 10px;border-radius:13px;border:1px solid var(--linie2);background:#0a0d14;
+  color:var(--text);font-size:15px;font-weight:650;cursor:pointer;
+  transition:transform .16s var(--weich),border-color .16s,background .16s;
+}
+.wahlKnopf:hover{transform:translateY(-2px);border-color:var(--grau2)}
+.wahlKnopf:active{transform:translateY(0) scale(.97)}
+.wahlKnopf.aktiv{border-color:var(--rot);background:rgba(255,77,36,.14);box-shadow:0 0 0 3px rgba(255,77,36,.12)}
+button.haupt{
+  width:100%;margin-top:20px;padding:14px;border:0;border-radius:12px;
+  background:linear-gradient(135deg,var(--rot),#e03e18);color:#fff;font-size:15px;font-weight:700;
+  cursor:pointer;transition:filter .16s,transform .16s var(--weich);
+  box-shadow:0 8px 22px rgba(255,77,36,.28);
+}
+button.haupt:hover{filter:brightness(1.08)}
+button.haupt:active{transform:scale(.985)}
+button.haupt:disabled{opacity:.55;cursor:default;box-shadow:none}
+.fehler{
+  margin-top:14px;padding:11px 13px;border-radius:11px;font-size:13px;
+  background:rgba(255,77,36,.13);border:1px solid rgba(255,77,36,.34);color:var(--rot2);
+  animation:wippen .35s var(--weich);
+}
+.notiz{margin-top:16px;font-size:12px;color:var(--grau2);text-align:center;line-height:1.6}
+
+/* ── Gerüst ─────────────────────────────────────────────────────────────── */
+#app{display:none}
+.kopf{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;
+  padding:11px 16px;background:rgba(7,9,14,.82);backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--linie);
+}
+.kopf h2{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;flex:1}
+.kopfLogo{display:none}
+.burger{
+  width:40px;height:40px;border-radius:11px;border:1px solid var(--linie2);background:var(--karte);
+  color:var(--text);font-size:17px;cursor:pointer;display:grid;place-items:center;
+  transition:background .16s,transform .16s var(--weich);flex:0 0 auto;
+}
+.burger:hover{background:var(--karte2)}
+.burger:active{transform:scale(.93)}
+.stand{text-align:right;font-size:11px;color:var(--grau);line-height:1.35;white-space:nowrap}
+.stand b{display:block;color:var(--text);font-size:12px;font-weight:600}
+
+nav{
+  position:fixed;top:0;left:0;bottom:0;width:250px;z-index:60;
+  background:linear-gradient(180deg,var(--bg2),#080a10);
+  border-right:1px solid var(--linie);padding:18px 13px;
+  transform:translateX(-100%);transition:transform .26s var(--weich);
+  overflow-y:auto;display:flex;flex-direction:column;
+}
+nav.offen{transform:none}
+.navMarke{display:flex;align-items:center;gap:11px;padding:4px 8px 20px}
+.navMarke div{line-height:1.25}
+.navMarke b{display:block;font-size:15px}
+.navMarke span{font-size:11.5px;color:var(--grau)}
+.navGruppe{font-size:10.5px;letter-spacing:1.3px;color:var(--grau2);text-transform:uppercase;padding:14px 12px 7px;font-weight:700}
+nav a{
+  display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:11px;
+  color:var(--grau);text-decoration:none;font-size:14.5px;font-weight:550;
+  transition:background .16s,color .16s,transform .16s var(--weich);position:relative;
+}
+nav a:hover{background:var(--karte);color:var(--text)}
+nav a.aktiv{background:rgba(255,77,36,.13);color:var(--text);font-weight:650}
+nav a.aktiv::before{
+  content:"";position:absolute;left:0;top:22%;bottom:22%;width:3px;
+  border-radius:0 3px 3px 0;background:var(--rot);
+}
+nav a .sym{width:19px;text-align:center;font-size:15px;opacity:.9}
+nav a .marker{margin-left:auto;font-size:10px;padding:2px 7px;border-radius:20px;background:var(--rot);color:#fff;font-weight:700}
+.navFuss{margin-top:auto;padding-top:14px;border-top:1px solid var(--linie);font-size:11px;color:var(--grau2);padding-left:12px;line-height:1.6}
+#schleier{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:50;display:none;animation:einblenden .2s}
+#schleier.an{display:block}
+
+main{padding:16px 14px 90px;max-width:1240px}
+
+/* ── Filterleiste ───────────────────────────────────────────────────────── */
+.werkzeug{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px}
+.filter{display:flex;gap:7px;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;flex:1;min-width:0}
+.filter::-webkit-scrollbar{display:none}
+.chip{
+  padding:9px 15px;border-radius:22px;background:var(--karte);border:1px solid var(--linie2);
+  color:var(--grau);font-size:13.5px;font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:all .17s var(--weich);flex:0 0 auto;
+}
+.chip:hover{color:var(--text);border-color:var(--grau2);transform:translateY(-1px)}
+.chip.aktiv{
+  background:linear-gradient(135deg,var(--rot),#e8431a);border-color:transparent;color:#fff;
+  box-shadow:0 5px 16px rgba(255,77,36,.32);
+}
+.knopfKlein{
+  padding:9px 13px;border-radius:11px;background:var(--karte);border:1px solid var(--linie2);
+  color:var(--grau);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;
+  transition:all .17s var(--weich);display:inline-flex;align-items:center;gap:6px;
+}
+.knopfKlein:hover{color:var(--text);border-color:var(--grau2)}
+.knopfKlein:active{transform:scale(.96)}
+.knopfKlein:disabled{opacity:.45;cursor:default}
+
+.woche{
+  display:flex;align-items:center;gap:11px;background:var(--karte);border:1px solid var(--linie2);
+  border-radius:13px;padding:9px 11px;margin-bottom:15px;animation:reinKlein .3s var(--weich) both;
+}
+.woche button{
+  width:34px;height:34px;border-radius:9px;border:1px solid var(--linie2);background:var(--karte2);
+  color:var(--text);font-size:16px;cursor:pointer;transition:all .16s var(--weich);
+}
+.woche button:hover:not(:disabled){background:var(--rot);border-color:transparent}
+.woche button:disabled{opacity:.3;cursor:default}
+.woche .mitte{flex:1;text-align:center}
+.woche .mitte span{font-weight:650;font-size:14px}
+.woche .mitte small{display:block;color:var(--grau);font-size:11.5px}
+
+/* ── Karten ─────────────────────────────────────────────────────────────── */
+.raster{display:grid;grid-template-columns:repeat(2,1fr);gap:11px;margin-bottom:20px}
+.k{
+  background:linear-gradient(170deg,var(--karte2),var(--karte));
+  border:1px solid var(--linie);border-radius:var(--rund);padding:14px;
+  position:relative;overflow:hidden;
+  animation:reinKlein .42s var(--weich) both;
+  transition:transform .2s var(--weich),border-color .2s;
+}
+.k:hover{transform:translateY(-3px);border-color:var(--linie2)}
+.k .lbl{font-size:11.5px;color:var(--grau);font-weight:600;letter-spacing:.2px;margin-bottom:5px;display:flex;align-items:center;gap:5px}
+.k .wert{font-size:25px;font-weight:800;letter-spacing:-.9px;line-height:1.1;animation:hochzaehlen .5s var(--weich) both}
+.k .einheit{font-size:14px;font-weight:600;color:var(--grau);margin-left:3px}
+.k .delta{font-size:11.5px;margin-top:5px;font-weight:650}
+.k .fuss{font-size:11px;color:var(--grau2);margin-top:4px}
+.k .funke{position:absolute;right:0;bottom:0;left:0;height:34px;opacity:.5;pointer-events:none}
+.hoch{color:var(--gruen)}.runter{color:var(--rot2)}.gleich{color:var(--grau)}
+
+.block{
+  background:linear-gradient(170deg,var(--karte2),var(--karte));
+  border:1px solid var(--linie);border-radius:var(--rund);padding:15px;margin-bottom:16px;
+  animation:rein .45s var(--weich) both;
+}
+.blockKopf{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.titel{font-size:11px;letter-spacing:1.3px;color:var(--grau);text-transform:uppercase;font-weight:700}
+.untertitel{font-size:11.5px;color:var(--grau2);margin-top:2px;text-transform:none;letter-spacing:0;font-weight:500}
+.legende{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--grau);margin-top:10px}
+.legende span{display:flex;align-items:center;gap:6px}
+.legende i{width:11px;height:3px;border-radius:2px;display:inline-block}
+
+/* ── Diagramme ──────────────────────────────────────────────────────────── */
+.dia{position:relative;width:100%;touch-action:pan-y}
+.dia svg{display:block;width:100%;overflow:visible}
+.dia .leer{padding:30px 12px;text-align:center;color:var(--grau2);font-size:13px}
+.zugLinie{stroke:var(--linie2);stroke-width:1;stroke-dasharray:3 3}
+.gitter{stroke:var(--linie);stroke-width:1;opacity:.6}
+.achse{fill:var(--grau2);font-size:10.5px;font-weight:600}
+.wertLabel{font-size:10px;font-weight:800;opacity:.95}
+
+/* Umschalter je Diagramm */
+.umschalter{display:flex;gap:7px;flex-wrap:wrap}
+.ugruppe{display:flex;background:#0a0d14;border:1px solid var(--linie2);border-radius:10px;padding:2px;gap:2px}
+.ubtn{
+  border:0;background:transparent;color:var(--grau);font-size:11.5px;font-weight:650;
+  padding:5px 10px;border-radius:8px;cursor:pointer;transition:all .16s var(--weich);
+  font-family:inherit;white-space:nowrap;
+}
+.ubtn:hover{color:var(--text)}
+.ubtn.aktiv{background:var(--karte2);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.bahn{fill:none;stroke-width:2.6;stroke-linejoin:round;stroke-linecap:round}
+.punkt{opacity:0;transition:opacity .12s}
+.dia.wach .punkt{opacity:1}
+.balken{transition:opacity .15s}
+.balken:hover{opacity:.78}
+
+/* Die Blase rechnet ihre Position selbst aus (siehe wolkeZeigen), damit sie
+   nie aus dem Bild ragt. Deshalb hier KEIN transform mehr — das hing sie
+   starr an den Punkt und schnitt am rechten Rand genau den Wert ab.
+   z-index 70 liegt ueber der Kopfzeile (40), sonst verschwindet sie dahinter. */
+.wolke{
+  position:absolute;pointer-events:none;z-index:70;opacity:0;
+  background:rgba(10,13,20,.97);border:1px solid var(--linie2);border-radius:12px;
+  padding:9px 12px;font-size:12.5px;
+  max-width:min(340px, calc(100vw - 20px));
+  box-shadow:0 12px 34px rgba(0,0,0,.6);
+  transition:opacity .13s;
+}
+.wolke.an{opacity:1}
+.wolke .wTag{font-size:11px;color:var(--grau);font-weight:600;margin-bottom:5px}
+.wolke .wZeile{display:flex;align-items:center;gap:7px;margin-top:3px;white-space:nowrap}
+.wolke .wZeile i{width:8px;height:8px;border-radius:3px;flex:0 0 auto}
+.wolke .wZeile b{margin-left:auto;font-weight:700;padding-left:12px}
+.wolke .wHinweis{font-size:10.5px;color:var(--gelb);margin-top:6px;white-space:normal}
+
+/* ── Ring, Rang, Heatmap, Trichter, Kohorten, Streifen ──────────────────── */
+.ringBox{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.ringBox .dia{flex:0 0 auto;width:150px}
+.ringLegende{flex:1;min-width:130px;display:flex;flex-direction:column;gap:9px}
+.ringLegende div{display:flex;align-items:center;gap:9px;font-size:13px}
+.ringLegende i{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+.ringLegende b{margin-left:auto;font-weight:700}
+.ringLegende small{color:var(--grau);font-size:11.5px;min-width:38px;text-align:right}
+
+.rang{display:flex;flex-direction:column;gap:9px}
+.rangZeile{display:grid;grid-template-columns:1fr auto;gap:5px;font-size:13px}
+.rangKopf{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.rangKopf span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rangKopf b{font-weight:700;flex:0 0 auto}
+.rangBalken{grid-column:1/-1;height:7px;border-radius:5px;background:var(--linie);overflow:hidden}
+.rangBalken i{display:block;height:100%;border-radius:5px;transition:width .7s var(--weich)}
+
+.heat{display:grid;grid-template-columns:auto repeat(24,1fr);gap:2px;font-size:9.5px}
+.heat .hLbl{color:var(--grau2);font-size:9.5px;display:flex;align-items:center;padding-right:5px;font-weight:600}
+.heat .zelle{aspect-ratio:1;border-radius:2.5px;background:var(--linie);cursor:pointer;transition:transform .12s}
+.heat .zelle:hover{transform:scale(1.35);z-index:2;position:relative}
+.heatFuss{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--grau2)}
+.heatFuss i{width:13px;height:13px;border-radius:3px;display:inline-block}
+
+.trichter{display:flex;flex-direction:column;gap:8px}
+.tStufe{position:relative;border-radius:11px;padding:11px 14px;overflow:hidden;transition:transform .18s var(--weich)}
+.tStufe:hover{transform:translateX(3px)}
+.tStufe .tFuell{position:absolute;inset:0;opacity:.2;transform-origin:left;transition:transform .8s var(--weich)}
+.tStufe .tInhalt{position:relative;display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.tStufe .tName{font-size:13.5px;font-weight:600}
+.tStufe .tWert{font-weight:800;font-size:16px}
+.tStufe .tQuote{font-size:11.5px;color:var(--grau);margin-top:2px;position:relative}
+
+.kohorten{overflow-x:auto;padding-bottom:4px}
+.kohorten table{border-collapse:separate;border-spacing:3px;font-size:11.5px;min-width:100%}
+.kohorten th{color:var(--grau2);font-weight:700;font-size:10px;padding:2px 5px;text-align:center;white-space:nowrap}
+.kohorten td.name{color:var(--grau);white-space:nowrap;text-align:left;padding-right:8px;font-weight:600}
+.kohorten td.z{width:40px;height:27px;border-radius:6px;text-align:center;font-weight:700;color:#fff;font-size:11px}
+
+.streifen{display:flex;gap:2px;height:30px;align-items:stretch}
+.streifen i{flex:1;border-radius:2.5px;min-width:2px;transition:transform .12s;cursor:pointer}
+.streifen i:hover{transform:scaleY(1.14)}
+
+/* ── Listen und Zustände ────────────────────────────────────────────────── */
+.liste{display:flex;flex-direction:column;gap:2px}
+.zeile{
+  display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:11px;
+  background:rgba(255,255,255,.022);font-size:13.5px;transition:background .16s;
+}
+.zeile:hover{background:rgba(255,255,255,.05)}
+.zeile .re{margin-left:auto;color:var(--grau);font-size:12.5px;text-align:right;white-space:nowrap}
+.ampel{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.ampel.lebt{animation:pulsPunkt 2.4s ease-in-out infinite}
+
+.hostKarte{
+  border:1px solid var(--linie);border-radius:14px;padding:14px;margin-bottom:10px;
+  background:rgba(255,255,255,.022);transition:border-color .2s;
+}
+.hostKarte.tot{border-color:rgba(255,77,36,.5);background:rgba(255,77,36,.07)}
+.hostKopf{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+.hostKopf b{font-size:14.5px}
+.hostKopf .re{margin-left:auto;font-size:13px;font-weight:700}
+.hostZeile{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--grau);padding:3px 0}
+.hostZeile b{color:var(--text);font-weight:600;text-align:right}
+.marke2{
+  display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;
+  background:var(--linie);color:var(--grau);margin:2px 3px 0 0;
+}
+.marke2.gut{background:rgba(46,204,113,.16);color:var(--gruen)}
+.marke2.warn{background:rgba(246,196,69,.16);color:var(--gelb)}
+
+.hinweis{
+  padding:12px 14px;border-radius:12px;font-size:12.5px;line-height:1.65;
+  background:rgba(246,196,69,.09);border:1px solid rgba(246,196,69,.26);color:#e8c877;margin-bottom:14px;
+}
+.hinweis.gut{background:rgba(46,204,113,.09);border-color:rgba(46,204,113,.26);color:#8ee0ad}
+.hinweis.schlimm{background:rgba(255,77,36,.1);border-color:rgba(255,77,36,.3);color:var(--rot2)}
+
+.skelett{
+  border-radius:var(--rund);height:88px;margin-bottom:11px;
+  background:linear-gradient(90deg,var(--karte) 8%,var(--karte2) 20%,var(--karte) 34%);
+  background-size:560px 100%;animation:schimmer 1.25s linear infinite;
+}
+.dreher{
+  width:14px;height:14px;border:2px solid rgba(255,255,255,.28);border-top-color:#fff;
+  border-radius:50%;animation:drehen .7s linear infinite;display:inline-block;
+}
+
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);z-index:90;
+  background:rgba(10,13,20,.97);border:1px solid var(--linie2);border-radius:13px;
+  padding:12px 18px;font-size:13.5px;box-shadow:0 14px 40px rgba(0,0,0,.6);
+  opacity:0;transition:opacity .22s,transform .22s var(--weich);pointer-events:none;max-width:88vw;
+}
+.toast.an{opacity:1;transform:translate(-50%,0)}
+.toast.schlimm{border-color:rgba(255,77,36,.5)}
+
+/* ── Ab Tablet ──────────────────────────────────────────────────────────── */
+@media(min-width:760px){
+  .raster{grid-template-columns:repeat(3,1fr);gap:12px}
+  .k .wert{font-size:27px}
+  main{padding:20px 22px 80px}
+  .kopf{padding:13px 22px}
+}
+@media(min-width:1000px){
+  nav{transform:none}
+  #schleier{display:none!important}
+  .burger{display:none}
+  .kopfLogo{display:block}
+  .kopf,main{margin-left:250px}
+  main{padding:22px 30px 70px}
+  .raster{grid-template-columns:repeat(4,1fr);gap:13px}
+  .k{padding:16px}
+  .k .wert{font-size:29px}
+  .block{padding:18px}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ Anmeldung ══════════════════════════════════════════════════════════ -->
+<div class="tor" id="anmeldung">
+  <div class="torKarte">
+    <div class="marke">
+      <img class="logo gross" src="__LOGO__" alt="Cruise Connector">
+      <div>
+        <h1>Monitoring</h1>
+        <p>Nur f&uuml;r Vucko und Luca</p>
+      </div>
+    </div>
+
+    <form id="formAnmeldung" autocomplete="off">
+      <label>Wer bist du?</label>
+      <div class="wahl">
+        <button type="button" class="wahlKnopf" data-benutzer="vucko">Vucko</button>
+        <button type="button" class="wahlKnopf" data-benutzer="luca">Luca</button>
+      </div>
+      <label for="pw">Passwort</label>
+      <input id="pw" type="password" autocomplete="current-password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;">
+      <button class="haupt" id="knopfAnmelden" type="submit" disabled>Anmelden</button>
+    </form>
+
+    <div id="fehlerAnmeldung"></div>
+    <div class="notiz">Jede Sitzung endet beim Schlie&szlig;en des Browsers.<br>Fehlversuche werden protokolliert und gemeldet.</div>
+  </div>
+</div>
+
+<!-- ══ Erstes Passwort ersetzen ═══════════════════════════════════════════ -->
+<div class="tor" id="wechsel" style="display:none">
+  <div class="torKarte">
+    <div class="marke">
+      <img class="logo gross" src="__LOGO__" alt="Cruise Connector">
+      <div>
+        <h1>Neues Passwort</h1>
+        <p>Das Startpasswort muss ersetzt werden</p>
+      </div>
+    </div>
+    <div class="hinweis">Solange <b>Test123</b> gilt, zeigt das Dashboard keine Zahlen an. Bitte jetzt ein eigenes Passwort setzen, mindestens 10 Zeichen.</div>
+    <form id="formWechsel" autocomplete="off">
+      <label for="wAlt">Bisheriges Passwort</label>
+      <input id="wAlt" type="password" autocomplete="current-password">
+      <label for="wNeu">Neues Passwort</label>
+      <input id="wNeu" type="password" autocomplete="new-password" placeholder="mindestens 10 Zeichen">
+      <label for="wNeu2">Neues Passwort wiederholen</label>
+      <input id="wNeu2" type="password" autocomplete="new-password">
+      <button class="haupt" type="submit">Passwort speichern</button>
+    </form>
+    <div id="fehlerWechsel"></div>
+  </div>
+</div>
+
+<!-- ══ Dashboard ══════════════════════════════════════════════════════════ -->
+<div id="app">
+  <div id="schleier"></div>
+
+  <nav id="nav">
+    <div class="navMarke">
+      <img class="logo" src="__LOGO__" alt="Cruise Connector">
+      <div><b>Monitoring</b><span id="navName">&nbsp;</span></div>
+    </div>
+    <div class="navGruppe">Bereiche</div>
+    <a href="#ueberblick"  class="aktiv"><span class="sym">&#9673;</span>&Uuml;berblick</a>
+    <a href="#nutzer"><span class="sym">&#9679;</span>Nutzer</a>
+    <a href="#fahrten"><span class="sym">&#9679;</span>Fahrten</a>
+    <a href="#community"><span class="sym">&#9679;</span>Community</a>
+    <a href="#routing"><span class="sym">&#9679;</span>Routing</a>
+    <a href="#infra"><span class="sym">&#9679;</span>Infrastruktur<span class="marker" id="infraMarker" style="display:none">!</span></a>
+    <a href="#zugriffe"><span class="sym">&#9679;</span>Zugriffe</a>
+    <div class="navGruppe">Sitzung</div>
+    <a href="#" id="abmelden"><span class="sym">&#8629;</span>Abmelden</a>
+    <div class="navFuss">
+      <span id="fussStand">&nbsp;</span><br>
+      <span id="fussPunkte">&nbsp;</span>
+    </div>
+  </nav>
+
+  <div class="kopf">
+    <button class="burger" id="burger" aria-label="Men&uuml;">&#9776;</button>
+    <img class="logo kopfLogo" src="__LOGO__" alt="Cruise Connector" style="height:26px">
+    <h2 id="bereichTitel">&Uuml;berblick</h2>
+    <div class="stand"><b id="standWert">&nbsp;</b><span id="standAlter">&nbsp;</span></div>
+  </div>
+
+  <main>
+    <div class="werkzeug">
+      <div class="filter" id="filter">
+        <div class="chip aktiv" data-t="7">7 Tage</div>
+        <div class="chip" data-t="14">14 Tage</div>
+        <div class="chip" data-t="30">30 Tage</div>
+        <div class="chip" data-t="90">3 Monate</div>
+        <div class="chip" data-t="365">1 Jahr</div>
+        <div class="chip" data-t="woche">Woche vergleichen</div>
+      </div>
+      <button class="knopfKlein" id="knopfExport" title="Diesen Bereich als CSV laden">&#8595; CSV</button>
+    </div>
+
+    <div id="wochenleiste" style="display:none">
+      <div class="woche">
+        <button id="wZurueck" aria-label="Woche zur&uuml;ck">&#8249;</button>
+        <div class="mitte"><span id="wTitel">Diese Woche</span><small id="wZeitraum">&nbsp;</small></div>
+        <button id="wVor" aria-label="Woche vor">&#8250;</button>
+      </div>
+    </div>
+
+    <div id="inhalt"></div>
+  </main>
+</div>
+
+<div class="wolke" id="wolke"></div>
+<div class="toast" id="toast"></div>
+
+<script src="__SKRIPT__"></script>
+</body>
+</html>

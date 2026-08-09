@@ -2,235 +2,317 @@
 // admin-monitor — Monitoring-Dashboard für CruiseConnect.
 //
 // 2026-08-07 (vucko): „Das Monitoring-Tool darf nie wieder die Datenbank
-// überlasten. Es soll sich maximal alle 12 Stunden aktualisieren. Und ich
-// möchte, dass es nicht von jedem angeschaut werden kann, sondern nur von mir
-// und meinem Kollegen."
+// überlasten, maximal alle 12 Stunden aktualisieren. Nur ich und mein Kollege
+// sollen es sehen. Anfangspasswort Test123, nach der Erstanmeldung ändern wir
+// es selbst. Und Benutzername statt E-Mail — Vucko und Luca."
 //
-// ZWEI GRUNDLEGENDE ÄNDERUNGEN GEGENÜBER DER ALTEN FASSUNG:
+// 2026-08-07, zweite Runde (vucko): „schau das die verbindung zu den beiden
+// mini pc's zuverlässig ist … das kann jede stunde mal kontrolliert werden und
+// bei problemen oder verbindungsverlust direkt berichtet werden."
 //
-// 1) DIESE FUNKTION RECHNET NICHTS MEHR.
-//    Vorher rief sie fünf schwere RPCs auf und versuchte, das über einen
-//    Cache in MODUL-VARIABLEN zu bremsen. Das ist Zustand pro Isolat — jedes
-//    frisch gestartete Isolat fing bei null an. Gemessen: je 185 Aufrufe in
-//    6,85 Tagen statt der versprochenen 14. Dazu zerstörte der Cache-Buster
-//    des Clients die CDN-Bremse.
-//    Jetzt rechnet ein pg_cron-Job zweimal täglich und legt das Ergebnis in
-//    admin_metric_snapshots ab; ein eindeutiger Index auf den Halbtags-Slot
-//    lässt höchstens einen Schnappschuss je Halbtag zu. Diese Funktion macht
-//    nur noch EINEN indizierten SELECT. Ein Dashboard-Aufruf KANN die
-//    schweren Abfragen nicht mehr auslösen — der Code dafür existiert hier
-//    nicht mehr.
+// VIER GRUNDSÄTZE:
 //
-// 2) ECHTE ANMELDUNG STATT TOKEN IN DER URL.
-//    Der alte Schutz war ?token=… — wer den Link hatte, war drin, und URLs
-//    landen im Verlauf, in Lesezeichen und in Chat-Vorschauen. Jetzt schickt
-//    das Dashboard das Zugangstoken des angemeldeten Nutzers im
-//    Authorization-Header; hier wird es serverseitig geprüft und die
-//    Nutzer-ID gegen monitor_admins abgeglichen. Jeder Versuch wird
-//    protokolliert, unberechtigte lösen einen Alarm aus.
+// 1) DIESE FUNKTION RECHNET NICHTS.
+//    Früher rief sie fünf schwere RPCs auf und bremste das über einen Cache in
+//    MODUL-VARIABLEN — Zustand pro Isolat, jedes frische fing bei null an.
+//    Gemessen: je 185 Aufrufe in 6,85 Tagen statt der versprochenen 14.
+//    Jetzt rechnet pg_cron zweimal täglich; ein eindeutiger Index auf den
+//    Halbtags-Slot lässt höchstens einen Schnappschuss je Halbtag zu. Hier
+//    passieren nur noch drei indizierte SELECTs. Die RPC-Aufrufe existieren in
+//    diesem Code nicht mehr.
 //
-// Endpunkte:
-//   GET  /admin-monitor                 -> HTML (Anmeldung + Dashboard)
-//   POST /admin-monitor  (Bearer-Token) -> JSON mit Kennzahlen und Verlauf
+// 2) EIGENE ANMELDUNG, GETRENNT VON DER APP.
+//    Auf auth.users liegen zwei Trigger, die für jedes neue Konto ein
+//    App-Profil anlegen. Dashboard-Konten dort hätten die Kennzahlen
+//    verfälscht, die dieses Dashboard anzeigt. Deshalb eine eigene, sehr
+//    kleine Anmeldung: bcrypt in der Datenbank, Sitzungstoken als
+//    Zufallswert, alles über SECURITY-DEFINER-Funktionen, auf die kein
+//    Client Rechte hat.
+//
+// 3) DAS SCHWACHE STARTPASSWORT IST EINGEZÄUNT.
+//    Solange „Test123" nicht geändert wurde, liefert diese Funktion KEINE
+//    Kennzahlen aus, sondern ausschließlich `passwort_aendern_noetig`.
+//
+// 4) DIE MINI-PCS WERDEN HIER NICHT MEHR ANGEPINGT.
+//    Vorher: bei JEDEM Dashboard-Aufruf zwei fetch auf fremde Rechner, sechs
+//    Sekunden Zeitlimit, und danach ein hart erfundenes `ms: 0`. Wer das
+//    Dashboard nicht öffnete, bekam nie ein Signal, und einen Alarm gab es
+//    nie. Jetzt prüft infra-health-check stündlich per Cron mit echter
+//    Zeitmessung und meldet bei Zustandswechsel. Hier wird nur noch der
+//    gespeicherte Zustand GELESEN. Der Knopf „jetzt prüfen" im Dashboard
+//    stößt denselben Lauf von Hand an, höchstens einmal pro Minute.
+//
+// Endpunkte (alle POST, Aktion im Rumpf):
+//   {aktion:'login',       benutzer, passwort}   -> Token oder Fehler
+//   {aktion:'daten',       token}                -> Kennzahlen + Verlauf + Infra
+//   {aktion:'infra_jetzt', token}                -> Mini-PC-Prüfung von Hand
+//   {aktion:'passwort',    token, alt, neu}      -> Passwortwechsel
+//   {aktion:'logout',      token}                -> Sitzung verwerfen
+//   GET                                          -> Hinweis (Seite liegt auf R2)
 // ─────────────────────────────────────────────────────────────────────────────
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { SEITE } from './seite.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 
-// GraphHopper-Funnels (öffentliche /health). Kostet die Datenbank nichts.
-const PC2_HEALTH = 'https://vucko2-hp-prodesk-600-g5-desktop-mini.taildddd94.ts.net/health';
-const PC1_HEALTH = 'https://vucko.taildddd94.ts.net/health';
-
-// Wie viele Schnappschüsse der Verlauf höchstens mitliefert. 800 Zeilen
-// entsprechen bei zwei pro Tag gut 13 Monaten — genug für den Jahresfilter,
-// und immer noch ein einziger indizierter SELECT.
+// 800 Zeilen sind bei zwei Schnappschüssen pro Tag gut 13 Monate — genug für
+// den Jahresfilter, und immer noch ein einziger indizierter SELECT.
 const VERLAUF_MAX = 800;
 
-const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
-  auth: { persistSession: false },
-});
+// Sieben Tage stündliche Prüfung = 2 Hosts * 24 * 7 = 336 Zeilen.
+const INFRA_VERLAUF_MAX = 400;
 
-async function ping(url: string): Promise<{ up: boolean; ms: number | null }> {
-  const t0 = Date.now();
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
-    return { up: r.ok, ms: Date.now() - t0 };
-  } catch {
-    return { up: false, ms: null };
-  }
-}
+// Von Hand höchstens einmal pro Minute, damit der Knopf kein Werkzeug wird,
+// mit dem man die beiden Mini-PCs beschießt.
+const INFRA_MANUELL_ABSTAND_MS = 60_000;
+
+const db = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
+
+// 2026-08-07 (vucko: „Failed to fetch"): Diese Kopfzeilen braucht AUCH die
+// Vorabanfrage. Sie stehen deshalb getrennt und werden von beiden Wegen
+// benutzt.
+const KOPF = {
+  'content-type': 'application/json',
+  'cache-control': 'no-store',
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'content-type, authorization, apikey, x-client-info',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-max-age': '86400',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-      'access-control-allow-origin': '*',
-      'access-control-allow-headers': 'authorization, content-type',
-      'access-control-allow-methods': 'POST, OPTIONS',
-      // Das Dashboard hängt an keiner fremden Quelle. Alles, was nicht von
-      // hier oder von Supabase kommt, wird vom Browser blockiert.
-      'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',
-    },
+    headers: KOPF,
   });
 }
 
-/** Schreibt den Versuch weg und meldet zurück, ob ein Alarm fällig ist. */
+const herkunft = (req: Request) =>
+  (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || null;
+
 async function protokolliere(
-  req: Request,
-  userId: string | null,
-  email: string | null,
-  erfolg: boolean,
-  grund: string,
+  req: Request, name: string | null, erfolg: boolean, grund: string,
 ): Promise<boolean> {
   try {
-    const { data } = await admin.rpc('monitor_log_access', {
-      p_user_id: userId,
-      p_email: email,
+    const { data } = await db.rpc('monitor_log_access', {
+      p_user_id: null,
+      p_email: name,
       p_erfolg: erfolg,
       p_grund: grund,
-      p_ip: req.headers.get('x-forwarded-for') ?? null,
+      p_ip: herkunft(req),
       p_user_agent: req.headers.get('user-agent') ?? null,
     });
     return data === true;
-  } catch (_) {
+  } catch {
     return false;
   }
 }
 
-/**
- * Meldet den Admins einen unberechtigten Versuch.
+/** Meldet unberechtigte Versuche über den bestehenden Benachrichtigungsweg.
  *
- * Bewusst ueber eine Zeile in `notifications` statt ueber einen direkten
- * Aufruf von send-push: Auf notifications sitzt bereits der Trigger, der die
- * Zustellung uebernimmt. Ein eigener Aufruf muesste dessen Vertrag
- * nachbauen — und der erwartet ein ganz anderes Format, als hier zunaechst
- * angenommen wurde.
- *
- * `from_user_id` ist der Empfaenger selbst. Die Spalte ist NOT NULL, und bei
- * einer Systemmeldung gibt es keinen Absender.
- */
-async function alarmSenden(grund: string, email: string | null) {
+ *  2026-08-07: Das lief bis heute ins Leere. Die beiden AKTIVEN Konten hatten
+ *  user_id = NULL, die Zeilen MIT user_id waren inaktiv — der Filter unten fand
+ *  also nie einen Empfänger und meldete still gar nichts. Die Verknüpfung ist
+ *  in der Migration infra_health_hourly_watch nachgezogen. Falls sie je wieder
+ *  fehlt, steht das jetzt im Log, statt lautlos zu verschwinden. */
+async function alarmSenden(grund: string, wer: string | null) {
   try {
-    const { data: admins } = await admin
+    const { data: admins } = await db
       .from('monitor_admins')
       .select('user_id')
-      .eq('aktiv', true);
-    if (!admins?.length) return;
-    const wer = email ? ` von ${email}` : '';
-    await admin.from('notifications').insert(
+      .eq('aktiv', true)
+      .not('user_id', 'is', null);
+    if (!admins?.length) {
+      console.error('[admin-monitor] ALARM OHNE EMPFAENGER:', grund, wer);
+      return;
+    }
+    await db.from('notifications').insert(
       admins.map((a) => ({
         user_id: a.user_id,
         from_user_id: a.user_id,
         type: 'monitor_alarm',
         payload: {
           title: 'Monitoring: unberechtigter Zugriff',
-          body: `Versuch${wer}, das Dashboard zu oeffnen. Grund: ${grund}.`,
+          body: `Versuch${wer ? ` als „${wer}"` : ''}, das Dashboard zu öffnen. Grund: ${grund}.`,
           grund,
         },
       })),
     );
   } catch (e) {
-    console.error('[admin-monitor] Alarm konnte nicht gemeldet werden:', e);
+    console.error('[admin-monitor] Alarm nicht gemeldet:', e);
   }
 }
 
-/**
- * Prüft die Anmeldung. Gibt bei Erfolg den Nutzer zurück, sonst eine Antwort.
- *
- * Bewusst in dieser Reihenfolge: erst Token vorhanden, dann Token gültig,
- * dann berechtigt. Jede Stufe wird eigens protokolliert, damit man im
- * Nachhinein unterscheiden kann zwischen „abgelaufene Sitzung" und
- * „jemand probiert etwas".
- */
-type ZugangOk = { ok: true; name: string; userId: string };
-type ZugangAbgelehnt = { ok: false; antwort: Response };
-
-async function pruefeZugang(req: Request): Promise<ZugangOk | ZugangAbgelehnt> {
-  const auth = req.headers.get('authorization') ?? '';
-  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
-
-  if (!token) {
-    await protokolliere(req, null, null, false, 'kein_token');
-    return { ok: false, antwort: json({ error: 'Nicht angemeldet.' }, 401) };
+/** Stösst infra-health-check an. Das Geheimnis holt sich die Funktion über
+ *  eine SECURITY-DEFINER-Funktion, auf die nur die Service-Rolle Rechte hat —
+ *  so steht es nirgends im Klartext in dieser Datei. */
+async function infraPruefungAnstossen(): Promise<boolean> {
+  try {
+    const { data: secret } = await db.rpc('infra_health_cron_secret_lesen');
+    if (!secret) return false;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/infra-health-check`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-infra-secret': String(secret) },
+      body: JSON.stringify({ quelle: 'dashboard' }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    return r.ok;
+  } catch (e) {
+    console.error('[admin-monitor] Handprüfung fehlgeschlagen:', e);
+    return false;
   }
+}
 
-  const { data, error } = await admin.auth.getUser(token);
-  const user = data?.user ?? null;
-  if (error || !user) {
-    const alarm = await protokolliere(req, null, null, false, 'token_ungueltig');
-    if (alarm) await alarmSenden('ungültiges Zugangstoken', null);
-    return { ok: false, antwort: json({ error: 'Sitzung ungültig. Bitte neu anmelden.' }, 401) };
-  }
-
-  const { data: adminRow } = await admin
-    .from('monitor_admins')
-    .select('anzeigename')
-    .eq('user_id', user.id)
-    .eq('aktiv', true)
-    .maybeSingle();
-
-  if (!adminRow) {
-    const alarm = await protokolliere(req, user.id, user.email ?? null, false, 'nicht_berechtigt');
-    if (alarm) await alarmSenden('Konto ohne Berechtigung', user.email ?? null);
-    // Bewusst dieselbe knappe Meldung wie oben: Wer nicht berechtigt ist,
-    // soll nicht erfahren, ob sein Konto überhaupt existiert.
-    return { ok: false, antwort: json({ error: 'Kein Zugriff auf dieses Dashboard.' }, 403) };
-  }
-
-  await protokolliere(req, user.id, user.email ?? null, true, 'ok');
-  return { ok: true, name: adminRow.anzeigename as string, userId: user.id };
+/** Liest den gespeicherten Zustand der Mini-PCs. Kein Netzzugriff. */
+async function infraLesen() {
+  const [zustand, verlauf] = await Promise.all([
+    db.from('infra_health_state')
+      .select('host, anzeige, up, ms, http_code, profile, seit, zuletzt_geprueft, letzter_fehler')
+      .order('host'),
+    db.from('infra_health_checks')
+      .select('host, geprueft, up, ms')
+      .order('geprueft', { ascending: false })
+      .limit(INFRA_VERLAUF_MAX),
+  ]);
+  return {
+    hosts: zustand.data ?? [],
+    verlauf: verlauf.data ?? [],
+  };
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return json({}, 204);
+  // 204 bedeutet „kein Inhalt". Ein Rumpf ist dabei VERBOTEN — der Versuch
+  // wirft, die Funktion antwortet mit 500, der Browser bricht die
+  // Vorabanfrage ab und meldet „Failed to fetch". Genau das ist passiert.
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: KOPF });
 
-  // ── Die Seite selbst ist öffentlich, enthält aber KEINE Daten. ───────────
-  // Sie zeigt nur das Anmeldefenster; alles Weitere kommt erst nach der
-  // Prüfung unten.
   if (req.method === 'GET') {
-    return new Response(SEITE.replace('__ANON_KEY__', ANON_KEY).replace('__SUPABASE_URL__', SUPABASE_URL), {
-      headers: {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        'x-frame-options': 'DENY',
-        'referrer-policy': 'no-referrer',
-      },
+    // Supabase liefert HTML auf *.supabase.co als text/plain aus. Die Seite
+    // liegt deshalb auf R2; hier steht nur der Verweis.
+    return json({
+      hinweis: 'Das Dashboard liegt unter https://tiles.cruiseconnector.at/monitor.html',
+    });
+  }
+  if (req.method !== 'POST') return json({ error: 'Methode nicht erlaubt.' }, 405);
+
+  const rumpf = await req.json().catch(() => ({}));
+  const aktion = String(rumpf?.aktion ?? '');
+
+  // ── Anmelden ────────────────────────────────────────────────────────────
+  if (aktion === 'login') {
+    const benutzer = String(rumpf.benutzer ?? '').slice(0, 60);
+    const { data, error } = await db.rpc('monitor_login', {
+      p_benutzer: benutzer,
+      p_passwort: String(rumpf.passwort ?? '').slice(0, 200),
+      p_ip: herkunft(req),
+    });
+    if (error) return json({ error: 'Anmeldung gerade nicht möglich.' }, 500);
+
+    if (!data?.ok) {
+      const grund = data?.grund === 'gesperrt' ? 'gesperrt' : 'passwort_falsch';
+      const alarm = await protokolliere(req, benutzer, false, grund);
+      if (alarm) await alarmSenden('falsches Passwort', benutzer);
+      return json({
+        error: grund === 'gesperrt'
+          ? 'Zu viele Fehlversuche. Bitte in 15 Minuten erneut probieren.'
+          : 'Benutzername oder Passwort stimmt nicht.',
+      }, 401);
+    }
+
+    await protokolliere(req, benutzer, true, 'ok');
+    return json({
+      token: data.token,
+      name: data.name,
+      passwort_aendern_noetig: data.passwort_aendern_noetig === true,
     });
   }
 
-  if (req.method !== 'POST') return json({ error: 'Methode nicht erlaubt.' }, 405);
+  const token = String(rumpf.token ?? '');
 
-  const zugang = await pruefeZugang(req);
-  if (!zugang.ok) return zugang.antwort;
-
-  // ── EIN indizierter SELECT. Mehr passiert hier nicht. ────────────────────
-  const { data: reihen, error } = await admin
-    .from('admin_metric_snapshots')
-    .select('taken_at, slot_key, metrics, history, today, compare, analytics')
-    .order('taken_at', { ascending: false })
-    .limit(VERLAUF_MAX);
-
-  if (error) {
-    return json({ error: `Schnappschüsse nicht lesbar: ${error.message}` }, 500);
+  // ── Abmelden ────────────────────────────────────────────────────────────
+  if (aktion === 'logout') {
+    if (token) await db.from('monitor_sessions').delete().eq('token', token);
+    return json({ ok: true });
   }
+
+  // ── Ab hier ist eine gültige Sitzung Pflicht ────────────────────────────
+  if (!token) {
+    await protokolliere(req, null, false, 'kein_token');
+    return json({ error: 'Nicht angemeldet.' }, 401);
+  }
+  const { data: sitzung } = await db.rpc('monitor_session_pruefen', { p_token: token });
+  if (!sitzung?.ok) {
+    const alarm = await protokolliere(req, null, false, 'token_ungueltig');
+    if (alarm) await alarmSenden('ungültiges Sitzungstoken', null);
+    return json({ error: 'Sitzung abgelaufen. Bitte neu anmelden.' }, 401);
+  }
+
+  // ── Passwort ändern ─────────────────────────────────────────────────────
+  if (aktion === 'passwort') {
+    const { data, error } = await db.rpc('monitor_passwort_aendern', {
+      p_token: token,
+      p_alt: String(rumpf.alt ?? ''),
+      p_neu: String(rumpf.neu ?? ''),
+    });
+    if (error) return json({ error: 'Änderung gerade nicht möglich.' }, 500);
+    if (!data?.ok) return json({ error: data?.grund ?? 'Änderung fehlgeschlagen.' }, 400);
+    await protokolliere(req, sitzung.name, true, 'passwort_geaendert');
+    return json({ ok: true });
+  }
+
+  // Auch hier gilt die Einzäunung des Startpassworts.
+  if (sitzung.passwort_aendern_noetig === true) {
+    return json({ passwort_aendern_noetig: true, angemeldet_als: sitzung.name });
+  }
+
+  // ── Mini-PCs von Hand prüfen ────────────────────────────────────────────
+  if (aktion === 'infra_jetzt') {
+    const { data: vorher } = await db
+      .from('infra_health_state').select('zuletzt_geprueft')
+      .order('zuletzt_geprueft', { ascending: false }).limit(1).maybeSingle();
+    const alter = vorher?.zuletzt_geprueft
+      ? Date.now() - new Date(vorher.zuletzt_geprueft).getTime()
+      : Number.MAX_SAFE_INTEGER;
+    if (alter < INFRA_MANUELL_ABSTAND_MS) {
+      return json({
+        ok: false,
+        grund: 'zu_frueh',
+        wartesekunden: Math.ceil((INFRA_MANUELL_ABSTAND_MS - alter) / 1000),
+        infra: await infraLesen(),
+      });
+    }
+    const ok = await infraPruefungAnstossen();
+    return json({ ok, infra: await infraLesen() });
+  }
+
+  if (aktion !== 'daten') return json({ error: 'Unbekannte Aktion.' }, 400);
+
+  // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
+  const [schnappschuesse, infra] = await Promise.all([
+    db.from('admin_metric_snapshots')
+      .select('taken_at, slot_key, metrics, history, today, compare, analytics')
+      .order('taken_at', { ascending: false })
+      .limit(VERLAUF_MAX),
+    infraLesen(),
+  ]);
+
+  const { data: reihen, error } = schnappschuesse;
+
+  if (error) return json({ error: `Schnappschüsse nicht lesbar: ${error.message}` }, 500);
   if (!reihen?.length) {
     return json({
       error: 'Noch kein Schnappschuss vorhanden. Der erste entsteht beim nächsten Lauf (10:00 bzw. 22:00 UTC).',
-      angemeldet_als: zugang.name,
+      angemeldet_als: sitzung.name,
+      infra,
     });
   }
 
   const neuester = reihen[0];
-  const [pc2, pc1] = await Promise.all([ping(PC2_HEALTH), ping(PC1_HEALTH)]);
 
   return json({
-    angemeldet_als: zugang.name,
+    angemeldet_als: sitzung.name,
     stand: neuester.taken_at,
     slot: neuester.slot_key,
     metrics: neuester.metrics,
@@ -238,14 +320,14 @@ Deno.serve(async (req) => {
     today: neuester.today,
     compare: neuester.compare,
     analytics: neuester.analytics,
-    // Der ganze Tagesverlauf, damit das Dashboard 7 Tage, 30 Tage, 3 Monate
-    // und 1 Jahr sowie Wochenvergleiche RECHNEN kann, ohne je wieder
+    // Der ganze Tagesverlauf, damit das Dashboard 7 Tage, 14 Tage, 30 Tage,
+    // 3 Monate und 1 Jahr sowie Wochenvergleiche RECHNEN kann, ohne je
     // nachzufragen.
     verlauf: reihen.map((z) => ({ t: z.taken_at, slot: z.slot_key, m: z.metrics })),
     abdeckung: {
       punkte: reihen.length,
       aeltester: reihen[reihen.length - 1]?.taken_at ?? null,
     },
-    infra: { pc2, pc1 },
+    infra,
   });
 });
