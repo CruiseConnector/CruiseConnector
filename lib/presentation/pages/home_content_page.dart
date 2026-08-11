@@ -19,6 +19,7 @@ import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app_badges;
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
+import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
@@ -3429,7 +3430,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             compact: embedded,
             framed: !embedded,
             showHeader: !embedded,
-            onOpenCommunity: () => widget.onTabChange?.call(1),
+            onOpenCommunity: () => _oeffneCommunity(CommunityPage.tabFeed),
           ),
         );
       case _HomeWidgetId.communityContacts:
@@ -3442,7 +3443,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             compact: size == _DashboardWidgetSize.small || embedded,
             framed: !embedded,
             showHeader: !embedded,
-            onOpenCommunity: () => widget.onTabChange?.call(1),
+            onOpenCommunity: () => _oeffneCommunity(CommunityPage.tabEntdecken),
           ),
         );
       case _HomeWidgetId.communityGroups:
@@ -3455,7 +3456,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             compact: size == _DashboardWidgetSize.small || embedded,
             framed: !embedded,
             showHeader: !embedded,
-            onOpenCommunity: () => widget.onTabChange?.call(1),
+            onOpenCommunity: () => _oeffneCommunity(CommunityPage.tabGruppen),
           ),
         );
       case _HomeWidgetId.communityEvents:
@@ -3468,7 +3469,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             compact: size == _DashboardWidgetSize.small || embedded,
             framed: !embedded,
             showHeader: !embedded,
-            onOpenCommunity: () => widget.onTabChange?.call(1),
+            onOpenCommunity: () => _oeffneCommunity(CommunityPage.tabGruppen),
           ),
         );
       case _HomeWidgetId.weekly:
@@ -3770,6 +3771,19 @@ class _HomeContentPageState extends State<HomeContentPage>
         );
       }),
     );
+  }
+
+
+  /// Oeffnet den Community-Tab UND springt dort den passenden Reiter an.
+  ///
+  /// 2026-08-11 (vucko „wenn ich auf Kontakte klicke, moechte ich auf das
+  /// Community-Entdecken-Feld kommen"): Vorher riefen alle drei Kacheln nur
+  /// `onTabChange(1)`. Das oeffnet zwar Community, sagt aber nicht, WELCHER der
+  /// vier Reiter gemeint ist — man landete deshalb immer auf Feed. Der
+  /// Zielreiter geht jetzt ueber [CommunityPage.pendingTabFocus] mit.
+  void _oeffneCommunity(int reiter) {
+    CommunityPage.pendingTabFocus.value = reiter;
+    widget.onTabChange?.call(1);
   }
 
   Widget _buildWeeklyFolderSlide() {

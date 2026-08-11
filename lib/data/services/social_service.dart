@@ -1650,15 +1650,51 @@ class SocialService {
     });
   }
 
+  /// Sortiert Gruppen fuer die Entdecken-Liste in drei Eimern.
+  ///
+  /// 2026-08-11 (vucko „man soll nicht zwingend eine Uhrzeit einstellen
+  /// muessen"): Seit die Startzeit optional ist, gibt es Gruppen ohne Zeit.
+  /// Die alte Sortierung schob sie ans ENDE — und weil die Liste bei
+  /// `.limit(80)` / `.take(40)` abschneidet, waeren spontane Gruppen faktisch
+  /// unsichtbar gewesen. Das haette das Feature still totgelegt.
+  ///
+  /// Reihenfolge jetzt:
+  ///   0  terminiert und noch bevorstehend  (naechster Termin zuerst)
+  ///   1  spontan, ohne Zeit                (neueste zuerst)
+  ///   2  Termin bereits vorbei             (zuletzt)
+  /// Nur fuer Tests: die Sortierregel ohne Datenbank pruefbar machen.
+  @visibleForTesting
+  static void sortiereFuerTest(List<Map<String, dynamic>> list) =>
+      _sortByStartTime(list);
+
   static void _sortByStartTime(List<Map<String, dynamic>> list) {
     _filterExpired(list);
+    final jetzt = DateTime.now();
+
+    DateTime? startzeit(Map<String, dynamic> g) =>
+        DateTime.tryParse(g['start_time'] as String? ?? '');
+
+    int eimer(Map<String, dynamic> g) {
+      final dt = startzeit(g);
+      if (dt == null) return 1;
+      return dt.isBefore(jetzt) ? 2 : 0;
+    }
+
+    /// Fuer spontane Gruppen zaehlt das Anlagedatum.
+    DateTime schluessel(Map<String, dynamic> g) =>
+        startzeit(g) ??
+        DateTime.tryParse(g['created_at'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+
     list.sort((a, b) {
-      final aDt = DateTime.tryParse(a['start_time'] as String? ?? '');
-      final bDt = DateTime.tryParse(b['start_time'] as String? ?? '');
-      if (aDt == null && bDt == null) return 0;
-      if (aDt == null) return 1;
-      if (bDt == null) return -1;
-      return aDt.compareTo(bDt);
+      final ea = eimer(a);
+      final eb = eimer(b);
+      if (ea != eb) return ea.compareTo(eb);
+      // Bevorstehende: frueheste zuerst. Spontane und vergangene: neueste
+      // zuerst — was gerade entstand, ist am ehesten noch relevant.
+      return ea == 0
+          ? schluessel(a).compareTo(schluessel(b))
+          : schluessel(b).compareTo(schluessel(a));
     });
   }
 

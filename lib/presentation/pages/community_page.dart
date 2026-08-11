@@ -36,6 +36,28 @@ class CommunityPage extends StatefulWidget {
   static final ValueNotifier<String?> pendingGroupFocus =
       ValueNotifier<String?>(null);
 
+  /// Zielreiter, den ein Aufrufer von aussen anspringen will.
+  ///
+  /// 2026-08-11 (vucko „wenn ich auf Kontakte klicke, moechte ich auf das
+  /// Community-Entdecken-Feld kommen"): Die Home-Kacheln riefen alle nur
+  /// `onTabChange(1)` — das oeffnet den Community-Tab, sagt aber nicht, WELCHER
+  /// der vier Reiter gemeint ist. Man landete deshalb immer auf Feed.
+  ///
+  /// Bewusst ein ValueNotifier wie [pendingGroupFocus] und KEIN Konstruktor-
+  /// Parameter: Ein Parameter wirkt nur, wenn sich sein Wert aendert. Zweimal
+  /// hintereinander „Kontakte" waere derselbe Wert — beim zweiten Mal wuerde
+  /// nichts passieren. Der Notifier wird nach dem Anspringen auf null
+  /// zurueckgesetzt und funktioniert dadurch beliebig oft.
+  ///
+  /// Reiter: 0 Feed, 1 Gruppen, 2 Chats, 3 Entdecken.
+  static final ValueNotifier<int?> pendingTabFocus = ValueNotifier<int?>(null);
+
+  /// Sprechende Namen fuer die Reiter — verhindert vertippte Indizes.
+  static const int tabFeed = 0;
+  static const int tabGruppen = 1;
+  static const int tabChats = 2;
+  static const int tabEntdecken = 3;
+
   @override
   State<CommunityPage> createState() => _CommunityPageState();
 }
@@ -89,9 +111,13 @@ class _CommunityPageState extends State<CommunityPage>
       if (!_tabController.indexIsChanging) setState(() {});
     });
     CommunityPage.pendingGroupFocus.addListener(_onPendingGroupFocus);
+    CommunityPage.pendingTabFocus.addListener(_onPendingTabFocus);
     _scheduleLoadData();
     _setupRealtime();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _onPendingGroupFocus());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onPendingGroupFocus();
+      _onPendingTabFocus();
+    });
   }
 
   void _onPendingGroupFocus() {
@@ -102,6 +128,15 @@ class _CommunityPageState extends State<CommunityPage>
       _tabController.animateTo(1);
     }
     _scheduleLoadData();
+  }
+
+  /// Springt den von aussen gewuenschten Reiter an und gibt das Signal frei.
+  void _onPendingTabFocus() {
+    final ziel = CommunityPage.pendingTabFocus.value;
+    if (ziel == null || !mounted) return;
+    CommunityPage.pendingTabFocus.value = null;
+    if (ziel < 0 || ziel >= _tabController.length) return;
+    if (_tabController.index != ziel) _tabController.animateTo(ziel);
   }
 
   void _scheduleLoadData() {
@@ -123,6 +158,7 @@ class _CommunityPageState extends State<CommunityPage>
     _postsChannel?.unsubscribe();
     _groupsChannel?.unsubscribe();
     CommunityPage.pendingGroupFocus.removeListener(_onPendingGroupFocus);
+    CommunityPage.pendingTabFocus.removeListener(_onPendingTabFocus);
     _tabController.dispose();
     _searchController.dispose();
     _groupSearchController.dispose();

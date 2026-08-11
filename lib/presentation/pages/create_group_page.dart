@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:latlong2/latlong.dart';
@@ -731,11 +732,6 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _showError('Beschreibung ist zu lang.');
       return;
     }
-    if (_selectedDateTime == null) {
-      _showError('Bitte Datum & Uhrzeit wählen.');
-      return;
-    }
-
     setState(() => _isCreating = true);
     try {
       final startDt = _selectedDateTime;
@@ -1739,8 +1735,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                   const Icon(Icons.access_time, color: Colors.white, size: 20),
                   const SizedBox(width: 12),
                   const Text(
-                    'Startuhrzeit *',
+                    'Startzeit',
                     style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'optional',
+                    style: TextStyle(color: Colors.white38, fontSize: 12),
                   ),
                   const Spacer(),
                   Container(
@@ -1755,15 +1756,34 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                     child: Text(
                       _selectedDateTime != null
                           ? _formatDateTime(_selectedDateTime!)
-                          : 'Wählen',
+                          : 'Spontan',
                       style: TextStyle(
                         color: _selectedDateTime != null
                             ? Colors.white
-                            : AppAccentColors.accent,
+                            : Colors.white54,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
+                  // Zuruecksetzen: Ohne diesen Weg waere eine einmal gesetzte
+                  // Zeit fuer immer fest — das Feld ist ja optional.
+                  if (_selectedDateTime != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          size: 18,
+                          color: Colors.white38,
+                        ),
+                        tooltip: 'Startzeit entfernen',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _selectedDateTime = null);
+                        },
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1979,7 +1999,11 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _nameCtrl.text.trim().length <= AppInputLimits.groupNameMaxLength &&
         _descCtrl.text.trim().length <=
             AppInputLimits.groupDescriptionMaxLength &&
-        _selectedDateTime != null &&
+        // 2026-08-11 (vucko „ich moechte, dass man nicht zwingend eine Uhrzeit
+        // bzw. ein Datum einstellen muss. Das soll zusaetzlich sein."):
+        // Startzeit ist bewusst KEINE Bedingung mehr. Ohne Zeit gilt die
+        // Gruppe als spontan. Die Spalte groups.start_time ist nullable und
+        // CruiseGroupService.create nimmt sie bereits als DateTime? entgegen.
         _maxPeople.round() >= 2;
   }
 
