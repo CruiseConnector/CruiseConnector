@@ -68,6 +68,18 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   LatLng? _startPoint;
   final List<LatLng> _roundTripWaypoints = [];
   List<LatLng> _routeLatLngs = [];
+
+  /// Zeichen-Animation der frisch generierten Route.
+  ///
+  /// 2026-08-11 (vucko „man bekommt keine Animation, wie die Strecke verlaeuft
+  /// auf der Karte"): Uebernommen aus der Single-Cruise-Seite
+  /// (_startRouteDrawAnimation) — dasselbe bewaehrte Verfahren, damit sich
+  /// beide Seiten gleich anfuehlen. Der Zaehler ist der Abbruch-Schalter: Jede
+  /// neue Route (oder das Verlassen der Seite) erhoeht ihn, laufende Ticks
+  /// erkennen daran, dass sie veraltet sind, und legen sich hin. Ohne das
+  /// wuerde ein alter Timer eine geloeschte Route zurueckschreiben.
+  Timer? _routeZeichenTimer;
+  int _routeZeichenToken = 0;
   RouteResult? _lastRoute;
   int? _selectedWaypointIndex;
   int? _replaceWaypointIndex;
@@ -100,6 +112,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   @override
   void dispose() {
+    // Zuerst: laufende Zeichnung stoppen. Ein Tick nach dem Abbau wuerde
+    // setState auf einem toten Widget rufen.
+    _brichRoutenZeichnungAb();
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _addressCtrl.dispose();
@@ -400,11 +415,74 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _routeStatusText = 'Route bereit';
       });
     }
+    // Die Karte rahmt die VOLLE Route ein, bevor die Animation laeuft — sonst
+    // wandert der Ausschnitt waehrend des Zeichnens.
     _fitRouteBounds(coords);
     // Nach dem Generieren zurueck zur Karte: Wer unten im Formular steht, sieht
     // die frische Route sonst gar nicht. Genau das war Vuckos Beschwerde,
     // er konnte "nicht nachschauen, wo das Problem ist".
     _scrollToMap();
+    _starteRoutenZeichnung(coords);
+  }
+
+  /// Soll die Route gezeichnet werden statt einfach zu erscheinen?
+  ///
+  /// Kurze Routen wirken beim Zeichnen zappelig, deshalb erst ab 12 Punkten.
+  /// Und wer in den Systemeinstellungen Animationen abgeschaltet oder einen
+  /// Screenreader an hat, bekommt die Route sofort — Bedienungshilfen gehen
+  /// vor Effekt.
+  bool _sollRouteZeichnen(List<LatLng> punkte) {
+    if (punkte.length < 12) return false;
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return true;
+    return !media.disableAnimations && !media.accessibleNavigation;
+  }
+
+  /// Zeichnet die Route in ~2,4 s von vorne nach hinten auf die Karte.
+  void _starteRoutenZeichnung(List<LatLng> ziel) {
+    _brichRoutenZeichnungAb();
+    if (!mounted || !_sollRouteZeichnen(ziel)) return;
+
+    _routeZeichenToken++;
+    final token = _routeZeichenToken;
+    final start = DateTime.now();
+    const dauer = Duration(milliseconds: 2400);
+
+    setState(() => _routeLatLngs = ziel.take(2).toList(growable: false));
+
+    _routeZeichenTimer = Timer.periodic(const Duration(milliseconds: 33), (
+      timer,
+    ) {
+      if (!mounted || token != _routeZeichenToken) {
+        timer.cancel();
+        return;
+      }
+      final vergangen = DateTime.now().difference(start).inMilliseconds;
+      final roh = (vergangen / dauer.inMilliseconds).clamp(0.0, 1.0);
+      final weich = Curves.easeInOutCubic.transform(roh);
+      final sichtbar = math
+          .max(2, (ziel.length * weich).ceil())
+          .clamp(2, ziel.length)
+          .toInt();
+      setState(
+        () => _routeLatLngs = ziel.take(sichtbar).toList(growable: false),
+      );
+      if (roh >= 1.0) {
+        timer.cancel();
+        // Zum Schluss die volle Liste setzen, damit am Ende garantiert die
+        // echte Route steht und nicht eine um Rundungsfehler gekuerzte.
+        setState(() => _routeLatLngs = List<LatLng>.from(ziel));
+      }
+    });
+  }
+
+  /// Bricht eine laufende Zeichnung ab. MUSS vor jedem Leeren der Route und
+  /// beim Verlassen der Seite gerufen werden — sonst schreibt ein alter Tick
+  /// die geloeschte Route zurueck.
+  void _brichRoutenZeichnungAb() {
+    _routeZeichenToken++;
+    _routeZeichenTimer?.cancel();
+    _routeZeichenTimer = null;
   }
 
   /// Scrollt den Kopf mit der Karte wieder ins Bild.
@@ -788,6 +866,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     setState(() {
       _isRoundTrip = isRoundTrip;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       if (isRoundTrip) {
         _selectedDetour = 'Direkt';
@@ -807,6 +886,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     setState(() {
       _planningType = planningType;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       if (planningType == 'Zufall') {
         _roundTripWaypoints.clear();
@@ -828,6 +908,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       setState(() {
         _startPoint = point;
         _lastRoute = null;
+        _brichRoutenZeichnungAb();
         _routeLatLngs = [];
       });
     }
@@ -838,6 +919,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     var hitWaypointLimit = false;
     setState(() {
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
@@ -875,6 +957,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -888,6 +971,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -906,6 +990,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -946,6 +1031,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _waypointOrigin = 'auto_seed';
         _waypointSeedAttempt = nextSeed;
         _lastRoute = null;
+        _brichRoutenZeichnungAb();
         _routeLatLngs = [];
       });
     } catch (_) {
@@ -1159,6 +1245,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedLength = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1172,6 +1259,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedStyle = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1180,6 +1268,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                             _selectedDestination = suggestion;
                             _destinationCtrl.text = suggestion.placeName;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1188,6 +1277,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                             _selectedDestination = null;
                             _destinationCtrl.clear();
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1201,6 +1291,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedDetour = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1209,6 +1300,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _avoidHighways = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
