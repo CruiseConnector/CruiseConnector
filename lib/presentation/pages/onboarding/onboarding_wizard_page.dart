@@ -24,6 +24,7 @@ import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
+import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -346,6 +347,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
 
   // ── Navigation ───────────────────────────────────────────────────────────
   Future<void> _next() async {
+    // Vorschlaege schon beim Verlassen der Region-Seite anstossen — dann ist
+    // die Liste da, wenn der Abschluss-Schritt erscheint, und niemand sieht
+    // einen Ladekringel. Bewusst NICHT abgewartet: Das Weiterblaettern darf
+    // nie an einer Netzabfrage haengen.
+    if (_current == _Step.region) {
+      _mitfahrerVorschlaege ??= SocialService.getSuggestedUsers(limit: 8);
+    }
     switch (_current) {
       case _Step.account:
         if (!await _createAccount()) return;
@@ -593,6 +601,20 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       _goTo(_page + 1, forward: true);
     }
   }
+
+
+  /// Vorschlaege fuer den Abschluss-Schritt.
+  ///
+  /// 2026-08-11 (vucko): „vorallem moechte ich, dass die Leute eher sehen,
+  /// dass es auch das Gruppenfeature oder das Community-Feature gibt."
+  /// BEWUSST KEIN eigener Schritt: Die Fortschrittsbalken oben kommen aus
+  /// _steps.length — ein zusaetzlicher Balken liesse das Onboarding laenger
+  /// wirken und erhoeht das Abbruchrisiko. Stattdessen haengt die Liste am
+  /// ohnehin vorhandenen letzten Schritt, wo der Knopf schon „App starten"
+  /// heisst. Wer nicht folgen will, tippt einfach weiter — nichts blockiert.
+  Future<List<Map<String, dynamic>>>? _mitfahrerVorschlaege;
+  final Set<String> _gefolgt = <String>{};
+  final Set<String> _folgenLaeuft = <String>{};
 
   Future<void> _finish() async {
     setState(() => _busy = true);
@@ -1572,9 +1594,154 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             textAlign: TextAlign.center,
             style: TextStyle(color: _muted, fontSize: 16, height: 1.45),
           ),
+          _mitfahrerListe(accent),
         ],
       ),
     );
+  }
+
+  /// „Finde Mitfahrer" — Vorschlaege direkt zum Folgen.
+  ///
+  /// Zeigt sich NUR, wenn es wirklich jemanden gibt. Kein Ladekringel, kein
+  /// Leertext: Bei einer jungen App ist die Liste oft leer, und ein leerer
+  /// Kasten im Abschluss-Schritt waere schlechter als gar keiner.
+  Widget _mitfahrerListe(Color accent) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _mitfahrerVorschlaege,
+      builder: (context, snap) {
+        final leute = snap.data ?? const <Map<String, dynamic>>[];
+        if (snap.connectionState != ConnectionState.done || leute.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 30),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Fahrer in deiner Nähe',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Folge ein paar Leuten — dann ist die Community von Anfang an '
+                'lebendig.',
+                style: TextStyle(color: _muted, fontSize: 13, height: 1.35),
+              ),
+            ),
+            const SizedBox(height: 14),
+            for (final person in leute.take(5)) _mitfahrerZeile(person, accent),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _mitfahrerZeile(Map<String, dynamic> person, Color accent) {
+    final id = (person['id'] as String?) ?? '';
+    final handle = SocialService.publicHandle(person, fallbackUserId: id);
+    final grund =
+        SocialService.mutualFollowersLine(person) ?? 'Neu dabei';
+    final schonGefolgt = _gefolgt.contains(id);
+    final laeuft = _folgenLaeuft.contains(id);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          UserAvatar(
+            name: handle,
+            avatarUrl: person['avatar_url'] as String?,
+            radius: 18,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  handle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  grund,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _muted, fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            height: 32,
+            child: schonGefolgt
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Icon(
+                      Icons.check_rounded,
+                      color: Color(0xFF2ECC71),
+                      size: 20,
+                    ),
+                  )
+                : OutlinedButton(
+                    onPressed: (laeuft || id.isEmpty)
+                        ? null
+                        : () => _folgeMitfahrer(id),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      side: BorderSide(color: accent.withValues(alpha: 0.6)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: Text(
+                      'Folgen',
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Folgen ist bewusst „optimistisch": Der Haken erscheint sofort. Schlaegt es
+  /// fehl, wird er still zurueckgenommen — im Onboarding jemandem eine
+  /// Fehlermeldung vorzusetzen, waere der falsche Moment.
+  Future<void> _folgeMitfahrer(String id) async {
+    setState(() => _folgenLaeuft.add(id));
+    try {
+      await SocialService.followUser(id);
+      if (!mounted) return;
+      setState(() {
+        _gefolgt.add(id);
+        _folgenLaeuft.remove(id);
+      });
+    } catch (e) {
+      debugPrint('[Onboarding] Folgen fehlgeschlagen: $e');
+      if (!mounted) return;
+      setState(() => _folgenLaeuft.remove(id));
+    }
   }
 
   // ── Bausteine ──────────────────────────────────────────────────────────────

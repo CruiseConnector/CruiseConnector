@@ -18,6 +18,8 @@ import '../../data/services/saved_routes_service.dart';
 import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../../domain/models/saved_route.dart';
+import '../widgets/start_zeit_sheet.dart';
+import '../widgets/top_toast.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import '../widgets/group_safety_notice_sheet.dart';
@@ -57,7 +59,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   // 2026-08-09 (vucko): Karte aufziehbar + Rücksprung zur Karte nach dem
   // Generieren. Vorher war sie fest 280 px hoch und beim Einstellen weg.
   final ScrollController _scrollCtrl = ScrollController();
-  bool _karteGross = false;
+  /// Sind die Einstellungen weggedrueckt (Karte im Vollbild)?
+  ///
+  /// 2026-08-11 (vucko): „im Idealfall, dass es wie bei der Single-Cruise-
+  /// Mode-Page ist und man das einfach wegdruecken kann und die Karte im
+  /// Vollscreen hat." Nach einer erfolgreichen Generierung klappt die Seite
+  /// von selbst ein, damit man die frisch gezeichnete Route ganz sieht.
+  bool _configEingeklappt = false;
 
   bool _isRoundTrip = true;
   bool _avoidHighways = false;
@@ -67,6 +75,18 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   LatLng? _startPoint;
   final List<LatLng> _roundTripWaypoints = [];
   List<LatLng> _routeLatLngs = [];
+
+  /// Zeichen-Animation der frisch generierten Route.
+  ///
+  /// 2026-08-11 (vucko „man bekommt keine Animation, wie die Strecke verlaeuft
+  /// auf der Karte"): Uebernommen aus der Single-Cruise-Seite
+  /// (_startRouteDrawAnimation) — dasselbe bewaehrte Verfahren, damit sich
+  /// beide Seiten gleich anfuehlen. Der Zaehler ist der Abbruch-Schalter: Jede
+  /// neue Route (oder das Verlassen der Seite) erhoeht ihn, laufende Ticks
+  /// erkennen daran, dass sie veraltet sind, und legen sich hin. Ohne das
+  /// wuerde ein alter Timer eine geloeschte Route zurueckschreiben.
+  Timer? _routeZeichenTimer;
+  int _routeZeichenToken = 0;
   RouteResult? _lastRoute;
   int? _selectedWaypointIndex;
   int? _replaceWaypointIndex;
@@ -99,6 +119,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   @override
   void dispose() {
+    // Zuerst: laufende Zeichnung stoppen. Ein Tick nach dem Abbau wuerde
+    // setState auf einem toten Widget rufen.
+    _brichRoutenZeichnungAb();
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _addressCtrl.dispose();
@@ -399,11 +422,83 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _routeStatusText = 'Route bereit';
       });
     }
+    // Die Karte rahmt die VOLLE Route ein, bevor die Animation laeuft — sonst
+    // wandert der Ausschnitt waehrend des Zeichnens.
     _fitRouteBounds(coords);
     // Nach dem Generieren zurueck zur Karte: Wer unten im Formular steht, sieht
     // die frische Route sonst gar nicht. Genau das war Vuckos Beschwerde,
     // er konnte "nicht nachschauen, wo das Problem ist".
     _scrollToMap();
+    // Einstellungen wegdruecken, damit die frisch gezeichnete Route im
+    // Vollbild zu sehen ist — genau das war Vuckos Wunsch: „im Idealfall,
+    // dass man das einfach wegdruecken kann und die Karte im Vollscreen hat".
+    // Kurz verzoegert, damit das Einklappen nicht mit dem Einrahmen der Karte
+    // um denselben Frame kaempft.
+    Future<void>.delayed(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      setState(() => _configEingeklappt = true);
+    });
+    _starteRoutenZeichnung(coords);
+  }
+
+  /// Soll die Route gezeichnet werden statt einfach zu erscheinen?
+  ///
+  /// Kurze Routen wirken beim Zeichnen zappelig, deshalb erst ab 12 Punkten.
+  /// Und wer in den Systemeinstellungen Animationen abgeschaltet oder einen
+  /// Screenreader an hat, bekommt die Route sofort — Bedienungshilfen gehen
+  /// vor Effekt.
+  bool _sollRouteZeichnen(List<LatLng> punkte) {
+    if (punkte.length < 12) return false;
+    final media = MediaQuery.maybeOf(context);
+    if (media == null) return true;
+    return !media.disableAnimations && !media.accessibleNavigation;
+  }
+
+  /// Zeichnet die Route in ~2,4 s von vorne nach hinten auf die Karte.
+  void _starteRoutenZeichnung(List<LatLng> ziel) {
+    _brichRoutenZeichnungAb();
+    if (!mounted || !_sollRouteZeichnen(ziel)) return;
+
+    _routeZeichenToken++;
+    final token = _routeZeichenToken;
+    final start = DateTime.now();
+    const dauer = Duration(milliseconds: 2400);
+
+    setState(() => _routeLatLngs = ziel.take(2).toList(growable: false));
+
+    _routeZeichenTimer = Timer.periodic(const Duration(milliseconds: 33), (
+      timer,
+    ) {
+      if (!mounted || token != _routeZeichenToken) {
+        timer.cancel();
+        return;
+      }
+      final vergangen = DateTime.now().difference(start).inMilliseconds;
+      final roh = (vergangen / dauer.inMilliseconds).clamp(0.0, 1.0);
+      final weich = Curves.easeInOutCubic.transform(roh);
+      final sichtbar = math
+          .max(2, (ziel.length * weich).ceil())
+          .clamp(2, ziel.length)
+          .toInt();
+      setState(
+        () => _routeLatLngs = ziel.take(sichtbar).toList(growable: false),
+      );
+      if (roh >= 1.0) {
+        timer.cancel();
+        // Zum Schluss die volle Liste setzen, damit am Ende garantiert die
+        // echte Route steht und nicht eine um Rundungsfehler gekuerzte.
+        setState(() => _routeLatLngs = List<LatLng>.from(ziel));
+      }
+    });
+  }
+
+  /// Bricht eine laufende Zeichnung ab. MUSS vor jedem Leeren der Route und
+  /// beim Verlassen der Seite gerufen werden — sonst schreibt ein alter Tick
+  /// die geloeschte Route zurueck.
+  void _brichRoutenZeichnungAb() {
+    _routeZeichenToken++;
+    _routeZeichenTimer?.cancel();
+    _routeZeichenTimer = null;
   }
 
   /// Scrollt den Kopf mit der Karte wieder ins Bild.
@@ -787,6 +882,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     setState(() {
       _isRoundTrip = isRoundTrip;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       if (isRoundTrip) {
         _selectedDetour = 'Direkt';
@@ -806,6 +902,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     setState(() {
       _planningType = planningType;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       if (planningType == 'Zufall') {
         _roundTripWaypoints.clear();
@@ -814,7 +911,20 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _waypointOrigin = 'manual';
         _waypointSeedAttempt = 0;
       }
+      // Wegpunkte setzt man AUF der Karte — Panel einklappen und Karte
+      // freigeben, wie es die Cruise-Seite bei Karten-Aktionen macht.
+      if (planningType == 'Wegpunkte') {
+        _configEingeklappt = true;
+      }
     });
+    if (planningType == 'Wegpunkte' && mounted) {
+      TopToast.show(
+        context,
+        message: 'Tippe auf die Karte, um deine Stopps zu setzen',
+        icon: Icons.touch_app_rounded,
+        duration: const Duration(milliseconds: 2600),
+      );
+    }
   }
 
   void _handleMapTap(LatLng point) {
@@ -827,6 +937,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       setState(() {
         _startPoint = point;
         _lastRoute = null;
+        _brichRoutenZeichnungAb();
         _routeLatLngs = [];
       });
     }
@@ -837,6 +948,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     var hitWaypointLimit = false;
     setState(() {
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
@@ -874,6 +986,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -887,6 +1000,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -905,6 +1019,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       _waypointOrigin = 'manual';
       _waypointSeedAttempt = 0;
       _lastRoute = null;
+      _brichRoutenZeichnungAb();
       _routeLatLngs = [];
     });
   }
@@ -914,7 +1029,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     if (index == null || index < 0 || index >= _roundTripWaypoints.length) {
       return;
     }
-    setState(() => _replaceWaypointIndex = index);
+    setState(() {
+      _replaceWaypointIndex = index;
+      // Karte freigeben, BEVOR wir zum Tippen auffordern — sonst verdeckt das
+      // solide Panel genau die Flaeche, auf die getippt werden soll. Dieselbe
+      // Regel gilt fuer den Wegpunkte-Modus und „Standort waehlen".
+      _configEingeklappt = true;
+    });
     _showError('Tippe auf die Karte, um Stopp ${index + 1} neu zu setzen.');
   }
 
@@ -945,6 +1066,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _waypointOrigin = 'auto_seed';
         _waypointSeedAttempt = nextSeed;
         _lastRoute = null;
+        _brichRoutenZeichnungAb();
         _routeLatLngs = [];
       });
     } catch (_) {
@@ -1078,63 +1200,120 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       backgroundColor: const Color(0xFF0B0E14),
       body: Stack(
         children: [
-          CustomScrollView(
+          // Die Karte steht GENAU EINMAL im Baum und wandert nie in einen
+          // anderen Teilbaum. Wuerde sie beim Umschalten neu gebaut, zeigte
+          // _mapController auf den alten, toten Controller — die Karte wuerde
+          // frische Routen dann stillschweigend nicht mehr einrahmen.
+          Positioned.fill(child: RepaintBoundary(child: _buildMap())),
+
+          // Einstellungen: da oder weggedrueckt. Dasselbe Zwei-Zustands-Muster
+          // wie in der Single-Cruise-Seite.
+          RepaintBoundary(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.06),
+                    end: Offset.zero,
+                  ).animate(anim),
+                  child: child,
+                ),
+              ),
+              // Ohne eigenen layoutBuilder legt AnimatedSwitcher die beiden
+              // Zustaende zentriert uebereinander — der Inhalt wuerde beim
+              // Wechseln springen.
+              layoutBuilder: (aktuell, vorige) => Stack(
+                fit: StackFit.expand,
+                children: [...vorige, if (aktuell != null) aktuell],
+              ),
+              child: _configEingeklappt
+                  ? _buildVollbildLeiste()
+                  : _buildEinstellungsBlatt(),
+            ),
+          ),
+
+          if (_isGenerating) _buildRouteGenerationStatus(),
+          _buildKopfKnoepfe(),
+        ],
+      ),
+    );
+  }
+
+  /// Die Einstellungen — 1:1 das Muster der Single-Cruise-Seite.
+  ///
+  /// 2026-08-11 (vucko): „es soll nicht transparent sein, es soll wie bei der
+  /// Single-Cruise-Mode-Page sein ... einfach von der Cruise-Mode-Page
+  /// uebernommen werden, nur halt dass es die Einstellungen vom Gruppenfeature
+  /// auch hat." Uebernommen ist deshalb exakt deren Aufbau (dort
+  /// _buildConfigOverlay, Zustand config_expanded): oben ein schmaler
+  /// Kartenstreifen mit Griff — Tipp oder Runterwischen klappt ein —, darunter
+  /// das SOLIDE Panel (0xFF0B0E14) mit allen Einstellungen. Karten-Aktionen
+  /// („Auf Karte tippen", Wegpunkte) klappen das Panel zuerst ein, genau wie
+  /// _beginPickStartOnMap auf der Cruise-Seite: Karte freigeben fuer den Tap.
+  Widget _buildEinstellungsBlatt() {
+    final safeTop = MediaQuery.of(context).padding.top;
+    return Stack(
+      key: const ValueKey('einstellungen_offen'),
+      children: [
+        NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            // Overscroll am Listenanfang = Runterwischen -> einklappen.
+            if (n is OverscrollNotification && n.overscroll < -6) {
+              _versteckeEinstellungen();
+              return true;
+            }
+            return false;
+          },
+          child: CustomScrollView(
             controller: _scrollCtrl,
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
-              SliverAppBar(
-                // 2026-08-09 (vucko): „ich konnte leider nicht nachschauen, wo
-                // das Problem ist." Die Karte war fest 280 px hoch — zum
-                // Einstellen musste man runterscrollen, und genau dann war sie
-                // weg. Über den Knopf oben rechts lässt sie sich jetzt auf
-                // fast die volle Höhe aufziehen, um die Route zu prüfen.
-                expandedHeight: _karteGross
-                    ? MediaQuery.of(context).size.height * 0.82
-                    : 280,
-                pinned: true,
-                backgroundColor: const Color(0xFF0B0E14),
-                elevation: 0,
-                leading: Container(
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+              // Schmaler Kartenstreifen mit Griff, wie auf der Cruise-Seite.
+              SliverToBoxAdapter(
+                child: GestureDetector(
+                  onTap: _versteckeEinstellungen,
+                  onVerticalDragUpdate: (d) {
+                    if ((d.primaryDelta ?? 0) > 4) _versteckeEinstellungen();
+                  },
+                  onVerticalDragEnd: (d) {
+                    if ((d.primaryVelocity ?? 0) > 60) {
+                      _versteckeEinstellungen();
+                    }
+                  },
+                  child: Container(
+                    height: safeTop + 64,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0xFF0B0E14)],
+                      ),
+                    ),
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2.5),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                actions: [
-                  Container(
-                    margin: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      tooltip: _karteGross
-                          ? 'Karte verkleinern'
-                          : 'Karte vergrößern',
-                      icon: Icon(
-                        _karteGross
-                            ? Icons.close_fullscreen
-                            : Icons.open_in_full,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () {
-                        setState(() => _karteGross = !_karteGross);
-                        // Beim Vergrößern nach oben, sonst bliebe der Kopf
-                        // zusammengefaltet und die Karte trotzdem klein.
-                        if (_karteGross) _scrollToMap();
-                      },
-                    ),
-                  ),
-                ],
-                flexibleSpace: FlexibleSpaceBar(background: _buildMap()),
               ),
+              // Das solide Panel mit allen Einstellungen — nichts scheint durch.
               SliverToBoxAdapter(
-                child: Padding(
+                child: Container(
+                  color: const Color(0xFF0B0E14),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
                     vertical: 24,
@@ -1158,11 +1337,29 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedLength = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
                         onLocationChanged: (value) async {
-                          setState(() => _selectedLocation = value);
+                          setState(() {
+                            _selectedLocation = value;
+                            // Startpunkt setzt man AUF der Karte — Panel
+                            // einklappen (Cruise-Muster: „Karte freigeben
+                            // fuer den Tap").
+                            if (value == 'Standort wählen') {
+                              _configEingeklappt = true;
+                            }
+                          });
+                          if (value == 'Standort wählen' && mounted) {
+                            TopToast.show(
+                              context,
+                              message:
+                                  'Tippe auf die Karte für deinen Startpunkt',
+                              icon: Icons.touch_app_rounded,
+                              duration: const Duration(milliseconds: 2600),
+                            );
+                          }
                           if (value == 'Aktueller Standort') {
                             await _tryLocateUser();
                           }
@@ -1171,6 +1368,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedStyle = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1179,6 +1377,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                             _selectedDestination = suggestion;
                             _destinationCtrl.text = suggestion.placeName;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1187,6 +1386,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                             _selectedDestination = null;
                             _destinationCtrl.clear();
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1200,6 +1400,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _selectedDetour = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1208,6 +1409,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           setState(() {
                             _avoidHighways = value;
                             _lastRoute = null;
+                            _brichRoutenZeichnungAb();
                             _routeLatLngs = [];
                           });
                         },
@@ -1256,18 +1458,171 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       ),
                       const SizedBox(height: 12),
                       _buildDescriptionField(),
-                      const SizedBox(height: 120),
+                      const SizedBox(height: 28),
+                      // Die Aktionsknoepfe stehen IM Formular, nicht darueber.
+                      // Als schwebende Leiste deckten sie auf kleinen
+                      // Bildschirmen die Modus-Chips zu (gemessen: Chips bei
+                      // y=549, Leiste ab y=521 bei 800x600).
+                      _buildBottomBar(schwebend: false),
+                      SizedBox(
+                        height: MediaQuery.of(context).padding.bottom + 16,
+                      ),
                     ],
                   ),
                 ),
               ),
             ],
+            ),
           ),
-          if (_isGenerating) _buildRouteGenerationStatus(),
-          _buildBottomBar(),
+      ],
+    );
+  }
+
+  /// Karte im Vollbild — unten nur eine schmale Leiste zum Zurueckholen.
+  Widget _buildVollbildLeiste() {
+    final accent = AppAccentColors.accent;
+    return Stack(
+      key: const ValueKey('einstellungen_weg'),
+      children: [
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [Color(0xFF0B0E14), Colors.transparent],
+                stops: [0.45, 1.0],
+              ),
+            ),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              28,
+              20,
+              MediaQuery.of(context).padding.bottom + 16,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Griff: macht ohne Worte klar, dass hier etwas hochgezogen
+                // werden kann.
+                Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_lastRoute != null) ...[
+                  _buildRouteStats(),
+                  const SizedBox(height: 14),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: accent,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(27),
+                      ),
+                    ),
+                    onPressed: _zeigeEinstellungen,
+                    icon: const Icon(Icons.tune_rounded, size: 20),
+                    label: const Text(
+                      'Gruppe einstellen',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Auch nach oben wischen holt die Einstellungen zurueck.
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 120,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onVerticalDragUpdate: (d) {
+              if ((d.primaryDelta ?? 0) < -6) _zeigeEinstellungen();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Zurueck-Knopf und der Schalter zum Wegdruecken.
+  Widget _buildKopfKnoepfe() {
+    final oben = MediaQuery.of(context).padding.top + 8;
+    return Positioned(
+      top: oben,
+      left: 8,
+      right: 8,
+      child: Row(
+        children: [
+          _rundKnopf(
+            icon: Icons.arrow_back,
+            tooltip: 'Zurueck',
+            onTap: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+          _rundKnopf(
+            icon: _configEingeklappt
+                ? Icons.tune_rounded
+                : Icons.map_outlined,
+            tooltip: _configEingeklappt
+                ? 'Einstellungen zeigen'
+                : 'Karte im Vollbild',
+            onTap: _configEingeklappt
+                ? _zeigeEinstellungen
+                : _versteckeEinstellungen,
+          ),
         ],
       ),
     );
+  }
+
+  Widget _rundKnopf({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, color: Colors.white, size: 20),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  void _versteckeEinstellungen() {
+    if (_configEingeklappt) return;
+    HapticFeedback.selectionClick();
+    setState(() => _configEingeklappt = true);
+  }
+
+  void _zeigeEinstellungen() {
+    if (!_configEingeklappt) return;
+    HapticFeedback.selectionClick();
+    setState(() => _configEingeklappt = false);
   }
 
   Widget _buildRouteGenerationStatus() {
@@ -1353,8 +1708,21 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   void _handleMapReady(CruiseMapLibreController controller) {
     _mapController = controller;
-    if (_routeLatLngs.length >= 2) {
-      _fitRouteBounds(_routeLatLngs);
+    // 2026-08-11, Fund der Gegenpruefung: Hier stand frueher _routeLatLngs —
+    // also das, was GERADE gezeichnet ist. onStyleLoaded kann auf iOS
+    // mehrfach feuern (siehe cruise_maplibre_map.dart), etwa wenn nach dem
+    // Kameraschwenk neue Kacheln laden. Faellt das in die 2,4 s der
+    // Zeichenanimation, enthaelt _routeLatLngs erst ein Anfangsstueck — die
+    // Karte haette auf ein Routen-Fragment gezoomt. _lastRoute ist immer
+    // vollstaendig.
+    final volleRoute = _lastRoute?.coordinates
+        .map((c) => LatLng(c[1], c[0]))
+        .toList(growable: false);
+    final zumEinrahmen = (volleRoute != null && volleRoute.length >= 2)
+        ? volleRoute
+        : _routeLatLngs;
+    if (zumEinrahmen.length >= 2) {
+      _fitRouteBounds(zumEinrahmen);
       return;
     }
     final start = _startPoint;
@@ -1453,9 +1821,22 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
+  /// Die Karten-Aktionen fuer Stopps.
+  ///
+  /// 2026-08-11, Korrektur nach der Gegenpruefung: Frueher lag die Karte in
+  /// einem 280 px hohen Kopf, „mittig" hiess also mittig im Kartenkopf. Seit
+  /// die Karte den ganzen Bildschirm fuellt, landete dieselbe Ausrichtung in
+  /// der BILDSCHIRMmitte — bei offenen Einstellungen also hinter dem
+  /// undurchsichtigen Formular. Die Setup-Karte verweist woertlich auf „die
+  /// Karten-Aktionen rechts", die dort gar nicht mehr zu sehen waren.
+  /// Jetzt haengen sie oben im sichtbaren Kartenstreifen.
   Widget _buildWaypointActionOverlay() {
-    return Align(
-      alignment: Alignment.centerRight,
+    final oben = _configEingeklappt
+        ? MediaQuery.of(context).padding.top + 64
+        : MediaQuery.of(context).padding.top + 56;
+    return Positioned(
+      top: oben,
+      right: 0,
       child: Padding(
         padding: const EdgeInsets.only(right: 14),
         child: Column(
@@ -1885,13 +2266,16 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  Widget _buildBottomBar() {
+  /// Die Aktionsknoepfe.
+  ///
+  /// 2026-08-11, Korrektur nach der Gegenpruefung: Frueher schwebte diese
+  /// Leiste als Positioned ueber dem Formular. Auf kleinen Bildschirmen (im
+  /// Test 800x600) deckte sie die Modus-Chips zu — gemessen: Chips bei y=549,
+  /// Leiste ab y=521. Ein Tipp auf „A nach B" landete auf der Leiste. Jetzt
+  /// steht sie am Ende des Formulars und kann nichts mehr verdecken.
+  Widget _buildBottomBar({bool schwebend = true}) {
     final canCreate = _canCreateGroup;
-    return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
-      child: Container(
+    final inhalt = Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
@@ -1989,8 +2373,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             ),
           ],
         ),
-      ),
     );
+    if (!schwebend) return inhalt;
+    return Positioned(bottom: 0, left: 0, right: 0, child: inhalt);
   }
 
   bool get _canCreateGroup {
@@ -2007,54 +2392,32 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _maxPeople.round() >= 2;
   }
 
+  /// Ein Blatt statt zweier System-Dialoge.
+  ///
+  /// 2026-08-11 (vucko „die Datum-/Uhrzeiteinstellung soll wesentlich
+  /// aesthetischer aussehen und nicht so verklemmt"): Vorher poppte erst ein
+  /// Kalenderblatt auf, danach eine Zifferblatt-Uhr — beide im Material-
+  /// Standard, beide ohne Bezug zum App-Design. Jetzt ein Blatt mit Tagesleiste,
+  /// Schnellwahl und Drehrad; „ohne feste Zeit" ist dort ein eigener Weg.
   Future<void> _selectTime() async {
-    final now = DateTime.now();
-    Widget theme(BuildContext ctx, Widget? child) => Theme(
-      data: Theme.of(ctx).copyWith(
-        colorScheme: ColorScheme.dark(
-          primary: AppAccentColors.accent,
-          surface: const Color(0xFF1C1F26),
-          onSurface: Colors.white,
-        ),
-        dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),
-      ),
-      child: child!,
-    );
-
-    final date = await showDatePicker(
-      context: context,
-      initialDate: _selectedDateTime ?? now,
-      firstDate: now.subtract(const Duration(days: 1)),
-      lastDate: now.add(const Duration(days: 365)),
-      builder: theme,
-    );
-    if (date == null || !mounted) return;
-
-    final time = await showTimePicker(
-      context: context,
-      initialTime: _selectedDateTime != null
-          ? TimeOfDay.fromDateTime(_selectedDateTime!)
-          : TimeOfDay.now(),
-      builder: theme,
-    );
-    if (time == null) return;
-
-    setState(() {
-      _selectedDateTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        time.hour,
-        time.minute,
-      );
-    });
+    final wahl = await zeigeStartZeitSheet(context, aktuell: _selectedDateTime);
+    // null = abgebrochen: dann bleibt alles, wie es war.
+    if (wahl == null || !mounted) return;
+    setState(() => _selectedDateTime = wahl.zeitpunkt);
   }
 
   String _formatDateTime(DateTime dt) {
-    final d =
-        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
+    final jetzt = DateTime.now();
+    final heute = DateTime(jetzt.year, jetzt.month, jetzt.day);
+    final tag = DateTime(dt.year, dt.month, dt.day);
+    final abstand = tag.difference(heute).inDays;
     final t =
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    // „Heute 18:00" liest sich schneller als „11.08. 18:00".
+    if (abstand == 0) return 'Heute $t';
+    if (abstand == 1) return 'Morgen $t';
+    final d =
+        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
     return '$d $t';
   }
 }

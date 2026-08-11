@@ -4,17 +4,21 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Merkt sich, welche Version der Nutzer zuletzt gesehen hat, und entscheidet
-/// daraus, ob nach einem Update der Neuerungen-Hinweis faellig ist.
+/// daraus, ob der Neuerungen-Hinweis faellig ist.
 ///
-/// 2026-08-09 (vucko): „Nach jedem Update soll ein Update-Log kommen."
+/// 2026-08-11 (vucko): „bei jedem Update das erste Mal, nachdem ich das Update
+/// installiert habe ODER die App frisch mit dem Update heruntergeladen habe,
+/// soll ein Popup kommen mit allen neuen Sachen."
 ///
-/// Zwei bewusste Entscheidungen:
-///  * Wer die App frisch installiert, bekommt KEINEN Update-Hinweis. Fuer den
-///    ist alles neu — ein „Das ist neu"-Blatt waere sinnlos und stuende dem
-///    Onboarding im Weg. Beim ersten Start wird die aktuelle Version einfach
-///    stillschweigend als gesehen vermerkt.
-///  * Der Hinweis wird als gesehen markiert, sobald er ANGEZEIGT wurde, nicht
-///    erst beim Wegtippen. Sonst kaeme er bei jedem Tab-Wechsel wieder.
+/// GESCHICHTE DIESER ENTSCHEIDUNG: Die erste Fassung unterdrueckte den Hinweis
+/// bei frischer Installation („fuer den ist ja alles neu"). Das ging doppelt
+/// schief: Auch das ERSTE Update, das diese Funktion mitbrachte, sah aus wie
+/// eine Erstinstallation (kein gespeicherter Stand) — der Hinweis erschien also
+/// nie, bei niemandem. Vucko hat es ausdruecklich anders entschieden: Der
+/// Hinweis kommt IMMER, sobald die laufende Version noch nicht gesehen wurde.
+///
+/// Der Hinweis wird als gesehen markiert, sobald er ANGEZEIGT wurde, nicht
+/// erst beim Wegtippen. Sonst kaeme er bei jedem Tab-Wechsel wieder.
 class ChangelogService {
   ChangelogService._();
 
@@ -40,12 +44,9 @@ class ChangelogService {
       final aktuell = await _aktuelleVersion();
       final gesehen = prefs.getString(_gesehenKey);
 
-      if (gesehen == null) {
-        // Erstinstallation (oder erste Version mit dieser Funktion): merken,
-        // aber nichts zeigen.
-        await prefs.setString(_gesehenKey, aktuell);
-        return null;
-      }
+      // Auch bei frischer Installation zeigen (gesehen == null): Vuckos
+      // ausdrueckliche Entscheidung — und die einzige Logik, bei der auch das
+      // allererste Update mit dieser Funktion den Hinweis bringt.
       if (gesehen == aktuell) return null;
 
       final eintrag = AppChangelog.fuerVersion(aktuell);

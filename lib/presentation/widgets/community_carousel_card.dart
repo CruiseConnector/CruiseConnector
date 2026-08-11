@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import '../../data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -177,6 +178,19 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
             .toList();
         _loading = false;
       });
+      // 2026-08-11 (vucko): Der Hinweispunkt am Community-Symbol lebt von
+      // genau diesen Zahlen — sie sind ohnehin schon geladen, also kostet der
+      // Punkt keine einzige zusaetzliche Abfrage.
+      // Jede Kachel meldet NUR, was sie selbst geladen hat. Fuer die andere
+      // Haelfte steht oben der Cache des Nachbarn — beim Kaltstart ist der
+      // leer, und eine gemeldete 0 wuerde den korrekten Wert der anderen
+      // Kachel ueberschreiben und den Hinweispunkt ausknipsen.
+      unawaited(
+        CommunityNeuigkeitService.instance.melde(
+          gruppen: _needsGroups ? results[1].length : null,
+          vorschlaege: _needsSuggestions ? results[0].length : null,
+        ),
+      );
     } catch (e) {
       debugPrint('[CommunityCarouselCard] Laden fehlgeschlagen: $e');
       if (!mounted) return;
@@ -316,6 +330,13 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
       _suggestedUsers.removeWhere((user) => user['id'] == userId);
     });
     _cachedSuggestedUsers?.removeWhere((user) => user['id'] == userId);
+    // Auch dauerhaft merken (14 Tage), nicht nur fuer diese Sitzung.
+    //
+    // 2026-08-11: Hier fehlte das. Wer jemanden auf der Home-Kachel wegklickte,
+    // sah ihn nach dem naechsten App-Start wieder — und im Entdecken-Tab
+    // sofort erneut, weil dessen serverseitiger Filter nur die gespeicherte
+    // Liste kennt. Weggeklickt muss weggeklickt bleiben, egal wo man tippt.
+    unawaited(SocialService.dismissSuggestedUser(userId));
     await _replenishSuggestedUsers();
   }
 
@@ -603,6 +624,8 @@ class SuggestedContactsSlide extends StatelessWidget {
                   return _ContactRow(
                     name: name,
                     handle: handle,
+                    grund:
+                        SocialService.mutualFollowersLine(user) ?? 'Neu dabei',
                     avatarUrl: user['avatar_url'] as String?,
                     busy: busyUserIds.contains(id),
                     onTap: () => onOpenUser(user),
@@ -655,6 +678,7 @@ class SuggestedContactsSlide extends StatelessWidget {
                 return _ContactRow(
                   name: name,
                   handle: handle,
+                  grund: SocialService.mutualFollowersLine(user) ?? 'Neu dabei',
                   avatarUrl: user['avatar_url'] as String?,
                   busy: busy,
                   onTap: () => onOpenUser(user),
@@ -893,6 +917,16 @@ class EventsComingSoonSlide extends StatelessWidget {
 class _ContactRow extends StatelessWidget {
   final String name;
   final String handle;
+
+  /// Warum wird diese Person vorgeschlagen?
+  ///
+  /// 2026-08-11 (vucko „ich moechte auch noch, dass das gekennzeichnet wird"):
+  /// Bisher stand unter dem Namen nur der @-Name — die Karte sagte also nie,
+  /// WARUM jemand auftaucht. SocialService.mutualFollowersLine baute den Satz
+  /// („@a und @b folgen diesem Account") schon lange, wurde aber NIRGENDS
+  /// aufgerufen. Fehlen gemeinsame Bekannte, steht dort „Neu dabei" statt
+  /// einer leeren Zeile.
+  final String? grund;
   final String? avatarUrl;
   final bool busy;
   final VoidCallback onTap;
@@ -903,6 +937,7 @@ class _ContactRow extends StatelessWidget {
   const _ContactRow({
     required this.name,
     required this.handle,
+    this.grund,
     required this.avatarUrl,
     required this.busy,
     required this.onTap,
@@ -945,7 +980,7 @@ class _ContactRow extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      handle,
+                      grund ?? handle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

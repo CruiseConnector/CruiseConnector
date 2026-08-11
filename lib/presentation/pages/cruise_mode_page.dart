@@ -18315,6 +18315,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _presentCompletionSheet(CruiseCompletionDialog dialog) {
     if (_completionSheetShown) return;
     _completionSheetShown = true;
+    // HIER WIRD NICHT GEZAEHLT. Die Fahrt zaehlt in _resetAfterCompletion —
+    // das ist der Sammelpunkt, den Vucko am 2026-08-04 dafuer vorgesehen hat,
+    // und nur dort ist der Fall „zu wenig aufgezeichnet" korrekt ausgenommen.
+    //
+    // Am 2026-08-11 stand hier kurzzeitig ein zweiter Aufruf, weil eine Suche
+    // nach dem falschen Methodennamen die bestehende Zaehlstelle nicht fand.
+    // Folge: Jede Fahrt zaehlte doppelt, und das Popup kam nach jeder ZWEITEN
+    // statt nach jeder dritten Runde. Der Test in bewertung_takt_test.dart
+    // wacht seitdem darueber, dass es bei GENAU EINER Zaehlstelle bleibt.
     unawaited(() async {
       await showCruiseCompletionSheet<void>(context: context, child: dialog);
       if (!mounted || _disposed) return;

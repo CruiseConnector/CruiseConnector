@@ -31,7 +31,10 @@ import '../../data/services/ride_rating_prompt_service.dart';
 /// Apple zeigt sein Blatt außerdem nach eigenem Ermessen und höchstens dreimal
 /// im Jahr je Nutzer. Passiert nichts sichtbares, ist das kein Fehler unserer
 /// App — deshalb behandeln wir den Aufruf als „erledigt", sobald er durch ist.
-Future<void> showRideRatingSheet(BuildContext context) async {
+Future<void> showRideRatingSheet(
+  BuildContext context, {
+  bool ersteFahrt = true,
+}) async {
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -41,12 +44,16 @@ Future<void> showRideRatingSheet(BuildContext context) async {
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
     ),
-    builder: (_) => const _RideRatingSheet(),
+    builder: (_) => _RideRatingSheet(ersteFahrt: ersteFahrt),
   );
 }
 
 class _RideRatingSheet extends StatefulWidget {
-  const _RideRatingSheet();
+  const _RideRatingSheet({required this.ersteFahrt});
+
+  /// Steuert nur die Ueberschrift. Der Text darunter — kleines Team, keine
+  /// Werbebudget, Bewertungen entscheiden — bleibt jedes Mal derselbe.
+  final bool ersteFahrt;
 
   @override
   State<_RideRatingSheet> createState() => _RideRatingSheetState();
@@ -230,10 +237,12 @@ class _RideRatingSheetState extends State<_RideRatingSheet> {
           ),
         ),
         const SizedBox(height: 18),
-        const Text(
-          'Erste Fahrt geschafft',
+        Text(
+          widget.ersteFahrt
+              ? 'Erste Fahrt geschafft'
+              : 'Wieder eine Runde geschafft',
           textAlign: TextAlign.center,
-          style: TextStyle(
+          style: const TextStyle(
             color: Colors.white,
             fontSize: 21,
             fontWeight: FontWeight.w800,

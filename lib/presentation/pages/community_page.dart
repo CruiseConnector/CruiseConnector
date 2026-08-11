@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
@@ -260,6 +261,40 @@ class _CommunityPageState extends State<CommunityPage>
     // Community dieselbe Inbox und denselben Badge-State verwenden.
   }
 
+  /// Fuellt die Vorschlaege nach, sobald welche wegfallen — wie bei Instagram.
+  ///
+  /// 2026-08-11 (vucko): „wenn man sie wegklickt, sollen neue dazukommen."
+  /// Vorher wurde nur lokal entfernt; die Liste schrumpfte, bis nichts mehr
+  /// da war. Jetzt holt ein Wegklick (oder ein angenommenes Folgen) frische
+  /// Profile nach — die eben Entfernten sind durch die Dismiss-Liste bzw. den
+  /// Follow-Ausschluss schon serverseitig ausgeschlossen.
+  bool _vorschlaegeNachfuellenLaeuft = false;
+
+  Future<void> _fuelleVorschlaegeNach() async {
+    if (_vorschlaegeNachfuellenLaeuft) return;
+    if (_suggestedUsers.length >= 6) return;
+    _vorschlaegeNachfuellenLaeuft = true;
+    try {
+      final frisch = await SocialService.getSuggestedUsers(limit: 20);
+      if (!mounted) return;
+      final schonDa = _suggestedUsers
+          .map((u) => u['id'] as String?)
+          .whereType<String>()
+          .toSet();
+      final neue = frisch
+          .where((u) => !schonDa.contains(u['id']))
+          .toList()
+        ..shuffle();
+      if (neue.isNotEmpty) {
+        setState(() => _suggestedUsers.addAll(neue));
+      }
+    } catch (e) {
+      debugPrint('[Community] Vorschlaege nachfuellen fehlgeschlagen: $e');
+    } finally {
+      _vorschlaegeNachfuellenLaeuft = false;
+    }
+  }
+
   Future<void> _loadData() async {
     try {
       final provider = context.read<CommunityProvider>();
@@ -267,7 +302,7 @@ class _CommunityPageState extends State<CommunityPage>
         provider.loadAll(),
         SocialService.getMyGroups(),
         SocialService.getDiscoverGroups(),
-        SocialService.getSuggestedUsers(),
+        SocialService.getSuggestedUsers(limit: 20),
       ]);
 
       if (mounted) {
@@ -1524,6 +1559,7 @@ class _CommunityPageState extends State<CommunityPage>
                 setState(() {
                   _suggestedUsers.removeWhere((u) => u['id'] == id);
                 });
+                unawaited(_fuelleVorschlaegeNach());
               },
               icon: Icon(
                 Icons.close,
@@ -1578,6 +1614,7 @@ class _CommunityPageState extends State<CommunityPage>
                       setState(() {
                         _suggestedUsers.removeWhere((u) => u['id'] == id);
                       });
+                      unawaited(_fuelleVorschlaegeNach());
                     }
                   },
                   child: Container(

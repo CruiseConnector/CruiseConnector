@@ -67,10 +67,14 @@ void main() {
   testWidgets('zeigt Wegpunkt-Hinweis ohne Setup-Aktionschips', (tester) async {
     await tester.pumpWidget(buildCard(selectedWaypointIndex: 1));
 
-    expect(
-      find.text('Stopp 2 ausgewählt. Nutze die Karten-Aktionen rechts.'),
-      findsOneWidget,
-    );
+    // 2026-08-11: Hier stand „Stopp 2 ausgewählt. Nutze die Karten-Aktionen
+    // rechts." Der Satz versprach etwas, das es nicht gibt: Die Rückrufe
+    // onReplaceSelectedWaypoint/onDeleteSelectedWaypoint werden von beiden
+    // Seiten übergeben, aber in dieser Karte nie aufgerufen — und die
+    // Karten-Aktionsleiste kennt nur „Letzten löschen" und „Alle löschen",
+    // nichts für den AUSGEWÄHLTEN Stopp. Die Erwartungen weiter unten
+    // („Auswahl löschen" findsNothing) belegen genau das.
+    expect(find.text('Stopp 2 ausgewählt.'), findsOneWidget);
     expect(
       find.text(
         'Die Strecke ergibt sich aus deinen Stopps. Stil und Aktionen steuerst du direkt auf der Karte.',
