@@ -10,7 +10,13 @@ import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
 /// keinen Fall während der Fahrt. Und wenn sie nicht bewertet haben, soll es
 /// alle drei Routen kommen."
 ///
-/// Diese Datei prüft jede dieser vier Regeln einzeln.
+/// 2026-08-11 (vucko, PRAEZISIERT): „Nach jeder dritten RUNDE, die man
+/// gefahren ist, alleine oder in der Gruppe." Der Takt haengt seitdem an
+/// abgeschlossenen FAHRTEN, nicht mehr an Routen-Ereignissen. Eine blosse
+/// Routensuche zaehlt nicht mehr mit — sonst bekam das Popup, wer dreimal
+/// suchte, ohne je zu fahren.
+///
+/// Diese Datei prüft jede dieser Regeln einzeln.
 ///
 /// „Niemals während der Fahrt" steht bewusst NICHT hier: Das ist keine
 /// Bedingung im Dienst, sondern ergibt sich daraus, dass nur die Home-Schale
@@ -60,30 +66,41 @@ void main() {
     });
   });
 
-  group('Danach alle drei Routen', () {
+  group('Danach alle drei FAHRTEN', () {
     Future<void> ersteRundeAbhaken() async {
       await dienst.registerCompletedRide();
       await dienst.markPromptShown();
     }
 
-    test('zwei Routen reichen noch nicht', () async {
+    test('zwei Fahrten reichen noch nicht', () async {
       await ersteRundeAbhaken();
-      await dienst.registerRouteEvent();
-      await dienst.registerRouteEvent();
+      await dienst.registerCompletedRide();
+      await dienst.registerCompletedRide();
       expect(await dienst.shouldPrompt(), isFalse);
     });
 
-    test('die dritte Route löst aus', () async {
+    test('die dritte Fahrt löst aus', () async {
       await ersteRundeAbhaken();
-      await dienst.registerRouteEvent();
-      await dienst.registerRouteEvent();
-      await dienst.registerRouteEvent();
+      await dienst.registerCompletedRide();
+      await dienst.registerCompletedRide();
+      await dienst.registerCompletedRide();
       expect(await dienst.shouldPrompt(), isTrue);
     });
 
-    test('eine gefahrene Route zählt genauso wie eine gesuchte', () async {
-      // Aufzeichnen und Mitfahren erzeugen keine Suche — sie müssen trotzdem
-      // in den Drei-Rhythmus einzahlen.
+    test('reine Routensuchen zählen NICHT mehr mit', () async {
+      // Bis 2026-08-11 löste das hier aus. Vucko wollte ausdrücklich den Takt
+      // an gefahrenen Runden, nicht an Suchvorgängen — wer nur stöbert, soll
+      // nicht nach einer Bewertung gefragt werden.
+      await ersteRundeAbhaken();
+      for (var i = 0; i < 10; i++) {
+        await dienst.registerRouteEvent();
+      }
+      expect(await dienst.shouldPrompt(), isFalse);
+    });
+
+    test('eine Gruppenfahrt zählt genauso wie eine Solofahrt', () async {
+      // Der Dienst unterscheidet bewusst nicht: cruise_mode_page meldet beide
+      // über denselben Abschluss-Trichter (_presentCompletionSheet).
       await ersteRundeAbhaken();
       await dienst.registerCompletedRide();
       await dienst.registerCompletedRide();
@@ -94,16 +111,16 @@ void main() {
     test('der Rhythmus beginnt nach jedem Popup von vorn', () async {
       await ersteRundeAbhaken();
       for (var i = 0; i < 3; i++) {
-        await dienst.registerRouteEvent();
+        await dienst.registerCompletedRide();
       }
       expect(await dienst.shouldPrompt(), isTrue);
       await dienst.markPromptShown();
       expect(await dienst.shouldPrompt(), isFalse);
       for (var i = 0; i < 2; i++) {
-        await dienst.registerRouteEvent();
+        await dienst.registerCompletedRide();
       }
       expect(await dienst.shouldPrompt(), isFalse);
-      await dienst.registerRouteEvent();
+      await dienst.registerCompletedRide();
       expect(await dienst.shouldPrompt(), isTrue);
     });
   });
@@ -136,8 +153,8 @@ void main() {
   });
 
   group('Die Drei-Schwelle ist die vereinbarte', () {
-    test('routesBetweenPrompts ist 3', () {
-      expect(RideRatingPromptService.routesBetweenPrompts, 3);
+    test('ridesBetweenPrompts ist 3', () {
+      expect(RideRatingPromptService.ridesBetweenPrompts, 3);
     });
   });
 }

@@ -18315,6 +18315,16 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _presentCompletionSheet(CruiseCompletionDialog dialog) {
     if (_completionSheetShown) return;
     _completionSheetShown = true;
+    // 2026-08-11 (vucko): „nach jeder dritten Runde, die man gefahren ist,
+    // alleine ODER IN DER GRUPPE, MUESSEN Popups kommen."
+    //
+    // Diese eine Zeile fehlte — registerCompletedRide() wurde nirgends
+    // aufgerufen, der Fahrten-Zaehler stand also dauerhaft auf 0. Hier ist die
+    // richtige Stelle: Alle drei Abschluss-Wege (Ziel erreicht, manuell
+    // beendet, vorzeitig abgebrochen) laufen hier durch, der Ein-Schuss-Schutz
+    // oben garantiert genau eine Zaehlung pro Fahrt, und Gruppenfahrten kommen
+    // ueber denselben Weg.
+    unawaited(RideRatingPromptService.instance.registerCompletedRide());
     unawaited(() async {
       await showCruiseCompletionSheet<void>(context: context, child: dialog);
       if (!mounted || _disposed) return;
