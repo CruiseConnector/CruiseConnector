@@ -84,6 +84,7 @@ import 'package:cruise_connect/domain/models/route_maneuver.dart'
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/controllers/cruise_navigation_controller.dart';
+import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise/route_loading_phases.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_completion_dialog.dart';
@@ -11610,6 +11611,19 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   /// Gespeicherte Aufzeichnung als Community-Post anbieten. Nutzt denselben
   /// Weg wie „Route teilen" bei den gespeicherten Routen.
+  /// „Naechstes Mal zu zweit" — fuehrt nach der Fahrt zum Gruppe-Erstellen.
+  ///
+  /// 2026-08-11 (vucko): Der Moment direkt nach einer Fahrt ist der beste, um
+  /// auf Gruppenfahrten aufmerksam zu machen. Das Speichern laeuft im
+  /// Hintergrund weiter, deshalb darf sofort weitergeblaettert werden — die
+  /// Gruppenerstellung braucht die Routen-ID nicht.
+  Future<void> _erstelleGruppeNachFahrt() async {
+    if (!mounted || _disposed) return;
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const CreateGroupPage()));
+  }
+
   Future<void> _publishRecordedRoute(String savedRouteId) async {
     if (!mounted || _disposed) return;
     await Navigator.of(context).push(
@@ -18348,7 +18362,16 @@ class _CruiseModePageState extends State<CruiseModePage>
         avgSpeedKmh: snapshot.avgSpeedKmh,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
+        // Vorschlaege nur bei Solo-Fahrten: In der Gruppe geht es nach der
+        // Fahrt zurueck in die Lobby, ein Weiterleiten wuerde das zerreissen.
+        folgeVorschlaege: widget.groupId == null,
+        onGruppeErstellen: _erstelleGruppeNachFahrt,
         onSave: (rating, tags, title, photoBytes, publish) {
+          // 2026-08-11: publish wurde hier bisher entgegengenommen und
+          // weggeworfen. Das fiel nie auf, weil canPublish auf diesem Pfad
+          // false ist und der Knopf gar nicht erscheint — eine schlafende
+          // Mine: Sobald hier ein Veroeffentlichen-Weg dazukommt, liefe er
+          // still ins Leere. Der Wunsch wird jetzt durchgereicht.
           _starteHintergrundSpeichern(
             verwerfen: false,
             completed: true,
@@ -18356,6 +18379,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             ratingTags: tags,
             title: title,
             photoBytes: photoBytes,
+            publish: publish,
           );
         },
         onDiscard: () {
@@ -18412,7 +18436,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         belowMinimum: snapshot.belowMinimum,
         routeStyle: _selectedStyle,
         isRoundTrip: _isRoundTrip,
+        folgeVorschlaege: widget.groupId == null,
+        onGruppeErstellen: _erstelleGruppeNachFahrt,
         onSave: (rating, tags, title, photoBytes, publish) {
+          // Siehe oben: der publish-Wunsch darf nicht verloren gehen.
           _starteHintergrundSpeichern(
             verwerfen: false,
             completed: false,
@@ -18421,6 +18448,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             ratingTags: tags,
             title: title,
             photoBytes: photoBytes,
+            publish: publish,
           );
         },
         onDiscard: () {

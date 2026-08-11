@@ -115,6 +115,8 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.topSpeedKmh = 0,
     this.avgSpeedKmh = 0,
     this.canPublish = false,
+    this.folgeVorschlaege = false,
+    this.onGruppeErstellen,
   });
 
   final double distanceKm;
@@ -164,6 +166,19 @@ class CruiseCompletionDialog extends StatefulWidget {
   /// und danach als Community-Post angeboten. Nur für selbst aufgezeichnete
   /// Strecken; sonst existiert der Knopf gar nicht.
   final bool canPublish;
+
+  /// Zeigt nach der Fahrt zwei dezente Vorschlaege: gemeinsam fahren und
+  /// in der Community teilen.
+  ///
+  /// 2026-08-11 (vucko „vorallem moechte ich, dass die Leute eher sehen, dass
+  /// es auch das Gruppenfeature oder das Community-Feature gibt"): Der Moment
+  /// direkt nach einer Fahrt ist der beste — da ist jemand stolz auf seine
+  /// Strecke. Bewusst als leise Vorschlagszeile und nicht als Dialog: Wer sie
+  /// nicht will, uebersieht sie einfach.
+  final bool folgeVorschlaege;
+
+  /// Wird gerufen, wenn der Nutzer „Naechstes Mal zu zweit" waehlt.
+  final VoidCallback? onGruppeErstellen;
 
   @override
   State<CruiseCompletionDialog> createState() => _CruiseCompletionDialogState();
@@ -277,6 +292,53 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     } finally {
       Navigator.of(context).pop();
     }
+  }
+
+  /// „Wie waer's danach?" — zwei leise Wege in die Gruppen- und Community-Welt.
+  Widget _buildFolgeVorschlaege() {
+    final busy = _abgeschickt || _isSharing;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Wie wär\'s danach?',
+          style: TextStyle(
+            color: Color(0xFFA8AFBC),
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: _FolgeChip(
+                icon: Icons.group_add_outlined,
+                label: 'Nächstes Mal zu zweit',
+                onTap: busy ? null : _handleGruppeErstellen,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _FolgeChip(
+                icon: Icons.forum_outlined,
+                label: 'In die Community',
+                onTap: busy ? null : () => _handleSave(publish: true),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Speichert wie gewohnt und uebergibt danach an die Seite, die zum
+  /// Gruppe-Erstellen weiterleitet. Das Speichern laeuft im Hintergrund —
+  /// deshalb darf gleich weitergeblaettert werden.
+  void _handleGruppeErstellen() {
+    final weiter = widget.onGruppeErstellen;
+    _handleSave();
+    weiter?.call();
   }
 
   void _handleDiscard() {
@@ -477,6 +539,10 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 _buildPhotoControl(),
                 const SizedBox(height: 10),
                 _buildRatingPanel(),
+                if (widget.folgeVorschlaege) ...[
+                  const SizedBox(height: 12),
+                  _buildFolgeVorschlaege(),
+                ],
                 if (widget.belowMinimum) ...[
                   const SizedBox(height: 10),
                   const Text(
@@ -1489,6 +1555,61 @@ class _LegendDot extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+
+/// Leiser Vorschlags-Knopf: umrandet statt gefuellt, damit er neben den echten
+/// Aktionen („Speichern", „Verwerfen") nicht um Aufmerksamkeit kaempft.
+class _FolgeChip extends StatelessWidget {
+  const _FolgeChip({required this.icon, required this.label, this.onTap});
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final aus = onTap == null;
+    return SizedBox(
+      height: 36,
+      child: OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: aus ? 0.06 : 0.12),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          foregroundColor: Colors.white,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 14,
+              color: Colors.white.withValues(alpha: aus ? 0.3 : 0.7),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: aus ? 0.3 : 0.85),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
