@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
@@ -340,6 +341,10 @@ class _HomePageState extends State<HomePage> {
       _visitedTabs.add(index);
     });
     if (index == 0) unawaited(_pruefeBewertungsPopup());
+    // Community geoeffnet: Hinweispunkt aus und Stand merken.
+    if (index == 1) {
+      unawaited(CommunityNeuigkeitService.instance.alsGesehenMarkieren());
+    }
   }
 
   /// 2026-08-04 (vucko): „Nachdem sie die Fahrt abgeschlossen und dann
@@ -515,7 +520,7 @@ class _HomePageState extends State<HomePage> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _buildNavItem(Icons.home_outlined, 0),
-              _buildNavItem(Icons.groups_outlined, 1),
+              _buildNavItem(Icons.groups_outlined, 1, mitHinweis: true),
               const SizedBox(width: 80),
               _buildNavItem(Icons.show_chart, 3),
               _buildNavItem(Icons.person_outline, 4),
@@ -592,10 +597,56 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildNavItem(IconData icon, int index) {
+  /// [mitHinweis] blendet einen kleinen Punkt ein, wenn es dort Neues gibt.
+  ///
+  /// 2026-08-11 (vucko): „vorallem moechte ich, dass die Leute eher sehen,
+  /// dass es auch das Gruppenfeature oder das Community-Feature gibt." Der
+  /// Punkt zieht den Blick, ohne etwas zu verstellen — und verschwindet, sobald
+  /// der Tab geoeffnet wurde.
+  Widget _buildNavItem(IconData icon, int index, {bool mitHinweis = false}) {
     final isSelected = _selectedIndex == index;
     final accent = context.watch<AppAccentProvider>().color;
 
+    if (mitHinweis) {
+      return ValueListenableBuilder<bool>(
+        valueListenable: CommunityNeuigkeitService.instance.hatNeues,
+        builder: (context, neues, kind) {
+          // Im aktiven Tab waere der Punkt sinnlos — man schaut ja gerade hin.
+          if (!neues || isSelected) return kind!;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              kind!,
+              Positioned(
+                top: 14,
+                right: 12,
+                child: Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    shape: BoxShape.circle,
+                    // Weisser Ring, damit der Punkt auf dem hellen Balken
+                    // sauber absetzt.
+                    border: Border.all(color: Colors.white, width: 1.6),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+        child: _navItemKern(icon, index, isSelected, accent),
+      );
+    }
+    return _navItemKern(icon, index, isSelected, accent);
+  }
+
+  Widget _navItemKern(
+    IconData icon,
+    int index,
+    bool isSelected,
+    Color accent,
+  ) {
     return GestureDetector(
       onTap: () => _onNavItemTapped(index),
       behavior: HitTestBehavior.opaque,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import '../../data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -177,6 +178,15 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
             .toList();
         _loading = false;
       });
+      // 2026-08-11 (vucko): Der Hinweispunkt am Community-Symbol lebt von
+      // genau diesen Zahlen — sie sind ohnehin schon geladen, also kostet der
+      // Punkt keine einzige zusaetzliche Abfrage.
+      unawaited(
+        CommunityNeuigkeitService.instance.melde(
+          gruppen: results[1].length,
+          vorschlaege: results[0].length,
+        ),
+      );
     } catch (e) {
       debugPrint('[CommunityCarouselCard] Laden fehlgeschlagen: $e');
       if (!mounted) return;
