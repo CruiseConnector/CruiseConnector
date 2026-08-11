@@ -35,9 +35,14 @@ class AppChangelog {
   /// Neueste Version zuerst.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
-      version: '1.5.10',
-      titel: 'Gruppenfahrten, Umwege und Rueckmeldungen',
+      version: '1.5.11',
+      titel: 'Bessere Routen, Gruppenfahrten und Rueckmeldungen',
       punkte: <String>[
+        'Die Fahrstile liefern wieder wirklich unterschiedliche Routen: '
+            'Kurvenjagd sucht die kurvigen Strecken, der Sportmodus die '
+            'fluessigen, die Abendrunde die gemuetlichen.',
+        'A nach B mit Umweg: klein ist rund doppelt so lang wie der direkte Weg, '
+            'mittel dreifach, gross vierfach. Aus 20 km werden 40, 60 oder 80 km.',
         'Gruppe einrichten: Die Karte laesst sich jetzt frei bewegen und das '
             'Formular einklappen — du siehst die Route, bevor ihr losfahrt.',
         'Fahrer und Mitfahrer sind getrennt: Wer als Mitfahrer eingetragen ist, '
@@ -45,9 +50,8 @@ class AppChangelog {
         'Verfahren in der Gruppe: Statt ratlos stehenzubleiben bekommst du die '
             'Wahl — zurueck zur Gruppe, Gruppenroute uebernehmen oder eigene Route.',
         'Die Kamera dreht sich waehrend der Gruppenfahrt nicht mehr wild.',
-        'A nach B mit Umweg: klein ist rund doppelt so lang wie der direkte Weg, '
-            'mittel dreifach, gross vierfach. Aus 20 km werden 40, 60 oder 80 km.',
         'Neu in den Einstellungen: Rueckmeldung schicken — mit Foto, direkt an uns.',
+        'Kurven werden jetzt ueberall gleich und genau gezaehlt.',
       ],
     ),
   ];

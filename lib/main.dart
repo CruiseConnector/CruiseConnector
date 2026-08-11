@@ -36,6 +36,7 @@ import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
+import 'package:cruise_connect/presentation/widgets/force_update_gate.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
@@ -454,8 +455,10 @@ class _MyAppState extends State<MyApp> {
                 foregroundColor: Colors.white,
               ),
             ),
-            home: const _CruiseLaunchGate(
-              child: _LanguageChoiceGate(child: AuthPage()),
+            home: const ForceUpdateGate(
+              child: _CruiseLaunchGate(
+                child: _LanguageChoiceGate(child: AuthPage()),
+              ),
             ),
           );
         },
