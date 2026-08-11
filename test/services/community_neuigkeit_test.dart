@@ -78,4 +78,80 @@ void main() {
     await dienst.melde(gruppen: 4, vorschlaege: 6);
     expect(dienst.hatNeues.value, isFalse);
   });
+
+  // ── Fund der adversarischen Gegenpruefung (2026-08-11) ───────────────────
+  //
+  // Auf dem Startbildschirm liegen ZWEI unabhaengige Kacheln. Jede laedt nur
+  // ihre eigene Haelfte, meldete aber beide Zahlen — fuer die fremde beim
+  // Kaltstart eine 0. Wer zuletzt fertig wurde, ueberschrieb den korrekten
+  // Wert des anderen. Weil die Vorschlaege-Abfrage die langsamere ist, kam sie
+  // typischerweise zuletzt und knipste den Punkt fuer neue Gruppen aus.
+  //
+  // Genau das ist Vuckos „die Highlights sehe ich leider nicht".
+  group('Zwei Kacheln loeschen sich nicht gegenseitig aus', () {
+    test('eine spaetere Teilmeldung nimmt den Punkt nicht zurueck', () async {
+      SharedPreferences.setMockInitialValues({
+        'community_gesehen_gruppen_v1': 8,
+        'community_gesehen_vorschlaege_v1': 5,
+      });
+      dienst.zuruecksetzenFuerTest();
+
+      // Die Gruppen-Kachel ist zuerst fertig: 10 > 8 → es gibt Neues.
+      await dienst.melde(gruppen: 10);
+      expect(dienst.hatNeues.value, isTrue);
+
+      // Danach die langsamere Vorschlaege-Kachel: nichts Neues bei IHR.
+      await dienst.melde(vorschlaege: 5);
+      expect(
+        dienst.hatNeues.value,
+        isTrue,
+        reason:
+            'die zweite Kachel weiss nichts ueber Gruppen und darf den Punkt '
+            'nicht ausknipsen',
+      );
+    });
+
+    test('umgekehrte Reihenfolge, gleiches Ergebnis', () async {
+      SharedPreferences.setMockInitialValues({
+        'community_gesehen_gruppen_v1': 8,
+        'community_gesehen_vorschlaege_v1': 5,
+      });
+      dienst.zuruecksetzenFuerTest();
+
+      await dienst.melde(vorschlaege: 9);
+      expect(dienst.hatNeues.value, isTrue);
+      await dienst.melde(gruppen: 8);
+      expect(dienst.hatNeues.value, isTrue);
+    });
+
+    test('ohne Neues bleibt er aus, egal in welcher Reihenfolge', () async {
+      SharedPreferences.setMockInitialValues({
+        'community_gesehen_gruppen_v1': 8,
+        'community_gesehen_vorschlaege_v1': 5,
+      });
+      dienst.zuruecksetzenFuerTest();
+
+      await dienst.melde(gruppen: 8);
+      await dienst.melde(vorschlaege: 5);
+      expect(dienst.hatNeues.value, isFalse);
+    });
+
+    test('ein frueher Community-Tipp schreibt keine 0 als gesehen fest',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      dienst.zuruecksetzenFuerTest();
+
+      // Nutzer tippt sofort auf Community, waehrend die Kacheln noch laden.
+      await dienst.alsGesehenMarkieren();
+      final prefs = await SharedPreferences.getInstance();
+      expect(
+        prefs.getInt('community_gesehen_gruppen_v1'),
+        isNull,
+        reason:
+            'eine festgeschriebene 0 liesse den Punkt danach bei jedem '
+            'einzelnen Vorschlag wieder leuchten',
+      );
+      expect(prefs.getInt('community_gesehen_vorschlaege_v1'), isNull);
+    });
+  });
 }

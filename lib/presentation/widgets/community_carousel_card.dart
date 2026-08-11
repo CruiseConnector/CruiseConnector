@@ -181,10 +181,14 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
       // 2026-08-11 (vucko): Der Hinweispunkt am Community-Symbol lebt von
       // genau diesen Zahlen — sie sind ohnehin schon geladen, also kostet der
       // Punkt keine einzige zusaetzliche Abfrage.
+      // Jede Kachel meldet NUR, was sie selbst geladen hat. Fuer die andere
+      // Haelfte steht oben der Cache des Nachbarn — beim Kaltstart ist der
+      // leer, und eine gemeldete 0 wuerde den korrekten Wert der anderen
+      // Kachel ueberschreiben und den Hinweispunkt ausknipsen.
       unawaited(
         CommunityNeuigkeitService.instance.melde(
-          gruppen: results[1].length,
-          vorschlaege: results[0].length,
+          gruppen: _needsGroups ? results[1].length : null,
+          vorschlaege: _needsSuggestions ? results[0].length : null,
         ),
       );
     } catch (e) {
@@ -326,6 +330,13 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
       _suggestedUsers.removeWhere((user) => user['id'] == userId);
     });
     _cachedSuggestedUsers?.removeWhere((user) => user['id'] == userId);
+    // Auch dauerhaft merken (14 Tage), nicht nur fuer diese Sitzung.
+    //
+    // 2026-08-11: Hier fehlte das. Wer jemanden auf der Home-Kachel wegklickte,
+    // sah ihn nach dem naechsten App-Start wieder — und im Entdecken-Tab
+    // sofort erneut, weil dessen serverseitiger Filter nur die gespeicherte
+    // Liste kennt. Weggeklickt muss weggeklickt bleiben, egal wo man tippt.
+    unawaited(SocialService.dismissSuggestedUser(userId));
     await _replenishSuggestedUsers();
   }
 

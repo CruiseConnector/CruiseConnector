@@ -1029,7 +1029,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     if (index == null || index < 0 || index >= _roundTripWaypoints.length) {
       return;
     }
-    setState(() => _replaceWaypointIndex = index);
+    setState(() {
+      _replaceWaypointIndex = index;
+      // Karte freigeben, BEVOR wir zum Tippen auffordern — sonst verdeckt das
+      // solide Panel genau die Flaeche, auf die getippt werden soll. Dieselbe
+      // Regel gilt fuer den Wegpunkte-Modus und „Standort waehlen".
+      _configEingeklappt = true;
+    });
     _showError('Tippe auf die Karte, um Stopp ${index + 1} neu zu setzen.');
   }
 

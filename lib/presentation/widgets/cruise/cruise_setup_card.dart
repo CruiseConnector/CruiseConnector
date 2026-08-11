@@ -1492,7 +1492,12 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     }
     final selected = widget.selectedWaypointIndex;
     if (selected != null && selected >= 0) {
-      return 'Stopp ${selected + 1} ausgewählt. Nutze die Karten-Aktionen rechts.';
+      // 2026-08-11: Hier stand „Nutze die Karten-Aktionen rechts." Die dort
+      // versprochenen Aktionen fuer den AUSGEWAEHLTEN Stopp gibt es nicht —
+      // onReplaceSelectedWaypoint/onDeleteSelectedWaypoint werden von beiden
+      // Seiten uebergeben, aber in dieser Karte nirgends aufgerufen. Die
+      // Leiste kann nur „Letzten loeschen" und „Alle loeschen".
+      return 'Stopp ${selected + 1} ausgewählt.';
     }
     final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
     return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
