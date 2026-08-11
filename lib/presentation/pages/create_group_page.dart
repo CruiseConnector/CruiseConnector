@@ -1643,8 +1643,21 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   void _handleMapReady(CruiseMapLibreController controller) {
     _mapController = controller;
-    if (_routeLatLngs.length >= 2) {
-      _fitRouteBounds(_routeLatLngs);
+    // 2026-08-11, Fund der Gegenpruefung: Hier stand frueher _routeLatLngs —
+    // also das, was GERADE gezeichnet ist. onStyleLoaded kann auf iOS
+    // mehrfach feuern (siehe cruise_maplibre_map.dart), etwa wenn nach dem
+    // Kameraschwenk neue Kacheln laden. Faellt das in die 2,4 s der
+    // Zeichenanimation, enthaelt _routeLatLngs erst ein Anfangsstueck — die
+    // Karte haette auf ein Routen-Fragment gezoomt. _lastRoute ist immer
+    // vollstaendig.
+    final volleRoute = _lastRoute?.coordinates
+        .map((c) => LatLng(c[1], c[0]))
+        .toList(growable: false);
+    final zumEinrahmen = (volleRoute != null && volleRoute.length >= 2)
+        ? volleRoute
+        : _routeLatLngs;
+    if (zumEinrahmen.length >= 2) {
+      _fitRouteBounds(zumEinrahmen);
       return;
     }
     final start = _startPoint;
