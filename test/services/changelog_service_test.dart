@@ -10,13 +10,19 @@ void main() {
 
   tearDown(() => ChangelogService.versionsLeser = null);
 
-  test('Erstinstallation zeigt keinen Update-Hinweis', () async {
+  // 2026-08-11 (vucko, ausdrueckliche Entscheidung): Der Hinweis kommt AUCH
+  // bei frischer Installation. Die erste Fassung unterdrueckte ihn dort — mit
+  // der Folge, dass auch das allererste Update mit dieser Funktion wie eine
+  // Erstinstallation aussah und der Hinweis nie erschien, bei niemandem.
+  test('auch die Erstinstallation zeigt den Hinweis — genau einmal', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     ChangelogService.versionsLeser = () async => aktuell;
 
-    expect(await ChangelogService.instance.faelligerEintrag(), isNull);
+    final eintrag = await ChangelogService.instance.faelligerEintrag();
+    expect(eintrag, isNotNull);
+    expect(eintrag!.version, aktuell);
 
-    // Beim zweiten Start (gleiche Version) weiterhin nichts.
+    await ChangelogService.instance.markiereGesehen(eintrag.version);
     expect(await ChangelogService.instance.faelligerEintrag(), isNull);
   });
 

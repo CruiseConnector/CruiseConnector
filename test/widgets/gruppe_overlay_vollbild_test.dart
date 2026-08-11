@@ -99,56 +99,58 @@ void main() {
     );
   });
 
-  // ── Fund aus der adversarischen Gegenpruefung (2026-08-11) ───────────────
-  // DER kritische Fehler dieses Umbaus: Zuerst lag ein bildschirmfuellender
-  // CustomScrollView ueber der Karte, mit einem durchsichtigen
-  // IgnorePointer-Streifen obendrueber. Die Annahme war, Beruehrungen fielen
-  // dort zur Karte durch. Falsch: Flutters Scrollable haengt seinen
-  // Gestenerkenner mit HitTestBehavior.opaque ueber den GANZEN Viewport und
-  // nimmt den Treffer an, bevor die Karte darunter geprueft wird. Damit waeren
-  // „Tippe auf die Karte, um den Startpunkt zu setzen" und die gesamte
-  // Wegpunkt-Planung unbedienbar gewesen.
-  testWidgets('die Karte bleibt bedienbar, auch wenn die Einstellungen offen sind', (
+  // ── Verhalten nach Vuckos Rueckmeldung vom 2026-08-11 ────────────────────
+  // „Es soll nicht transparent sein, es soll wie bei der Single-Cruise-Mode-
+  // Page sein." Das Panel ist deshalb SOLIDE und deckt die Karte ab — und
+  // Karten-Aktionen klappen es zuerst ein (Cruise-Muster: „Karte freigeben
+  // fuer den Tap"). Diese Tests halten beide Regeln fest.
+
+  testWidgets('Wegpunkte-Modus klappt das Panel ein (Karte frei zum Tippen)', (
     tester,
   ) async {
     await tester.pumpWidget(seite());
     await tester.pump();
+    expect(find.text('Gruppen-Details'), findsOneWidget);
 
-    // Ein Punkt im oberen Kartenstreifen.
-    const probe = Offset(200, 90);
-    final treffer = tester.hitTestOnBinding(probe);
-    final zieleUeberDerKarte = treffer.path
-        .map((e) => e.target.runtimeType.toString())
-        .takeWhile((t) => !t.contains('RenderView'))
-        .toList();
+    await tester.tap(find.text('Wegpunkte'));
+    await tester.pumpAndSettle();
 
-    // Kein Scrollable darf in diesem Streifen im Trefferpfad liegen.
-    expect(
-      zieleUeberDerKarte.any((t) => t.contains('Viewport')),
-      isFalse,
-      reason:
-          'Ein Scrollable im Kartenstreifen wuerde jeden Zeiger schlucken — '
-          'Trefferpfad: $zieleUeberDerKarte',
-    );
+    // Panel weg, Vollbild-Leiste da — genau wie beim Cruisen.
+    expect(find.text('Gruppen-Details'), findsNothing);
+    expect(find.text('Gruppe einstellen'), findsOneWidget);
+
+    // Den Hinweis-Toast (2,6 s) auslaufen lassen, sonst meldet das
+    // Test-Framework am Ende einen noch offenen Timer.
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
   });
 
-  test('das Einstellungsblatt deckt den Kartenstreifen nicht ab', () {
+  test('das Panel ist solide und die Karten-Aktionen klappen ein', () {
     final quelle = File(
       'lib/presentation/pages/create_group_page.dart',
     ).readAsStringSync();
-    // Der ScrollView muss UNTERHALB des Kartenstreifens beginnen.
+
+    // 1) Der Einstellungs-Sliver liegt auf einem soliden Grund — nichts
+    //    scheint durch. (Vucko: „es soll nicht transparent sein.")
+    final blatt = quelle.substring(
+      quelle.indexOf('Widget _buildEinstellungsBlatt()'),
+      quelle.indexOf('Widget _buildVollbildLeiste()'),
+    );
     expect(
-      quelle.contains('top: _kartenStreifen'),
+      blatt.contains('color: const Color(0xFF0B0E14)'),
+      isTrue,
+      reason: 'das Panel muss solide sein wie auf der Cruise-Seite',
+    );
+
+    // 2) „Standort waehlen" gibt die Karte frei.
+    expect(
+      RegExp(
+        r"if \(value == 'Standort wählen'\) \{\s*_configEingeklappt = true;",
+      ).hasMatch(quelle),
       isTrue,
       reason:
-          'Deckt das Blatt die Karte wieder ab, schluckt der Scrollable jeden '
-          'Zeiger und die Karte ist tot.',
-    );
-    // Und die Aktionsleiste darf nicht mehr ueber dem Formular schweben.
-    expect(
-      quelle.contains('_buildBottomBar(schwebend: false)'),
-      isTrue,
-      reason: 'schwebend deckte auf kleinen Bildschirmen die Modus-Chips zu',
+          'sonst fordert die App zum Kartentipp auf, waehrend das solide '
+          'Panel die Karte verdeckt',
     );
   });
 }

@@ -19,6 +19,7 @@ import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../../domain/models/saved_route.dart';
 import '../widgets/start_zeit_sheet.dart';
+import '../widgets/top_toast.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import '../widgets/group_safety_notice_sheet.dart';
@@ -910,7 +911,20 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _waypointOrigin = 'manual';
         _waypointSeedAttempt = 0;
       }
+      // Wegpunkte setzt man AUF der Karte — Panel einklappen und Karte
+      // freigeben, wie es die Cruise-Seite bei Karten-Aktionen macht.
+      if (planningType == 'Wegpunkte') {
+        _configEingeklappt = true;
+      }
     });
+    if (planningType == 'Wegpunkte' && mounted) {
+      TopToast.show(
+        context,
+        message: 'Tippe auf die Karte, um deine Stopps zu setzen',
+        icon: Icons.touch_app_rounded,
+        duration: const Duration(milliseconds: 2600),
+      );
+    }
   }
 
   void _handleMapTap(LatLng point) {
@@ -1223,49 +1237,77 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  /// Wie viel Karte oben sichtbar (und bedienbar) bleibt.
-  double get _kartenStreifen =>
-      math.max(170.0, MediaQuery.of(context).size.height * 0.30);
-
-  /// Die Einstellungen als Blatt UNTER dem Kartenstreifen.
+  /// Die Einstellungen — 1:1 das Muster der Single-Cruise-Seite.
   ///
-  /// 2026-08-11, Korrektur nach der Gegenpruefung: Zuerst lag hier ein
-  /// bildschirmfuellender CustomScrollView mit einem durchsichtigen
-  /// IgnorePointer-Streifen obendrueber — in der Annahme, Beruehrungen wuerden
-  /// dort zur Karte durchfallen. Das ist FALSCH: Flutters Scrollable haengt
-  /// seinen Gestenerkenner mit HitTestBehavior.opaque ueber den ganzen
-  /// Viewport und nimmt den Treffer an, bevor die Karte darunter ueberhaupt
-  /// geprueft wird. IgnorePointer schaltet nur den eigenen Teilbaum stumm,
-  /// nicht den Scrollable darueber. Folge waere gewesen: Karte nicht
-  /// verschiebbar, nicht zoombar, und „Tippe auf die Karte, um den Startpunkt
-  /// zu setzen" haette nicht funktioniert — obwohl die App genau dazu auffordert.
-  ///
-  /// Jetzt deckt das Blatt den Kartenstreifen gar nicht erst ab. Was nicht
-  /// ueberlappt, kann auch nichts schlucken.
+  /// 2026-08-11 (vucko): „es soll nicht transparent sein, es soll wie bei der
+  /// Single-Cruise-Mode-Page sein ... einfach von der Cruise-Mode-Page
+  /// uebernommen werden, nur halt dass es die Einstellungen vom Gruppenfeature
+  /// auch hat." Uebernommen ist deshalb exakt deren Aufbau (dort
+  /// _buildConfigOverlay, Zustand config_expanded): oben ein schmaler
+  /// Kartenstreifen mit Griff — Tipp oder Runterwischen klappt ein —, darunter
+  /// das SOLIDE Panel (0xFF0B0E14) mit allen Einstellungen. Karten-Aktionen
+  /// („Auf Karte tippen", Wegpunkte) klappen das Panel zuerst ein, genau wie
+  /// _beginPickStartOnMap auf der Cruise-Seite: Karte freigeben fuer den Tap.
   Widget _buildEinstellungsBlatt() {
+    final safeTop = MediaQuery.of(context).padding.top;
     return Stack(
       key: const ValueKey('einstellungen_offen'),
       children: [
-          Positioned(
-            top: _kartenStreifen,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: CustomScrollView(
+        NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            // Overscroll am Listenanfang = Runterwischen -> einklappen.
+            if (n is OverscrollNotification && n.overscroll < -6) {
+              _versteckeEinstellungen();
+              return true;
+            }
+            return false;
+          },
+          child: CustomScrollView(
             controller: _scrollCtrl,
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
+              // Schmaler Kartenstreifen mit Griff, wie auf der Cruise-Seite.
               SliverToBoxAdapter(
-                child: IgnorePointer(
-                  child: SizedBox(
-                    height: math.max(
-                      170.0,
-                      MediaQuery.of(context).size.height * 0.30,
+                child: GestureDetector(
+                  onTap: _versteckeEinstellungen,
+                  onVerticalDragUpdate: (d) {
+                    if ((d.primaryDelta ?? 0) > 4) _versteckeEinstellungen();
+                  },
+                  onVerticalDragEnd: (d) {
+                    if ((d.primaryVelocity ?? 0) > 60) {
+                      _versteckeEinstellungen();
+                    }
+                  },
+                  child: Container(
+                    height: safeTop + 64,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0xFF0B0E14)],
+                      ),
+                    ),
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2.5),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
+              // Das solide Panel mit allen Einstellungen — nichts scheint durch.
               SliverToBoxAdapter(
-                child: Padding(
+                child: Container(
+                  color: const Color(0xFF0B0E14),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
                     vertical: 24,
@@ -1294,7 +1336,24 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                           });
                         },
                         onLocationChanged: (value) async {
-                          setState(() => _selectedLocation = value);
+                          setState(() {
+                            _selectedLocation = value;
+                            // Startpunkt setzt man AUF der Karte — Panel
+                            // einklappen (Cruise-Muster: „Karte freigeben
+                            // fuer den Tap").
+                            if (value == 'Standort wählen') {
+                              _configEingeklappt = true;
+                            }
+                          });
+                          if (value == 'Standort wählen' && mounted) {
+                            TopToast.show(
+                              context,
+                              message:
+                                  'Tippe auf die Karte für deinen Startpunkt',
+                              icon: Icons.touch_app_rounded,
+                              duration: const Duration(milliseconds: 2600),
+                            );
+                          }
                           if (value == 'Aktueller Standort') {
                             await _tryLocateUser();
                           }

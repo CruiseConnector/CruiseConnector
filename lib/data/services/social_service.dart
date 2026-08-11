@@ -1382,17 +1382,50 @@ class SocialService {
   /// Nutzer-Vorschläge: Freunde-von-Freunden, fallback neueste Nutzer.
   /// Wird vom Entdecken-Tab genutzt wenn man (noch) niemandem folgt.
   // ── Weggeklickte Vorschläge („X" auf der Karte) ──────────────────────────
-  // Lokal persistiert (SharedPreferences): Wer einmal weggeklickt wurde, wird
-  // auf diesem Gerät nicht mehr vorgeschlagen. Bewusst KEINE DB-Tabelle —
-  // kein Migrations-Risiko, funktioniert offline, Instagram-ähnlich genug.
+  // Lokal persistiert (SharedPreferences). Format je Eintrag: 'id|epochMs'.
+  //
+  // 2026-08-11 (vucko „wenn man sie wegklickt, sollen wie bei Instagram neue
+  // dazukommen — wir sind schon 93 Personen und es kann nicht sein, dass mir
+  // eine Person vorgeschlagen wird"): Vorher war Wegklicken ENDGUELTIG. Bei
+  // ~93 Nutzern erschoepft sich der Pool damit in Tagen — am Ende blieb genau
+  // eine Person uebrig, jeden Tag dieselbe. Weggeklickte tauchen jetzt nach
+  // [_dismissVerfall] wieder auf; Instagram macht es genauso. Alte Eintraege
+  // ohne Zeitstempel gelten ab dem ersten Lesen als „gerade weggeklickt".
   static const String _dismissedSuggestionsKey = 'suggested_users_dismissed_v1';
   static const int _dismissedSuggestionsCap = 300;
+  static const Duration _dismissVerfall = Duration(days: 14);
 
   static Future<Set<String>> getDismissedSuggestionIds() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return (prefs.getStringList(_dismissedSuggestionsKey) ?? const [])
-          .toSet();
+      final roh = prefs.getStringList(_dismissedSuggestionsKey) ?? const [];
+      final jetzt = DateTime.now().millisecondsSinceEpoch;
+      final frisch = <String>[];
+      final ids = <String>{};
+      var migriert = false;
+      for (final eintrag in roh) {
+        final trenner = eintrag.lastIndexOf('|');
+        if (trenner < 0) {
+          // Alt-Format ohne Zeitstempel: ab jetzt zaehlt die Uhr.
+          frisch.add('$eintrag|$jetzt');
+          ids.add(eintrag);
+          migriert = true;
+          continue;
+        }
+        final id = eintrag.substring(0, trenner);
+        final wann = int.tryParse(eintrag.substring(trenner + 1)) ?? jetzt;
+        if (jetzt - wann > _dismissVerfall.inMilliseconds) {
+          // Verfallen: nicht mehr ausschliessen, Eintrag entfernen.
+          migriert = true;
+          continue;
+        }
+        frisch.add(eintrag);
+        ids.add(id);
+      }
+      if (migriert) {
+        await prefs.setStringList(_dismissedSuggestionsKey, frisch);
+      }
+      return ids;
     } catch (_) {
       return <String>{};
     }
@@ -1403,8 +1436,8 @@ class SocialService {
       final prefs = await SharedPreferences.getInstance();
       final list = prefs.getStringList(_dismissedSuggestionsKey) ?? <String>[];
       list
-        ..remove(userId)
-        ..add(userId);
+        ..removeWhere((e) => e == userId || e.startsWith('$userId|'))
+        ..add('$userId|${DateTime.now().millisecondsSinceEpoch}');
       final trimmed = list.length > _dismissedSuggestionsCap
           ? list.sublist(list.length - _dismissedSuggestionsCap)
           : list;
@@ -1438,6 +1471,9 @@ class SocialService {
       ...dismissed,
       ...following.map((r) => (r as Map)['following_id'] as String),
     };
+
+    // Reihenfolge bleibt stabil: erst Freunde-von-Freunden, dann Auffueller.
+    final ergebnis = <String, Map<String, dynamic>>{};
 
     // 1) Freunde-von-Freunden. Die Zwischenperson (follower_id) ist genau der
     //    GEMEINSAME Follower — jemand, dem ich folge und der auch dem
@@ -1499,26 +1535,68 @@ class SocialService {
           suggestions[sid]!['mutual_names'] = names;
           suggestions[sid]!['mutual_count'] = names.length;
         }
-        return taken.map((sid) => suggestions[sid]!).toList();
+        // 2026-08-11 (vucko „mir wird den ganzen Tag nur EINE Person
+        // angezeigt"): Genau hier lag es. Vorher kehrte der Freunde-von-
+        // Freunden-Pfad an dieser Stelle ZURUECK — auch mit nur einem
+        // einzigen Treffer. Bei einem duennen Netz (93 Nutzer) war das der
+        // Normalfall: eine Person, jeden Tag dieselbe, und der Fallback mit
+        // allen uebrigen Profilen lief nie. Jetzt wird gesammelt und unten
+        // aufgefuellt, bis das Limit voll ist.
+        for (final sid in taken) {
+          ergebnis[sid] = suggestions[sid]!;
+        }
       }
     }
+    if (ergebnis.length >= limit) {
+      return ergebnis.values.take(limit).toList();
+    }
 
-    // 2) Fallback: neueste Profile. WICHTIG: kein `.eq('is_private', false)` —
+    // 2) Auffuellen: neueste Profile, LANDSLEUTE ZUERST (vucko: „mehr Profile
+    // in der Umgebung"). WICHTIG: kein `.eq('is_private', false)` —
     // das warf auch alle Profile mit is_private=NULL (Alt-Accounts vor der
     // Spalte) raus und ließ die Vorschläge komplett leer. Private Profile
     // dürfen wie bei Instagram vorgeschlagen werden — „Folgen" wird für sie
     // automatisch zur Anfrage (followUser handhabt das über den Status).
     final recent = await _db
         .from('profiles')
-        .select('id, username, avatar_url, is_private')
+        .select('id, username, avatar_url, is_private, country_code')
         .order('created_at', ascending: false)
         .limit(limit * 3 + excluded.length);
+
+    // Eigenes Land fuer die „Umgebung"-Sortierung — ein winziger Lookup.
+    String? meinLand;
+    try {
+      final ich = await _db
+          .from('profiles')
+          .select('country_code')
+          .eq('id', uid)
+          .maybeSingle();
+      meinLand = ich?['country_code'] as String?;
+    } catch (_) {
+      meinLand = null;
+    }
+
     final pool = (recent as List)
         .whereType<Map<String, dynamic>>()
         .where((p) => !excluded.contains(p['id']))
+        .where((p) => !ergebnis.containsKey(p['id']))
         .toList()
       ..shuffle();
-    return pool.take(limit).toList();
+    // Landsleute nach vorne — stabile Sortierung erhaelt die Zufallsreihenfolge
+    // innerhalb beider Gruppen.
+    if (meinLand != null && meinLand.isNotEmpty) {
+      final gleiche = pool.where((p) => p['country_code'] == meinLand);
+      final andere = pool.where((p) => p['country_code'] != meinLand);
+      pool
+        ..clear()
+        ..addAll(gleiche)
+        ..addAll(andere);
+    }
+    for (final p in pool) {
+      if (ergebnis.length >= limit) break;
+      ergebnis[p['id'] as String] = p;
+    }
+    return ergebnis.values.take(limit).toList();
   }
 
   /// Baut die „gemeinsame Follower"-Zeile für Vorschlags-Karten (Instagram-
