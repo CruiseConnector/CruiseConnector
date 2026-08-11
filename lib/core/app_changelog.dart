@@ -35,6 +35,23 @@ class AppChangelog {
   /// Neueste Version zuerst.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.12',
+      titel: 'Gruppen einrichten wie beim Cruisen',
+      punkte: <String>[
+        'Beim Gruppe-Erstellen kannst du die Einstellungen jetzt wegdruecken '
+            'und die Karte im Vollbild ansehen — wie in der Fahransicht.',
+        'Die Route zeichnet sich nach dem Generieren auf der Karte, du siehst '
+            'sofort, wie sie verlaeuft.',
+        'Startzeit ist optional geworden: Ohne Zeit gilt die Ausfahrt als '
+            'spontan. Und die Auswahl ist ein einziges schoenes Blatt statt '
+            'zweier Dialoge.',
+        'Kontakte auf dem Startbildschirm fuehren jetzt direkt zu Entdecken.',
+        'Vorschlaege sagen dir, warum jemand vorgeschlagen wird.',
+        'Nach der Fahrt kannst du direkt eine Gruppe planen oder die Strecke '
+            'in der Community teilen.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.11',
       titel: 'Bessere Routen, Gruppenfahrten und Rueckmeldungen',
       punkte: <String>[

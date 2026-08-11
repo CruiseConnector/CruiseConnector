@@ -1,4 +1,5 @@
 import 'package:cruise_connect/presentation/widgets/start_zeit_sheet.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -133,5 +134,116 @@ void main() {
     final mitZeit = StartZeitWahl(DateTime(2026, 8, 15, 10));
     expect(spontan.zeitpunkt, isNull);
     expect(mitZeit.zeitpunkt, isNotNull);
+  });
+
+  // ── Funde aus der adversarischen Gegenpruefung (2026-08-11) ──────────────
+  // Alle vier lagen in genau diesem Blatt und waren echt.
+
+  testWidgets('Schnellwahl bewegt auch das Uhrzeit-Rad mit', (tester) async {
+    tester.view.physicalSize = const Size(430, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => zeigeStartZeitSheet(context),
+              child: const Text('auf'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('auf'));
+    await tester.pumpAndSettle();
+
+    final vorher = tester
+        .widget<CupertinoDatePicker>(find.byType(CupertinoDatePicker))
+        .key;
+    await tester.tap(find.text('Heute Abend'));
+    await tester.pumpAndSettle();
+    final nachher = tester
+        .widget<CupertinoDatePicker>(find.byType(CupertinoDatePicker))
+        .key;
+
+    // CupertinoDatePicker liest initialDateTime nur beim ERSTEN Bauen. Ohne
+    // wechselnden Schluessel bliebe das Rad auf der alten Zeit stehen — und
+    // die erste Radberuehrung wuerde die Schnellwahl ueberschreiben.
+    expect(
+      nachher,
+      isNot(equals(vorher)),
+      reason: 'das Rad muss neu gebaut werden, sonst zeigt es die alte Zeit',
+    );
+  });
+
+  testWidgets('Schnellwahl liegt nie in der Vergangenheit', (tester) async {
+    tester.view.physicalSize = const Size(430, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    for (final chip in ['Heute Abend', 'Morgen früh', 'Samstag']) {
+      StartZeitWahl? ergebnis;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () async {
+                  ergebnis = await zeigeStartZeitSheet(context);
+                },
+                child: const Text('auf'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('auf'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(chip));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Übernehmen'));
+      await tester.pumpAndSettle();
+
+      expect(
+        ergebnis?.zeitpunkt?.isAfter(DateTime.now()),
+        isTrue,
+        reason: '„$chip" darf keine vergangene Startzeit liefern',
+      );
+    }
+  });
+
+  testWidgets('die Vorgabe-Uhrzeit liegt immer in der Zukunft', (tester) async {
+    tester.view.physicalSize = const Size(430, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    StartZeitWahl? ergebnis;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                ergebnis = await zeigeStartZeitSheet(context);
+              },
+              child: const Text('auf'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('auf'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Übernehmen'));
+    await tester.pumpAndSettle();
+
+    // Um 23:30 haette die alte Modulo-Rechnung 00:00 am HEUTIGEN Tag ergeben —
+    // fast einen ganzen Tag in der Vergangenheit.
+    expect(ergebnis?.zeitpunkt?.isAfter(DateTime.now()), isTrue);
   });
 }

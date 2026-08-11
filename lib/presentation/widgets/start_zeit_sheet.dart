@@ -63,6 +63,18 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
   late DateTime _tag;
   late TimeOfDay _uhrzeit;
 
+  /// Zwingt das Uhrzeit-Rad zum Neuaufbau, wenn die Zeit von AUSSEN gesetzt
+  /// wurde (Schnellwahl).
+  ///
+  /// CupertinoDatePicker liest `initialDateTime` nur beim ERSTEN Bauen. Ein
+  /// blosses setState bewegt das Rad also nicht: Nach „Heute Abend" stuende
+  /// oben 18:00, das Rad zeigte aber weiter die alte Zeit — und die erste
+  /// Radberuehrung haette die Wahl wieder ueberschrieben. Ein wechselnder
+  /// Schluessel baut das Rad neu und setzt es damit auf die neue Zeit.
+  /// Beim Drehen selbst bleibt der Schluessel gleich, sonst kaempfte der
+  /// Neuaufbau gegen den Finger.
+  int _radSchluessel = 0;
+
   /// Der Ausgangspunkt aller Tagesberechnungen. Einmal beim Oeffnen bestimmt,
   /// damit ein Tageswechsel um Mitternacht die Liste nicht unter dem Finger
   /// verschiebt.
@@ -74,14 +86,32 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
     final jetzt = DateTime.now();
     _heute = DateTime(jetzt.year, jetzt.month, jetzt.day);
     final start = widget.aktuell;
-    _tag = start != null
-        ? DateTime(start.year, start.month, start.day)
-        : _heute;
-    _uhrzeit = start != null
-        ? TimeOfDay(hour: start.hour, minute: start.minute)
-        // Ohne Vorgabe die naechste volle Stunde — praktischer als „jetzt",
-        // weil eine Ausfahrt selten in derselben Minute losgeht.
-        : TimeOfDay(hour: (jetzt.hour + 1) % 24, minute: 0);
+    if (start != null) {
+      _tag = DateTime(start.year, start.month, start.day);
+      _uhrzeit = TimeOfDay(hour: start.hour, minute: start.minute);
+    } else {
+      // Ohne Vorgabe die naechste volle Stunde — praktischer als „jetzt", weil
+      // eine Ausfahrt selten in derselben Minute losgeht.
+      //
+      // ueber den DateTime gerechnet und NICHT ueber (stunde + 1) % 24: Um
+      // 23:30 haette die Modulo-Rechnung 00:00 am HEUTIGEN Tag ergeben — also
+      // fast einen ganzen Tag in der Vergangenheit.
+      final naechsteStunde = DateTime(
+        jetzt.year,
+        jetzt.month,
+        jetzt.day,
+        jetzt.hour + 1,
+      );
+      _tag = DateTime(
+        naechsteStunde.year,
+        naechsteStunde.month,
+        naechsteStunde.day,
+      );
+      _uhrzeit = TimeOfDay(
+        hour: naechsteStunde.hour,
+        minute: naechsteStunde.minute,
+      );
+    }
   }
 
   DateTime get _ergebnis => DateTime(
@@ -93,9 +123,17 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
   );
 
   String _tagesName(DateTime t) {
-    final diff = t.difference(_heute).inDays;
-    if (diff == 0) return 'Heute';
-    if (diff == 1) return 'Morgen';
+    // Ueber die Kalenderfelder vergleichen, damit die Sommerzeit nichts
+    // verschiebt.
+    if (t.year == _heute.year && t.month == _heute.month && t.day == _heute.day) {
+      return 'Heute';
+    }
+    final morgen = _heute.add(const Duration(days: 1));
+    if (t.year == morgen.year &&
+        t.month == morgen.month &&
+        t.day == morgen.day) {
+      return 'Morgen';
+    }
     return _wochentage[t.weekday - 1];
   }
 
@@ -104,11 +142,24 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
     setState(() => _tag = DateTime(t.year, t.month, t.day));
   }
 
-  void _schnellwahl(DateTime tag, TimeOfDay zeit) {
+  /// Setzt Tag und Uhrzeit — und schiebt auf die naechste Woche/den naechsten
+  /// Tag, falls der Zeitpunkt schon vorbei waere.
+  ///
+  /// Ohne diese Verschiebung haette „Heute Abend" um 20 Uhr eine Startzeit von
+  /// 18 Uhr am selben Tag ergeben, also in der Vergangenheit — und „Samstag"
+  /// am Samstagnachmittag ebenso.
+  void _schnellwahl(DateTime tag, TimeOfDay zeit, {int verschiebungTage = 1}) {
     HapticFeedback.selectionClick();
+    var ziel = DateTime(tag.year, tag.month, tag.day, zeit.hour, zeit.minute);
+    final jetzt = DateTime.now();
+    if (!ziel.isAfter(jetzt)) {
+      ziel = ziel.add(Duration(days: verschiebungTage));
+    }
     setState(() {
-      _tag = DateTime(tag.year, tag.month, tag.day);
-      _uhrzeit = zeit;
+      _tag = DateTime(ziel.year, ziel.month, ziel.day);
+      _uhrzeit = TimeOfDay(hour: ziel.hour, minute: ziel.minute);
+      // Das Rad muss der neuen Zeit folgen.
+      _radSchluessel++;
     });
   }
 
@@ -204,6 +255,9 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
                     () => _schnellwahl(
                       _naechsterSamstag,
                       const TimeOfDay(hour: 10, minute: 0),
+                      // Ist der Samstag schon angebrochen, meint der Nutzer den
+                      // naechsten — nicht morgen.
+                      verschiebungTage: 7,
                     ),
                   ),
                 ],
@@ -284,6 +338,7 @@ class _StartZeitSheetState extends State<_StartZeitSheet> {
                   ),
                 ),
                 child: CupertinoDatePicker(
+                  key: ValueKey(_radSchluessel),
                   mode: CupertinoDatePickerMode.time,
                   use24hFormat: true,
                   minuteInterval: 5,
