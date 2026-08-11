@@ -203,6 +203,14 @@ void main() {
       );
       await tester.tap(find.text('auf'));
       await tester.pumpAndSettle();
+
+      // Die Schnellwahl ist eine waagrechte Liste: „Samstag" liegt auf einem
+      // 430pt breiten iPhone bei x≈453, also ausserhalb des Bildschirms.
+      // Ohne dieses Heranscrollen ging der Tipp ins Leere — der Test bestand
+      // dann nur deshalb, weil auch die Vorgabezeit in der Zukunft liegt, und
+      // pruefte den Samstag-Pfad in Wahrheit gar nicht.
+      await tester.ensureVisible(find.text(chip));
+      await tester.pumpAndSettle();
       await tester.tap(find.text(chip));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Übernehmen'));
