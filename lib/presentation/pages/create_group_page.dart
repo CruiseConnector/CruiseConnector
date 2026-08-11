@@ -18,6 +18,7 @@ import '../../data/services/saved_routes_service.dart';
 import '../../domain/models/place_suggestion.dart';
 import '../../domain/models/route_result.dart';
 import '../../domain/models/saved_route.dart';
+import '../widgets/start_zeit_sheet.dart';
 import '../widgets/cruise/cruise_maplibre_map.dart';
 import '../widgets/cruise/cruise_setup_card.dart';
 import '../widgets/group_safety_notice_sheet.dart';
@@ -2007,54 +2008,32 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _maxPeople.round() >= 2;
   }
 
+  /// Ein Blatt statt zweier System-Dialoge.
+  ///
+  /// 2026-08-11 (vucko „die Datum-/Uhrzeiteinstellung soll wesentlich
+  /// aesthetischer aussehen und nicht so verklemmt"): Vorher poppte erst ein
+  /// Kalenderblatt auf, danach eine Zifferblatt-Uhr — beide im Material-
+  /// Standard, beide ohne Bezug zum App-Design. Jetzt ein Blatt mit Tagesleiste,
+  /// Schnellwahl und Drehrad; „ohne feste Zeit" ist dort ein eigener Weg.
   Future<void> _selectTime() async {
-    final now = DateTime.now();
-    Widget theme(BuildContext ctx, Widget? child) => Theme(
-      data: Theme.of(ctx).copyWith(
-        colorScheme: ColorScheme.dark(
-          primary: AppAccentColors.accent,
-          surface: const Color(0xFF1C1F26),
-          onSurface: Colors.white,
-        ),
-        dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1C1F26)),
-      ),
-      child: child!,
-    );
-
-    final date = await showDatePicker(
-      context: context,
-      initialDate: _selectedDateTime ?? now,
-      firstDate: now.subtract(const Duration(days: 1)),
-      lastDate: now.add(const Duration(days: 365)),
-      builder: theme,
-    );
-    if (date == null || !mounted) return;
-
-    final time = await showTimePicker(
-      context: context,
-      initialTime: _selectedDateTime != null
-          ? TimeOfDay.fromDateTime(_selectedDateTime!)
-          : TimeOfDay.now(),
-      builder: theme,
-    );
-    if (time == null) return;
-
-    setState(() {
-      _selectedDateTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        time.hour,
-        time.minute,
-      );
-    });
+    final wahl = await zeigeStartZeitSheet(context, aktuell: _selectedDateTime);
+    // null = abgebrochen: dann bleibt alles, wie es war.
+    if (wahl == null || !mounted) return;
+    setState(() => _selectedDateTime = wahl.zeitpunkt);
   }
 
   String _formatDateTime(DateTime dt) {
-    final d =
-        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
+    final jetzt = DateTime.now();
+    final heute = DateTime(jetzt.year, jetzt.month, jetzt.day);
+    final tag = DateTime(dt.year, dt.month, dt.day);
+    final abstand = tag.difference(heute).inDays;
     final t =
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    // „Heute 18:00" liest sich schneller als „11.08. 18:00".
+    if (abstand == 0) return 'Heute $t';
+    if (abstand == 1) return 'Morgen $t';
+    final d =
+        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.';
     return '$d $t';
   }
 }
