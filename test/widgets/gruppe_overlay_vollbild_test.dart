@@ -98,4 +98,57 @@ void main() {
       reason: 'die Karte muss ausserhalb des Umschalters liegen',
     );
   });
+
+  // ── Fund aus der adversarischen Gegenpruefung (2026-08-11) ───────────────
+  // DER kritische Fehler dieses Umbaus: Zuerst lag ein bildschirmfuellender
+  // CustomScrollView ueber der Karte, mit einem durchsichtigen
+  // IgnorePointer-Streifen obendrueber. Die Annahme war, Beruehrungen fielen
+  // dort zur Karte durch. Falsch: Flutters Scrollable haengt seinen
+  // Gestenerkenner mit HitTestBehavior.opaque ueber den GANZEN Viewport und
+  // nimmt den Treffer an, bevor die Karte darunter geprueft wird. Damit waeren
+  // „Tippe auf die Karte, um den Startpunkt zu setzen" und die gesamte
+  // Wegpunkt-Planung unbedienbar gewesen.
+  testWidgets('die Karte bleibt bedienbar, auch wenn die Einstellungen offen sind', (
+    tester,
+  ) async {
+    await tester.pumpWidget(seite());
+    await tester.pump();
+
+    // Ein Punkt im oberen Kartenstreifen.
+    const probe = Offset(200, 90);
+    final treffer = tester.hitTestOnBinding(probe);
+    final zieleUeberDerKarte = treffer.path
+        .map((e) => e.target.runtimeType.toString())
+        .takeWhile((t) => !t.contains('RenderView'))
+        .toList();
+
+    // Kein Scrollable darf in diesem Streifen im Trefferpfad liegen.
+    expect(
+      zieleUeberDerKarte.any((t) => t.contains('Viewport')),
+      isFalse,
+      reason:
+          'Ein Scrollable im Kartenstreifen wuerde jeden Zeiger schlucken — '
+          'Trefferpfad: $zieleUeberDerKarte',
+    );
+  });
+
+  test('das Einstellungsblatt deckt den Kartenstreifen nicht ab', () {
+    final quelle = File(
+      'lib/presentation/pages/create_group_page.dart',
+    ).readAsStringSync();
+    // Der ScrollView muss UNTERHALB des Kartenstreifens beginnen.
+    expect(
+      quelle.contains('top: _kartenStreifen'),
+      isTrue,
+      reason:
+          'Deckt das Blatt die Karte wieder ab, schluckt der Scrollable jeden '
+          'Zeiger und die Karte ist tot.',
+    );
+    // Und die Aktionsleiste darf nicht mehr ueber dem Formular schweben.
+    expect(
+      quelle.contains('_buildBottomBar(schwebend: false)'),
+      isTrue,
+      reason: 'schwebend deckte auf kleinen Bildschirmen die Modus-Chips zu',
+    );
+  });
 }

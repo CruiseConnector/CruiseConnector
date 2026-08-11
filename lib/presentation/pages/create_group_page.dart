@@ -1223,26 +1223,37 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  /// Die Einstellungen als Blatt ueber der Karte.
+  /// Wie viel Karte oben sichtbar (und bedienbar) bleibt.
+  double get _kartenStreifen =>
+      math.max(170.0, MediaQuery.of(context).size.height * 0.30);
+
+  /// Die Einstellungen als Blatt UNTER dem Kartenstreifen.
+  ///
+  /// 2026-08-11, Korrektur nach der Gegenpruefung: Zuerst lag hier ein
+  /// bildschirmfuellender CustomScrollView mit einem durchsichtigen
+  /// IgnorePointer-Streifen obendrueber — in der Annahme, Beruehrungen wuerden
+  /// dort zur Karte durchfallen. Das ist FALSCH: Flutters Scrollable haengt
+  /// seinen Gestenerkenner mit HitTestBehavior.opaque ueber den ganzen
+  /// Viewport und nimmt den Treffer an, bevor die Karte darunter ueberhaupt
+  /// geprueft wird. IgnorePointer schaltet nur den eigenen Teilbaum stumm,
+  /// nicht den Scrollable darueber. Folge waere gewesen: Karte nicht
+  /// verschiebbar, nicht zoombar, und „Tippe auf die Karte, um den Startpunkt
+  /// zu setzen" haette nicht funktioniert — obwohl die App genau dazu auffordert.
+  ///
+  /// Jetzt deckt das Blatt den Kartenstreifen gar nicht erst ab. Was nicht
+  /// ueberlappt, kann auch nichts schlucken.
   Widget _buildEinstellungsBlatt() {
     return Stack(
       key: const ValueKey('einstellungen_offen'),
       children: [
-          CustomScrollView(
+          Positioned(
+            top: _kartenStreifen,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: CustomScrollView(
             controller: _scrollCtrl,
             slivers: [
-              // Durchsichtiger Platzhalter statt Kartenkopf.
-              //
-              // 2026-08-11 (vucko „im Idealfall, dass es wie bei der Single-
-              // Cruise-Mode-Page ist und man das einfach wegdruecken kann und
-              // die Karte im Vollscreen hat"): Die Karte liegt jetzt als
-              // Positioned.fill UNTER diesem Blatt und wird nur EINMAL gebaut.
-              // Frueher sass sie im SliverAppBar — der faltete sich beim
-              // Scrollen zusammen, und genau dann war die Karte weg.
-              //
-              // IgnorePointer, damit Wischen in diesem Streifen die KARTE
-              // bewegt und nicht das Formular scrollt. Gescrollt wird auf dem
-              // Formular darunter.
               SliverToBoxAdapter(
                 child: IgnorePointer(
                   child: SizedBox(
@@ -1382,14 +1393,22 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       ),
                       const SizedBox(height: 12),
                       _buildDescriptionField(),
-                      const SizedBox(height: 120),
+                      const SizedBox(height: 28),
+                      // Die Aktionsknoepfe stehen IM Formular, nicht darueber.
+                      // Als schwebende Leiste deckten sie auf kleinen
+                      // Bildschirmen die Modus-Chips zu (gemessen: Chips bei
+                      // y=549, Leiste ab y=521 bei 800x600).
+                      _buildBottomBar(schwebend: false),
+                      SizedBox(
+                        height: MediaQuery.of(context).padding.bottom + 16,
+                      ),
                     ],
                   ),
                 ),
               ),
             ],
+            ),
           ),
-          _buildBottomBar(),
       ],
     );
   }
@@ -1724,9 +1743,22 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
+  /// Die Karten-Aktionen fuer Stopps.
+  ///
+  /// 2026-08-11, Korrektur nach der Gegenpruefung: Frueher lag die Karte in
+  /// einem 280 px hohen Kopf, „mittig" hiess also mittig im Kartenkopf. Seit
+  /// die Karte den ganzen Bildschirm fuellt, landete dieselbe Ausrichtung in
+  /// der BILDSCHIRMmitte — bei offenen Einstellungen also hinter dem
+  /// undurchsichtigen Formular. Die Setup-Karte verweist woertlich auf „die
+  /// Karten-Aktionen rechts", die dort gar nicht mehr zu sehen waren.
+  /// Jetzt haengen sie oben im sichtbaren Kartenstreifen.
   Widget _buildWaypointActionOverlay() {
-    return Align(
-      alignment: Alignment.centerRight,
+    final oben = _configEingeklappt
+        ? MediaQuery.of(context).padding.top + 64
+        : MediaQuery.of(context).padding.top + 56;
+    return Positioned(
+      top: oben,
+      right: 0,
       child: Padding(
         padding: const EdgeInsets.only(right: 14),
         child: Column(
@@ -2156,13 +2188,16 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     );
   }
 
-  Widget _buildBottomBar() {
+  /// Die Aktionsknoepfe.
+  ///
+  /// 2026-08-11, Korrektur nach der Gegenpruefung: Frueher schwebte diese
+  /// Leiste als Positioned ueber dem Formular. Auf kleinen Bildschirmen (im
+  /// Test 800x600) deckte sie die Modus-Chips zu — gemessen: Chips bei y=549,
+  /// Leiste ab y=521. Ein Tipp auf „A nach B" landete auf der Leiste. Jetzt
+  /// steht sie am Ende des Formulars und kann nichts mehr verdecken.
+  Widget _buildBottomBar({bool schwebend = true}) {
     final canCreate = _canCreateGroup;
-    return Positioned(
-      bottom: 0,
-      left: 0,
-      right: 0,
-      child: Container(
+    final inhalt = Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
@@ -2260,8 +2295,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
             ),
           ],
         ),
-      ),
     );
+    if (!schwebend) return inhalt;
+    return Positioned(bottom: 0, left: 0, right: 0, child: inhalt);
   }
 
   bool get _canCreateGroup {
