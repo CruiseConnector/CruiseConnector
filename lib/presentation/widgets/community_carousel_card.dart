@@ -613,6 +613,8 @@ class SuggestedContactsSlide extends StatelessWidget {
                   return _ContactRow(
                     name: name,
                     handle: handle,
+                    grund:
+                        SocialService.mutualFollowersLine(user) ?? 'Neu dabei',
                     avatarUrl: user['avatar_url'] as String?,
                     busy: busyUserIds.contains(id),
                     onTap: () => onOpenUser(user),
@@ -665,6 +667,7 @@ class SuggestedContactsSlide extends StatelessWidget {
                 return _ContactRow(
                   name: name,
                   handle: handle,
+                  grund: SocialService.mutualFollowersLine(user) ?? 'Neu dabei',
                   avatarUrl: user['avatar_url'] as String?,
                   busy: busy,
                   onTap: () => onOpenUser(user),
@@ -903,6 +906,16 @@ class EventsComingSoonSlide extends StatelessWidget {
 class _ContactRow extends StatelessWidget {
   final String name;
   final String handle;
+
+  /// Warum wird diese Person vorgeschlagen?
+  ///
+  /// 2026-08-11 (vucko „ich moechte auch noch, dass das gekennzeichnet wird"):
+  /// Bisher stand unter dem Namen nur der @-Name — die Karte sagte also nie,
+  /// WARUM jemand auftaucht. SocialService.mutualFollowersLine baute den Satz
+  /// („@a und @b folgen diesem Account") schon lange, wurde aber NIRGENDS
+  /// aufgerufen. Fehlen gemeinsame Bekannte, steht dort „Neu dabei" statt
+  /// einer leeren Zeile.
+  final String? grund;
   final String? avatarUrl;
   final bool busy;
   final VoidCallback onTap;
@@ -913,6 +926,7 @@ class _ContactRow extends StatelessWidget {
   const _ContactRow({
     required this.name,
     required this.handle,
+    this.grund,
     required this.avatarUrl,
     required this.busy,
     required this.onTap,
@@ -955,7 +969,7 @@ class _ContactRow extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      handle,
+                      grund ?? handle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

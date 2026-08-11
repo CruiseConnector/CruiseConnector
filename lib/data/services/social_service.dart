@@ -1615,10 +1615,21 @@ class SocialService {
     if (uid == null) return [];
     final blocked = await getBlockedAndBlockerIds();
 
+    // 2026-08-11 (vucko, Home-Kacheln): Bewusst KEIN select('*') mehr.
+    // Das zog fuer bis zu 80 Gruppen die vollen Routengeometrien
+    // (route_data, current_route_data) mit — mehrere hundert Kilobyte, die
+    // hier niemand liest. Die Fahrtroute kommt ausschliesslich ueber
+    // CruiseGroupService.fetch, wenn man einer Gruppe wirklich beitritt.
+    // Neu dabei: avatar_url des Gastgebers, damit die Kacheln ein Gesicht
+    // zeigen koennen — das kostet nichts extra.
     final groups = await _db
         .from('groups')
         .select(
-          '*, group_members(user_id), profiles:created_by(id, username)',
+          'id, name, created_by, is_active, is_public, closed_at, start_time, '
+          'start_location, route_name, stats, time_location, max_people, '
+          'invite_code, created_at, '
+          'group_members(user_id), '
+          'profiles:created_by(id, username, avatar_url)',
         )
         .eq('is_public', true)
         .eq('is_active', false)
