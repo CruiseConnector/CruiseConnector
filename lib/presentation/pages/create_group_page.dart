@@ -58,7 +58,13 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   // 2026-08-09 (vucko): Karte aufziehbar + Rücksprung zur Karte nach dem
   // Generieren. Vorher war sie fest 280 px hoch und beim Einstellen weg.
   final ScrollController _scrollCtrl = ScrollController();
-  bool _karteGross = false;
+  /// Sind die Einstellungen weggedrueckt (Karte im Vollbild)?
+  ///
+  /// 2026-08-11 (vucko): „im Idealfall, dass es wie bei der Single-Cruise-
+  /// Mode-Page ist und man das einfach wegdruecken kann und die Karte im
+  /// Vollscreen hat." Nach einer erfolgreichen Generierung klappt die Seite
+  /// von selbst ein, damit man die frisch gezeichnete Route ganz sieht.
+  bool _configEingeklappt = false;
 
   bool _isRoundTrip = true;
   bool _avoidHighways = false;
@@ -422,6 +428,15 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     // die frische Route sonst gar nicht. Genau das war Vuckos Beschwerde,
     // er konnte "nicht nachschauen, wo das Problem ist".
     _scrollToMap();
+    // Einstellungen wegdruecken, damit die frisch gezeichnete Route im
+    // Vollbild zu sehen ist — genau das war Vuckos Wunsch: „im Idealfall,
+    // dass man das einfach wegdruecken kann und die Karte im Vollscreen hat".
+    // Kurz verzoegert, damit das Einklappen nicht mit dem Einrahmen der Karte
+    // um denselben Frame kaempft.
+    Future<void>.delayed(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      setState(() => _configEingeklappt = true);
+    });
     _starteRoutenZeichnung(coords);
   }
 
@@ -1165,60 +1180,78 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
       backgroundColor: const Color(0xFF0B0E14),
       body: Stack(
         children: [
+          // Die Karte steht GENAU EINMAL im Baum und wandert nie in einen
+          // anderen Teilbaum. Wuerde sie beim Umschalten neu gebaut, zeigte
+          // _mapController auf den alten, toten Controller — die Karte wuerde
+          // frische Routen dann stillschweigend nicht mehr einrahmen.
+          Positioned.fill(child: RepaintBoundary(child: _buildMap())),
+
+          // Einstellungen: da oder weggedrueckt. Dasselbe Zwei-Zustands-Muster
+          // wie in der Single-Cruise-Seite.
+          RepaintBoundary(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.06),
+                    end: Offset.zero,
+                  ).animate(anim),
+                  child: child,
+                ),
+              ),
+              // Ohne eigenen layoutBuilder legt AnimatedSwitcher die beiden
+              // Zustaende zentriert uebereinander — der Inhalt wuerde beim
+              // Wechseln springen.
+              layoutBuilder: (aktuell, vorige) => Stack(
+                fit: StackFit.expand,
+                children: [...vorige, if (aktuell != null) aktuell],
+              ),
+              child: _configEingeklappt
+                  ? _buildVollbildLeiste()
+                  : _buildEinstellungsBlatt(),
+            ),
+          ),
+
+          if (_isGenerating) _buildRouteGenerationStatus(),
+          _buildKopfKnoepfe(),
+        ],
+      ),
+    );
+  }
+
+  /// Die Einstellungen als Blatt ueber der Karte.
+  Widget _buildEinstellungsBlatt() {
+    return Stack(
+      key: const ValueKey('einstellungen_offen'),
+      children: [
           CustomScrollView(
             controller: _scrollCtrl,
             slivers: [
-              SliverAppBar(
-                // 2026-08-09 (vucko): „ich konnte leider nicht nachschauen, wo
-                // das Problem ist." Die Karte war fest 280 px hoch — zum
-                // Einstellen musste man runterscrollen, und genau dann war sie
-                // weg. Über den Knopf oben rechts lässt sie sich jetzt auf
-                // fast die volle Höhe aufziehen, um die Route zu prüfen.
-                expandedHeight: _karteGross
-                    ? MediaQuery.of(context).size.height * 0.82
-                    : 280,
-                pinned: true,
-                backgroundColor: const Color(0xFF0B0E14),
-                elevation: 0,
-                leading: Container(
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+              // Durchsichtiger Platzhalter statt Kartenkopf.
+              //
+              // 2026-08-11 (vucko „im Idealfall, dass es wie bei der Single-
+              // Cruise-Mode-Page ist und man das einfach wegdruecken kann und
+              // die Karte im Vollscreen hat"): Die Karte liegt jetzt als
+              // Positioned.fill UNTER diesem Blatt und wird nur EINMAL gebaut.
+              // Frueher sass sie im SliverAppBar — der faltete sich beim
+              // Scrollen zusammen, und genau dann war die Karte weg.
+              //
+              // IgnorePointer, damit Wischen in diesem Streifen die KARTE
+              // bewegt und nicht das Formular scrollt. Gescrollt wird auf dem
+              // Formular darunter.
+              SliverToBoxAdapter(
+                child: IgnorePointer(
+                  child: SizedBox(
+                    height: math.max(
+                      170.0,
+                      MediaQuery.of(context).size.height * 0.30,
+                    ),
                   ),
                 ),
-                actions: [
-                  Container(
-                    margin: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      tooltip: _karteGross
-                          ? 'Karte verkleinern'
-                          : 'Karte vergrößern',
-                      icon: Icon(
-                        _karteGross
-                            ? Icons.close_fullscreen
-                            : Icons.open_in_full,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: () {
-                        setState(() => _karteGross = !_karteGross);
-                        // Beim Vergrößern nach oben, sonst bliebe der Kopf
-                        // zusammengefaltet und die Karte trotzdem klein.
-                        if (_karteGross) _scrollToMap();
-                      },
-                    ),
-                  ),
-                ],
-                flexibleSpace: FlexibleSpaceBar(background: _buildMap()),
               ),
               SliverToBoxAdapter(
                 child: Padding(
@@ -1356,11 +1389,156 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
               ),
             ],
           ),
-          if (_isGenerating) _buildRouteGenerationStatus(),
           _buildBottomBar(),
+      ],
+    );
+  }
+
+  /// Karte im Vollbild — unten nur eine schmale Leiste zum Zurueckholen.
+  Widget _buildVollbildLeiste() {
+    final accent = AppAccentColors.accent;
+    return Stack(
+      key: const ValueKey('einstellungen_weg'),
+      children: [
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [Color(0xFF0B0E14), Colors.transparent],
+                stops: [0.45, 1.0],
+              ),
+            ),
+            padding: EdgeInsets.fromLTRB(
+              20,
+              28,
+              20,
+              MediaQuery.of(context).padding.bottom + 16,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Griff: macht ohne Worte klar, dass hier etwas hochgezogen
+                // werden kann.
+                Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_lastRoute != null) ...[
+                  _buildRouteStats(),
+                  const SizedBox(height: 14),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: accent,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(27),
+                      ),
+                    ),
+                    onPressed: _zeigeEinstellungen,
+                    icon: const Icon(Icons.tune_rounded, size: 20),
+                    label: const Text(
+                      'Gruppe einstellen',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Auch nach oben wischen holt die Einstellungen zurueck.
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: 120,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onVerticalDragUpdate: (d) {
+              if ((d.primaryDelta ?? 0) < -6) _zeigeEinstellungen();
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Zurueck-Knopf und der Schalter zum Wegdruecken.
+  Widget _buildKopfKnoepfe() {
+    final oben = MediaQuery.of(context).padding.top + 8;
+    return Positioned(
+      top: oben,
+      left: 8,
+      right: 8,
+      child: Row(
+        children: [
+          _rundKnopf(
+            icon: Icons.arrow_back,
+            tooltip: 'Zurueck',
+            onTap: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+          _rundKnopf(
+            icon: _configEingeklappt
+                ? Icons.tune_rounded
+                : Icons.map_outlined,
+            tooltip: _configEingeklappt
+                ? 'Einstellungen zeigen'
+                : 'Karte im Vollbild',
+            onTap: _configEingeklappt
+                ? _zeigeEinstellungen
+                : _versteckeEinstellungen,
+          ),
         ],
       ),
     );
+  }
+
+  Widget _rundKnopf({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        tooltip: tooltip,
+        icon: Icon(icon, color: Colors.white, size: 20),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  void _versteckeEinstellungen() {
+    if (_configEingeklappt) return;
+    HapticFeedback.selectionClick();
+    setState(() => _configEingeklappt = true);
+  }
+
+  void _zeigeEinstellungen() {
+    if (!_configEingeklappt) return;
+    HapticFeedback.selectionClick();
+    setState(() => _configEingeklappt = false);
   }
 
   Widget _buildRouteGenerationStatus() {
