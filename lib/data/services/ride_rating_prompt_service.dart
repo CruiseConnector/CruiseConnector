@@ -166,6 +166,21 @@ class RideRatingPromptService {
   }
 
   /// Nur für die Diagnose im Debug-Build.
+  /// Wurde in dieser Installation schon einmal nach einer Bewertung gefragt?
+  ///
+  /// Nur fuer die Ueberschrift des Blattes. „Erste Fahrt geschafft" stimmt ab
+  /// dem zweiten Popup nicht mehr — und das Blatt erscheint seit dem
+  /// 2026-08-11 nach jeder dritten Runde immer wieder.
+  Future<bool> wurdeSchonGefragt() async {
+    try {
+      final p = await _prefs;
+      return (p.getInt(_kPromptsShown) ?? 0) > 0;
+    } catch (e) {
+      debugPrint('[RideRating] Popup-Zaehler nicht lesbar: $e');
+      return false;
+    }
+  }
+
   Future<String> debugState() async {
     final p = await _prefs;
     return 'Fahrten=${p.getInt(_kCompletedRides) ?? 0} '

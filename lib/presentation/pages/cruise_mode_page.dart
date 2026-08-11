@@ -18315,16 +18315,15 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _presentCompletionSheet(CruiseCompletionDialog dialog) {
     if (_completionSheetShown) return;
     _completionSheetShown = true;
-    // 2026-08-11 (vucko): „nach jeder dritten Runde, die man gefahren ist,
-    // alleine ODER IN DER GRUPPE, MUESSEN Popups kommen."
+    // HIER WIRD NICHT GEZAEHLT. Die Fahrt zaehlt in _resetAfterCompletion —
+    // das ist der Sammelpunkt, den Vucko am 2026-08-04 dafuer vorgesehen hat,
+    // und nur dort ist der Fall „zu wenig aufgezeichnet" korrekt ausgenommen.
     //
-    // Diese eine Zeile fehlte — registerCompletedRide() wurde nirgends
-    // aufgerufen, der Fahrten-Zaehler stand also dauerhaft auf 0. Hier ist die
-    // richtige Stelle: Alle drei Abschluss-Wege (Ziel erreicht, manuell
-    // beendet, vorzeitig abgebrochen) laufen hier durch, der Ein-Schuss-Schutz
-    // oben garantiert genau eine Zaehlung pro Fahrt, und Gruppenfahrten kommen
-    // ueber denselben Weg.
-    unawaited(RideRatingPromptService.instance.registerCompletedRide());
+    // Am 2026-08-11 stand hier kurzzeitig ein zweiter Aufruf, weil eine Suche
+    // nach dem falschen Methodennamen die bestehende Zaehlstelle nicht fand.
+    // Folge: Jede Fahrt zaehlte doppelt, und das Popup kam nach jeder ZWEITEN
+    // statt nach jeder dritten Runde. Der Test in bewertung_takt_test.dart
+    // wacht seitdem darueber, dass es bei GENAU EINER Zaehlstelle bleibt.
     unawaited(() async {
       await showCruiseCompletionSheet<void>(context: context, child: dialog);
       if (!mounted || _disposed) return;

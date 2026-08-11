@@ -113,38 +113,108 @@ void main() {
     });
   });
 
-  // Der teuerste Fehler dieses Mechanismus war kein Rechenfehler, sondern eine
-  // fehlende Zeile: registerCompletedRide() wurde NIRGENDS aufgerufen. Der
-  // Fahrten-Zaehler stand dauerhaft auf 0, und kein noch so richtiger Takt
-  // konnte je ausloesen. Genau so ein Fehler faellt in Unit-Tests nie auf —
-  // deshalb wacht dieser Test ueber die Verdrahtung selbst.
-  test('jede abgeschlossene Fahrt wird auch wirklich gemeldet', () {
+  // Der teuerste Fehler an diesem Mechanismus war kein Rechenfehler, sondern
+  // eine Zaehlstelle zu viel.
+  //
+  // Am 2026-08-11 wurde ein zweiter registerCompletedRide()-Aufruf ergaenzt,
+  // weil eine Suche nach dem falschen Methodennamen die bestehende Stelle
+  // nicht fand. Danach zaehlte jede Fahrt doppelt: Das Popup kam nach jeder
+  // ZWEITEN Runde statt nach jeder dritten. Kein Unit-Test konnte das sehen —
+  // sie rufen den Dienst ja selbst auf und kennen die Aufrufkette in
+  // cruise_mode_page.dart nicht.
+  //
+  // Die erste Fassung dieser Wache pruefte nur, DASS irgendwo gezaehlt wird.
+  // Genau daran ist sie vorbeigelaufen. Jetzt zaehlt sie die Aufrufstellen.
+  test('eine Fahrt wird an GENAU EINER Stelle gezaehlt', () {
     final quelle = File(
       'lib/presentation/pages/cruise_mode_page.dart',
     ).readAsStringSync();
 
+    final aufrufe = RegExp(
+      r'RideRatingPromptService\.instance\.registerCompletedRide\(\)',
+    ).allMatches(quelle).length;
+
     expect(
-      quelle.contains(
-        'RideRatingPromptService.instance.registerCompletedRide()',
-      ),
-      isTrue,
-      reason: 'ohne diesen Aufruf bleibt der Fahrten-Zaehler fuer immer 0',
+      aufrufe,
+      1,
+      reason:
+          'Bei 0 bleibt der Fahrten-Zaehler fuer immer auf 0 und das Popup '
+          'kommt nie. Bei 2 zaehlt jede Fahrt doppelt und das Popup kommt '
+          'nach jeder zweiten statt nach jeder dritten Runde.',
     );
 
-    // Und zwar im Ein-Schuss-Trichter, durch den ALLE drei Abschluss-Wege
-    // laufen (Ziel erreicht, manuell beendet, vorzeitig abgebrochen) — solo
-    // wie Gruppe. Steht der Aufruf woanders, zaehlt entweder ein Weg nicht
-    // oder eine Fahrt doppelt.
-    final start = quelle.indexOf('void _presentCompletionSheet(');
-    expect(start, greaterThan(0));
-    final trichter = quelle.substring(start, start + 1200);
+    // Und zwar in _resetAfterCompletion — dem Sammelpunkt, an dem Speichern
+    // UND Verwerfen zusammenlaufen und an dem der Abbruchpfad „zu wenig
+    // aufgezeichnet" bewusst mit zaehltAlsAbgeschlosseneFahrt: false
+    // ausgenommen ist. Wandert der Aufruf woanders hin, zaehlt entweder ein
+    // Weg nicht mit oder eine leere Aufzeichnung zaehlt faelschlich mit.
+    final start = quelle.indexOf('void _resetAfterCompletion(');
+    expect(start, greaterThan(0), reason: '_resetAfterCompletion nicht mehr da');
+    final sammelpunkt = quelle.substring(start, start + 600);
     expect(
-      trichter.contains('registerCompletedRide()'),
+      sammelpunkt.contains('registerCompletedRide()'),
       isTrue,
-      reason:
-          'der Aufruf gehoert hinter den _completionSheetShown-Schutz in '
-          '_presentCompletionSheet — dort genau einmal pro Fahrt',
+      reason: 'die Zaehlung gehoert in _resetAfterCompletion',
     );
+  });
+
+  // Die Ueberschrift des Blattes hiess fest „Erste Fahrt geschafft". Solange
+  // das Popup nur einmal im Leben kam, stimmte das. Seit es nach jeder dritten
+  // Runde wiederkommt, behauptet die App beim vierten, siebten, zehnten Mal
+  // etwas sichtbar Falsches.
+  group('Die Ueberschrift passt zum Anlass', () {
+    test('vor dem ersten Popup ist es die erste Fahrt', () async {
+      SharedPreferences.setMockInitialValues({});
+      expect(
+        await RideRatingPromptService.instance.wurdeSchonGefragt(),
+        isFalse,
+      );
+    });
+
+    test('nach dem ersten Popup nicht mehr', () async {
+      SharedPreferences.setMockInitialValues({
+        'ride_rating_prompts_shown_v1': 1,
+      });
+      expect(
+        await RideRatingPromptService.instance.wurdeSchonGefragt(),
+        isTrue,
+      );
+    });
+
+    test('das Blatt bietet beide Ueberschriften an', () {
+      final quelle = File(
+        'lib/presentation/widgets/ride_rating_sheet.dart',
+      ).readAsStringSync();
+      expect(quelle.contains("'Erste Fahrt geschafft'"), isTrue);
+      expect(quelle.contains("'Wieder eine Runde geschafft'"), isTrue);
+      // Und der Kern der Botschaft steht in BEIDEN Faellen darunter.
+      expect(
+        quelle.contains('winzigen Team'),
+        isTrue,
+        reason: 'vucko: „dass wir ein kleines Team sind"',
+      );
+      expect(
+        quelle.contains('sind Bewertungen'),
+        isTrue,
+        reason: 'vucko: „eine Rezension uns mega weiterbringen wuerde"',
+      );
+    });
+
+    test('home_page liest den Stand VOR dem Hochzaehlen', () {
+      final quelle = File(
+        'lib/presentation/pages/home_page.dart',
+      ).readAsStringSync();
+      final vorher = quelle.indexOf('wurdeSchonGefragt()');
+      final nachher = quelle.indexOf('markPromptShown()');
+      expect(vorher, greaterThan(0));
+      expect(
+        vorher,
+        lessThan(nachher),
+        reason:
+            'umgekehrt waere schon das allererste Popup „nicht das erste" und '
+            'die Ueberschrift von Anfang an falsch',
+      );
+    });
   });
 
   group('Ein Update ist ein neuer Anlauf', () {

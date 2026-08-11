@@ -398,12 +398,16 @@ class _HomePageState extends State<HomePage> {
     if (!mounted || _selectedIndex != 0) return;
 
     _bewertungsPopupOffen = true;
+    // Den Stand VOR dem Hochzählen lesen — danach wäre jedes Popup „nicht das
+    // erste" und die Überschrift beim allerersten Mal falsch herum.
+    final ersteFahrt = !await RideRatingPromptService.instance
+        .wurdeSchonGefragt();
     // Erst zählen, dann zeigen. Wer das Blatt wegwischt, hat es trotzdem
     // gesehen — sonst käme es beim nächsten Tab-Wechsel sofort wieder.
     await RideRatingPromptService.instance.markPromptShown();
     try {
       if (!mounted) return;
-      await showRideRatingSheet(context);
+      await showRideRatingSheet(context, ersteFahrt: ersteFahrt);
     } finally {
       _bewertungsPopupOffen = false;
     }
