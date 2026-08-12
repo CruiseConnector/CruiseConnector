@@ -28,7 +28,7 @@ void main() {
 
   test('Nach einem Update kommt der Hinweis genau einmal', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
-      'changelog_gesehene_version': '1.0.0',
+      'changelog_gesehene_version_v2': '1.0.0',
     });
     ChangelogService.versionsLeser = () async => aktuell;
 
@@ -43,14 +43,14 @@ void main() {
 
   test('Version ohne gepflegten Eintrag haengt nicht ewig nach', () async {
     SharedPreferences.setMockInitialValues(<String, Object>{
-      'changelog_gesehene_version': '1.0.0',
+      'changelog_gesehene_version_v2': '1.0.0',
     });
     ChangelogService.versionsLeser = () async => '9.9.9';
 
     expect(await ChangelogService.instance.faelligerEintrag(), isNull);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('changelog_gesehene_version'), '9.9.9');
+    expect(prefs.getString('changelog_gesehene_version_v2'), '9.9.9');
   });
 
   test('Jeder Eintrag hat Titel und mindestens einen Punkt', () {
@@ -59,5 +59,32 @@ void main() {
       expect(e.titel.trim(), isNotEmpty);
       expect(e.punkte, isNotEmpty, reason: 'Version ${e.version} ist leer');
     }
+  });
+
+  // 2026-08-12: Der Schluessel wurde auf _v2 gehoben.
+  //
+  // Die Fassung davor vermerkte die Version als gesehen, BEVOR das Blatt
+  // angezeigt wurde. Ein so gesetzter Stempel ist von einem echten Besuch
+  // nicht zu unterscheiden — auf Vuckos Samsung stand „gesehen=1.5.13",
+  // obwohl nie ein Blatt zu sehen war. Unter dem neuen Schluessel bekommen
+  // alle betroffenen Geraete ihr Update-Blatt genau einmal nachgereicht.
+  test('ein alter Stempel blockiert das Blatt nicht mehr', () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'changelog_gesehene_version': aktuell, // alter Schluessel, alte Fassung
+    });
+    ChangelogService.versionsLeser = () async => aktuell;
+
+    final eintrag = await ChangelogService.instance.faelligerEintrag();
+    expect(
+      eintrag,
+      isNotNull,
+      reason:
+          'wer durch den Fehler faelschlich gestempelt wurde, haette das Blatt '
+          'sonst nie zu sehen bekommen',
+    );
+
+    // Und der tote Eintrag wird dabei aufgeraeumt.
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.containsKey('changelog_gesehene_version'), isFalse);
   });
 }

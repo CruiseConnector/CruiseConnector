@@ -64,6 +64,7 @@ class CruiseSetupCard extends StatefulWidget {
     this.onRemoveLastWaypoint,
     this.onDeleteSelectedWaypoint,
     this.onReplaceSelectedWaypoint,
+    this.zeigeAuswahlAktionen = false,
     this.onClearWaypoints,
   });
 
@@ -110,6 +111,16 @@ class CruiseSetupCard extends StatefulWidget {
   final VoidCallback? onRemoveLastWaypoint;
   final VoidCallback? onDeleteSelectedWaypoint;
   final VoidCallback? onReplaceSelectedWaypoint;
+
+  /// Zeigt fuer den AUSGEWAEHLTEN Stopp „verschieben"/„loeschen" direkt hier.
+  ///
+  /// 2026-08-12: Beide Rueckrufe gab es seit langem, aufgerufen hat sie diese
+  /// Karte nie — im Einzel-Cruise war ein angetippter Stopp damit eine
+  /// Sackgasse. Die Gruppenseite hat die beiden Aktionen in ihrer eigenen
+  /// Karten-Leiste (dort passt es besser, weil das Formular beim Kartentippen
+  /// eingeklappt ist) und laesst diesen Schalter deshalb aus, sonst stuenden
+  /// sie doppelt da.
+  final bool zeigeAuswahlAktionen;
   final VoidCallback? onClearWaypoints;
 
   static const _geocodingService = GeocodingService();
@@ -544,6 +555,33 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
                 fontWeight: FontWeight.w500,
               ),
             ),
+            if (widget.zeigeAuswahlAktionen &&
+                (widget.selectedWaypointIndex ?? -1) >= 0) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AuswahlAktion(
+                      icon: Icons.edit_location_alt_outlined,
+                      label: 'Verschieben',
+                      onTap: widget.waypointActionsEnabled
+                          ? widget.onReplaceSelectedWaypoint
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _AuswahlAktion(
+                      icon: Icons.wrong_location_outlined,
+                      label: 'Löschen',
+                      onTap: widget.waypointActionsEnabled
+                          ? widget.onDeleteSelectedWaypoint
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             const Text(
               'Die Strecke ergibt sich aus deinen Stopps. Stil und Aktionen steuerst du direkt auf der Karte.',
@@ -1492,12 +1530,14 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
     }
     final selected = widget.selectedWaypointIndex;
     if (selected != null && selected >= 0) {
-      // 2026-08-11: Hier stand „Nutze die Karten-Aktionen rechts." Die dort
-      // versprochenen Aktionen fuer den AUSGEWAEHLTEN Stopp gibt es nicht —
-      // onReplaceSelectedWaypoint/onDeleteSelectedWaypoint werden von beiden
-      // Seiten uebergeben, aber in dieser Karte nirgends aufgerufen. Die
-      // Leiste kann nur „Letzten loeschen" und „Alle loeschen".
-      return 'Stopp ${selected + 1} ausgewählt.';
+      // Bis 2026-08-11 stand hier „Nutze die Karten-Aktionen rechts" — und
+      // versprach damit Aktionen, die es nirgends gab. Jetzt gibt es sie,
+      // aber je nach Seite an einem anderen Ort: auf der Gruppenseite in der
+      // Karten-Leiste, im Einzel-Cruise gleich hier darunter.
+      return widget.zeigeAuswahlAktionen
+          ? 'Stopp ${selected + 1} ausgewählt.'
+          : 'Stopp ${selected + 1} ausgewählt. Die Aktionen dafür liegen '
+                'rechts auf der Karte.';
     }
     final pluralSuffix = widget.roundTripWaypointCount == 1 ? '' : 's';
     return '${widget.roundTripWaypointCount} Stopp$pluralSuffix gesetzt. Die Route fährt diese Punkte an.';
@@ -1505,6 +1545,54 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
 }
 
 // ═══════════════════════ PRIVATE HELPER WIDGETS ═══════════════════════════════
+
+/// Eine Aktion fuer den gerade ausgewaehlten Stopp.
+class _AuswahlAktion extends StatelessWidget {
+  const _AuswahlAktion({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final aktiv = onTap != null;
+    return Opacity(
+      opacity: aktiv ? 1 : 0.4,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1C1F26),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: Colors.white70),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _LargeModeButton extends StatelessWidget {
   const _LargeModeButton({

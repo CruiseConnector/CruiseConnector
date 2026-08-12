@@ -22,7 +22,24 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ChangelogService {
   ChangelogService._();
 
-  static const String _gesehenKey = 'changelog_gesehene_version';
+  /// 2026-08-12: Schluessel bewusst auf _v2 gehoben.
+  ///
+  /// Die Fassung davor vermerkte die Version als gesehen, BEVOR das Blatt
+  /// angezeigt wurde. Kam dazwischen etwas — beim ersten Start nach dem Update
+  /// setzt das Tutorial intern den Home-Reiter —, stand „gesehen" im Speicher,
+  /// ohne dass jemals ein Blatt zu sehen war. Auf Vuckos Samsung im Log
+  /// nachgewiesen: „laeuft=1.5.13 gesehen=1.5.13".
+  ///
+  /// Ein so gesetzter Stempel ist von einem echten Besuch nicht zu
+  /// unterscheiden. Deshalb faengt der Zaehler unter einem neuen Schluessel an:
+  /// Jedes Geraet, das der alte Code faelschlich gestempelt hat, bekommt sein
+  /// Update-Blatt genau einmal nachgereicht. Der alte Schluessel wird nicht
+  /// gelesen — genau das ist der Sinn.
+  static const String _gesehenKey = 'changelog_gesehene_version_v2';
+
+  /// Nur zum Aufraeumen: Der alte Stempel wird beim ersten Lauf entfernt,
+  /// damit auf den Geraeten kein toter Eintrag liegen bleibt.
+  static const String _gesehenKeyAlt = 'changelog_gesehene_version';
 
   static final ChangelogService instance = ChangelogService._();
 
@@ -42,6 +59,9 @@ class ChangelogService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final aktuell = await _aktuelleVersion();
+      if (prefs.containsKey(_gesehenKeyAlt)) {
+        await prefs.remove(_gesehenKeyAlt);
+      }
       final gesehen = prefs.getString(_gesehenKey);
 
       // Auch bei frischer Installation zeigen (gesehen == null): Vuckos

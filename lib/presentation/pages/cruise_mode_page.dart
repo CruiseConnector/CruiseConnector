@@ -6431,6 +6431,11 @@ class _CruiseModePageState extends State<CruiseModePage>
                         selectedWaypointIndex: _selectedRoundTripWaypointIndex,
                         replacingWaypointIndex: _replaceRoundTripWaypointIndex,
                         waypointActionsEnabled: !_isLoading,
+                        // Im Einzel-Cruise gibt es keine eigene Karten-Leiste,
+                        // deshalb liegen die Aktionen fuer den ausgewaehlten
+                        // Stopp hier in der Karte. Die Gruppenseite hat ihre
+                        // eigene Leiste und laesst das aus.
+                        zeigeAuswahlAktionen: true,
                         onGenerateWaypointSeed: _generateRoundTripWaypointSeed,
                         onRemoveLastWaypoint: _removeLastRoundTripWaypoint,
                         onDeleteSelectedWaypoint:
