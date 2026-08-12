@@ -253,6 +253,48 @@ class _CruiseModePageState extends State<CruiseModePage>
   // 2026-06-10 (vucko Find-My-Härtung): App kommt aus dem Hintergrund zurück
   // (Lock/Anruf/App-Switch — die typischen Netz-Blip-Momente): Gruppen-
   // Realtime sofort hart neu aufbauen + backfillen, statt auf Timer zu warten.
+  /// Gibt im Hintergrund Speicher frei, damit Android die App nicht abschiesst.
+  ///
+  /// 2026-08-12 (vucko): „wenn ich die app wechsle auf eine andere app, die app
+  /// komplett aufeinmal crashed vom app verlauf oder die route einfach
+  /// geresetted wird und ich nochmal auf route bestaetigen klicken muss."
+  ///
+  /// Auf seinem Samsung nachgewiesen (`dumpsys activity exit-info`): fuenfmal
+  /// `reason=3 (LOW_MEMORY)` und fuenfmal „OTHER KILLS BY SYSTEM". Die App wird
+  /// also nicht von einem eigenen Fehler zerrissen, sondern von Android
+  /// aufgeraeumt, weil sie im Hintergrund zu viel haelt. Danach ist der Prozess
+  /// tot — und beim Zurueckkommen steht man vor einer frisch geladenen Route,
+  /// die man erst bestaetigen und dann starten muss. Genau seine Beschreibung.
+  ///
+  /// Der Bildspeicher ist der groesste Brocken, den man gefahrlos wegwerfen
+  /// kann: Feed-Bilder, Profilbilder und Karten-Symbole werden beim
+  /// Zurueckkommen einfach neu geladen. Die Fahrt selbst wird NICHT angefasst —
+  /// Route, GPS-Strom und Aufzeichnung laufen unveraendert weiter.
+  void _entlasteImHintergrund() {
+    try {
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
+      debugPrint('[Speicher] Bildspeicher im Hintergrund geleert');
+    } catch (e) {
+      debugPrint('[Speicher] Entlasten fehlgeschlagen: $e');
+    }
+  }
+
+  /// Androids letzte Warnung, bevor die App abgeschossen wird.
+  ///
+  /// Bisher gab es dafuer gar keinen Behandler — die Warnung verpuffte, und
+  /// kurz darauf war der Prozess weg. Jetzt wird wenigstens der Bildspeicher
+  /// geraeumt und der Fahrt-Schnappschuss gesichert, damit ein Abschuss nicht
+  /// mehr weh tut.
+  @override
+  void didHaveMemoryPressure() {
+    super.didHaveMemoryPressure();
+    debugPrint('[Speicher] Android meldet Speicherdruck');
+    _entlasteImHintergrund();
+    _persistActiveRideSnapshot(force: true, paused: _isPaused);
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -270,6 +312,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // 2026-07-22 (vucko Free-Cam-Kompass): Magnetometer im Hintergrund
       // nicht weiterlaufen lassen (Akku) — Resume startet ihn bei Bedarf neu.
       _stopCompass();
+      _entlasteImHintergrund();
     }
     if (state != AppLifecycleState.resumed || !mounted || _disposed) return;
     _startCompassIfNeeded();
@@ -3788,8 +3831,39 @@ class _CruiseModePageState extends State<CruiseModePage>
     final route = CruiseModePage.pendingRoute.value;
     if (route != null) {
       CruiseModePage.pendingRoute.value = null;
-      unawaited(_loadSavedRoute(route));
+      unawaited(_uebernehmeAusstehendeRoute(route));
     }
+  }
+
+  /// Laedt die Route und bestaetigt sie sofort, wenn es eine WIEDERAUFNAHME ist.
+  ///
+  /// 2026-08-12 (vucko): „man muss extra wieder auf Route anfangen oder Route
+  /// beginnen klicken mitten in der Strecke — Frust!" und „wie wenn man frisch
+  /// eine Route erstellt hat und sie fahren moechte."
+  ///
+  /// Der Hintergrund: Android beendet die App im Hintergrund, wenn der Speicher
+  /// knapp wird. Auf Vuckos Samsung ist das belegt (`dumpsys activity
+  /// exit-info`: fuenfmal `reason=3 (LOW_MEMORY)`). Nach so einem Abschuss ist
+  /// der Prozess tot, und die Fahrt kam ueber die Home-Karte als GESPEICHERTE
+  /// ROUTE zurueck — also als reine Vorschau. Der Fahrer musste erst „Route
+  /// bestaetigen" und dann „Fahrt starten" druecken. Wortgleich seine
+  /// Beschreibung.
+  ///
+  /// Eine Wiederaufnahme ist am `routeSource` erkennbar, das
+  /// `_resumeInterruptedRide` in home_content_page setzt. In diesem Fall wird
+  /// direkt bestaetigt, damit nur noch EIN Druck noetig ist.
+  ///
+  /// Bewusst NICHT auch die Fahrt automatisch starten: Wer die App beendet hat,
+  /// wollte vielleicht aufhoeren. Ein ungefragt weiterlaufender Trip wuerde XP,
+  /// Streak und Fahrtstatistik verfaelschen. Der letzte Druck bleibt beim
+  /// Fahrer.
+  Future<void> _uebernehmeAusstehendeRoute(SavedRoute route) async {
+    await _loadSavedRoute(route);
+    if (!mounted || _disposed) return;
+    if (route.routeSource != 'resume') return;
+    if (_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
+    debugPrint('[CruiseMode] Wiederaufnahme — Route direkt bestaetigt');
+    await _confirmRoute(preserveCurrentProgress: true);
   }
 
   // 2026-05-24 (vucko Task #53): Trip-Resume aus Home-Carousel.
@@ -11410,6 +11484,33 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<void> _startNavigationFlow() async {
+    // 2026-08-12 (vucko): „Bei Appwechsel stoppt Route automatisch und man muss
+    // extra wieder auf Route anfangen oder Route beginnen klicken mitten in der
+    // Strecke — Frust!"
+    //
+    // Der Knopf „Fahrt starten" kann nach einem Neuaufbau der Oberflaeche
+    // faelschlich wieder auftauchen (Bild-im-Bild reisst auf Android den
+    // Bildschirmaufbau ab, und nach einem Speicher-Abschuss durch Android ist
+    // ohnehin alles neu). Bisher hat ein Druck darauf MITTEN IN DER FAHRT eine
+    // neue Anfahrtsstrecke berechnet (_prepareAccessLegForOffRouteStart) und
+    // die Linie sichtbar umspringen lassen — aus einem Anzeigefehler wurde ein
+    // echter Routen-Reset.
+    //
+    // Dieser Schutz macht den zweiten Druck folgenlos. Er wirkt unabhaengig
+    // davon, WARUM der Knopf wieder da war, und auf beiden Plattformen. Die
+    // Pause laeuft ueber eigene Wege (_setPaused), nicht hierueber — eine
+    // pausierte Fahrt kann also weiterhin fortgesetzt werden.
+    //
+    // _soloRideStarted deckt die Einzelfahrt ab (es ueberlebt bewusst Pause
+    // und Simulation). Bei Gruppenfahrten wird es nie gesetzt — dort reicht
+    // eine laufende Fahrt-Session als Beleg.
+    final fahrtLaeuftBereits =
+        _navigationStartTime != null &&
+        (_soloRideStarted || widget.groupId != null);
+    if (fahrtLaeuftBereits) {
+      debugPrint('[CruiseMode] Fahrt laeuft bereits — Start wird ignoriert');
+      return;
+    }
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet erlauben
     // 2026-08-04: Steh-Uhr der VORIGEN Fahrt loeschen. Sonst koennte ein alter
     // Zeitstempel den Steh-Notausgang sofort ausloesen.

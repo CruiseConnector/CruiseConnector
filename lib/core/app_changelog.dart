@@ -67,6 +67,10 @@ class AppChangelog {
         'Am Ziel beendet sich die Fahrt zuverlässig von selbst, sobald du '
             'stehst. Auch dann, wenn die Strecke etwas kürzer gemessen wurde. '
             'Beim bloßen Vorbeifahren passiert weiterhin nichts.',
+        'Beim Wechsel in eine andere App geht die Fahrt nicht mehr verloren. '
+            'Die App gibt im Hintergrund Speicher frei, damit Android sie nicht '
+            'mehr beendet, und ein zweiter Druck auf Fahrt starten kann die '
+            'Route nicht mehr neu berechnen.',
         'Neu: Nach jedem Update siehst du genau hier, was sich geändert hat.',
       ],
     ),
