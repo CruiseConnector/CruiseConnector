@@ -2200,7 +2200,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Wie jede Navi sperren wir die Cruise-Seite auf Hochkant; beim Verlassen
     // (dispose) wird die App wieder für alle Orientierungen freigegeben.
     SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
-    _loadVectorTiles();
+    // 2026-08-12: Nur noch fuer den flutter_map-Zweig laden.
+    //
+    // _useMapLibre steht fest auf true, der flutter_map-Zweig (_buildFlutterMap)
+    // wird also NIE gerendert — die hier geladenen PMTiles-Anbieter hat seither
+    // niemand mehr benutzt. Der Aufruf oeffnete trotzdem bei jedem Oeffnen der
+    // Fahransicht HTTP-Clients und baute Verzeichnisstrukturen auf. Toter Code,
+    // der lief.
+    //
+    // Gefunden bei der Suche nach den ~400 MB, die Android dazu bringen, die
+    // App im Hintergrund abzuschiessen. Es ist nicht der grosse Brocken, aber
+    // der einzige, den man ohne jedes Risiko wegnehmen kann.
+    if (!_useMapLibre) _loadVectorTiles();
     // 2026-06-06 (vucko P10): Zuletzt bekannten Standort laden → Karte öffnet
     // (auch beim Kaltstart) sofort dort statt bei „Deutschland-Mitte@z6".
     unawaited(_loadPersistedUserCenter());
