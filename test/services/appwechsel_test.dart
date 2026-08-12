@@ -181,4 +181,69 @@ void main() {
       );
     });
   });
+
+  group('4. Die Wache haengt am App-Kern, nicht an einer Seite', () {
+    late String wache;
+    late String main;
+
+    setUpAll(() {
+      wache = File(
+        'lib/data/services/app_speicher_wache.dart',
+      ).readAsStringSync();
+      main = File('lib/main.dart').readAsStringSync();
+    });
+
+    // DER FUND, DER EINE ANNAHME WIDERLEGT HAT. Der erste Anlauf haengte die
+    // Entlastung an didChangeAppLifecycleState der FAHRANSICHT. Die Messung
+    // danach zeigte: nichts passierte, der Verbrauch stieg im Hintergrund
+    // sogar von 319 auf 365 MB. Der Grund steht in home_page.dart — der
+    // Cruise-Tab wird BEWUSST erst beim ersten Besuch gebaut (die
+    // MapLibre-Ansicht darf nicht unsichtbar entstehen, sonst stuerzt sie
+    // nativ ab). Wer auf der Startseite ist, hat die Fahransicht gar nicht im
+    // Baum, und der Behandler lief nie.
+    test('sie wird beim App-Start angemeldet', () {
+      expect(main.contains('AppSpeicherWache.instance.starten()'), isTrue);
+    });
+
+    test('sie haengt am Binding, nicht an einem Widget', () {
+      expect(wache.contains('with WidgetsBindingObserver'), isTrue);
+      expect(
+        wache.contains('WidgetsBinding.instance.addObserver(this)'),
+        isTrue,
+      );
+    });
+
+    test('Androids Speicherdruck wird beantwortet', () {
+      expect(wache.contains('void didHaveMemoryPressure()'), isTrue);
+    });
+
+    test('der Bildspeicher ist gedeckelt', () {
+      // Flutter erlaubt sonst 100 MB. Bei einer App, die nachweislich wegen
+      // Speichermangel abgeschossen wird, ist das zu grosszuegig.
+      expect(wache.contains('maximumSizeBytes'), isTrue);
+      expect(wache.contains('48 * 1024 * 1024'), isTrue);
+    });
+  });
+
+  group('5. Die Karte wird im Hintergrund still gelegt', () {
+    test('aber NIEMALS waehrend einer Fahrt', () {
+      final start = quelle.indexOf('void didChangeAppLifecycleState(');
+      final rumpf = quelle.substring(start, start + 2200);
+      expect(
+        rumpf.contains('if (!_isRouteConfirmed && !_recordingActive)'),
+        isTrue,
+        reason:
+            'waehrend Fahrt oder Aufzeichnung haengen Kamera, Puck und Linie '
+            'an der aktiven Karte',
+      );
+    });
+
+    test('und beim Zurueckkommen wieder aktiviert', () {
+      expect(
+        quelle.contains('_mlController?.active = mounted && !_disposed;'),
+        isTrue,
+        reason: 'ohne Gegenstueck bliebe die Karte tot',
+      );
+    });
+  });
 }

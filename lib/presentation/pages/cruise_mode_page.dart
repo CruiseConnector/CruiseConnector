@@ -313,6 +313,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       // nicht weiterlaufen lassen (Akku) — Resume startet ihn bei Bedarf neu.
       _stopCompass();
       _entlasteImHintergrund();
+      // 2026-08-12: Karte still legen, solange KEINE Fahrt laeuft. Das spart
+      // keine Megabyte (`active` ist ein Schutzschalter gegen native Aufrufe,
+      // kein Speicher-Hebel), verhindert aber Aufrufe auf eine nicht sichtbare
+      // Ansicht — die dokumentierte SIGABRT-Quelle dieser Datei. Waehrend
+      // einer Fahrt oder Aufzeichnung bleibt die Karte AKTIV: Dort haengen
+      // Kamera, Puck und Linie daran.
+      if (!_isRouteConfirmed && !_recordingActive) {
+        _mlController?.active = false;
+      }
     }
     if (state != AppLifecycleState.resumed || !mounted || _disposed) return;
     _startCompassIfNeeded();
@@ -330,6 +339,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Prediction-Baseline auf jetzt (kein Extrapolations-Sprung), _resetPuckBlend
     // killt den alten Interpolationsrest, und Render-Lock + Linie werden auf den
     // aktuellen Standort verankert → sofort synchron.
+    // Gegenstueck zum Stilllegen oben.
+    _mlController?.active = mounted && !_disposed;
     _nativeSmoother.rebaseToNow();
     _resetPuckBlend();
     // 2026-07-22 (vucko „GPS veraltet"-Fehlmeldung): Beim Resume wurde bisher

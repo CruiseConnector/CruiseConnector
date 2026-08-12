@@ -33,12 +33,26 @@ class AppSpeicherWache with WidgetsBindingObserver {
 
   bool _angemeldet = false;
 
+  /// Obergrenze fuer den Bildspeicher.
+  ///
+  /// Flutter erlaubt standardmaessig 100 MB. Bei einer App, die Android
+  /// nachweislich wegen Speichermangel abschiesst, ist das zu grosszuegig:
+  /// Feed-Bilder und Profilbilder duerfen den Ausschlag nicht geben. 48 MB
+  /// reichen fuer fluessiges Scrollen; was darueber hinaus faellt, wird beim
+  /// Zurueckscrollen neu dekodiert — kaum spuerbar.
+  static const int _bildspeicherGrenzeBytes = 48 * 1024 * 1024;
+
   /// Einmal beim App-Start aufrufen.
   void starten() {
     if (_angemeldet) return;
     _angemeldet = true;
     WidgetsBinding.instance.addObserver(this);
-    debugPrint('[Speicher] Wache aktiv');
+    PaintingBinding.instance.imageCache.maximumSizeBytes =
+        _bildspeicherGrenzeBytes;
+    debugPrint(
+      '[Speicher] Wache aktiv, Bildspeicher gedeckelt auf '
+      '${_bildspeicherGrenzeBytes ~/ (1024 * 1024)} MB',
+    );
   }
 
   @override
