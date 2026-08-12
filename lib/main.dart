@@ -32,6 +32,7 @@ import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
+import 'package:cruise_connect/data/services/app_speicher_wache.dart';
 import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
@@ -97,6 +98,12 @@ void main() {
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
       unawaited(CameraSettingsService.instance.load());
+      // 2026-08-12: Gibt im Hintergrund den Bildspeicher frei, damit Android
+      // die App nicht wegen Speichermangel abschiesst (auf Vuckos Samsung
+      // fuenfmal als reason=3 LOW_MEMORY nachgewiesen). Muss HIER stehen und
+      // nicht auf einer Seite: Der Cruise-Tab wird erst beim ersten Besuch
+      // gebaut, ein Behandler dort liefe auf der Startseite nie.
+      AppSpeicherWache.instance.starten();
       MapStyleService.instance.ensureAutoDownloadScheduled(
         delay: const Duration(seconds: 10),
         reason: 'app_start',

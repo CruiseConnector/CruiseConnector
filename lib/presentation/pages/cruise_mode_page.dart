@@ -7341,10 +7341,26 @@ class _CruiseModePageState extends State<CruiseModePage>
     // nicht an den Live-Puck-Kopf gehängt) bis die neue Route committet ist —
     // wie Google/Apple, die die alte Route bis zum Reroute-Commit stehen lassen.
     final hideLineForReroute = _isReroutingBannerActive && !_isOverviewActive;
+    // 2026-08-12 (vucko): „Bei der Single-Cruise-Mode-Page kommt nach dem
+    // Suchen einer Route keine Animation. Bei der Gruppenseite passt es."
+    //
+    // Die Animation lief die ganze Zeit — nur auf einer Linie, die in diesem
+    // Moment gar nicht gezeigt wurde. Nach der Suche ist die UEBERSICHT aktiv,
+    // und in dem Zweig griff der Code auf _fullRouteBackgroundLatLngs zurueck:
+    // die VOLLE, statische Route. Die wachsende Linie (_routeLatLngs) war
+    // damit unsichtbar, und man sah die fertige Strecke sofort.
+    //
+    // Solange die Zeichen-Animation laeuft UND die Route noch nicht bestaetigt
+    // ist, gewinnt jetzt die wachsende Linie — auch in der Uebersicht. Danach
+    // faellt alles auf das bisherige Verhalten zurueck.
+    final zeichnetGerade =
+        _routeDrawAnimationTimer?.isActive == true && !_isRouteConfirmed;
     final activePts = hideLineForReroute
         ? (_routeLatLngs.length >= 2
               ? _fullRouteBackgroundLatLngs
               : const <LatLng>[])
+        : (zeichnetGerade && _routeLatLngs.length >= 2)
+        ? _routeLatLngs
         : (!_isOverviewActive && _routeLatLngs.length >= 2)
         ? (canUseLiveRouteWindow
               ? _brightAheadLatLngs

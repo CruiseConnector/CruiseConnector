@@ -2299,20 +2299,37 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
   /// steht sie am Ende des Formulars und kann nichts mehr verdecken.
   Widget _buildBottomBar({bool schwebend = true}) {
     final canCreate = _canCreateGroup;
+    // 2026-08-12 (vucko): „Der Generier-Knopf ist bei der Gruppenseite nicht
+    // zentriert und unten sieht es komisch aus."
+    //
+    // Die Leiste war urspruenglich eine SCHWEBENDE Leiste ueber der Karte und
+    // hat das nach dem Umbau ins Formular mitgeschleppt: einen schwarzen
+    // Verlauf (der ueber der Karte Sinn ergibt, im soliden Panel aber wie ein
+    // Schmutzrand aussieht), noch einmal 20 Punkte Seitenrand OBWOHL das Panel
+    // schon 20 hat — dadurch standen die Knoepfe schmaler und nach innen
+    // versetzt als alles darueber — und 40 Punkte Leerraum unten, die im
+    // Formular als Loch erschienen.
+    //
+    // Schwebend bleibt alles wie gehabt, eingebettet fallen Verlauf und
+    // doppelter Rand weg.
     final inhalt = Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.bottomCenter,
-            end: Alignment.topCenter,
-            colors: [Colors.black.withValues(alpha: 0.9), Colors.transparent],
-            stops: const [0.6, 1.0],
-          ),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
+        decoration: schwebend
+            ? BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.9),
+                    Colors.transparent,
+                  ],
+                  stops: const [0.6, 1.0],
+                ),
+              )
+            : null,
+        padding: schwebend
+            ? const EdgeInsets.fromLTRB(20, 20, 20, 40)
+            : EdgeInsets.zero,
+        child: Row(
           children: [
             Expanded(
               child: SizedBox(
@@ -2392,8 +2409,6 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                         ),
                 ),
               ),
-            ),
-          ],
             ),
           ],
         ),
