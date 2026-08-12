@@ -57,14 +57,31 @@ class _HomePageState extends State<HomePage> {
     CruiseModePage.pendingGroupView.addListener(_onPendingGroupView);
     CruiseModePage.openCruiseTab.addListener(_onOpenCruiseTab);
     AppTutorialService.replayRequests.addListener(_onTutorialReplayRequested);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       _communityProvider = context.read<CommunityProvider>();
       _communityProvider?.startRealtime();
       // 2026-05-23 (vucko): Notification-Service starten + Toast bei
       // neuen Einträgen anzeigen.
       _setupNotificationService();
-      unawaited(_runFirstLoginGuidance());
+      await _runFirstLoginGuidance();
+
+      // 2026-08-12: Auch beim APP-START prüfen, nicht nur beim Antippen.
+      //
+      // Vuckos „das Update-Popup fehlt komplett" hatte genau hier seine
+      // Ursache: `_pruefeBewertungsPopup` hing ausschließlich an
+      // `_onNavItemTapped(0)`. Beim Start steht man aber schon auf Home und
+      // tippt Home nie an — man müsste erst auf einen anderen Reiter wechseln
+      // und zurückkommen. Genau der Moment, in dem beides erscheinen soll
+      // (App frisch geöffnet, Fahrt vorbei), war damit der einzige, in dem es
+      // nicht erschien.
+      //
+      // Erst NACH der Erstanmeldungs-Führung, damit sich Tutorial und Blatt
+      // nicht stapeln. Die Wächter in `_pruefeNeuerungen`/
+      // `_pruefeBewertungsPopup` (Vollbild-Navigation, offenes Blatt,
+      // abgebautes Widget, falscher Reiter) gelten unverändert.
+      if (!mounted || _selectedIndex != 0) return;
+      unawaited(_pruefeBewertungsPopup());
     });
     // 2026-06-05 (vucko Crash-Fix): Pre-Warm NICHT mehr sofort. Die schwere
     // Download-/Cache-IO lief gleichzeitig mit dem ersten Karten-Öffnen und war

@@ -56,4 +56,38 @@ void main() {
           'ohne das Tor hat app_min_version.min_build_number keine Wirkung',
     );
   });
+
+  // Falle 3: Der Auslöser haengt nur am Antippen des Home-Tabs.
+  //
+  // Bis zum 2026-08-12 war das so — und deshalb erschien weder das
+  // Update-Blatt noch die Sterne-Frage jemals beim App-Start: Man steht nach
+  // dem Oeffnen bereits auf Home und tippt Home nie an. Man musste erst auf
+  // einen anderen Reiter wechseln und zurueckkommen. Genau der Moment, in dem
+  // beides erscheinen soll, war der einzige, in dem es ausblieb.
+  test('Update-Blatt und Sterne-Frage werden auch beim App-Start geprueft', () {
+    final quelle = File('lib/presentation/pages/home_page.dart')
+        .readAsStringSync();
+
+    final aufrufe = RegExp(
+      r'_pruefeBewertungsPopup\(\)',
+    ).allMatches(quelle).length;
+    expect(
+      aufrufe,
+      greaterThanOrEqualTo(3),
+      reason:
+          'erwartet: die Definition, der Aufruf aus _onNavItemTapped UND der '
+          'Aufruf aus dem Post-Frame-Block in initState',
+    );
+
+    // Der Start-Aufruf muss in initState stehen, nicht irgendwo.
+    final start = quelle.indexOf('void initState()');
+    expect(start, greaterThan(0));
+    final ende = quelle.indexOf('void _onTutorialReplayRequested');
+    expect(ende, greaterThan(start));
+    expect(
+      quelle.substring(start, ende).contains('_pruefeBewertungsPopup()'),
+      isTrue,
+      reason: 'ohne den Aufruf beim Start sieht niemand das Update-Blatt',
+    );
+  });
 }
