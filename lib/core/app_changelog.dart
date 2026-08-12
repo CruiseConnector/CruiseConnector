@@ -54,6 +54,8 @@ class AppChangelog {
             'und Events zum Gruppen-Reiter.',
         'Nach der Fahrt kannst du direkt eine Gruppe planen oder die Strecke in '
             'der Community teilen.',
+        'Das Mitdrehen der Karte ist jetzt standardmaessig aus. Wer es mag, '
+            'schaltet es in den Einstellungen unter „Fahransicht" ein.',
         'Neu: Nach jedem Update siehst du genau hier, was sich getaendert hat.',
       ],
     ),

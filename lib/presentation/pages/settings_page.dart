@@ -632,7 +632,8 @@ class _SettingsPageState extends State<SettingsPage> {
                           .setAutoRotateFreeCam(v),
                       subtitle:
                           'Im freien Modus dreht sich die Karte in deine '
-                          'Blickrichtung. Aus: Norden bleibt oben.',
+                          'Blickrichtung. Aus: Norden bleibt oben. '
+                          'Nach jedem Update startet das wieder aus.',
                     ),
                   ),
                 ]),

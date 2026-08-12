@@ -54,11 +54,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text(eintrag.titel), findsOneWidget);
+
+    // Das Blatt scrollt, und was ausserhalb liegt, wird gar nicht erst
+    // gebaut. Also zu jedem Punkt hinscrollen — das prueft nebenbei, dass
+    // wirklich ALLE erreichbar sind und nicht der letzte unter dem Rand
+    // verschwindet.
+    final liste = find.byType(Scrollable).first;
     for (final punkt in eintrag.punkte) {
+      await tester.scrollUntilVisible(
+        find.text(punkt),
+        120,
+        scrollable: liste,
+      );
       expect(
         find.text(punkt),
         findsOneWidget,
-        reason: 'dieser Punkt fehlt im Blatt: $punkt',
+        reason: 'dieser Punkt ist im Blatt nicht erreichbar: $punkt',
       );
     }
   });
