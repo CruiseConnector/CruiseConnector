@@ -1842,6 +1842,30 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // 2026-08-12 (vucko: „kann man den Wegpunkte-Modus nicht im
+            // Gruppenmodus gut verwenden?"). Bis hierher konnte man einen
+            // Stopp zwar antippen und auswaehlen — danach gab es aber keine
+            // einzige Aktion dafuer. _replaceSelectedWaypoint und
+            // _deleteSelectedWaypoint existierten, waren aber nie mit einem
+            // Knopf verbunden. Nur „Letzten loeschen" und „Alle loeschen"
+            // waren erreichbar; einen BESTIMMTEN Stopp zu aendern ging nicht.
+            //
+            // Die beiden Knoepfe erscheinen nur bei ausgewaehltem Stopp,
+            // damit die Leiste sonst nicht zuwaechst.
+            if (_selectedWaypointIndex != null) ...[
+              _buildMapActionButton(
+                icon: Icons.edit_location_alt_outlined,
+                label: 'Stopp ${_selectedWaypointIndex! + 1} verschieben',
+                onTap: _replaceSelectedWaypoint,
+              ),
+              const SizedBox(height: 10),
+              _buildMapActionButton(
+                icon: Icons.wrong_location_outlined,
+                label: 'Stopp ${_selectedWaypointIndex! + 1} löschen',
+                onTap: _deleteSelectedWaypoint,
+              ),
+              const SizedBox(height: 10),
+            ],
             _buildMapActionButton(
               icon: Icons.auto_awesome,
               label: 'Stopps vorschlagen',

@@ -153,4 +153,31 @@ void main() {
           'Panel die Karte verdeckt',
     );
   });
+
+  // 2026-08-12 (vucko: „kann man den Wegpunkte-Modus nicht im Gruppenmodus gut
+  // verwenden?"). Stopps SETZEN ging immer. Was fehlte: Ein angetippter Stopp
+  // liess sich danach nicht mehr aendern — _replaceSelectedWaypoint und
+  // _deleteSelectedWaypoint existierten, waren aber nie mit einem Knopf
+  // verbunden. Erreichbar waren nur „Letzten loeschen" und „Alle loeschen".
+  test('ein ausgewaehlter Stopp hat auch Aktionen', () {
+    final quelle = File(
+      'lib/presentation/pages/create_group_page.dart',
+    ).readAsStringSync();
+
+    final start = quelle.indexOf('Widget _buildWaypointActionOverlay()');
+    expect(start, greaterThan(0));
+    final leiste = quelle.substring(start, start + 2600);
+
+    expect(
+      leiste.contains('_replaceSelectedWaypoint'),
+      isTrue,
+      reason: 'sonst ist das Auswaehlen eines Stopps eine Sackgasse',
+    );
+    expect(leiste.contains('_deleteSelectedWaypoint'), isTrue);
+    expect(
+      leiste.contains('if (_selectedWaypointIndex != null)'),
+      isTrue,
+      reason: 'ohne Auswahl soll die Leiste nicht zuwachsen',
+    );
+  });
 }
