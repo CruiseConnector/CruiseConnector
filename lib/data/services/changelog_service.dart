@@ -47,6 +47,7 @@ class ChangelogService {
       // Auch bei frischer Installation zeigen (gesehen == null): Vuckos
       // ausdrueckliche Entscheidung — und die einzige Logik, bei der auch das
       // allererste Update mit dieser Funktion den Hinweis bringt.
+      debugPrint('[Changelog] laeuft=$aktuell gesehen=$gesehen');
       if (gesehen == aktuell) return null;
 
       final eintrag = AppChangelog.fuerVersion(aktuell);

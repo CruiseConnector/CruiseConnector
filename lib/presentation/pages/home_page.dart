@@ -395,12 +395,21 @@ class _HomePageState extends State<HomePage> {
     if (!mounted || _selectedIndex != 0) return false;
 
     _neuerungenOffen = true;
-    // Erst merken, dann zeigen — sonst kaeme das Blatt bei jedem Tab-Wechsel
-    // wieder, falls der Nutzer es wegwischt.
-    await ChangelogService.instance.markiereGesehen(eintrag.version);
+    // 2026-08-12: Erst ZEIGEN, dann merken.
+    //
+    // Vorher war es umgekehrt („sonst kaeme das Blatt bei jedem Tab-Wechsel
+    // wieder"). Das war doppelt falsch: Gegen die Wiederkehr im selben Lauf
+    // schuetzt bereits _neuerungenOffen, und wer das Blatt wegwischt, hat es
+    // trotzdem gesehen — showChangelogSheet kehrt auch beim Wegwischen
+    // zurueck. Dafuer ging der Hinweis UNWIDERRUFLICH verloren, sobald
+    // zwischen Merken und Anzeigen irgendetwas dazwischenkam (Widget
+    // abgebaut, Reiterwechsel durchs Tutorial): vermerkt als gesehen,
+    // nie angezeigt, und bis zur naechsten Version nicht mehr zu holen.
     try {
       if (!mounted) return true;
+      debugPrint('[Changelog] zeige Blatt fuer ${eintrag.version}');
       await showChangelogSheet(context, eintrag);
+      await ChangelogService.instance.markiereGesehen(eintrag.version);
     } finally {
       _neuerungenOffen = false;
     }
