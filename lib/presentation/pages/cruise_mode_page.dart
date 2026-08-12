@@ -963,7 +963,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// halben Minute dreissig Meter vom Ziel — der ist da. Genau das macht diese
   /// Regel, und sie verhindert, dass jemand ohne Abschluss-Sheet festsitzt.
   static const double _arrivalStandstillSpeedMps = 1.5;
-  static const Duration _arrivalStandstillDuration = Duration(seconds: 20);
+  /// 2026-08-12 (vucko): „mache es so, dass es etwas schneller kommt, im
+  /// Umkreis von 50 m 15 Sekunden."
+  static const Duration _arrivalStandstillDuration = Duration(seconds: 15);
 
   /// 2026-08-12 (vucko): „Wenn man kurz vorm Ziel ist, beendet es die Route
   /// nicht selbstaendig, auch wenn man unmittelbar 5 Meter neben dem Ziel ist.
@@ -972,10 +974,17 @@ class _CruiseModePageState extends State<CruiseModePage>
   ///
   /// Genau diese Unterscheidung macht das Stehen: Wer vorbeifaehrt, steht
   /// nicht. Deshalb reicht innerhalb des STRENGEN Abschlussradius (10 m plus
-  /// GPS-Zugabe) ein kurzes Fenster. Die 20 Sekunden bleiben fuer den weiten
+  /// GPS-Zugabe) ein sehr kurzes Fenster. Das laengere gilt fuer den weiten
   /// 50-m-Radius, wo eine rote Ampel kurz vor dem Ziel sonst als Ankunft
   /// durchginge.
-  static const Duration _arrivalStandstillDurationNah = Duration(seconds: 8);
+  ///
+  /// 2026-08-12 (vucko): „am Ziel innerhalb von 3 bis 5 Sekunden." Vier
+  /// Sekunden ist die Mitte davon und liegt bewusst ueber drei: Beim Anhalten
+  /// braucht der Geschwindigkeitswert des Empfaengers ein bis zwei Sekunden,
+  /// bis er wirklich unter 1,5 m/s faellt. Bei drei Sekunden haenge das
+  /// Ergebnis am Rauschen des einzelnen Fixes; bei vier ist es stabil und
+  /// fuehlt sich immer noch sofort an.
+  static const Duration _arrivalStandstillDurationNah = Duration(seconds: 4);
 
   /// Seit wann steht das Fahrzeug in Zielnaehe? `null` = faehrt noch.
   DateTime? _stehtSeitAmZiel;

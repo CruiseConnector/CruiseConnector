@@ -122,7 +122,12 @@ void main() {
 
   group('Der Notausgang fuer schlechten Empfang', () {
     const stehTempoMps = 1.5;
-    const stehDauer = Duration(seconds: 20);
+    // 2026-08-12: von 20 auf 15 Sekunden gesenkt (vucko: „mache es so, dass es
+    // etwas schneller kommt, im Umkreis von 50 m 15 Sekunden"). Diese Datei
+    // BAUT die Regel nach, statt sie aufzurufen — sie merkt eine Aenderung an
+    // der echten Konstante also nicht von selbst. Genau darueber wacht jetzt
+    // ankunft_stehend_test.dart.
+    const stehDauer = Duration(seconds: 15);
 
     /// Bildet `_stehtLangGenugAmZiel` ab.
     ({bool angekommen, DateTime? seit}) stehPruefung({
@@ -150,11 +155,11 @@ void main() {
       expect(r.seit, t0);
     });
 
-    test('nach 20 Sekunden Stillstand in Zielnaehe gilt man als angekommen', () {
+    test('nach 15 Sekunden Stillstand in Zielnaehe gilt man als angekommen', () {
       final r = stehPruefung(
         abstandM: 30,
         tempoMps: 0,
-        jetzt: t0.add(const Duration(seconds: 21)),
+        jetzt: t0.add(const Duration(seconds: 16)),
         stehtSeit: t0,
       );
       expect(
@@ -168,7 +173,7 @@ void main() {
       final r = stehPruefung(
         abstandM: 30,
         tempoMps: 9,
-        jetzt: t0.add(const Duration(seconds: 21)),
+        jetzt: t0.add(const Duration(seconds: 16)),
         stehtSeit: t0,
       );
       expect(r.angekommen, isFalse);

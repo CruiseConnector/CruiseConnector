@@ -166,8 +166,32 @@ void main() {
         ),
         isTrue,
         reason:
-            'im weiten 50-m-Radius muessen die 20 Sekunden bleiben — sonst '
-            'zaehlt eine rote Ampel kurz vor dem Ziel als Ankunft',
+            'im weiten 50-m-Radius muss das laengere Fenster (15 s) gelten — '
+            'sonst zaehlt eine rote Ampel kurz vor dem Ziel als Ankunft',
+      );
+    });
+
+    // Die beiden Wartezeiten stehen als Konstanten in cruise_mode_page und
+    // werden von ankunft_radius_test.dart nur NACHGEBAUT — eine Aenderung dort
+    // bliebe sonst voellig unbemerkt. Diese Wache haelt die vereinbarten
+    // Zahlen fest.
+    test('die Wartezeiten sind die vereinbarten', () {
+      expect(
+        quelle.contains(
+          '_arrivalStandstillDuration = Duration(seconds: 15)',
+        ),
+        isTrue,
+        reason: 'vucko: „im Umkreis von 50 m 15 Sekunden"',
+      );
+      expect(
+        quelle.contains(
+          '_arrivalStandstillDurationNah = Duration(seconds: 4)',
+        ),
+        isTrue,
+        reason:
+            'vucko: „am Ziel innerhalb von 3 bis 5 Sekunden". Vier liegt '
+            'bewusst ueber drei: Beim Anhalten braucht der Tempo-Wert des '
+            'Empfaengers ein bis zwei Sekunden, bis er unter 1,5 m/s faellt.',
       );
     });
 
