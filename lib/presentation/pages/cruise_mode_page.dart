@@ -922,6 +922,18 @@ class _CruiseModePageState extends State<CruiseModePage>
   static const double _arrivalStandstillSpeedMps = 1.5;
   static const Duration _arrivalStandstillDuration = Duration(seconds: 20);
 
+  /// 2026-08-12 (vucko): „Wenn man kurz vorm Ziel ist, beendet es die Route
+  /// nicht selbstaendig, auch wenn man unmittelbar 5 Meter neben dem Ziel ist.
+  /// Ich will einfach, wenn man ungefaehr dort ist — und nicht, wenn man nah
+  /// am Ziel vorbeifaehrt — dass es die Route beendet."
+  ///
+  /// Genau diese Unterscheidung macht das Stehen: Wer vorbeifaehrt, steht
+  /// nicht. Deshalb reicht innerhalb des STRENGEN Abschlussradius (10 m plus
+  /// GPS-Zugabe) ein kurzes Fenster. Die 20 Sekunden bleiben fuer den weiten
+  /// 50-m-Radius, wo eine rote Ampel kurz vor dem Ziel sonst als Ankunft
+  /// durchginge.
+  static const Duration _arrivalStandstillDurationNah = Duration(seconds: 8);
+
   /// Seit wann steht das Fahrzeug in Zielnaehe? `null` = faehrt noch.
   DateTime? _stehtSeitAmZiel;
   int _lastDrawnRouteIndex =
@@ -13417,7 +13429,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       return false;
     }
     final seit = _stehtSeitAmZiel ??= DateTime.now();
-    return DateTime.now().difference(seit) >= _arrivalStandstillDuration;
+    // Direkt am Ziel geht es schnell, weiter weg braucht es laenger.
+    final direktAmZiel = distanceToTarget <= _abschlussRadiusFuer(position);
+    final noetig = direktAmZiel
+        ? _arrivalStandstillDurationNah
+        : _arrivalStandstillDuration;
+    return DateTime.now().difference(seit) >= noetig;
   }
 
   bool _canCompleteNavigationAtCurrentPosition(geo.Position position) {
@@ -13428,16 +13445,34 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-08-04: War `_arrivalRadiusMeters` (50 m) und damit derselbe Wert wie
     // fuers Banner. Jetzt der strenge Abschluss-Radius mit GPS-Zugabe — oder,
     // wenn das Fahrzeug in Zielnaehe steht, der Banner-Radius als Notausgang.
-    final radius = _stehtLangGenugAmZiel(position, distanceToTarget)
-        ? _arrivalRadiusMeters
-        : _abschlussRadiusFuer(position);
+    final steht = _stehtLangGenugAmZiel(position, distanceToTarget);
+    final radius = steht ? _arrivalRadiusMeters : _abschlussRadiusFuer(position);
+    // 2026-08-12: Wer am Ziel STEHT, muss nicht mehr 95 % der geplanten
+    // Strecke nachweisen — 80 % genuegen, dieselbe Schwelle, ab der ein
+    // Rundkurs ueberhaupt als „fast fertig" gilt.
+    //
+    // Warum das noetig war: Der Steh-Notausgang lockerte bisher NUR den
+    // Radius. Die Rundkurs-Prozenthuerde blieb — und sie haengt an
+    // _totalDistanceDriven, einer GPS-Track-Laenge, die die geplante
+    // Strassenlaenge prinzipiell nur unterschreiten kann (verworfene Stuecke
+    // bei GPS-Luecken, Sehnenzug statt feiner Geometrie). Wer bei einem
+    // Rundkurs 5 m vom Ziel parkte und wartete, wartete deshalb vergeblich.
+    //
+    // Warum das SICHER ist: Die Lockerung greift ausschliesslich im Stand
+    // (<= 1,5 m/s) in Zielnaehe. Wer nur nah am Ziel vorbeifaehrt, loest sie
+    // nie aus. Und die 80 % kommen aus dem gefahrenen Track, nicht aus dem
+    // Map-Matcher — ein fehlgesprungener Matcher kann sie nicht vortaeuschen.
+    // Genau diese Unabhaengigkeit war der eigentliche Wert der Regel; sie
+    // bleibt erhalten.
     final canComplete = shouldCompleteNavigation(
       isRoundTrip: _isRoundTrip,
       distanceToFinalTargetMeters: distanceToTarget,
       drivenDistanceMeters: _totalDistanceDriven,
       plannedDistanceMeters: plannedDistanceMeters,
       completionRadiusMeters: radius,
-      minRoundTripProgress: _minProgressForAutomaticCompletion,
+      minRoundTripProgress: steht
+          ? _roundTripFinishArmProgress
+          : _minProgressForAutomaticCompletion,
     );
     if (canComplete) return true;
 

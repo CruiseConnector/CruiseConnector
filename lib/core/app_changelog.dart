@@ -56,6 +56,9 @@ class AppChangelog {
             'der Community teilen.',
         'Das Mitdrehen der Karte ist jetzt standardmaessig aus. Wer es mag, '
             'schaltet es in den Einstellungen unter „Fahransicht" ein.',
+        'Am Ziel beendet sich die Fahrt jetzt zuverlaessig von selbst, sobald '
+            'du stehst — auch wenn die Strecke etwas kuerzer gemessen wurde. '
+            'Beim blossen Vorbeifahren passiert weiterhin nichts.',
         'Neu: Nach jedem Update siehst du genau hier, was sich getaendert hat.',
       ],
     ),

@@ -418,9 +418,18 @@ class _MyAppState extends State<MyApp> {
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             // Übersetzungen für Code ohne BuildContext (Services) bereitstellen,
             // sobald der Baum steht bzw. die Sprache wechselt.
+            // 2026-08-12: Das Update-Tor liegt hier und NICHT mehr in `home`.
+            //
+            // Als `home` war es eine Route IM Navigator — und alles, was per
+            // push/pushAndRemoveUntil dazukommt (Gruppen-Deeplink, Ruecksprung
+            // nach der Anmeldung), legt sich UEBER eine Route. Die Sperre war
+            // damit umgehbar. Im builder liegt sie als Deckel ueber dem
+            // gesamten Navigator: Jeder push landet darunter.
             builder: (context, child) {
               L10n.update(AppLocalizations.of(context));
-              return child ?? const SizedBox.shrink();
+              return ForceUpdateGate(
+                child: child ?? const SizedBox.shrink(),
+              );
             },
             navigatorKey: rootNavigatorKey,
             // Trackt jeden Seitenwechsel automatisch als "screen_view"
@@ -455,10 +464,8 @@ class _MyAppState extends State<MyApp> {
                 foregroundColor: Colors.white,
               ),
             ),
-            home: const ForceUpdateGate(
-              child: _CruiseLaunchGate(
-                child: _LanguageChoiceGate(child: AuthPage()),
-              ),
+            home: const _CruiseLaunchGate(
+              child: _LanguageChoiceGate(child: AuthPage()),
             ),
           );
         },
