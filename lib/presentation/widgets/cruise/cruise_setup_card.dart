@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:provider/provider.dart';
@@ -129,8 +131,39 @@ class CruiseSetupCard extends StatefulWidget {
   State<CruiseSetupCard> createState() => _CruiseSetupCardState();
 }
 
-class _CruiseSetupCardState extends State<CruiseSetupCard> {
+class _CruiseSetupCardState extends State<CruiseSetupCard>
+    with WidgetsBindingObserver {
   late bool _avoidHighways;
+
+  /// 2026-08-12 (vucko): „wenn man das Ziel suchen will, muss man immer
+  /// speziell runter gehen, damit ich die Ergebnisse sehen kann. Ich moechte,
+  /// dass man beim Draufklicken direkt die perfekte Ansicht hat, dass man zum
+  /// Bestaetigen der Adresse direkt klicken kann und nicht unterscrollen muss."
+  ///
+  /// Warum das so weh tat: Die Vorschlagsbox haengt UNTER dem Suchfeld. Sitzt
+  /// das Feld weit unten im Formular, liegt die Box hinter der Tastatur. Und
+  /// runterscrollen half nicht — beide Suchfelder haben
+  /// `onTapOutside: unfocus()`, das schon beim FINGER-AUFSETZEN feuert. Wer
+  /// scrollen wollte, verlor im selben Moment den Fokus, und die Liste schloss
+  /// sich wieder. Man kam praktisch nie dran.
+  ///
+  /// Die Loesung geht andersherum: Statt die Liste nach unten zu quetschen,
+  /// wird das FELD nach oben geholt, sobald es den Fokus bekommt. Darunter
+  /// bleiben dann ueber 300 Punkte Platz bis zur Tastatur — die Box passt
+  /// vollstaendig, und die Adresse ist ohne eine einzige Wischbewegung
+  /// antippbar.
+  final GlobalKey _zielFeldSchluessel = GlobalKey();
+
+  /// Die Gruppenseite reicht keinen FocusNode durch, die Cruise-Seite schon.
+  /// Fuer den eigenen Node gilt: nur der wird auch wieder freigegeben.
+  final FocusNode _eigenerZielFokus = FocusNode();
+
+  FocusNode get _zielFokus => widget.destinationFocusNode ?? _eigenerZielFokus;
+
+  /// Solange die Tastatur noch hochfaehrt, aendert sich die Fensterhoehe. Erst
+  /// wenn sie zwei Messungen lang gleich bleibt, wird ausgerichtet — sonst
+  /// scrollt man an die falsche Stelle und es ruckelt zweimal.
+  double _letzteTastaturhoehe = -1;
   // 2026-05-24 (vucko): welcher Modus zeigt aktuell die Erklärungs-Bubble?
   // null = keine. 'roundtrip' | 'atob' | 'zufall' | 'wegpunkte'
   String? _activeExplainer;
@@ -167,6 +200,8 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _zielFokus.addListener(_beiFokuswechsel);
     _avoidHighways = widget.selectedAvoidHighways;
     // 2026-07-28 (vucko „bei Rundkurs sieht man keine Erklaerung"): Beim
     // Oeffnen stand `_activeExplainer` auf null, es war also GAR KEINE
@@ -198,6 +233,64 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
       debugPrint('[RouteDebug][SetupCard] avoidHighways=$value');
     }
     widget.onAvoidHighwaysChanged?.call(value);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _zielFokus.removeListener(_beiFokuswechsel);
+    // NUR die selbst erzeugten Nodes freigeben. Der von aussen gereichte
+    // gehoert der Seite und wird dort entsorgt.
+    _eigenerZielFokus.dispose();
+    super.dispose();
+  }
+
+  void _beiFokuswechsel() {
+    if (!_zielFokus.hasFocus) return;
+    _letzteTastaturhoehe = -1;
+    _richteSuchfeldAus();
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!_zielFokus.hasFocus) return;
+    // Feuert waehrend die Tastatur hochfaehrt mehrfach. Erst ausrichten, wenn
+    // sich die Hoehe nicht mehr aendert — das ist selbstkorrigierend bei
+    // langsamen Tastaturen, beim Drehen und im geteilten Bildschirm, und
+    // braucht keine geratene Wartezeit.
+    final hoehe = View.of(context).viewInsets.bottom;
+    if (hoehe == _letzteTastaturhoehe) return;
+    _letzteTastaturhoehe = hoehe;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _richteSuchfeldAus());
+  }
+
+  /// Holt das Ziel-Suchfeld knapp unter die Statusleiste.
+  ///
+  /// Alle Abbruchbedingungen sind bewusst gesetzt: Der Schluessel kann
+  /// zwischenzeitlich aus dem Baum gefallen sein (das Formular klappt ein, die
+  /// Karte wechselt in den Bestaetigungs-Zweig), und in eine LAUFENDE
+  /// Wischbewegung darf man nicht hineinscrollen — das fuehlt sich an, als
+  /// wuerde einem das Bild aus der Hand gerissen.
+  void _richteSuchfeldAus() {
+    if (!mounted || !_zielFokus.hasFocus) return;
+    final ctx = _zielFeldSchluessel.currentContext;
+    if (ctx == null) return;
+    final position = Scrollable.maybeOf(ctx)?.position;
+    if (position == null || position.isScrollingNotifier.value) return;
+    final box = ctx.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+
+    final oben = MediaQuery.paddingOf(ctx).top + 12;
+    final nenner = math.max(1.0, position.viewportDimension - box.size.height);
+    final ausrichtung = (oben / nenner).clamp(0.0, 1.0);
+
+    Scrollable.ensureVisible(
+      ctx,
+      alignment: ausrichtung,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   @override
@@ -722,7 +815,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
         const SizedBox(height: 10),
         TypeAheadField<PlaceSuggestion>(
           controller: widget.destinationController,
-          focusNode: widget.destinationFocusNode,
+          focusNode: _zielFokus,
           debounceDuration: const Duration(milliseconds: 380),
           suggestionsCallback: (pattern) async {
             if (pattern.trim().length < 2) return [];
@@ -869,6 +962,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard> {
             ),
           ),
           builder: (context, controller, focusNode) => Container(
+            key: _zielFeldSchluessel,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
               boxShadow: [

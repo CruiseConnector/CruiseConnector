@@ -491,35 +491,65 @@ class _CommunityCarouselCardState extends State<CommunityCarouselCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (widget.showHeader) ...[
-            Row(
-              children: [
-                Icon(_icon, color: AppAccentColors.accent, size: 17),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    _title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      height: 1.06,
-                    ),
+            // 2026-08-12 (vucko): „schau, dass die Quicklinks zuverlaessiger
+            // sind, die sind noch nicht gut genug. Dass es leichter ist, wenn
+            // man draufdrueckt, weitergeleitet wird, und man mehr Flaeche zum
+            // Druecken hat — aber nicht zu viel, dass man ausversehen
+            // draufdrueckt."
+            //
+            // Vorher hing der Sprung in die Community an einem NACKTEN
+            // Pfeilsymbol mit 14 Punkten Kantenlaenge. Das ist weniger als ein
+            // Drittel der empfohlenen 48 Punkte — man musste zielen, und
+            // daneben passierte einfach nichts.
+            //
+            // Jetzt ist die ganze KOPFZEILE der Bereich: Symbol, Titel und
+            // Pfeil zusammen, mindestens 44 Punkte hoch. Das trifft man
+            // beilaeufig.
+            //
+            // Bewusst NICHT die ganze Kachel: Darunter liegen Profilbilder,
+            // Folgen-Knoepfe und das Wegklicken. Waere alles ein einziger
+            // Bereich, wuerde jeder Fehlgriff auf einen Knopf stattdessen die
+            // Community oeffnen — genau das „ausversehen draufdruecken", das er
+            // ausschliesst.
+            Semantics(
+              button: true,
+              label: '$_title öffnen',
+              child: GestureDetector(
+                onTap: widget.onOpenCommunity,
+                behavior: HitTestBehavior.opaque,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Row(
+                    children: [
+                      Icon(_icon, color: AppAccentColors.accent, size: 17),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          _title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            height: 1.06,
+                          ),
+                        ),
+                      ),
+                      // Etwas groesser und heller: Der Pfeil ist jetzt der
+                      // sichtbare Hinweis „hier geht es weiter", nicht mehr
+                      // das Ziel selbst.
+                      const Icon(
+                        Icons.arrow_forward_ios,
+                        color: Colors.white70,
+                        size: 15,
+                      ),
+                    ],
                   ),
                 ),
-                GestureDetector(
-                  onTap: widget.onOpenCommunity,
-                  behavior: HitTestBehavior.opaque,
-                  child: const Icon(
-                    Icons.arrow_forward_ios,
-                    color: Colors.white54,
-                    size: 14,
-                  ),
-                ),
-              ],
+              ),
             ),
-            SizedBox(height: widget.compact ? 8 : 10),
+            SizedBox(height: widget.compact ? 4 : 6),
           ],
           Expanded(
             child: _loading ? const _CommunityLoadingSlide() : _sectionSlide(),
