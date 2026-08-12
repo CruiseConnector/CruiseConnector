@@ -59,7 +59,12 @@ class AppChangelog {
             'und Fahrer aus deinem Land. Klickst du jemanden weg, rücken neue '
             'nach.',
         'Kontakte auf dem Startbildschirm führen direkt zu Entdecken, Gruppen '
-            'und Events direkt zu den Gruppen.',
+            'und Events direkt zu den Gruppen. Und die Kacheln lassen sich '
+            'jetzt viel leichter treffen.',
+        'Bei der Zielsuche stehen die Vorschläge sofort im Blick. Du musst '
+            'nicht mehr nach unten scrollen, um eine Adresse anzutippen.',
+        'Einen gesetzten Stopp kannst du jetzt auch wieder verschieben oder '
+            'einzeln löschen, in der Gruppe wie beim Cruisen.',
         'Nach der Fahrt kannst du sofort eine Gruppe planen oder die Strecke '
             'in der Community teilen.',
         'Das Mitdrehen der Karte ist jetzt standardmäßig aus. Wer es mag, '
@@ -68,9 +73,11 @@ class AppChangelog {
             'am Ziel nach wenigen Sekunden, etwas weiter weg nach einer kurzen '
             'Wartezeit. Beim bloßen Vorbeifahren passiert weiterhin nichts.',
         'Beim Wechsel in eine andere App geht die Fahrt nicht mehr verloren. '
-            'Die App gibt im Hintergrund Speicher frei, damit Android sie nicht '
-            'mehr beendet, und ein zweiter Druck auf Fahrt starten kann die '
-            'Route nicht mehr neu berechnen.',
+            'Ein zweiter Druck auf Fahrt starten kann die Route nicht mehr neu '
+            'berechnen, und wenn Android die App doch einmal beendet, kommst '
+            'du mit einem einzigen Tipp zurück in die laufende Fahrt.',
+        'Wenn du die App bewertest, hilfst du uns enorm. Deshalb fragen wir '
+            'nach jeder dritten Runde einmal nach, mehr nicht.',
         'Neu: Nach jedem Update siehst du genau hier, was sich geändert hat.',
       ],
     ),
