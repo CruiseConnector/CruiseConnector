@@ -33,70 +33,82 @@ class AppChangelog {
   AppChangelog._();
 
   /// Neueste Version zuerst.
+  // 2026-08-12 (vucko): „schau auch noch, dass das Update-Popup äöü verwendet
+  // und im Satz keine Bindestriche hat."
+  //
+  // Deshalb hier: echte Umlaute statt ae/oe/ue, echtes ß, und KEINE
+  // Gedankenstriche. Wo vorher ein Strich stand, ist der Satz umgeschrieben,
+  // nicht nur der Strich ersetzt. Auch zusammengesetzte Wörter kommen ohne
+  // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
       version: '1.5.13',
-      titel: 'Gruppen, Vorschlaege und ein Update, das alle bekommen',
+      titel: 'Gruppen, Vorschläge und ein Update, das alle bekommen',
       punkte: <String>[
-        'Aufnehmen zieht jetzt eine Linie hinter dir her — du siehst live, wo '
-            'du ueberall warst.',
-        'Viele kleine Feinheiten in der Bedienung ueberarbeitet.',
-        'Beim Gruppe-Erstellen kannst du die Einstellungen wegdruecken und die '
-            'Karte im Vollbild ansehen — genau wie in der Fahransicht.',
-        'Die Route zeichnet sich nach dem Generieren auf der Karte: Du siehst '
-            'sofort, wie sie verlaeuft.',
-        'Startzeit ist optional. Ohne Zeit gilt die Ausfahrt als spontan — und '
-            'die Auswahl ist ein einziges schoenes Blatt statt zweier Dialoge.',
-        'Entdecken schlaegt dir deutlich mehr Leute vor: Freunde von Freunden '
-            'und Fahrer aus deinem Land. Klickst du jemanden weg, ruecken neue '
+        'Beim Aufnehmen zieht die App jetzt eine Linie hinter dir her. Du '
+            'siehst live, wo du überall warst.',
+        'Viele kleine Feinheiten in der Bedienung überarbeitet.',
+        'Beim Anlegen einer Gruppe kannst du die Einstellungen wegdrücken und '
+            'die Karte im Vollbild ansehen, genau wie in der Fahransicht.',
+        'Die Route zeichnet sich nach dem Generieren auf der Karte. Du siehst '
+            'sofort, wie sie verläuft.',
+        'Die Startzeit ist optional. Ohne Zeit gilt die Ausfahrt als spontan, '
+            'und die Auswahl ist ein einziges schönes Blatt statt zweier '
+            'Dialoge.',
+        'Entdecken schlägt dir deutlich mehr Leute vor: Freunde von Freunden '
+            'und Fahrer aus deinem Land. Klickst du jemanden weg, rücken neue '
             'nach.',
-        'Kontakte auf dem Startbildschirm fuehren direkt zu Entdecken, Gruppen '
-            'und Events zum Gruppen-Reiter.',
-        'Nach der Fahrt kannst du direkt eine Gruppe planen oder die Strecke in '
-            'der Community teilen.',
-        'Das Mitdrehen der Karte ist jetzt standardmaessig aus. Wer es mag, '
-            'schaltet es in den Einstellungen unter „Fahransicht" ein.',
-        'Am Ziel beendet sich die Fahrt jetzt zuverlaessig von selbst, sobald '
-            'du stehst — auch wenn die Strecke etwas kuerzer gemessen wurde. '
-            'Beim blossen Vorbeifahren passiert weiterhin nichts.',
-        'Neu: Nach jedem Update siehst du genau hier, was sich getaendert hat.',
+        'Kontakte auf dem Startbildschirm führen direkt zu Entdecken, Gruppen '
+            'und Events direkt zu den Gruppen.',
+        'Nach der Fahrt kannst du sofort eine Gruppe planen oder die Strecke '
+            'in der Community teilen.',
+        'Das Mitdrehen der Karte ist jetzt standardmäßig aus. Wer es mag, '
+            'schaltet es in den Einstellungen unter „Fahransicht“ wieder ein.',
+        'Am Ziel beendet sich die Fahrt zuverlässig von selbst, sobald du '
+            'stehst. Auch dann, wenn die Strecke etwas kürzer gemessen wurde. '
+            'Beim bloßen Vorbeifahren passiert weiterhin nichts.',
+        'Neu: Nach jedem Update siehst du genau hier, was sich geändert hat.',
       ],
     ),
     ChangelogEintrag(
       version: '1.5.12',
       titel: 'Gruppen einrichten wie beim Cruisen',
       punkte: <String>[
-        'Beim Gruppe-Erstellen kannst du die Einstellungen jetzt wegdruecken '
-            'und die Karte im Vollbild ansehen — wie in der Fahransicht.',
-        'Die Route zeichnet sich nach dem Generieren auf der Karte, du siehst '
-            'sofort, wie sie verlaeuft.',
-        'Startzeit ist optional geworden: Ohne Zeit gilt die Ausfahrt als '
-            'spontan. Und die Auswahl ist ein einziges schoenes Blatt statt '
+        'Beim Anlegen einer Gruppe kannst du die Einstellungen jetzt '
+            'wegdrücken und die Karte im Vollbild ansehen, wie in der '
+            'Fahransicht.',
+        'Die Route zeichnet sich nach dem Generieren auf der Karte. Du siehst '
+            'sofort, wie sie verläuft.',
+        'Die Startzeit ist optional geworden. Ohne Zeit gilt die Ausfahrt als '
+            'spontan, und die Auswahl ist ein einziges schönes Blatt statt '
             'zweier Dialoge.',
-        'Kontakte auf dem Startbildschirm fuehren jetzt direkt zu Entdecken.',
-        'Vorschlaege sagen dir, warum jemand vorgeschlagen wird.',
-        'Nach der Fahrt kannst du direkt eine Gruppe planen oder die Strecke '
+        'Kontakte auf dem Startbildschirm führen jetzt direkt zu Entdecken.',
+        'Vorschläge sagen dir, warum jemand vorgeschlagen wird.',
+        'Nach der Fahrt kannst du sofort eine Gruppe planen oder die Strecke '
             'in der Community teilen.',
       ],
     ),
     ChangelogEintrag(
       version: '1.5.11',
-      titel: 'Bessere Routen, Gruppenfahrten und Rueckmeldungen',
+      titel: 'Bessere Routen, Gruppenfahrten und Rückmeldungen',
       punkte: <String>[
         'Die Fahrstile liefern wieder wirklich unterschiedliche Routen: '
             'Kurvenjagd sucht die kurvigen Strecken, der Sportmodus die '
-            'fluessigen, die Abendrunde die gemuetlichen.',
-        'A nach B mit Umweg: klein ist rund doppelt so lang wie der direkte Weg, '
-            'mittel dreifach, gross vierfach. Aus 20 km werden 40, 60 oder 80 km.',
-        'Gruppe einrichten: Die Karte laesst sich jetzt frei bewegen und das '
-            'Formular einklappen — du siehst die Route, bevor ihr losfahrt.',
-        'Fahrer und Mitfahrer sind getrennt: Wer als Mitfahrer eingetragen ist, '
-            'erscheint nicht mehr als eigenes Auto auf der Karte.',
+            'flüssigen, die Abendrunde die gemütlichen.',
+        'A nach B mit Umweg: klein ist rund doppelt so lang wie der direkte '
+            'Weg, mittel dreifach, groß vierfach. Aus 20 km werden 40, 60 oder '
+            '80 km.',
+        'Gruppe einrichten: Die Karte lässt sich jetzt frei bewegen und das '
+            'Formular einklappen. So siehst du die Route, bevor ihr losfahrt.',
+        'Fahrer und Mitfahrer sind getrennt: Wer als Mitfahrer eingetragen '
+            'ist, erscheint nicht mehr als eigenes Auto auf der Karte.',
         'Verfahren in der Gruppe: Statt ratlos stehenzubleiben bekommst du die '
-            'Wahl — zurueck zur Gruppe, Gruppenroute uebernehmen oder eigene Route.',
-        'Die Kamera dreht sich waehrend der Gruppenfahrt nicht mehr wild.',
-        'Neu in den Einstellungen: Rueckmeldung schicken — mit Foto, direkt an uns.',
-        'Kurven werden jetzt ueberall gleich und genau gezaehlt.',
+            'Wahl zwischen zurück zur Gruppe, Gruppenroute übernehmen und '
+            'eigene Route.',
+        'Die Kamera dreht sich während der Gruppenfahrt nicht mehr wild.',
+        'Neu in den Einstellungen: Rückmeldung schicken, mit Foto, direkt an '
+            'uns.',
+        'Kurven werden jetzt überall gleich und genau gezählt.',
       ],
     ),
   ];

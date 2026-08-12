@@ -90,4 +90,47 @@ void main() {
       reason: 'ohne den Aufruf beim Start sieht niemand das Update-Blatt',
     );
   });
+
+  // Falle 4: Ersatzschreibungen und Gedankenstriche im Update-Blatt.
+  //
+  // 2026-08-12 (vucko): „schau auch noch, dass das Update-Popup äöü verwendet
+  // und im Satz keine Bindestriche hat."
+  //
+  // Der erste Anlauf war komplett in ae/oe/ue geschrieben, weil die Eintraege
+  // ueber Skripte in die Datei kamen. Auf dem Geraet stand dann „Vorschlaege"
+  // und „ueberall" - sichtbar unfertig.
+  //
+  // Geprueft wird gegen eine LISTE konkreter Ersatzschreibungen, nicht gegen
+  // das blosse Vorkommen von „ae/oe/ue". Ein allgemeiner Test schlug bei
+  // „zuverlässig" und „Leute" an - richtige deutsche Woerter. Lieber eine
+  // Liste, die waechst, als ein Test, den man abschaltet.
+  test('das Update-Blatt schreibt deutsch, ohne Gedankenstriche', () {
+    const ersatzschreibungen = <String>[
+      'ueber', 'fuer', 'koenn', 'moecht', 'waehr', 'zurueck', 'schoen',
+      'gruen', 'muess', 'laesst', 'aendern', 'geaendert', 'getaendert',
+      'Vorschlaege', 'vorschlaege', 'ruecken', 'fuehr', 'gemuetlich',
+      'fluessig', 'zuverlaessig', 'kuerzer', 'groesse', 'strasse', 'Strasse',
+      'schlaegt', 'gezaehlt', 'Rueck', 'rueck', 'naechst', 'spaeter',
+      'haeuf', 'taeglich', 'maessig', 'bloss', 'grosse', 'Grosse',
+    ];
+
+    for (final e in AppChangelog.eintraege) {
+      for (final t in <String>[e.titel, ...e.punkte]) {
+        expect(
+          t.contains('\u2014') || t.contains('\u2013'),
+          isFalse,
+          reason: 'Gedankenstrich in: $t',
+        );
+        for (final falsch in ersatzschreibungen) {
+          expect(
+            t.contains(falsch),
+            isFalse,
+            reason:
+                'Ersatzschreibung „$falsch" in „$t". Bitte echte Umlaute '
+                'verwenden - der Text steht so auf dem Handy.',
+          );
+        }
+      }
+    }
+  });
 }
