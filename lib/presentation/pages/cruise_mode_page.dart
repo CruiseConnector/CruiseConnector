@@ -10299,6 +10299,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     });
   }
 
+  /// Endpunkte naeher als das gelten als geschlossene Runde — robust gegen
+  /// GPS-Rauschen am Ende aufgezeichneter Tracks.
+  static const double _loopSchlussMeter = 80.0;
+
+  bool _istGeometrischGeschlossen(RouteResult route) {
+    final c = route.coordinates;
+    if (c.length < 2) return false;
+    return geo.Geolocator.distanceBetween(
+          c.first[1],
+          c.first[0],
+          c.last[1],
+          c.last[0],
+        ) <=
+        _loopSchlussMeter;
+  }
+
   Future<RouteResult> _prepareRouteForPreviewStart({
     required RouteResult result,
     required geo.Position startPosition,
@@ -10306,6 +10322,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     required bool avoidHighways,
     bool forceAccessFromCurrentLocation = false,
     bool allowDistantAccess = false,
+    // 2026-08-14 (vucko, P3): „Die Route muss ORIGINAL bleiben, und man darf
+    // NIEMALS Abkuerzungen bekommen, auch nicht bei aufgenommenen Routen."
+    //
+    // Gilt fuer GELADENE Routen (gespeichert, gepostet, aufgezeichnet). Bei
+    // frischen Suchen ist das Vorwaerts-Andocken dagegen richtig: Die Route
+    // wurde von der eigenen Position aus gebaut, uebersprungen werden nur
+    // Meter, die man seit der Suche schon gefahren ist.
+    bool nieKuerzen = false,
   }) async {
     if ((!isRoundTrip && !forceAccessFromCurrentLocation) ||
         result.coordinates.length < 2) {
@@ -10380,15 +10404,28 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Seit P9 läuft dieser Block auch für A→B (forceAccessFromCurrentLocation);
         // mit `true` hängte er eine Rück-Leg B→A an → aus A→B wurde ein Loop.
         // Der Navigations-Pfad nutzt ebenfalls returnToSessionOrigin:isRoundTrip.
-        returnToSessionOrigin: isRoundTrip,
-        rebaseClosedLoop: isRoundTrip,
+        // P3 (2026-08-14): Bei geladenen Routen entscheidet die GEOMETRIE,
+        // nicht das gespeicherte Flag — aufgezeichnete Tracks tragen es
+        // unzuverlaessig. Geschlossen heisst: volle Runde, nur rotiert
+        // (Einstieg bei km 12 = km 12 bis Ende plus km 0 bis 12 — jeder
+        // Meter wird gefahren). Offen heisst: Einstieg IMMER am
+        // Original-Start; jeder Mittel-Einstieg einer offenen Route WAERE
+        // die Abkuerzung, die vucko ausschliesst.
+        returnToSessionOrigin: nieKuerzen
+            ? _istGeometrischGeschlossen(result)
+            : isRoundTrip,
+        rebaseClosedLoop: nieKuerzen
+            ? _istGeometrischGeschlossen(result)
+            : isRoundTrip,
         // 2026-06-27 (vucko): A→B nicht mehr hart auf den Routenstart (Index 0)
         // pinnen. Der frühere P9-Pin zwang eine Luftlinie/Anfahrt zum Original-
         // Start, wenn die Route am User vorbeiläuft. Stattdessen schleichend an
         // den nächsten Vorwärts-Punkt anschließen (joinNearestForward); Rundkurse
         // behalten die Loop-Rotation (rebaseClosedLoop, Ende = Original-Start).
-        preferredJoinIndex: null,
-        joinNearestForward: !isRoundTrip,
+        // — Gilt seit P3 NUR noch fuer frische Suchen, siehe nieKuerzen oben.
+        preferredJoinIndex:
+            nieKuerzen && !_istGeometrischGeschlossen(result) ? 0 : null,
+        joinNearestForward: nieKuerzen ? false : !isRoundTrip,
       );
     } catch (e) {
       // 2026-06-06 (vucko P9-Fix): Schlägt die Access-Leg-Berechnung fehl
@@ -11912,13 +11949,24 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     RouteAccessPlan accessPlan;
     try {
+      // P3 (2026-08-14): Bei einer GELADENEN Route (gespeichert, gepostet,
+      // aufgezeichnet) entscheidet die Geometrie statt des Flags, und eine
+      // offene Route dockt IMMER am Original-Start an — dieselben Regeln wie
+      // in der Vorschau, damit Vorschau und Fahrtstart nicht verschieden
+      // andocken (das war das „komische" Verhalten). Frische Suchen bleiben
+      // unveraendert: Dort ist das Vorwaerts-Andocken richtig.
+      final geladen = _isExistingRouteSession;
+      final geschlossen = geladen
+          ? _istGeometrischGeschlossen(sourceRoute)
+          : _isRoundTrip;
       accessPlan = await _routeService.buildAccessRouteToExistingRoute(
         currentPosition: position,
         existingRoute: sourceRoute,
         mode: 'Standard',
         avoidHighways: _effectiveNavigationAvoidHighways,
-        returnToSessionOrigin: _isRoundTrip,
-        rebaseClosedLoop: _isRoundTrip,
+        returnToSessionOrigin: geschlossen,
+        rebaseClosedLoop: geschlossen,
+        preferredJoinIndex: geladen && !geschlossen ? 0 : null,
         // 2026-07-29 (vucko „beim Rundkurs-Fortsetzen soll der Endpunkt
         // trotzdem zuhause sein"): Bei einer FORTGESETZTEN Runde ist der
         // Startpunkt der Fahrt nicht dort, wo man gerade steht, sondern dort,
@@ -11926,7 +11974,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Schleife am neuen Standort — man kam also nie mehr heim.
         // Nur bei fortgesetzten Rundkursen; eine frische Suche bleibt
         // unveraendert (dort IST die aktuelle Position der Start).
-        explicitSessionOrigin: (_isRoundTrip && _isExistingRouteSession)
+        explicitSessionOrigin: (geschlossen && _isExistingRouteSession)
             ? _copyCoord(sourceRoute.coordinates.first)
             : null,
       );
@@ -13025,6 +13073,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         avoidHighways: false,
         forceAccessFromCurrentLocation: true,
         allowDistantAccess: true,
+        // Geladene Route: Original bleibt Original, nie Abkuerzungen (P3).
+        nieKuerzen: true,
       );
       if (_isRouteGenerationCancelled(generationId)) return;
 
