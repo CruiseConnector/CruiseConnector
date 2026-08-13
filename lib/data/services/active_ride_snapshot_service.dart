@@ -42,9 +42,14 @@ class ActiveRideSnapshot {
     this.wasPaused = false,
     this.lastLat,
     this.lastLng,
+    this.pausedSeconds = 0,
   });
 
-  static const int schemaVersion = 1;
+  /// v2 (2026-08-14, P2): `paused_seconds` kam dazu, damit Vor-Kill-Pausen
+  /// beim Fortsetzen nicht als Fahrzeit zaehlen. fromJson liest v1 TOLERANT
+  /// (fehlendes Feld = 0) — ein striktes Verwerfen wuerde beim App-Update
+  /// genau die Fahrt wegwerfen, die diese Funktion retten soll.
+  static const int schemaVersion = 2;
 
   final DateTime savedAt;
   final DateTime startedAt;
@@ -61,6 +66,9 @@ class ActiveRideSnapshot {
   final double? lastLat;
   final double? lastLng;
 
+  /// Summe aller Pausen vor dem Sichern, in Sekunden.
+  final int pausedSeconds;
+
   Map<String, dynamic> toJson() => {
     'version': schemaVersion,
     'saved_at': savedAt.toIso8601String(),
@@ -75,10 +83,13 @@ class ActiveRideSnapshot {
     'was_paused': wasPaused,
     if (lastLat != null) 'last_lat': lastLat,
     if (lastLng != null) 'last_lng': lastLng,
+    'paused_seconds': pausedSeconds,
   };
 
   static ActiveRideSnapshot? fromJson(Map<String, dynamic> json) {
-    if ((json['version'] as num?)?.toInt() != schemaVersion) return null;
+    // Aeltere Schemata tolerant lesen, nur ZUKUENFTIGE verwerfen.
+    final version = (json['version'] as num?)?.toInt() ?? 0;
+    if (version < 1 || version > schemaVersion) return null;
     final savedAt = DateTime.tryParse(json['saved_at'] as String? ?? '');
     final startedAt = DateTime.tryParse(json['started_at'] as String? ?? '');
     final geometry = json['geometry'];
@@ -104,6 +115,7 @@ class ActiveRideSnapshot {
       wasPaused: json['was_paused'] == true,
       lastLat: (json['last_lat'] as num?)?.toDouble(),
       lastLng: (json['last_lng'] as num?)?.toDouble(),
+      pausedSeconds: (json['paused_seconds'] as num?)?.toInt() ?? 0,
     );
   }
 }

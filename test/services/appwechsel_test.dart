@@ -154,7 +154,7 @@ void main() {
         'Future<void> _uebernehmeAusstehendeRoute(',
       );
       expect(start, greaterThan(0));
-      final rumpf = quelle.substring(start, start + 700);
+      final rumpf = quelle.substring(start, start + 3200);
       expect(
         rumpf.contains("route.routeSource != 'resume'"),
         isTrue,
@@ -170,7 +170,7 @@ void main() {
       final start = quelle.indexOf(
         'Future<void> _uebernehmeAusstehendeRoute(',
       );
-      final rumpf = quelle.substring(start, start + 700);
+      final rumpf = quelle.substring(start, start + 3200);
       expect(
         rumpf.contains('_startNavigationFlow()'),
         isFalse,

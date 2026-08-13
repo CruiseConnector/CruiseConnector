@@ -24,9 +24,38 @@ class DrivenTrackRecorder {
   _DrivenTrackSample? _lastAccepted;
   double _distanceMeters = 0.0;
 
-  double get distanceMeters => _distanceMeters;
+  /// Vorleistung aus einer WIEDERHERGESTELLTEN Fahrt.
+  ///
+  /// 2026-08-14 (vucko, P2): „Beim spaeteren Fortsetzen wird der bisherige
+  /// Fortschritt gar nicht ausgewertet." Nach einem App-Neustart begann alles
+  /// bei null, obwohl die Kilometer echt gefahren waren.
+  ///
+  /// Es reicht NICHT, den Zaehler der Fahransicht zu setzen: Jedes GPS-Sample
+  /// ueberschreibt ihn mit [distanceMeters]. Die Vorleistung muss also durch
+  /// den Rekorder selbst fliessen — dann stimmen automatisch auch
+  /// Rundkurs-Abschluss, XP und der naechste Schnappschuss.
+  double _seedMeters = 0.0;
+
+  double get distanceMeters => _seedMeters + _distanceMeters;
+
+  /// Setzt die Vorleistung einer wiederhergestellten Fahrt.
+  void seedDistance(double meters) {
+    _seedMeters = meters.isFinite && meters > 0 ? meters : 0.0;
+  }
 
   void reset() {
+    _segments.clear();
+    _lastAccepted = null;
+    _distanceMeters = 0.0;
+    _seedMeters = 0.0;
+  }
+
+  /// Leert nur den Track, behaelt aber die Vorleistung.
+  ///
+  /// Fuer die Anfahrts-Etappe beim Start: Sie setzt den Track zurueck — ohne
+  /// diese Variante wuerde sie die wiederhergestellten Kilometer gleich
+  /// wieder loeschen.
+  void resetTrackKeepingSeed() {
     _segments.clear();
     _lastAccepted = null;
     _distanceMeters = 0.0;
@@ -108,7 +137,9 @@ class DrivenTrackRecorder {
         .toList(growable: false);
     return DrivenTrackSnapshot(
       segments: drawableSegments,
-      distanceMeters: _distanceMeters,
+      // Inklusive Vorleistung — der Schnappschuss ist die Quelle fuer
+      // Persistenz und Abschlussrechnung, dort zaehlt die Gesamtstrecke.
+      distanceMeters: distanceMeters,
       acceptedSegmentCount: _segments.length,
       maxSegmentMeters: _maxSegmentMeters(drawableSegments),
     );

@@ -131,6 +131,12 @@ class CruiseModePage extends StatefulWidget {
 
   /// Wird gesetzt, wenn eine gespeicherte Route erneut gefahren werden soll.
   /// HomePage hört darauf und wechselt zum Cruise-Tab.
+  /// Fortschritt einer WIEDERHERGESTELLTEN Fahrt (P2, 2026-08-14): Die
+  /// Home-Karte legt hier den Schnappschuss ab, BEVOR sie pendingRoute setzt.
+  /// _uebernehmeAusstehendeRoute konsumiert ihn nach dem Laden der Route.
+  static final ValueNotifier<ActiveRideSnapshot?> pendingResumeProgress =
+      ValueNotifier<ActiveRideSnapshot?>(null);
+
   static final ValueNotifier<SavedRoute?> pendingRoute =
       ValueNotifier<SavedRoute?>(null);
 
@@ -3891,8 +3897,39 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _uebernehmeAusstehendeRoute(SavedRoute route) async {
     await _loadSavedRoute(route);
     if (!mounted || _disposed) return;
-    if (route.routeSource != 'resume') return;
+    if (route.routeSource != 'resume') {
+      CruiseModePage.pendingResumeProgress.value = null;
+      return;
+    }
     if (_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
+
+    // 2026-08-14 (vucko, P2): „Beim spaeteren Fortsetzen wird der bisherige
+    // Fortschritt gar nicht ausgewertet — unbedingt loesen."
+    //
+    // Reihenfolge ist zwingend: ERST die Route laden (das nullt alle Zaehler),
+    // DANN den Fortschritt einspielen, DANN bestaetigen. Andersherum wuerde
+    // _applyRouteResult alles wieder loeschen.
+    //
+    // Der Seed fliesst durch den Rekorder, nicht nur in den Zaehler — jedes
+    // GPS-Sample wuerde einen blossen Zaehlerwert sofort ueberschreiben. Und
+    // _navigationStartTime wird RUECKDATIERT: Damit zaehlt die Luecke
+    // zwischen Abschuss und Fortsetzen von selbst nicht als Fahrzeit.
+    final fortschritt = CruiseModePage.pendingResumeProgress.value;
+    CruiseModePage.pendingResumeProgress.value = null;
+    if (fortschritt != null) {
+      final meter = fortschritt.drivenKm * 1000.0;
+      _drivenTrackRecorder.seedDistance(meter);
+      _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
+      _navigationStartTime = DateTime.now().subtract(
+        Duration(seconds: fortschritt.elapsedSeconds),
+      );
+      _totalPausedSeconds = fortschritt.pausedSeconds.toDouble();
+      debugPrint(
+        '[CruiseMode] Fortschritt wiederhergestellt: '
+        '${fortschritt.drivenKm.toStringAsFixed(1)} km, '
+        '${fortschritt.elapsedSeconds} s (${fortschritt.pausedSeconds} s Pause)',
+      );
+    }
     debugPrint('[CruiseMode] Wiederaufnahme — Route direkt bestaetigt');
     await _confirmRoute(preserveCurrentProgress: true);
   }
@@ -11555,6 +11592,23 @@ class _CruiseModePageState extends State<CruiseModePage>
         _navigationStartTime != null &&
         (_soloRideStarted || widget.groupId != null);
     if (fahrtLaeuftBereits) {
+      // 2026-08-14 (P2-Fund der Diagnose): Der „Weiter"-Knopf nach einer
+      // PAUSE laeuft ueber genau diesen Weg — die Pause stoppt den
+      // GPS-Strom, das Fortsetzen muss ihn wieder anwerfen. Die erste
+      // Fassung dieses Schutzes (12.08.) kehrte hier immer um: Nach Pause →
+      // Weiter startete das GPS nie wieder.
+      //
+      // Ist die Fahrt logisch aktiv, aber der Strom tot, wird nur das
+      // Tracking samt Kamera nachgeholt. Der eigentliche Zweck des Schutzes
+      // bleibt: KEIN Routen-Neuaufbau (_prepareAccessLegForOffRouteStart)
+      // mitten in der Fahrt.
+      if (_positionSubscription == null) {
+        debugPrint('[CruiseMode] Weiter nach Pause — Tracking neu gestartet');
+        _startNavigationTracking();
+        _isCameraLocked = true;
+        unawaited(_activateNavigationCamera());
+        return;
+      }
       debugPrint('[CruiseMode] Fahrt laeuft bereits — Start wird ignoriert');
       return;
     }
@@ -11898,8 +11952,11 @@ class _CruiseModePageState extends State<CruiseModePage>
         _safeSetState(() {
           _clearAccessLegState();
           _sessionRouteStartIndexInActiveRoute = 0;
-          _totalDistanceDriven = 0.0;
-          _drivenTrackRecorder.reset();
+          // P2: Vorleistung einer wiederhergestellten Fahrt behalten — ein
+          // harter reset() wuerde die geretteten Kilometer beim allerersten
+          // „Fahrt starten" mit Anfahrts-Etappe gleich wieder loeschen.
+          _drivenTrackRecorder.resetTrackKeepingSeed();
+          _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
         });
       }
       return;
@@ -11926,8 +11983,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _accessLegJoinIndex = joinIndexInMergedRoute;
       _sessionRouteStartIndexInActiveRoute = 0;
       _accessLegMainRouteResult = accessPlan.sessionRoute;
-      _totalDistanceDriven = 0.0;
-      _drivenTrackRecorder.reset();
+      // P2: siehe oben — Seed der Wiederaufnahme uebersteht die Anfahrt.
+      _drivenTrackRecorder.resetTrackKeepingSeed();
+      _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
     });
 
     if (mounted) {
@@ -19089,6 +19147,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       wasPaused: paused,
       lastLat: lat,
       lastLng: lng,
+      pausedSeconds:
+          _totalPausedSeconds.round() +
+          (paused && _pauseStartedAt != null
+              ? DateTime.now().difference(_pauseStartedAt!).inSeconds
+              : 0),
     );
     unawaited(
       force

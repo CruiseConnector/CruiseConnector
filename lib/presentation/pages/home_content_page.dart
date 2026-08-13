@@ -5307,6 +5307,10 @@ class _HomeContentPageState extends State<HomeContentPage>
       routeType: ride.isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
       routeSource: 'resume',
     );
+    // P2 (2026-08-14): Fortschritt VOR der Route setzen — der Route-Listener
+    // feuert sofort, und _uebernehmeAusstehendeRoute liest den Fortschritt
+    // direkt nach dem Laden.
+    CruiseModePage.pendingResumeProgress.value = ride;
     CruiseModePage.pendingRoute.value = route;
     widget.onTabChange?.call(2);
   }
