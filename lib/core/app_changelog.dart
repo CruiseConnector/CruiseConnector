@@ -42,6 +42,23 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.14',
+      titel: 'Zuverlässiger unterwegs',
+      punkte: <String>[
+        'Bei A nach B mit Umweg bleibt der Umweg jetzt auch nach einem '
+            'Verfahren erhalten. Die Route springt nicht mehr auf den '
+            'direkten Weg.',
+        'Eine unterbrochene Fahrt macht genau dort weiter, wo du warst. '
+            'Gefahrene Kilometer und Zeit zählen weiter, nichts beginnt '
+            'mehr bei null.',
+        'Gespeicherte und geteilte Routen bekommen einen sauberen Zubringer '
+            'zum besten Anschlusspunkt. Die Originalroute bleibt vollständig, '
+            'Abkürzungen gibt es nie.',
+        'Adressen lassen sich jetzt speichern und stehen bei der Zielsuche '
+            'als Schnellzugriff bereit.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.13',
       titel: 'Gruppen, Vorschläge und ein Update, das alle bekommen',
       punkte: <String>[

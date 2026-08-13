@@ -16457,7 +16457,34 @@ class _CruiseModePageState extends State<CruiseModePage>
           (!_isRoundTrip && _fullRouteCoordinates.length >= 2
               ? _fullRouteCoordinates.last
               : null);
-      if (!_isRoundTrip && destination != null && !accessLegMode) {
+      // 2026-08-14 (vucko, P1): „Im A-nach-B-Modus greift beim Rerouting die
+      // vorher getroffene Umwegs-Auswahl nicht mehr. Die Route veraendert sich
+      // direkt von 30 km auf bspw. 10 und es wird zum direkten A nach B."
+      //
+      // Ursache: Dieser Ziel-Zweig rechnet Position -> Ziel neu, mit hart
+      // codiertem mode 'Standard' und routeVariant 0 — die Umweg-Auswahl
+      // (_activeDetourVariant/_activePointToPointScenic) faellt dabei weg.
+      // Der Rejoin-Pfad weiter unten haengt dagegen die RESTLICHE
+      // Originalroute an den Verbinder und erhaelt den Umweg damit von
+      // selbst — er kam bei A nach B nur nie zum Zug, weil dieser Zweig
+      // Vorrang hat.
+      //
+      // Also: Bei aktiver Umweg-Auswahl den Ziel-Zweig ueberspringen und in
+      // den Rejoin fallen. Den Umweg-Parameter einfach an den Ziel-Reroute
+      // durchzureichen waere FALSCH: Die Varianten-Suche laeuft beim Reroute
+      // mit Budget 1 und 4,5 s und wuerde fast immer auf direkt
+      // zurueckfallen — und Faktor 3 auf die REST-Luftlinie ergaebe mitten
+      // in der Fahrt eine voellig neue Schleife statt der gewaehlten.
+      //
+      // Nur fuer A nach B OHNE Zwischenstopps: Bei Trips haengt das bewusste
+      // Ueberspringen von Stopps an genau diesem Ziel-Zweig.
+      final umwegAktiv =
+          (_activeDetourVariant > 0 || _activePointToPointScenic) &&
+          _activeIntermediateWaypoints.isEmpty;
+      if (!_isRoundTrip &&
+          destination != null &&
+          !accessLegMode &&
+          !umwegAktiv) {
         // 2026-06-09 (vucko Trip-Skip): Reroute führt durch die VERBLEIBENDEN
         // Zwischenstopps (übersprungene werden automatisch abgehakt) statt
         // stumm direkt zum Endziel.
