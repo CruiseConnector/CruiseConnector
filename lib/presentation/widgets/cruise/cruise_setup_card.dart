@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
+import 'package:cruise_connect/data/services/gespeicherte_adressen_service.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/mode_explainer_bubble.dart';
 
@@ -202,6 +204,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _zielFokus.addListener(_beiFokuswechsel);
+    unawaited(GespeicherteAdressenService.instance.load());
     _avoidHighways = widget.selectedAvoidHighways;
     // 2026-07-28 (vucko „bei Rundkurs sieht man keine Erklaerung"): Beim
     // Oeffnen stand `_activeExplainer` auf null, es war also GAR KEINE
@@ -764,6 +767,30 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
                     ],
                   ),
                 ),
+                // 2026-08-14 (vucko, P4): „Adressen speichern für
+                // Schnellsuche." Der Stern sitzt im Moment der Entscheidung —
+                // genau hier hat man das Ziel gerade gewählt.
+                ListenableBuilder(
+                  listenable: GespeicherteAdressenService.instance,
+                  builder: (context, _) {
+                    final ziel = widget.selectedDestination!;
+                    final gespeichert = GespeicherteAdressenService.instance
+                        .istGespeichert(ziel.latitude, ziel.longitude);
+                    return IconButton(
+                      icon: Icon(
+                        gespeichert
+                            ? Icons.star_rounded
+                            : Icons.star_border_rounded,
+                        color: gespeichert
+                            ? AppAccentColors.accent
+                            : Colors.white70,
+                        size: 22,
+                      ),
+                      onPressed: () => _zielMerkenUmschalten(ziel, gespeichert),
+                      tooltip: gespeichert ? 'Gemerkt' : 'Ziel merken',
+                    );
+                  },
+                ),
                 IconButton(
                   icon: const Icon(
                     Icons.close,
@@ -1017,9 +1044,178 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             ),
           ),
         ),
+        // Gemerkte Adressen als Schnellwahl — nur solange noch kein Ziel
+        // gewählt ist (dieser Zweig rendert genau dann). Leerer Dienst =
+        // kein toter Platz.
+        ListenableBuilder(
+          listenable: GespeicherteAdressenService.instance,
+          builder: (context, _) {
+            final adressen = GespeicherteAdressenService.instance.alle;
+            if (adressen.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: SizedBox(
+                height: 34,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: adressen.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) =>
+                      _adressChip(context, adressen[i]),
+                ),
+              ),
+            );
+          },
+        ),
         const SizedBox(height: 20),
         _buildDetourSelection(),
       ],
+    );
+  }
+
+  /// Chip im Stil der Schnellwahl aus dem Startzeit-Blatt.
+  Widget _adressChip(BuildContext context, GespeicherteAdresse adresse) {
+    return GestureDetector(
+      onTap: () {
+        FocusScope.of(context).unfocus();
+        // Identischer Pfad wie ein Tipp auf einen Suchtreffer.
+        widget.onDestinationSelected(adresse.zuVorschlag());
+      },
+      onLongPress: () => _adressOptionen(context, adresse),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(17),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.star_rounded, size: 14, color: AppAccentColors.accent),
+            const SizedBox(width: 5),
+            Text(
+              adresse.label,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _adressOptionen(
+    BuildContext context,
+    GespeicherteAdresse adresse,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF161A22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined, color: Colors.white70),
+              title: const Text(
+                'Umbenennen',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                _adresseUmbenennen(context, adresse);
+              },
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.delete_outline,
+                color: Colors.white70,
+              ),
+              title: const Text(
+                'Entfernen',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                GespeicherteAdressenService.instance.entfernen(adresse);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _adresseUmbenennen(
+    BuildContext context,
+    GespeicherteAdresse adresse,
+  ) async {
+    final controller = TextEditingController(text: adresse.label);
+    final neu = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF161A22),
+        title: const Text(
+          'Adresse umbenennen',
+          style: TextStyle(color: Colors.white, fontSize: 18),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 30,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(counterText: ''),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Abbrechen'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('Speichern'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (neu != null && neu.isNotEmpty) {
+      await GespeicherteAdressenService.instance.umbenennen(adresse, neu);
+    }
+  }
+
+  Future<void> _zielMerkenUmschalten(
+    PlaceSuggestion ziel,
+    bool bereitsGespeichert,
+  ) async {
+    final dienst = GespeicherteAdressenService.instance;
+    if (bereitsGespeichert) {
+      final i = dienst.alle.indexWhere(
+        (e) =>
+            (e.latitude - ziel.latitude).abs() < 1e-4 &&
+            (e.longitude - ziel.longitude).abs() < 1e-4,
+      );
+      if (i >= 0) await dienst.entfernen(dienst.alle[i]);
+      return;
+    }
+    await dienst.speichern(
+      GespeicherteAdresse(
+        // Vorschlag: erster Namensteil („Feldkirch, Vorarlberg" → „Feldkirch").
+        label: ziel.placeName.split(',').first.trim(),
+        placeName: ziel.placeName,
+        latitude: ziel.latitude,
+        longitude: ziel.longitude,
+        context: ziel.context,
+      ),
     );
   }
 
