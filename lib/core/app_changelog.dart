@@ -56,6 +56,10 @@ class AppChangelog {
             'Abkürzungen gibt es nie.',
         'Adressen lassen sich jetzt speichern und stehen bei der Zielsuche '
             'als Schnellzugriff bereit.',
+        'Neues Tutorial: kurz, animiert und zum Mitmachen. Wer es abschließt, '
+            'bekommt 125 XP.',
+        'Ein neues Abzeichen für alle: Gründungszeit, mit dem Datum, seit '
+            'wann du dabei bist. Du bekommst es gleich nach dem Update.',
       ],
     ),
     ChangelogEintrag(

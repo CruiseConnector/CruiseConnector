@@ -1,5 +1,14 @@
 /// Ein Badge das der Nutzer verdienen kann.
 class Badge {
+  /// 2026-08-14 (vucko Tutorial-Badge): badge_15 „Gründungszeit" bekommt JEDER
+  /// registrierte Nutzer. Die Beschreibung trägt den Platzhalter
+  /// [membershipDatePlaceholder], den die Renderer zur Anzeige dynamisch mit
+  /// dem Beitrittsmonat (profiles.created_at) ersetzen — [Badge.all] bleibt
+  /// dadurch const, der Sonderfall lebt in [resolveDescription].
+  static const String membershipBadgeId = 'badge_15';
+  static const String membershipDatePlaceholder = '{datum}';
+
+
   const Badge({
     required this.id,
     required this.name,
@@ -117,6 +126,17 @@ class Badge {
       category: 'level',
       assetPath: 'lib/images/badges/badge_14_purple_road_shield.png',
     ),
+    // 2026-08-14 (vucko Tutorial-Badge): Mitgliedschafts-Badge für alle.
+    // Asset: badge_12 (Gold-Zielflagge) war eine ungenutzte Lücke in der
+    // Bildserie und dient hier als Platzhalter, bis ein eigenes Bild kommt.
+    Badge(
+      id: membershipBadgeId,
+      name: 'Gründungszeit',
+      description: 'Dabei seit $membershipDatePlaceholder.',
+      emoji: '\u{1F31F}',
+      category: 'membership',
+      assetPath: 'lib/images/badges/badge_12_gold_finish_flag_alt.png',
+    ),
   ];
 
   static Badge? getById(String id) {
@@ -125,5 +145,40 @@ class Badge {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Deutsche Monatsnamen ohne intl-Locale-Initialisierung — die App nutzt
+  /// bisher nirgends DateFormat mit 'de', und ein fester Satz Namen kann in
+  /// keinem Widget-Test an fehlender Locale-Registrierung scheitern.
+  static const List<String> _germanMonths = [
+    'Januar',
+    'Februar',
+    'März',
+    'April',
+    'Mai',
+    'Juni',
+    'Juli',
+    'August',
+    'September',
+    'Oktober',
+    'November',
+    'Dezember',
+  ];
+
+  /// 'MMMM yyyy' auf Deutsch, z.B. 'August 2026'.
+  static String formatMonthYearDe(DateTime date) {
+    return '${_germanMonths[date.month - 1]} ${date.year}';
+  }
+
+  /// Beschreibung zur ANZEIGE auflösen: beim Mitgliedschafts-Badge wird der
+  /// Datums-Platzhalter durch den Beitrittsmonat ersetzt (Fallback: heute).
+  /// Alle anderen Badges liefern ihre Beschreibung unverändert.
+  static String resolveDescription(Badge badge, {DateTime? memberSince}) {
+    if (badge.id != membershipBadgeId) return badge.description;
+    final since = memberSince ?? DateTime.now();
+    return badge.description.replaceAll(
+      membershipDatePlaceholder,
+      formatMonthYearDe(since),
+    );
   }
 }

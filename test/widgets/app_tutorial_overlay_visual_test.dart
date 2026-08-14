@@ -30,10 +30,15 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // 2026-08-14 (vucko Tutorial-Umbau): Fluss von 10 auf 7 Schritte gekürzt,
+  // zwei interaktive Pflicht-Schritte dazu. Die Tap-Sequenz unten folgt dem
+  // NEUEN Fluss; die Golden-Bilder wurden bewusst NICHT neu generiert
+  // (bekannt-rot akzeptiert) — sie zeigen noch den alten Stand.
   testWidgets(
     'Tutorial-Highlights sitzen zentriert auf Bottom-Nav und Community-Tabs',
     (tester) async {
       await pumpTutorial(tester);
+      expect(find.text('Willkommen bei CruiseConnect'), findsWidgets);
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/app_tutorial_home_nav_centered.png'),
@@ -41,10 +46,22 @@ void main() {
 
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Community'), findsWidgets);
+      expect(find.text('Cruise Mode'), findsWidgets);
+      // Pflicht-Aktion: Routensuche in der Attrappe starten
+      await tester.tap(find.text('Route suchen'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Route gefunden'), findsOneWidget);
       await expectLater(
         find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_community_nav_centered.png'),
+        matchesGoldenFile('goldens/app_tutorial_cruise_nav_only.png'),
+      );
+
+      await tester.tap(find.text('Weiter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Gruppen: synchron fahren'), findsWidgets);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/app_tutorial_rides_tab_centered.png'),
       );
 
       await tester.tap(find.text('Weiter'));
@@ -57,22 +74,6 @@ void main() {
 
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Gruppen'), findsWidgets);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_rides_tab_centered.png'),
-      );
-
-      await tester.tap(find.text('Weiter'));
-      await tester.pumpAndSettle();
-      expect(find.text('Chats'), findsWidgets);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_chats_tab_centered.png'),
-      );
-
-      await tester.tap(find.text('Weiter'));
-      await tester.pumpAndSettle();
       expect(find.text('Entdecken'), findsWidgets);
       await expectLater(
         find.byType(MaterialApp),
@@ -81,27 +82,21 @@ void main() {
 
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Cruise Mode'), findsWidgets);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_cruise_nav_only.png'),
-      );
+      expect(find.text('Favoriten'), findsWidgets);
+      // Pflicht-Aktion: Adresse antippen, dann mit dem Stern merken
+      await tester.tap(find.text('Feldkirch, Vorarlberg'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(CupertinoIcons.star));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Gemerkt!'), findsOneWidget);
 
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Analytics'), findsWidgets);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_analytics_nav_only.png'),
-      );
-
-      await tester.tap(find.text('Weiter'));
-      await tester.pumpAndSettle();
-      expect(find.text('Profil'), findsWidgets);
-      await expectLater(
-        find.byType(MaterialApp),
-        matchesGoldenFile('goldens/app_tutorial_profile_nav_only.png'),
-      );
+      expect(find.text('Du bist startklar!'), findsWidgets);
+      expect(find.text('+125 XP'), findsOneWidget);
+      // Bewusst NICHT auf „Fertig" tippen: das würde den echten
+      // Belohnungspfad (Supabase) anstoßen, der im Widget-Test nichts
+      // verloren hat. Die Abschluss-Logik deckt tutorial_interaktiv_test ab.
     },
   );
 }

@@ -693,6 +693,12 @@ class GamificationService {
     if (totalKm >= 2500) currentlyQualifiedBadges.add('badge_10');
     if (totalKm >= 10000) currentlyQualifiedBadges.add('badge_13');
 
+    // 2026-08-14 (vucko Tutorial-Badge): „Gründungszeit" (badge_15) bekommt
+    // JEDER registrierte Nutzer — bewusst OHNE Bedingung. Bestandsnutzer
+    // erhalten es dadurch beim ersten Sync nach dem Update automatisch als
+    // newBadgeId → das Unlock-Popup (Verleih-Animation) feuert von selbst.
+    currentlyQualifiedBadges.add(Badge.membershipBadgeId);
+
     // 5. Bisherige Badges laden und neue bestimmen
     List<String> previousBadges = [];
     try {

@@ -12,6 +12,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
+import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
 import 'package:cruise_connect/data/services/route_elevation_service.dart';
@@ -1402,6 +1403,20 @@ class _HomeContentPageState extends State<HomeContentPage>
       }
       if (mounted && profile != null) {
         context.read<CommunityProvider>().seedProfile(profile);
+      }
+      // 2026-08-14 (vucko Tutorial-Badge): Neue Badges auch beim REINEN
+      // Home-Laden mit der Verleih-Animation zeigen — bisher feuerte das
+      // Popup nur beim Routen-Speichern (_buildSaveChip). So bekommen
+      // Bestandsnutzer badge_15 „Gründungszeit" nach dem Update automatisch
+      // verliehen. Solange das Tutorial noch offen ist, bleibt das Popup
+      // stumm: Neue Nutzer erleben die Verleihung IM Tutorial, und nichts
+      // stapelt sich über die Onboarding-Sheets.
+      if (mounted && result.newBadgeIds.isNotEmpty) {
+        unawaited(() async {
+          if (!await AppTutorialService.hasCompleted()) return;
+          if (!mounted) return;
+          await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+        }());
       }
       // 2026-05-28 (vucko Task #68): Persistiere Home-Snapshot damit der
       // nächste App-Start sofort die Card mit cached Werten rendert statt

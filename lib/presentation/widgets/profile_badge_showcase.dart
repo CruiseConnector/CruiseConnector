@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/membership_since_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
@@ -223,6 +224,14 @@ class ProfileBadgeShowcase extends StatelessWidget {
     return candidates.firstWhere((spot) => !usedSpots.contains(spot));
   }
 
+  /// created_at aus einem Profil-Map ziehen (getProfileStats liefert es mit) —
+  /// so zeigt das Badge-Detail beim FREMDEN Profil dessen Beitrittsdatum.
+  static DateTime? memberSinceFromProfile(Map<String, dynamic> profile) {
+    final raw = profile['created_at'];
+    if (raw is String) return DateTime.tryParse(raw)?.toLocal();
+    return null;
+  }
+
   static int _nearestSpot(Offset point) {
     var best = 0;
     var bestDistance = double.infinity;
@@ -236,10 +245,22 @@ class ProfileBadgeShowcase extends StatelessWidget {
     return best;
   }
 
+  /// 2026-08-14 (vucko Tutorial-Badge): Beim Mitgliedschafts-Badge wird der
+  /// Datums-Platzhalter in der Beschreibung dynamisch ersetzt. [memberSince]
+  /// kommt idealerweise aus dem angezeigten Profil (created_at); fehlt es,
+  /// wird das eigene Beitrittsdatum nachgeladen (Fallback: heutiges Datum in
+  /// [app.Badge.resolveDescription]).
   static Future<void> showBadgeDetails(
     BuildContext context,
-    app.Badge badge,
-  ) async {
+    app.Badge badge, {
+    DateTime? memberSince,
+  }) async {
+    var since = memberSince;
+    if (badge.id == app.Badge.membershipBadgeId && since == null) {
+      since = await MembershipSinceService.load();
+      if (!context.mounted) return;
+    }
+    final description = app.Badge.resolveDescription(badge, memberSince: since);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -287,7 +308,7 @@ class ProfileBadgeShowcase extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    badge.description,
+                    description,
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: Color(0xFFA7B0C1),
@@ -351,7 +372,13 @@ class ProfileBadgeShowcase extends StatelessWidget {
                 selected: false,
                 onTap: () {
                   final badge = app.Badge.getById(stickers[i].id);
-                  if (badge != null) showBadgeDetails(context, badge);
+                  if (badge != null) {
+                    showBadgeDetails(
+                      context,
+                      badge,
+                      memberSince: memberSinceFromProfile(profile),
+                    );
+                  }
                 },
               ),
           ],
@@ -719,7 +746,13 @@ class _ProfileBadgeStickerEditorState extends State<ProfileBadgeStickerEditor> {
                     ? null
                     : app.Badge.getById(sticker.id);
                 if (badge != null) {
-                  ProfileBadgeShowcase.showBadgeDetails(context, badge);
+                  ProfileBadgeShowcase.showBadgeDetails(
+                    context,
+                    badge,
+                    memberSince: ProfileBadgeShowcase.memberSinceFromProfile(
+                      widget.profile,
+                    ),
+                  );
                 }
               },
             ),

@@ -254,6 +254,9 @@ void main() {
           'badge_10',
           'badge_13',
           'badge_14',
+          // 2026-08-14 (vucko Tutorial-Badge): Gründungszeit — jeder
+          // registrierte Nutzer, vergeben über calculateAndSync.
+          'badge_15',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);
