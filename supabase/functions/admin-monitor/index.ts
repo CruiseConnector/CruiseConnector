@@ -182,7 +182,26 @@ async function infraLesen() {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTSPERRE (2026-08-14, vucko: "lokalisiere die api und sperre vorlaeufig
+// den zugang"): Seit dem Vormittag trifft alle 15-25 Minuten ein Aufruf mit
+// einem abgelaufenen Sitzungstoken ein (belegt: POST 401 in den Logs, je einer
+// pro Alarm-Push). Weder Vucko noch Luca noch dieser Rechner sind die Quelle.
+// Bis zur Klaerung ist der Zugang KOMPLETT gesperrt - jede Anfrage bekommt
+// 503, ohne Anmeldepruefung und OHNE Alarm-Push (der Push-Spam war das
+// eigentliche Aergernis). Zum Entsperren: Konstante auf false, neu deployen.
+const ZUGANG_GESPERRT = true;
+
 Deno.serve(async (req) => {
+  if (ZUGANG_GESPERRT) {
+    return new Response(
+      JSON.stringify({
+        error: 'Das Monitoring ist voruebergehend gesperrt.',
+      }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
+
   // 204 bedeutet „kein Inhalt". Ein Rumpf ist dabei VERBOTEN — der Versuch
   // wirft, die Funktion antwortet mit 500, der Browser bricht die
   // Vorabanfrage ab und meldet „Failed to fetch". Genau das ist passiert.
