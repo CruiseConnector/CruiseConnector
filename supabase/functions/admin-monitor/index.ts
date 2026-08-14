@@ -190,7 +190,7 @@ async function infraLesen() {
 // Bis zur Klaerung ist der Zugang KOMPLETT gesperrt - jede Anfrage bekommt
 // 503, ohne Anmeldepruefung und OHNE Alarm-Push (der Push-Spam war das
 // eigentliche Aergernis). Zum Entsperren: Konstante auf false, neu deployen.
-const ZUGANG_GESPERRT = true;
+const ZUGANG_GESPERRT = false;
 
 Deno.serve(async (req) => {
   if (ZUGANG_GESPERRT) {
@@ -263,8 +263,14 @@ Deno.serve(async (req) => {
   }
   const { data: sitzung } = await db.rpc('monitor_session_pruefen', { p_token: token });
   if (!sitzung?.ok) {
-    const alarm = await protokolliere(req, null, false, 'token_ungueltig');
-    if (alarm) await alarmSenden('ungültiges Sitzungstoken', null);
+    // 2026-08-14 (vucko-Vorfall): Ein vergessener Browser-Tab mit
+    // abgelaufener Sitzung loeste alle 15-25 Minuten einen Alarm-Push aus -
+    // 12 Stueck an einem Vormittag, und es war nie ein Angriff. Ein
+    // abgelaufenes Token ist der NORMALFALL einer ausgelaufenen Sitzung,
+    // kein Angriffssignal. Es wird weiter protokolliert (monitor_access_log,
+    // mit IP), aber nicht mehr gepusht. Alarm gibt es nur noch bei
+    // falschem PASSWORT - das ist das echte Angriffssignal.
+    await protokolliere(req, null, false, 'token_ungueltig');
     return json({ error: 'Sitzung abgelaufen. Bitte neu anmelden.' }, 401);
   }
 
