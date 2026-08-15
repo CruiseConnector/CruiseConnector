@@ -688,6 +688,21 @@ class GamificationService {
       currentlyQualifiedBadges.add('badge_09');
     }
 
+    // 2026-08-15 (vucko): sechs neue Stufen — alle aus Daten, die hier
+    // ohnehin schon liegen. Keine einzige zusaetzliche Abfrage.
+    if (completedSessions.length >= 10) {
+      currentlyQualifiedBadges.add('badge_17');
+    }
+    if (completedSessions.length >= 50) {
+      currentlyQualifiedBadges.add('badge_18');
+    }
+    if (completedGroupRides >= 5) currentlyQualifiedBadges.add('badge_19');
+    if (completedSessions.any((s) => s.distanceKm >= 100)) {
+      currentlyQualifiedBadges.add('badge_20');
+    }
+    if (routePostCount >= 5) currentlyQualifiedBadges.add('badge_21');
+    if (totalSecs >= 25 * 3600) currentlyQualifiedBadges.add('badge_22');
+
     // Distanz-Badges
     if (totalKm >= 500) currentlyQualifiedBadges.add('badge_06');
     if (totalKm >= 2500) currentlyQualifiedBadges.add('badge_10');

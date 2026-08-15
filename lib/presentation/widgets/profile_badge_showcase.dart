@@ -339,6 +339,31 @@ class ProfileBadgeShowcase extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 22),
+                  // 2026-08-14 (vucko): "ein Overlay, wo wenn man unten auf
+                  // Schliessen drueckt, sich das schliesst" - bisher ging das
+                  // Blatt nur per Wischen zu, ohne sichtbaren Ausweg.
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppAccentColors.accent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      child: const Text(
+                        'Schließen',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

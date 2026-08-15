@@ -257,6 +257,15 @@ void main() {
           // 2026-08-14 (vucko Tutorial-Badge): Gründungszeit — jeder
           // registrierte Nutzer, vergeben über calculateAndSync.
           'badge_15',
+          // 2026-08-15 (vucko Starter-Paket + neue Stufen): Startklar über
+          // die Starter-Aufgaben, 17-22 über calculateAndSync.
+          'badge_16',
+          'badge_17',
+          'badge_18',
+          'badge_19',
+          'badge_20',
+          'badge_21',
+          'badge_22',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);

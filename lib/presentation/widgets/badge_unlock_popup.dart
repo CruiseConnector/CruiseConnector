@@ -45,13 +45,18 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
+      // 2026-08-14 (vucko): "die Badge-Animation minimal laenger und mit noch
+      // mehr Effekten, die wirklich zeigen, dass man gerade ein Badge bekommen
+      // hat." Vorher 2,2 s mit Aufdecken und Absinken; jetzt 3,4 s mit einer
+      // Halte-Phase in der Mitte: Konfetti-Regen, rotierende Strahlen hinter
+      // dem Badge und ein doppelter Glanz-Puls.
+      duration: const Duration(milliseconds: 3400),
     )..forward();
     _closeAfterAnimation();
   }
 
   Future<void> _closeAfterAnimation() async {
-    await Future<void>.delayed(const Duration(milliseconds: 2380));
+    await Future<void>.delayed(const Duration(milliseconds: 3650));
     if (mounted) Navigator.of(context).maybePop();
   }
 
@@ -76,14 +81,17 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
           builder: (context, child) {
             final value = _controller.value;
             final reveal = Curves.easeOutBack.transform(
-              (value / 0.35).clamp(0.0, 1.0).toDouble(),
+              (value / 0.28).clamp(0.0, 1.0).toDouble(),
             );
+            // Die Halte-Phase (28-72 %) ist neu: Das Badge steht gross im
+            // Bild, waehrend Konfetti faellt und die Strahlen rotieren.
             final drop = Curves.easeInOutCubic.transform(
-              ((value - 0.58) / 0.34).clamp(0.0, 1.0).toDouble(),
+              ((value - 0.72) / 0.23).clamp(0.0, 1.0).toDouble(),
             );
-            final textOpacity = (1 - ((value - 0.50) / 0.18))
+            final textOpacity = (1 - ((value - 0.62) / 0.16))
                 .clamp(0.0, 1.0)
                 .toDouble();
+            final konfetti = ((value - 0.08) / 0.64).clamp(0.0, 1.0).toDouble();
 
             return LayoutBuilder(
               builder: (context, constraints) {
@@ -116,6 +124,33 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
                         child: _ActivityTarget(pulse: value),
                       ),
                     ),
+                    // Rotierende Strahlen hinter dem Badge - verschwinden
+                    // mit dem Absinken.
+                    if (drop < 1)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: _StrahlenPainter(
+                              zentrum: start,
+                              fortschritt: value,
+                              staerke: (reveal * (1 - drop))
+                                  .clamp(0.0, 1.0)
+                                  .toDouble(),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (konfetti > 0 && konfetti < 1)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: _KonfettiPainter(
+                              zentrum: start,
+                              fortschritt: konfetti,
+                            ),
+                          ),
+                        ),
+                      ),
                     ..._buildBursts(start, reveal, drop),
                     Positioned(
                       left: 24,
@@ -277,4 +312,121 @@ class _ActivityTarget extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Rotierende Lichtstrahlen hinter dem frisch verliehenen Badge.
+///
+/// 2026-08-14 (vucko): „mehr Effekte, die wirklich zeigen, dass man ein Badge
+/// gerade bekommen hat." Zwoelf Keile drehen sich langsam um das Badge, mit
+/// einem zweiten Glanz-Puls in der Halte-Phase.
+class _StrahlenPainter extends CustomPainter {
+  const _StrahlenPainter({
+    required this.zentrum,
+    required this.fortschritt,
+    required this.staerke,
+  });
+
+  final Offset zentrum;
+  final double fortschritt;
+  final double staerke;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (staerke <= 0) return;
+    // Doppelter Puls: zwei weiche Wellen ueber die Laufzeit.
+    final puls = 0.75 + 0.25 * math.sin(fortschritt * math.pi * 4).abs();
+    final radius = 190.0 * staerke * puls;
+    final drehung = fortschritt * math.pi * 0.7;
+    final farbe = AppAccentColors.accent;
+
+    for (var i = 0; i < 12; i++) {
+      final winkel = drehung + i * (math.pi * 2 / 12);
+      final pfad = Path()
+        ..moveTo(zentrum.dx, zentrum.dy)
+        ..lineTo(
+          zentrum.dx + math.cos(winkel - 0.06) * radius,
+          zentrum.dy + math.sin(winkel - 0.06) * radius,
+        )
+        ..lineTo(
+          zentrum.dx + math.cos(winkel + 0.06) * radius,
+          zentrum.dy + math.sin(winkel + 0.06) * radius,
+        )
+        ..close();
+      canvas.drawPath(
+        pfad,
+        Paint()
+          ..shader = ui.Gradient.radial(zentrum, radius, [
+            farbe.withValues(alpha: 0.30 * staerke),
+            farbe.withValues(alpha: 0.0),
+          ]),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_StrahlenPainter old) =>
+      old.fortschritt != fortschritt || old.staerke != staerke;
+}
+
+/// Konfetti-Regen waehrend der Halte-Phase.
+///
+/// Deterministisch aus dem Teilchen-Index abgeleitet (kein Random im Painter,
+/// sonst flackert jedes Neuzeichnen) — 42 Teilchen fliegen aus der Badge-Mitte
+/// nach oben und segeln mit Schwerkraft und Drehung herab.
+class _KonfettiPainter extends CustomPainter {
+  const _KonfettiPainter({required this.zentrum, required this.fortschritt});
+
+  final Offset zentrum;
+  final double fortschritt;
+
+  static const _farben = [
+    Color(0xFFFF6A00), // Akzent-Orange
+    Color(0xFFFFD166), // Gold
+    Color(0xFFFFFFFF), // Weiss
+    Color(0xFF6FCF97), // Gruen
+    Color(0xFF56CCF2), // Blau
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var i = 0; i < 42; i++) {
+      // Pseudozufall aus dem Index: stabil ueber alle Frames.
+      final h = (i * 2654435761) & 0xFFFF;
+      final richtung = (h / 0xFFFF) * math.pi * 2;
+      final tempo = 120.0 + (h % 97) * 2.2;
+      final groesse = 5.0 + (h % 7);
+      final farbe = _farben[i % _farben.length];
+
+      // Wurf nach aussen/oben, dann Schwerkraft.
+      final t = fortschritt;
+      final x = zentrum.dx + math.cos(richtung) * tempo * t;
+      final y =
+          zentrum.dy +
+          math.sin(richtung) * tempo * t * 0.6 -
+          140 * t +
+          340 * t * t;
+      if (y > size.height) continue;
+
+      final deckkraft = (1.0 - ((t - 0.55) / 0.45)).clamp(0.0, 1.0).toDouble();
+      final drehwinkel = t * math.pi * 3 + i;
+      canvas.save();
+      canvas.translate(x, y);
+      canvas.rotate(drehwinkel);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset.zero,
+            width: groesse,
+            height: groesse * 0.55,
+          ),
+          const Radius.circular(1.5),
+        ),
+        Paint()..color = farbe.withValues(alpha: deckkraft),
+      );
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(_KonfettiPainter old) => old.fortschritt != fortschritt;
 }

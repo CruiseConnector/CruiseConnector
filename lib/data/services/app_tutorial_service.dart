@@ -4,10 +4,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/gamification_service.dart';
 
+/// SCHLUESSEL-GESCHICHTE: v1 war das alte 10-Schritte-Tutorial. Mit dem
+/// interaktiven Neubau (2026-08-14) wurde der Schluessel auf v2 gehoben -
+/// dadurch gilt das neue Tutorial fuer ALLE als ungesehen und startet beim
+/// naechsten App-Start einmal automatisch, auch fuer Bestandsnutzer (vucko:
+/// "dass auf der neuesten Version das Onboarding auf meinem Account simuliert
+/// wird"). Ueberspringen bleibt jederzeit moeglich.
 class AppTutorialService {
   AppTutorialService._();
 
-  static const String completedKey = 'app_tutorial_v1_completed';
+  static const String completedKey = 'app_tutorial_v2_completed';
 
   // 2026-08-14 (vucko Tutorial-Belohnung): 125 XP einmalig für den ECHTEN
   // Tutorial-Abschluss (nicht fürs Überspringen, nicht für Replays).

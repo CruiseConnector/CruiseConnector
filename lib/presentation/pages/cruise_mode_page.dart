@@ -47,6 +47,7 @@ import 'package:cruise_connect/data/services/driven_track_recorder.dart';
 import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/ride_rating_prompt_service.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 // 2026-08-04: Foto-Upload und die Level-/Badge-Feier liefen frueher im
 // Abschluss-Sheet. Seit das sofort schliesst, gehoeren sie hierher.
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -9182,6 +9183,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-08-04 (vucko Bewertungs-Popup): „alle drei Routen, die man sucht
     // oder fährt oder mitfährt". Das hier ist das „sucht".
     unawaited(RideRatingPromptService.instance.registerRouteEvent());
+    // Starter-Aufgabe „Eine Route suchen" (2026-08-14).
+    unawaited(StarterAufgabenService.instance.markiere('route'));
     unawaited(_generateRoute());
   }
 
@@ -19095,7 +19098,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpBase: xpBreakdown.baseXp,
           xpMultiplier: xpBreakdown.multiplier,
           xpStreakDays: xpBreakdown.streakDays,
-          xpAwarded: xpBreakdown.totalXp,
+          // Doppel-XP-Woche des Starter-Pakets (2026-08-14): genau EINE Regelstelle.
+      xpAwarded: StarterAufgabenService.instance.wendeBonusAn(
+        xpBreakdown.totalXp,
+      ),
           completedAtEnd: completed,
           groupId: widget.groupId,
           // Foto direkt an die gespeicherte Route hängen → es überlebt die
@@ -19293,7 +19299,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeType: _abschlussIstRundkurs ? 'ROUND_TRIP' : 'POINT_TO_POINT',
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
-      xpAwarded: xpBreakdown.totalXp,
+      // Doppel-XP-Woche des Starter-Pakets (2026-08-14): genau EINE Regelstelle.
+      xpAwarded: StarterAufgabenService.instance.wendeBonusAn(
+        xpBreakdown.totalXp,
+      ),
       // 2026-06-23 (vucko X3): Gruppen-Fahrt taggen + Top-Speed mitschreiben
       // -> speist die deterministische Gruppen-Rangliste in der Lobby.
       groupId: widget.groupId,

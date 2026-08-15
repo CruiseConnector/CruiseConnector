@@ -22,6 +22,7 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/community_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
+import 'package:cruise_connect/presentation/widgets/starter_paket_karte.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
@@ -1626,6 +1627,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                     ),
                     const SizedBox(height: 10),
                     _buildDashboardEditHint(),
+                    // 2026-08-14 (vucko): Starter-Paket-Aufgaben + Doppel-XP-Countdown.
+                    const StarterPaketKarte(),
                     _buildDashboard(),
                     if (_showLegacyHomeBodyForDebug) ...[
                       // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar

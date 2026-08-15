@@ -56,6 +56,11 @@ class AppChangelog {
             'Abkürzungen gibt es nie.',
         'Adressen lassen sich jetzt speichern und stehen bei der Zielsuche '
             'als Schnellzugriff bereit.',
+        'Neu für alle: Das kurze Tutorial zum Mitmachen startet einmal '
+            'automatisch. Danach warten die Starter-Aufgaben mit dem '
+            'Startklar-Abzeichen und einer Woche doppelter XP.',
+        'Sieben neue Abzeichen, vom Stammfahrer bis zum Vielfahrer. Antippen '
+            'zeigt jetzt zu jedem eine kurze Beschreibung.',
         'Neues Tutorial: kurz, animiert und zum Mitmachen. Wer es abschließt, '
             'bekommt 125 XP.',
         'Ein neues Abzeichen für alle: Gründungszeit, mit dem Datum, seit '

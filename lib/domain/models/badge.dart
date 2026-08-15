@@ -6,6 +6,10 @@ class Badge {
   /// dem Beitrittsmonat (profiles.created_at) ersetzen — [Badge.all] bleibt
   /// dadurch const, der Sonderfall lebt in [resolveDescription].
   static const String membershipBadgeId = 'badge_15';
+
+  /// 2026-08-14 (vucko Starter-Paket): badge_16 „Startklar" gibt es fuer das
+  /// Erfuellen der fuenf Starter-Aufgaben — zusammen mit der Doppel-XP-Woche.
+  static const String starterBadgeId = 'badge_16';
   static const String membershipDatePlaceholder = '{datum}';
 
 
@@ -136,6 +140,74 @@ class Badge {
       emoji: '\u{1F31F}',
       category: 'membership',
       assetPath: 'lib/images/badges/badge_12_gold_finish_flag_alt.png',
+    ),
+    // 2026-08-14 (vucko Starter-Paket): Belohnung fuer die Starter-Aufgaben.
+    Badge(
+      id: starterBadgeId,
+      name: 'Startklar',
+      description:
+          'Alle Starter-Aufgaben erledigt. Dein Einstieg ist geschafft.',
+      emoji: '\u{1F3C1}',
+      category: 'membership',
+      assetPath: 'lib/images/badges/badge_16_amber_ignition.png',
+    ),
+    // 2026-08-15 (vucko): „erstelle mit unserem Layout noch viel weitere
+    // Badges, die passend sind." Sechs neue Stufen, alle aus Daten
+    // berechenbar, die calculateAndSync ohnehin schon laedt. Die Embleme sind
+    // stilechte Farbvarianten der bestehenden Bildserie (der Bild-Dienst hat
+    // aktuell kein Guthaben fuer frische Motive; Austausch spaeter = nur den
+    // assetPath ersetzen).
+    Badge(
+      id: 'badge_17',
+      name: 'Stammfahrer',
+      description: 'Zehn Fahrten bis zum Ende gebracht. Du bist angekommen.',
+      emoji: '\u{1F698}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_17_copper_gauge.png',
+    ),
+    Badge(
+      id: 'badge_18',
+      name: 'Dauerbrenner',
+      description: 'Fünfzig abgeschlossene Fahrten. Das ist kein Hobby mehr.',
+      emoji: '\u{1F525}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_18_steel_piston.png',
+    ),
+    Badge(
+      id: 'badge_19',
+      name: 'Konvoi-Kapitän',
+      description:
+          'Fünf Gruppenfahrten gemeinsam beendet. Auf dich ist Verlass.',
+      emoji: '\u{1F697}',
+      category: 'group',
+      assetPath: 'lib/images/badges/badge_19_convoy_wings.png',
+    ),
+    Badge(
+      id: 'badge_20',
+      name: 'Langstrecke',
+      description:
+          'Über 100 Kilometer in einer einzigen Fahrt. Respekt.',
+      emoji: '\u{1F6E3}',
+      category: 'distance',
+      assetPath: 'lib/images/badges/badge_20_roadhorizon_gold.png',
+    ),
+    Badge(
+      id: 'badge_21',
+      name: 'Streckenscout',
+      description:
+          'Fünf Routen mit der Community geteilt. Andere fahren deine Wege.',
+      emoji: '\u{1F4CD}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_21_scout_pin.png',
+    ),
+    Badge(
+      id: 'badge_22',
+      name: 'Vielfahrer',
+      description:
+          'Fünfundzwanzig Stunden hinterm Steuer. Die Straße kennt dich.',
+      emoji: '\u{23F1}',
+      category: 'distance',
+      assetPath: 'lib/images/badges/badge_22_hours_teal.png',
     ),
   ];
 

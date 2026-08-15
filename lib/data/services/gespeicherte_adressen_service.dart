@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:flutter/foundation.dart';
@@ -124,6 +127,8 @@ class GespeicherteAdressenService extends ChangeNotifier {
   }
 
   Future<void> speichern(GespeicherteAdresse adresse) async {
+    // Starter-Aufgabe „Eine Adresse merken" (2026-08-14).
+    unawaited(StarterAufgabenService.instance.markiere('favorit'));
     final vorhanden = _indexVon(adresse.latitude, adresse.longitude);
     if (vorhanden >= 0) {
       _eintraege[vorhanden] = adresse;

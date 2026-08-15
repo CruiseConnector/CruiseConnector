@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
@@ -361,6 +362,8 @@ class _HomePageState extends State<HomePage> {
     // Community geoeffnet: Hinweispunkt aus und Stand merken.
     if (index == 1) {
       unawaited(CommunityNeuigkeitService.instance.alsGesehenMarkieren());
+      // Starter-Aufgabe „Die Community oeffnen" (2026-08-14).
+      unawaited(StarterAufgabenService.instance.markiere('community'));
     }
   }
 

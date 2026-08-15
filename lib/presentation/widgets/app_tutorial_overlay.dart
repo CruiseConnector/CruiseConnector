@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/membership_since_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
@@ -204,6 +205,7 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
   /// ein Replay oder Doppel-Tap eine zweite Vergabe auslöst.
   Future<void> _complete() async {
     await AppTutorialService.markCompleted();
+    unawaited(StarterAufgabenService.instance.markiere('tutorial'));
     if (!_rewardTriggered) {
       _rewardTriggered = true;
       final claim =

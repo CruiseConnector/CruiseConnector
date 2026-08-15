@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -294,6 +296,8 @@ class SavedRoutesService {
     String? groupId,
     String? photoUrl,
   }) async {
+    // Starter-Aufgabe „Eine Route speichern" (2026-08-14).
+    unawaited(StarterAufgabenService.instance.markiere('speichern'));
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
 
