@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/geladene_route_manoever.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
 import 'package:cruise_connect/data/services/roundabout_topology_service.dart';
@@ -3532,6 +3533,83 @@ class RouteService {
         );
       }
       rethrow;
+    }
+  }
+
+  /// 2026-08-15 (vucko Testfahrt „Banner klebt am Kreisverkehr"): Manöver
+  /// für eine GELADENE Geometrie nachholen (Favorit, Post, Aufzeichnung,
+  /// „Fahrt fortsetzen") — die tragen sonst keine. GraphHopper wird entlang
+  /// der Geometrie geroutet (Start → dichte Vias → Ende); übernommen werden
+  /// NUR die Manöver, umgerechnet auf die Original-Koordinaten. Die
+  /// Geometrie bleibt unangetastet. Bewusst OHNE Registry/Pool/Cache-
+  /// Nebenwirkungen (kein generatePointToPoint). Fehler ⇒ leere Liste, die
+  /// Route fährt dann wie bisher ohne Manöver.
+  Future<List<RouteManeuver>> manoeverFuerGeladeneRoute({
+    required List<List<double>> coordinates,
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    if (coordinates.length < 3) return const [];
+    final first = coordinates.first;
+    final last = coordinates.last;
+    if (first.length < 2 || last.length < 2) return const [];
+    final vias = waehleViaPunkte(coordinates);
+    if (vias.isEmpty) return const [];
+    final start = geo.Position(
+      latitude: first[1],
+      longitude: first[0],
+      timestamp: DateTime.now(),
+      accuracy: 5,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      headingAccuracy: 0,
+      speed: 0,
+      speedAccuracy: 0,
+    );
+    final variant = RouteVariant(
+      index: 0,
+      seed: _nextRandomSeed(),
+      angleOffset: 0,
+      radiusJitter: 0,
+      offsetBearing: 0,
+      fingerprintHint: 'manoever_nachladen',
+      variantHint: 'loaded_maneuvers',
+    );
+    final request = _buildPointToPointRequest(
+      startPosition: start,
+      destinationLat: last[1],
+      destinationLng: last[0],
+      mode: 'Standard',
+      scenic: false,
+      normalizedVariant: 0,
+      avoidHighways: false,
+      styleConfig: RouteStyleConfig.forMode('Standard'),
+      targetDistanceKm: 1.0,
+      detourFactor: 1.0,
+      variant: variant,
+      candidateBudget: 1,
+      maxSearchMsOverride: 10000,
+      intermediateWaypoints: vias
+          .map((c) => <String, double>{'latitude': c[1], 'longitude': c[0]})
+          .toList(growable: false),
+    );
+    try {
+      final route = await _invoke(request).timeout(timeout);
+      final uebertragen = uebertrageManoeverAufGeometrie(
+        original: coordinates,
+        abgeleitet: route.coordinates,
+        manoever: route.maneuvers,
+        vias: vias,
+      );
+      debugPrint(
+        '[RouteService] Manöver für geladene Route: '
+        '${route.maneuvers.length} geliefert, ${uebertragen.length} übernommen '
+        '(${vias.length} Vias)',
+      );
+      return uebertragen;
+    } catch (e) {
+      debugPrint('[RouteService] Manöver-Nachladen fehlgeschlagen: $e');
+      return const [];
     }
   }
 
@@ -9676,8 +9754,24 @@ class RouteService {
         final providerExitNumber = isRoundabout
             ? (maneuver['exit'] as num?)?.toInt()
             : null;
+        // 2026-08-15 (vucko Kreisel-Symbol): Auch hier den ECHTEN Ring-Austritt
+        // aus der Geometrie holen (erste Rechtsdrehung nach der Einfahrt,
+        // begrenzt auf die Step-Laenge + 40 m Reserve). Bisher wurde die
+        // Ausfahrt direkt am Einfahrtspunkt gemessen — das ist der Ring selbst.
+        final ringExitIdx = isRoundabout
+            ? roundaboutRingExitIndex(
+                routeCoordinates,
+                routeIndex,
+                roundaboutSearchLimitIndex(
+                  routeCoordinates,
+                  routeIndex,
+                  math.max(distance, 30.0) + 40.0,
+                ),
+              )
+            : null;
+        final exitRefIdx = ringExitIdx ?? routeIndex;
         final geomTurnRad = isRoundabout
-            ? roundaboutGeomTurnRad(routeCoordinates, routeIndex, routeIndex)
+            ? roundaboutGeomTurnRad(routeCoordinates, routeIndex, exitRefIdx)
             : null;
         final exitNumber = isRoundabout
             ? correctedRoundaboutExitNumber(
@@ -9752,7 +9846,7 @@ class RouteService {
             roundaboutExitBearing: isRoundabout
                 ? RoundaboutTopologyService.armBearingAlong(
                     routeCoordinates,
-                    routeIndex,
+                    exitRefIdx,
                     1,
                   )
                 : null,
@@ -9825,6 +9919,18 @@ class RouteService {
       int? exitIdx;
       if (interval is List && interval.length >= 2) {
         exitIdx = (interval[1] as num?)?.toInt();
+      }
+      // 2026-08-15 (vucko „Kreisverkehrsymbole komplett falsch"): interval[1]
+      // ist NICHT der Ring-Austritt, sondern der Beginn der naechsten
+      // Instruktion. Den echten Austritt aus der Geometrie bestimmen; das
+      // Intervall-Ende bleibt nur die Obergrenze fuer die Suche.
+      if (isRoundabout && exitIdx != null) {
+        final ringExit = roundaboutRingExitIndex(
+          routeCoordinates,
+          coordIdx,
+          exitIdx,
+        );
+        if (ringExit != null) exitIdx = ringExit;
       }
       final geomTurnRad = isRoundabout
           ? roundaboutGeomTurnRad(
@@ -11292,6 +11398,73 @@ double calculateBearing(
       math.cos(startLatRad) * math.sin(endLatRad) -
       math.sin(startLatRad) * math.cos(endLatRad) * math.cos(dLonRad);
   return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+}
+
+/// Der ECHTE Ring-Austrittspunkt eines Kreisverkehrs, aus der Geometrie.
+///
+/// 2026-08-15 (vucko, Screenshot 18:22 „Ausfahrt 1" mit S-Bogen-Symbol):
+/// Bisher galt GraphHoppers `interval[1]` als Austrittspunkt. Das ist aber der
+/// Beginn der NAECHSTEN Instruktion — die USE_ROUNDABOUT-Instruktion umfasst
+/// Ring UND die anschliessende Strasse bis zum naechsten Manoever. Der
+/// Ausfahrts-Kurs wurde also 14-42 m HINTER dem Kreisel gemessen, oft schon
+/// in der naechsten Kurve. Daraus wurde ein falscher Drehwinkel und ein
+/// Symbol, das mit der echten Ausfahrt nichts zu tun hatte.
+///
+/// Rechtsverkehr: Der Ring wird LINKS gekruemmt befahren. Der Austritt ist die
+/// erste deutliche RECHTS-Drehung nach der Einfahrt. Wir laufen ab
+/// [entryIdx]+1 vorwaerts (hoechstens bis [limitIdx]) und geben den ersten
+/// Index zurueck, an dem der Kurs um mehr als [minRechtsDeg] nach rechts
+/// dreht. Findet sich keiner, null — dann greifen die bisherigen Rueckfaelle.
+int? roundaboutRingExitIndex(
+  List<List<double>> coords,
+  int entryIdx,
+  int limitIdx, {
+  double minRechtsDeg = 15,
+}) {
+  final n = coords.length;
+  if (n < 4 || entryIdx < 0) return null;
+  final ende = limitIdx.clamp(0, n - 1).toInt();
+  if (ende - entryIdx < 2) return null;
+  double? vorher;
+  for (var i = entryIdx + 1; i < ende; i++) {
+    final a = coords[i - 1];
+    final b = coords[i];
+    if (a.length < 2 || b.length < 2) continue;
+    final kurs = calculateBearing(a[1], a[0], b[1], b[0]);
+    if (vorher != null) {
+      var delta = (kurs - vorher) % 360.0;
+      if (delta > 180.0) delta -= 360.0;
+      if (delta < -180.0) delta += 360.0;
+      // Rechtsdrehung = positiv. Erst nach mindestens einem Ring-Segment
+      // (i >= entryIdx + 2), damit der Einfahrts-Knick selbst nicht zaehlt.
+      if (i >= entryIdx + 2 && delta > minRechtsDeg) return i - 1;
+    }
+    vorher = kurs;
+  }
+  return null;
+}
+
+/// Suchgrenze fuer [roundaboutRingExitIndex], wenn kein GraphHopper-Intervall
+/// vorliegt (Mapbox-Pfad, versteckte Kreisel): der Index, der ab [fromIdx]
+/// nach [meters] Metern Routenlaenge erreicht ist (mindestens fromIdx+3).
+int roundaboutSearchLimitIndex(
+  List<List<double>> coords,
+  int fromIdx,
+  double meters,
+) {
+  final n = coords.length;
+  if (n < 2) return 0;
+  var i = fromIdx.clamp(0, n - 1).toInt();
+  var rest = meters.isFinite ? meters : 0.0;
+  while (i + 1 < n && rest > 0) {
+    final a = coords[i];
+    final b = coords[i + 1];
+    if (a.length >= 2 && b.length >= 2) {
+      rest -= geo.Geolocator.distanceBetween(a[1], a[0], b[1], b[0]);
+    }
+    i++;
+  }
+  return math.max(i, math.min(fromIdx + 3, n - 1));
 }
 
 /// 2026-06-14 (vucko L3): Austritts-Drehwinkel eines Kreisverkehrs aus der

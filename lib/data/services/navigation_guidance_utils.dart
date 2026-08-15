@@ -325,7 +325,13 @@ int? selectActiveGuidanceManeuverIndex({
         ? lastIndex
         : null;
   }
-  return lastIndex;
+  // 2026-08-15 (vucko, Video 18:26): Alle Manoever liegen HINTER dem Fahrer
+  // und das letzte ist keine Ankunft — dann gibt es schlicht nichts mehr
+  // anzusagen. Vorher wurde hier trotzdem das letzte Manoever
+  // zurueckgegeben, und das Banner klebte 20+ Sekunden auf „Jetzt · In den
+  // Kreisverkehr einfahren", waehrend der Fahrer laengst 300 m weiter war.
+  // Kein Banner ist ehrlicher als ein falsches.
+  return null;
 }
 
 /// 2026-06-22 (vucko Banner-fehlt bei Rundkursen): Rotiert die Manöver-Indizes
@@ -407,16 +413,38 @@ bool graphhopperManeuverIsRoundabout({
 /// (Fortschritt eingefroren TROTZ klarer Fahrt) und erzwingt EINEN Reroute, der
 /// alles re-ankert. STRENG gegated: nur bei echter Fahrt ([minSpeedMps]) und nicht
 /// an Ziel-/Routenende — feuert also nie an der Ampel oder bei normalem Halt. Pur.
+///
+/// 2026-08-15 (vucko Testfahrt „App berechnet Route grundlos neu"): Zwei
+/// Verschärfungen, damit der Watchdog nur bei ECHTEM Hänger feuert:
+/// - [drivenSinceProgressChangedM]: Fahrweg (GPS-zu-GPS) seit dem letzten
+///   Fortschritt. Bisher zählte die Uhr auch an der Ampel weiter — 20 s Rot vor
+///   dem Kreisel, dann anfahren → 15 s waren „voll", ein Ruckler im Render-Lock
+///   und der Reroute kam grundlos. Jetzt müssen zusätzlich ≥ [minDrivenM]
+///   wirklich gefahren sein (der Aufrufer nullt den Fahrweg im Stand).
+/// - [inRoundabout]: Im Kreisverkehr steht der Render-Lock konstruktionsbedingt
+///   oft still (der Puck kreist um den Manöverpunkt, die Distanz-entlang-Route
+///   springt erst an der Ausfahrt) — dort feuert der Watchdog nicht; der
+///   normale Off-Route-Detektor bleibt zuständig.
 bool shouldForceRerouteOnFrozenProgress({
   required Duration sinceProgressChanged,
   required double speedMps,
   required bool approachingDestination,
   required bool nearRouteEnd,
+  double drivenSinceProgressChangedM = double.infinity,
+  bool inRoundabout = false,
   Duration frozenLimit = const Duration(seconds: 15),
   double minSpeedMps = 5.0,
+  double minDrivenM = 75.0,
 }) {
   if (approachingDestination || nearRouteEnd) return false;
+  if (inRoundabout) return false;
   if (!speedMps.isFinite || speedMps < minSpeedMps) return false;
+  // Unbekannter Fahrweg (Default infinity / NaN) gated nicht — nur ein
+  // bekannt zu KURZER Fahrweg haelt den Watchdog zurueck.
+  if (drivenSinceProgressChangedM.isFinite &&
+      drivenSinceProgressChangedM < minDrivenM) {
+    return false;
+  }
   return sinceProgressChanged >= frozenLimit;
 }
 

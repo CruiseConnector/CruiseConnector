@@ -766,6 +766,11 @@ class _CruiseModePageState extends State<CruiseModePage>
   // verpassten Manöver, Off-Route feuert noch nicht), wird EIN Reroute erzwungen.
   double? _lastRenderDistForFreeze;
   DateTime? _renderDistChangedAt;
+  // 2026-08-15 (vucko Testfahrt „Route grundlos neu berechnet"): Fahrweg seit
+  // dem letzten Fortschritt (GPS-zu-GPS). Standzeit zählt nicht mehr — an der
+  // Ampel wird Uhr + Fahrweg genullt, der Watchdog braucht ≥ 75 m ECHTE Fahrt.
+  double _watchdogDrivenM = 0.0;
+  geo.Position? _watchdogLastPos;
   // 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust" + „GPS-Hinweis"):
   // GPS-Stall-Watchdog. Friert der Standort-Stream ein (Tunnel/Wald), clampt der
   // Smoother-Predict nach 1,5s → location-getriebener Nav-Tick + Puck + Banner
@@ -12929,6 +12934,16 @@ class _CruiseModePageState extends State<CruiseModePage>
       // auf ein Manöver, das es in der neuen Geometrie nicht mehr gibt.
       _overshootManeuverIndex = null;
       _overshootMinDistM = double.infinity;
+      // 2026-08-15 (vucko Testfahrt „Route wird grundlos neu berechnet"):
+      // Der Off-Route-Timer und der Frozen-Progress-Watchdog gehören zur ALTEN
+      // Route. Ohne Reset lief `_offRouteSince` weiter und schlug nach dem
+      // Commit sofort wieder an (maximumWaitExceeded), und der Watchdog sah die
+      // Render-Distanz der neuen Route als „eingefroren" gegen den alten Wert.
+      _offRouteSince = null;
+      _lastRenderDistForFreeze = null;
+      _renderDistChangedAt = null;
+      _watchdogDrivenM = 0.0;
+      _watchdogLastPos = null;
       _remainingDistance = result.distanceMeters;
       _remainingDuration = result.durationSeconds;
       _distanceToFinalTargetMeters = null;
@@ -13046,11 +13061,25 @@ class _CruiseModePageState extends State<CruiseModePage>
         return;
       }
 
+      // 2026-08-15 (vucko Testfahrt „Banner klebt am Kreisverkehr"): Geladene
+      // Routen hatten KEINE Manöver — nur der Anfahrts-Leg. Jetzt werden sie
+      // parallel zur GPS-Suche entlang der Geometrie nachgeladen (Original-
+      // Koordinaten bleiben; misslingt es, fährt die Route wie bisher).
+      final manoeverFuture = _routeService.manoeverFuerGeladeneRoute(
+        coordinates: coordinates,
+      );
+      final startPosition =
+          await _resolveCurrentPositionForNavigationStart() ??
+          await _getStartCoordinates();
+      if (_isRouteGenerationCancelled(generationId)) return;
+      final nachgeladeneManoever = await manoeverFuture;
+      if (_isRouteGenerationCancelled(generationId)) return;
+
       final previewResult = RouteResult(
         geoJson: json.encode(geometry),
         geometry: geometry,
         coordinates: coordinates,
-        maneuvers: [],
+        maneuvers: nachgeladeneManoever,
         distanceMeters: route.distanceKm * 1000,
         durationSeconds: route.durationSeconds,
         distanceKm: route.distanceKm,
@@ -13059,16 +13088,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           'source': 'saved',
           'saved_route_id': route.id,
           'explicit_route_handoff': true,
+          'loaded_maneuvers': nachgeladeneManoever.length,
           'quality_tier': route.rating != null && route.rating! >= 4
               ? 'good'
               : 'acceptable',
         },
       );
-
-      final startPosition =
-          await _resolveCurrentPositionForNavigationStart() ??
-          await _getStartCoordinates();
-      if (_isRouteGenerationCancelled(generationId)) return;
       final preparedPreviewResult = await _prepareRouteForPreviewStart(
         result: previewResult,
         startPosition: startPosition,
@@ -14391,16 +14416,35 @@ class _CruiseModePageState extends State<CruiseModePage>
         (renderDistNow - _lastRenderDistForFreeze!).abs() > 5.0) {
       _lastRenderDistForFreeze = renderDistNow;
       _renderDistChangedAt = position.timestamp;
+      _watchdogDrivenM = 0.0;
     }
-    final frozenFor = _renderDistChangedAt == null
-        ? Duration.zero
-        : position.timestamp.difference(_renderDistChangedAt!);
     final watchdogSpeedMps = math.max(
       position.speed.isFinite && position.speed > 0 ? position.speed : 0.0,
       _nativeSmoother.speed.isFinite && _nativeSmoother.speed > 0
           ? _nativeSmoother.speed
           : 0.0,
     );
+    // 2026-08-15 (vucko Testfahrt „Route grundlos neu berechnet"): Fahrweg
+    // GPS-zu-GPS aufsummieren (Ausreißer > 150 m je Fix ignorieren). Im Stand /
+    // bei Schleichfahrt (< 5 m/s) Uhr UND Fahrweg nullen — 20 s Rot vor dem
+    // Kreisel dürfen nicht als „15 s eingefroren" gelten, sobald man anfährt.
+    if (_watchdogLastPos != null) {
+      final schritt = geo.Geolocator.distanceBetween(
+        _watchdogLastPos!.latitude,
+        _watchdogLastPos!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      if (schritt.isFinite && schritt <= 150.0) _watchdogDrivenM += schritt;
+    }
+    _watchdogLastPos = position;
+    if (watchdogSpeedMps < 5.0) {
+      _renderDistChangedAt = position.timestamp;
+      _watchdogDrivenM = 0.0;
+    }
+    final frozenFor = _renderDistChangedAt == null
+        ? Duration.zero
+        : position.timestamp.difference(_renderDistChangedAt!);
     if (!_isRerouting &&
         _isRouteConfirmed &&
         shouldForceRerouteOnFrozenProgress(
@@ -14408,6 +14452,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           speedMps: watchdogSpeedMps,
           approachingDestination: approachingDestination,
           nearRouteEnd: nearRouteEnd,
+          drivenSinceProgressChangedM: _watchdogDrivenM,
+          inRoundabout: _puckNaheKreisverkehr(position),
         ) &&
         (_lastRerouteTime == null ||
             position.timestamp.difference(_lastRerouteTime!) >
@@ -14420,6 +14466,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       _renderDistChangedAt = position.timestamp; // Anti-Spam
       _lastRenderDistForFreeze = renderDistNow;
+      _watchdogDrivenM = 0.0;
       _lastRerouteTime = position.timestamp;
       _offRouteSince = null;
       unawaited(_rerouteToOriginalRoute(position));
@@ -17535,6 +17582,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-08-15 (vucko Testfahrt „Route grundlos neu berechnet"): Steht der
+  /// Puck im/direkt am Kreisverkehr? Dann darf der Frozen-Progress-Watchdog
+  /// nicht feuern — im Ring kreist der Puck um den Manöverpunkt, die Distanz-
+  /// entlang-Route steht konstruktionsbedingt fast still, das ist kein Hänger.
+  /// Misst gegen die ECHTE GPS-Position (nicht den Render-Lock), damit ein
+  /// wirklich festgefahrener Lock 300 m hinter dem Kreisel den Watchdog nicht
+  /// ausbremst. Nur die Manöver rund um das aktive werden geprüft.
+  bool _puckNaheKreisverkehr(geo.Position position, {double radiusM = 90.0}) {
+    if (_maneuvers.isEmpty) return false;
+    final von = math.max(0, _activeManeuverIndex - 2);
+    final bis = math.min(_maneuvers.length - 1, _activeManeuverIndex + 2);
+    for (var i = von; i <= bis; i++) {
+      final m = _maneuvers[i];
+      if (m.maneuverType != ManeuverType.roundabout) continue;
+      final d = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        m.latitude,
+        m.longitude,
+      );
+      if (d <= radiusM) return true;
+    }
+    return false;
+  }
+
   RouteManeuver? _activeVisibleManeuver() {
     return _navigationController.activeVisibleManeuver(
       maneuvers: _maneuvers,
@@ -17957,10 +18029,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     // „Versteckter" Kreisel: GH hat ihn NICHT als Kreisel geliefert (keine
     // Nummer). Erst hier promotet → die Nummer kommt aus OSM-Topologie, sonst
     // aus der Geometrie. Symbol-Pfeil weiter aus dem echten Routen-Drehwinkel.
+    // 2026-08-15 (vucko Kreisel-Symbol): Ausfahrt am ECHTEN Ring-Austritt
+    // messen (erste Rechtsdrehung nach der Einfahrt, hoechstens 120 m weit),
+    // nicht direkt am Einfahrtspunkt — dort zeigt der Kurs noch in den Ring.
+    final ringExitIdx = roundaboutRingExitIndex(
+      _fullRouteCoordinates,
+      current.routeIndex,
+      roundaboutSearchLimitIndex(
+        _fullRouteCoordinates,
+        current.routeIndex,
+        120.0,
+      ),
+    );
+    final exitRefIdx = ringExitIdx ?? current.routeIndex;
     final geomTurnRad = roundaboutGeomTurnRad(
       _fullRouteCoordinates,
       current.routeIndex,
-      current.routeIndex,
+      exitRefIdx,
     );
     final entryBearing = RoundaboutTopologyService.armBearingAlong(
       _fullRouteCoordinates,
@@ -17969,7 +18054,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
     final exitBearing = RoundaboutTopologyService.armBearingAlong(
       _fullRouteCoordinates,
-      current.routeIndex,
+      exitRefIdx,
       1,
     );
     final topologyExit = roundaboutExitNumberFromTopologyBearings(
