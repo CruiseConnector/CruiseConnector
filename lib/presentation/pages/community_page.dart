@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:geolocator/geolocator.dart';
@@ -462,10 +463,30 @@ class _CommunityPageState extends State<CommunityPage>
             height: 1.2,
           ),
           tabs: [
-            _buildTabLabel('Feed'),
-            _buildTabLabel('Fahrten'),
-            _buildTabLabel('Chats'),
-            _buildTabLabel('Entdecken'),
+            // Keys: Das Tutorial liest die ECHTE Reiter-Position statt zu
+            // raten (2026-08-15, vucko: „inakkurat positioniert").
+            _buildTabLabel(
+              'Feed',
+              key: TutorialZielRegistry.key(TutorialZielRegistry.communityFeed),
+            ),
+            _buildTabLabel(
+              'Fahrten',
+              key: TutorialZielRegistry.key(
+                TutorialZielRegistry.communityRides,
+              ),
+            ),
+            _buildTabLabel(
+              'Chats',
+              key: TutorialZielRegistry.key(
+                TutorialZielRegistry.communityChats,
+              ),
+            ),
+            _buildTabLabel(
+              'Entdecken',
+              key: TutorialZielRegistry.key(
+                TutorialZielRegistry.communityDiscover,
+              ),
+            ),
           ],
         ),
         elevation: 0,
@@ -514,8 +535,9 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
-  Widget _buildTabLabel(String label) {
+  Widget _buildTabLabel(String label, {Key? key}) {
     return Tab(
+      key: key,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2),
         child: FittedBox(

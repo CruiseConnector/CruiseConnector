@@ -254,6 +254,10 @@ class ProfileBadgeShowcase extends StatelessWidget {
     BuildContext context,
     app.Badge badge, {
     DateTime? memberSince,
+    // 2026-08-15 (vucko): Bei gesperrten Badges Bedingung + Fortschritt
+    // zeigen („274 von 1000 km"). null = freigeschaltet oder nicht messbar.
+    app.BadgeFortschritt? fortschritt,
+    bool freigeschaltet = true,
   }) async {
     var since = memberSince;
     if (badge.id == app.Badge.membershipBadgeId && since == null) {
@@ -291,10 +295,13 @@ class ProfileBadgeShowcase extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 22),
-                  _BadgeStickerShell(
-                    size: 104,
-                    selected: true,
-                    child: _BadgeImage(badge: badge, size: 82),
+                  Opacity(
+                    opacity: freigeschaltet ? 1 : 0.38,
+                    child: _BadgeStickerShell(
+                      size: 104,
+                      selected: freigeschaltet,
+                      child: _BadgeImage(badge: badge, size: 82),
+                    ),
                   ),
                   const SizedBox(height: 18),
                   Text(
@@ -317,6 +324,48 @@ class ProfileBadgeShowcase extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (!freigeschaltet && fortschritt != null) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      fortschritt.anleitung,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: LinearProgressIndicator(
+                        value: fortschritt.anteil,
+                        minHeight: 8,
+                        backgroundColor: Colors.white.withValues(alpha: 0.08),
+                        color: AppAccentColors.accent,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      fortschritt.zahlen,
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ] else if (!freigeschaltet) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Noch gesperrt',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   Container(
                     padding: const EdgeInsets.symmetric(

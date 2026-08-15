@@ -19,6 +19,12 @@ class GamificationResult {
     required this.totalDistanceKm,
     required this.totalHours,
     required this.totalXp,
+    this.completedRides = 0,
+    this.completedGroupRides = 0,
+    this.routePosts = 0,
+    this.createdGroups = 0,
+    this.savedRoutes = 0,
+    this.longestRideKm = 0,
   });
 
   final UserLevel level;
@@ -28,6 +34,17 @@ class GamificationResult {
   final double totalDistanceKm;
   final double totalHours;
   final int totalXp;
+
+  /// 2026-08-15 (vucko): „bei den gesperrten Badges soll man den Fortschritt
+  /// sehen — 274 von 1000 km." Dafuer braucht die Oberflaeche dieselben
+  /// Zaehler, aus denen die Freischaltung berechnet wird. Sie liegen im Sync
+  /// ohnehin vor; hier werden sie nur mitgeliefert.
+  final int completedRides;
+  final int completedGroupRides;
+  final int routePosts;
+  final int createdGroups;
+  final int savedRoutes;
+  final double longestRideKm;
 
   List<Badge> get earnedBadges =>
       earnedBadgeIds.map(Badge.getById).whereType<Badge>().toList();
@@ -759,6 +776,16 @@ class GamificationService {
       totalDistanceKm: totalKm,
       totalHours: totalSecs / 3600,
       totalXp: totalXp,
+      completedRides: completedSessions.length,
+      completedGroupRides: completedGroupRides,
+      routePosts: routePostCount,
+      createdGroups: createdGroupCount,
+      savedRoutes: savedRouteReferenceCount,
+      longestRideKm: completedSessions.isEmpty
+          ? 0
+          : completedSessions
+                .map((s) => s.distanceKm)
+                .reduce((a, b) => a > b ? a : b),
     );
   }
 

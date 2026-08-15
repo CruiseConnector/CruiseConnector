@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/membership_since_service.dart';
@@ -188,6 +189,15 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       widget.onCommunitySectionChange?.call(communitySection);
     }
     await Future<void>.delayed(const Duration(milliseconds: 240));
+    // Die Zielseite ist jetzt gebaut und gelayoutet: einmal nachzeichnen,
+    // damit der Spotlight die GEMESSENE Position bekommt und nicht die vom
+    // Moment des Schrittwechsels (dort war der Reiter evtl. noch nicht da).
+    if (mounted) setState(() {});
+    // Und ein zweites Mal nach dem naechsten Frame — die TabBar-Animation
+    // ist dann sicher fertig.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   /// Überspringen: Tutorial gilt als gesehen, aber KEINE Belohnung — die 125 XP
@@ -1357,15 +1367,30 @@ class _TutorialSpotlightPainter extends CustomPainter {
       );
     }
 
+    // 2026-08-15 (vucko, Screenshots 17:14): „inakkurat positioniert". Die
+    // festen Zahlen unten (143, height-72) stimmten nur auf einem Geraet.
+    // Jetzt zuerst die ECHTE Position aus der Registry — der Schaetzwert
+    // bleibt nur als Rueckfall, falls das Ziel noch nicht gebaut ist.
+    Rect? gemessen(String ziel, {double aufblasen = 8}) =>
+        TutorialZielRegistry.rect(ziel, aufblasen: aufblasen);
+
     return switch (target) {
-      _TutorialTarget.communityFeed => communityTabTarget(0.125, 90),
-      _TutorialTarget.communityRides => communityTabTarget(0.365, 104),
-      _TutorialTarget.communityDiscover => communityTabTarget(0.84, 108),
-      _TutorialTarget.cruise => Rect.fromCenter(
-        center: Offset(width * 0.50, height - 72),
-        width: 104,
-        height: 104,
-      ),
+      _TutorialTarget.communityFeed =>
+        gemessen(TutorialZielRegistry.communityFeed) ??
+            communityTabTarget(0.125, 90),
+      _TutorialTarget.communityRides =>
+        gemessen(TutorialZielRegistry.communityRides) ??
+            communityTabTarget(0.365, 104),
+      _TutorialTarget.communityDiscover =>
+        gemessen(TutorialZielRegistry.communityDiscover) ??
+            communityTabTarget(0.84, 108),
+      _TutorialTarget.cruise =>
+        gemessen(TutorialZielRegistry.cruiseKnopf, aufblasen: 12) ??
+            Rect.fromCenter(
+              center: Offset(width * 0.50, height - 72),
+              width: 104,
+              height: 104,
+            ),
       _TutorialTarget.none => null,
     };
   }

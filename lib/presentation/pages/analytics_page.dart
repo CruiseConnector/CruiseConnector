@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -132,6 +133,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   int _totalXp = 0;
   UserLevel _level = UserLevel.fromXp(0);
   List<app.Badge> _earnedBadges = [];
+  // 2026-08-15: fuer den Badge-Fortschritt (274 von 1000 km).
+  GamificationResult? _gamResult;
   List<UserDriveSession> _driveSessions = [];
   List<_LeaderboardEntry> _leaderboardAllTime = const [];
   List<_LeaderboardEntry> _leaderboardWeek = const [];
@@ -344,6 +347,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           _totalXp = gamResult.totalXp;
           _level = gamResult.level;
           _earnedBadges = gamResult.earnedBadges;
+          _gamResult = gamResult;
           _driveSessions = driveSessions;
           _leaderboardAllTime =
               leaderboards[_LeaderboardPeriod.allTime] ?? const [];
@@ -2709,7 +2713,14 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     SizedBox(
                       width: cardWidth,
                       height: 138,
-                      child: _buildBadgeTile(badge),
+                      // 2026-08-15 (vucko): Jede Kachel oeffnet das Overlay —
+                      // freigeschaltet mit Beschreibung, gesperrt mit
+                      // Bedingung und Fortschritt.
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _oeffneBadge(badge),
+                        child: _buildBadgeTile(badge),
+                      ),
                     ),
                 ],
               );
@@ -2945,6 +2956,33 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           ),
         ],
       ),
+    );
+  }
+
+  app.BadgeFortschritt? _fortschrittFuer(app.Badge badge) {
+    final g = _gamResult;
+    if (g == null) return null;
+    return app.badgeFortschrittFuer(
+      badgeId: badge.id,
+      level: g.level.level,
+      totalKm: g.totalDistanceKm,
+      totalHours: g.totalHours,
+      completedRides: g.completedRides,
+      completedGroupRides: g.completedGroupRides,
+      routePosts: g.routePosts,
+      createdGroups: g.createdGroups,
+      savedRoutes: g.savedRoutes,
+      longestRideKm: g.longestRideKm,
+    );
+  }
+
+  Future<void> _oeffneBadge(app.Badge badge) {
+    final earned = _earnedBadges.any((b) => b.id == badge.id);
+    return ProfileBadgeShowcase.showBadgeDetails(
+      context,
+      badge,
+      freigeschaltet: earned,
+      fortschritt: earned ? null : _fortschrittFuer(badge),
     );
   }
 

@@ -254,3 +254,104 @@ class Badge {
     );
   }
 }
+
+/// Fortschritt zu einem noch gesperrten Badge.
+///
+/// 2026-08-15 (vucko): „bei den gesperrten soll man sehen, was sie machen
+/// muessen — z. B. 1000 km fahren — und wenn sie schon 274 gefahren sind, den
+/// Fortschritt, damit sie sehen: mir fehlen nicht mehr so viele."
+class BadgeFortschritt {
+  const BadgeFortschritt({
+    required this.aktuell,
+    required this.ziel,
+    required this.einheit,
+    required this.anleitung,
+  });
+
+  final double aktuell;
+  final double ziel;
+
+  /// „km", „Fahrten", „Std", „Level" …
+  final String einheit;
+
+  /// Ein Satz, was zu tun ist.
+  final String anleitung;
+
+  double get anteil => ziel <= 0 ? 0 : (aktuell / ziel).clamp(0.0, 1.0);
+
+  String get zahlen {
+    String f(double v) =>
+        v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1);
+    return '${f(aktuell)} von ${f(ziel)} $einheit';
+  }
+}
+
+/// Die EINE Stelle, die weiss, wie weit jemand von jedem Badge entfernt ist.
+///
+/// Muss mit den Bedingungen in `GamificationService.calculateAndSync()`
+/// uebereinstimmen — die Werte kommen aus demselben `GamificationResult`.
+/// Badges ohne messbaren Fortschritt (Gruendungszeit, Startklar) liefern null.
+BadgeFortschritt? badgeFortschrittFuer({
+  required String badgeId,
+  required int level,
+  required double totalKm,
+  required double totalHours,
+  required int completedRides,
+  required int completedGroupRides,
+  required int routePosts,
+  required int createdGroups,
+  required int savedRoutes,
+  required double longestRideKm,
+}) {
+  BadgeFortschritt p(double a, double z, String e, String t) =>
+      BadgeFortschritt(aktuell: a, ziel: z, einheit: e, anleitung: t);
+  switch (badgeId) {
+    case 'badge_01':
+      return p(level.toDouble(), 10, 'Level', 'Sammle XP bis Level 10.');
+    case 'badge_03':
+      return p(level.toDouble(), 25, 'Level', 'Sammle XP bis Level 25.');
+    case 'badge_08':
+      return p(level.toDouble(), 50, 'Level', 'Sammle XP bis Level 50.');
+    case 'badge_14':
+      return p(level.toDouble(), 100, 'Level', 'Erreiche Level 100.');
+    case 'badge_02':
+      return p(completedRides.toDouble(), 1, 'Fahrten',
+          'Fahre eine Route bis zum Ende.');
+    case 'badge_17':
+      return p(completedRides.toDouble(), 10, 'Fahrten',
+          'Bringe zehn Fahrten bis zum Ende.');
+    case 'badge_18':
+      return p(completedRides.toDouble(), 50, 'Fahrten',
+          'Bringe fuenfzig Fahrten bis zum Ende.');
+    case 'badge_04':
+      return p(completedGroupRides.toDouble(), 1, 'Gruppenfahrten',
+          'Beende eine Gruppenfahrt gemeinsam.');
+    case 'badge_19':
+      return p(completedGroupRides.toDouble(), 5, 'Gruppenfahrten',
+          'Beende fuenf Gruppenfahrten gemeinsam.');
+    case 'badge_05':
+      return p(routePosts.toDouble(), 1, 'Routen', 'Teile eine Route.');
+    case 'badge_21':
+      return p(routePosts.toDouble(), 5, 'Routen',
+          'Teile fuenf Routen mit der Community.');
+    case 'badge_07':
+      return p(createdGroups.toDouble(), 1, 'Gruppen',
+          'Erstelle eine Gruppe.');
+    case 'badge_09':
+      return p(savedRoutes.toDouble(), 5, 'Routen',
+          'Speichere fuenf verschiedene Routen.');
+    case 'badge_06':
+      return p(totalKm, 500, 'km', 'Fahre insgesamt 500 Kilometer.');
+    case 'badge_10':
+      return p(totalKm, 2500, 'km', 'Fahre insgesamt 2.500 Kilometer.');
+    case 'badge_13':
+      return p(totalKm, 10000, 'km', 'Fahre insgesamt 10.000 Kilometer.');
+    case 'badge_20':
+      return p(longestRideKm, 100, 'km',
+          'Fahre einmal ueber 100 Kilometer am Stueck.');
+    case 'badge_22':
+      return p(totalHours, 25, 'Std', 'Fahre insgesamt 25 Stunden.');
+    default:
+      return null;
+  }
+}

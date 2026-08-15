@@ -9,6 +9,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
@@ -568,6 +569,9 @@ class _HomePageState extends State<HomePage> {
                 duration: const Duration(milliseconds: 400),
                 curve: Curves.easeOutCubic,
                 child: Container(
+                  key: TutorialZielRegistry.key(
+                    TutorialZielRegistry.cruiseKnopf,
+                  ),
                   width: 78,
                   height: 78,
                   decoration: BoxDecoration(
