@@ -29,6 +29,7 @@ import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
 import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
+import 'package:cruise_connect/presentation/widgets/home/rangliste_kachel.dart';
 import 'package:cruise_connect/data/services/unterbrochene_fahrt_verbuchung.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
@@ -50,6 +51,7 @@ enum _HomeWidgetId {
   monthly,
   badgeHunt,
   totals,
+  rangliste,
 }
 
 enum _DashboardWidgetSize { small, large }
@@ -328,6 +330,11 @@ class _HomeContentPageState extends State<HomeContentPage>
       widgetIds: [_HomeWidgetId.streak],
       size: _DashboardWidgetSize.large,
     ),
+    _HomeDashboardItem(
+      key: 'rangliste',
+      widgetIds: [_HomeWidgetId.rangliste],
+      size: _DashboardWidgetSize.large,
+    ),
   ];
 
   static const List<_HomeWidgetMeta> _widgetCatalog = [
@@ -426,6 +433,15 @@ class _HomeContentPageState extends State<HomeContentPage>
       subtitle: 'KM, Strecken, Badges und XP kompakt',
       icon: Icons.query_stats_rounded,
       defaultSize: _DashboardWidgetSize.small,
+    ),
+    // 2026-08-16 (vucko Testfahrt T6): Rangliste — Top 3 und eigene Position,
+    // Woche/Monat, klein (Quadrat) oder gross (Rechteck).
+    _HomeWidgetMeta(
+      id: _HomeWidgetId.rangliste,
+      title: 'Rangliste',
+      subtitle: 'Top 3, deine Position, Woche und Monat',
+      icon: Icons.emoji_events_rounded,
+      defaultSize: _DashboardWidgetSize.large,
     ),
   ];
 
@@ -624,7 +640,36 @@ class _HomeContentPageState extends State<HomeContentPage>
           )
           .whereType<_HomeDashboardItem>()
           .toList();
-      final sanitized = _sanitizeDashboardItems(parsed);
+      var sanitized = _sanitizeDashboardItems(parsed);
+      // 2026-08-16 (T6): Bestandsnutzer mit eigenem Layout bekommen die neue
+      // Rangliste EINMAL automatisch dazu (hinter dem Streak bzw. am Ende) —
+      // danach entscheidet wieder nur der Nutzer (entfernen/verschieben).
+      const ranglisteEingefuegtKey = 'home_rangliste_kachel_eingefuegt_v1';
+      final schonAngeboten = prefs.getBool(ranglisteEingefuegtKey) ?? false;
+      final hatRangliste = sanitized.any(
+        (i) => i.widgetIds.contains(_HomeWidgetId.rangliste),
+      );
+      if (!schonAngeboten && !hatRangliste) {
+        const neu = _HomeDashboardItem(
+          key: 'rangliste',
+          widgetIds: [_HomeWidgetId.rangliste],
+          size: _DashboardWidgetSize.large,
+        );
+        final streakIdx = sanitized.indexWhere(
+          (i) => i.widgetIds.contains(_HomeWidgetId.streak),
+        );
+        sanitized = [...sanitized];
+        if (streakIdx >= 0) {
+          sanitized.insert(streakIdx + 1, neu);
+        } else {
+          sanitized.add(neu);
+        }
+        await prefs.setBool(ranglisteEingefuegtKey, true);
+        await prefs.setString(
+          _dashboardPrefsKey,
+          jsonEncode(sanitized.map((item) => item.toJson()).toList()),
+        );
+      }
       if (!mounted) return;
       setState(() {
         _dashboardItems = sanitized;
@@ -3556,6 +3601,15 @@ class _HomeContentPageState extends State<HomeContentPage>
         return _buildBadgeHuntWidget(size);
       case _HomeWidgetId.totals:
         return _buildTotalsWidget(size);
+      case _HomeWidgetId.rangliste:
+        return RanglisteKachel(
+          kompakt: size == _DashboardWidgetSize.small || embedded,
+          hoehe: size == _DashboardWidgetSize.small
+              ? _dashboardHalfTileHeight
+              : null,
+          decoration: embedded ? null : _dashboardCardDecoration(),
+          onTap: () => widget.onTabChange?.call(3),
+        );
     }
   }
 

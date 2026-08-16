@@ -42,6 +42,34 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.15',
+      titel: 'Weiterfahren ohne Klick, schönere Umwege, mehr Abzeichen',
+      punkte: <String>[
+        'Wechselst du während der Fahrt kurz die App, läuft die Fahrt beim '
+            'Zurückkommen einfach weiter. Kein erneutes Starten mehr.',
+        'Wurde die App unterwegs vom System beendet, setzt die Fahrt an '
+            'deiner Position von selbst fort. Alles bisher Gefahrene zählt '
+            'mit, und eine nicht fortgesetzte Fahrt wird im Hintergrund '
+            'trotzdem gutgeschrieben.',
+        'A nach B mit Umweg: kleiner, mittlerer und großer Umweg sind jetzt '
+            'klar unterscheidbar, und die Routen fahren als Schleife statt '
+            'zu einem Punkt und wieder zurück.',
+        'Kreisverkehre zeigen die richtige Ausfahrt im Symbol, und das '
+            'Manöverbanner bleibt nicht mehr an der Einfahrt hängen. '
+            'Gespeicherte und geteilte Routen bekommen jetzt volle '
+            'Abbiegehinweise.',
+        'Weniger unnötige Neuberechnungen, zum Beispiel nach einem Halt an '
+            'der Ampel oder im Kreisverkehr.',
+        'Die Starter-Aufgaben sind antippbar: Die App bringt dich hin und '
+            'zeigt dir an Ort und Stelle, was zu tun ist. Das Strecken-Setup '
+            'erklärt sich auf Wunsch Schritt für Schritt.',
+        'Vierzehn neue Abzeichen, vom Frühstarter bis zur Community-Stimme. '
+            'Gesperrte zeigen, was fehlt, zum Beispiel 274 von 1000 km.',
+        'Neu auf der Startseite: die Rangliste mit den Top 3 und deiner '
+            'Position, für die Woche und den Monat, klein oder groß.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.14',
       titel: 'Zuverlässiger unterwegs',
       punkte: <String>[

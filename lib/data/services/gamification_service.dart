@@ -25,6 +25,14 @@ class GamificationResult {
     this.createdGroups = 0,
     this.savedRoutes = 0,
     this.longestRideKm = 0,
+    this.fruehFahrten = 0,
+    this.nachtFahrten = 0,
+    this.wochenendFahrten = 0,
+    this.besteSerieTage = 0,
+    this.kurvenjagdFahrten = 0,
+    this.gefahreneStile = 0,
+    this.rundkurse = 0,
+    this.aNachBFahrten = 0,
   });
 
   final UserLevel level;
@@ -45,6 +53,17 @@ class GamificationResult {
   final int createdGroups;
   final int savedRoutes;
   final double longestRideKm;
+
+  /// 2026-08-16 (T6): Zaehler fuer badge_23 … badge_36 (siehe
+  /// [SessionKennzahlen]).
+  final int fruehFahrten;
+  final int nachtFahrten;
+  final int wochenendFahrten;
+  final int besteSerieTage;
+  final int kurvenjagdFahrten;
+  final int gefahreneStile;
+  final int rundkurse;
+  final int aNachBFahrten;
 
   List<Badge> get earnedBadges =>
       earnedBadgeIds.map(Badge.getById).whereType<Badge>().toList();
@@ -308,6 +327,71 @@ class GamificationService {
 
   static DateTime _dateOnly(DateTime date) {
     return DateTime(date.year, date.month, date.day);
+  }
+
+  /// 2026-08-16 (vucko Testfahrt T6): Kennzahlen fuer die neuen Badges — pur
+  /// aus den Sessions, damit Freischaltung (calculateAndSync) und Fortschritt
+  /// (badgeFortschrittFuer) garantiert dieselben Zahlen sehen.
+  ///
+  /// Zeitpunkte: `created_at` ist das Fahrt-ENDE; der Start wird als Ende
+  /// minus Fahrdauer geschaetzt (lokale Zeit). „Vor 8 Uhr gestartet" und
+  /// „nach 22 Uhr unterwegs" verlangen mindestens 5 km, damit ein 200-m-Test
+  /// vor der Haustuer nicht zaehlt.
+  static SessionKennzahlen sessionKennzahlen(Iterable<UserDriveSession> sessions) {
+    var frueh = 0;
+    var nacht = 0;
+    var wochenende = 0;
+    var kurvenjagd = 0;
+    var rundkurse = 0;
+    var aNachB = 0;
+    final stile = <String>{};
+    const vierStile = {'Kurvenjagd', 'Sport Mode', 'Abendrunde', 'Entdecker'};
+    for (final s in sessions) {
+      if (s.distanceKm <= 0) continue;
+      final ende = s.createdAt.toLocal();
+      final start = ende.subtract(Duration(seconds: s.durationSeconds));
+      if (s.distanceKm >= 5) {
+        if (start.hour < 8) frueh++;
+        if (ende.hour >= 22 || start.hour >= 22 || ende.hour < 4) nacht++;
+      }
+      if (!s.completedAtEnd) continue;
+      if (ende.weekday == DateTime.saturday || ende.weekday == DateTime.sunday) {
+        wochenende++;
+      }
+      final stil = s.routeStyle?.trim();
+      if (stil == 'Kurvenjagd') kurvenjagd++;
+      if (stil != null && vierStile.contains(stil)) stile.add(stil);
+      if (s.routeType == 'ROUND_TRIP') rundkurse++;
+      if (s.routeType == 'POINT_TO_POINT') aNachB++;
+    }
+    return SessionKennzahlen(
+      fruehFahrten: frueh,
+      nachtFahrten: nacht,
+      wochenendFahrten: wochenende,
+      besteSerieTage: laengsteFahrSerie(sessions),
+      kurvenjagdFahrten: kurvenjagd,
+      gefahreneStile: stile.length,
+      rundkurse: rundkurse,
+      aNachBFahrten: aNachB,
+    );
+  }
+
+  /// Laengste Serie aufeinanderfolgender Fahrtage in der ganzen Historie.
+  static int laengsteFahrSerie(Iterable<UserDriveSession> sessions) {
+    final tage = _driveDays(sessions).toList()..sort();
+    var beste = 0;
+    var lauf = 0;
+    DateTime? vorher;
+    for (final t in tage) {
+      if (vorher != null && t.difference(vorher).inDays == 1) {
+        lauf++;
+      } else {
+        lauf = 1;
+      }
+      if (lauf > beste) beste = lauf;
+      vorher = t;
+    }
+    return beste;
   }
 
   /// Zaehlt echte Kurven — dichte-unabhaengig + akkurat.
@@ -725,6 +809,22 @@ class GamificationService {
     }
     if (routePostCount >= 5) currentlyQualifiedBadges.add('badge_21');
     if (totalSecs >= 25 * 3600) currentlyQualifiedBadges.add('badge_22');
+    // 2026-08-16 (T6): badge_23 … badge_36.
+    final kz = sessionKennzahlen(sessions);
+    if (kz.fruehFahrten >= 1) currentlyQualifiedBadges.add('badge_23');
+    if (kz.nachtFahrten >= 1) currentlyQualifiedBadges.add('badge_24');
+    if (kz.wochenendFahrten >= 5) currentlyQualifiedBadges.add('badge_25');
+    if (kz.besteSerieTage >= 7) currentlyQualifiedBadges.add('badge_26');
+    if (kz.kurvenjagdFahrten >= 10) currentlyQualifiedBadges.add('badge_27');
+    if (kz.gefahreneStile >= 4) currentlyQualifiedBadges.add('badge_28');
+    if (kz.rundkurse >= 15) currentlyQualifiedBadges.add('badge_29');
+    if (kz.aNachBFahrten >= 15) currentlyQualifiedBadges.add('badge_30');
+    if (totalKm >= 1000) currentlyQualifiedBadges.add('badge_31');
+    if (totalKm >= 5000) currentlyQualifiedBadges.add('badge_32');
+    if (totalSecs >= 100 * 3600) currentlyQualifiedBadges.add('badge_33');
+    if (savedRouteReferenceCount >= 15) currentlyQualifiedBadges.add('badge_34');
+    if (createdGroupCount >= 3) currentlyQualifiedBadges.add('badge_35');
+    if (routePostCount >= 15) currentlyQualifiedBadges.add('badge_36');
 
     // Distanz-Badges
     if (totalKm >= 500) currentlyQualifiedBadges.add('badge_06');
@@ -792,6 +892,14 @@ class GamificationService {
           : completedSessions
                 .map((s) => s.distanceKm)
                 .reduce((a, b) => a > b ? a : b),
+      fruehFahrten: kz.fruehFahrten,
+      nachtFahrten: kz.nachtFahrten,
+      wochenendFahrten: kz.wochenendFahrten,
+      besteSerieTage: kz.besteSerieTage,
+      kurvenjagdFahrten: kz.kurvenjagdFahrten,
+      gefahreneStile: kz.gefahreneStile,
+      rundkurse: kz.rundkurse,
+      aNachBFahrten: kz.aNachBFahrten,
     );
   }
 
@@ -865,4 +973,26 @@ class GamificationService {
 
     return routeIds.length;
   }
+}
+
+/// 2026-08-16 (T6): Kennzahlen aus den Fahrt-Sessions fuer die Badges 23–36.
+class SessionKennzahlen {
+  const SessionKennzahlen({
+    required this.fruehFahrten,
+    required this.nachtFahrten,
+    required this.wochenendFahrten,
+    required this.besteSerieTage,
+    required this.kurvenjagdFahrten,
+    required this.gefahreneStile,
+    required this.rundkurse,
+    required this.aNachBFahrten,
+  });
+  final int fruehFahrten;
+  final int nachtFahrten;
+  final int wochenendFahrten;
+  final int besteSerieTage;
+  final int kurvenjagdFahrten;
+  final int gefahreneStile;
+  final int rundkurse;
+  final int aNachBFahrten;
 }

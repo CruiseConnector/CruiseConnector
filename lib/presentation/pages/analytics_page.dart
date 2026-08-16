@@ -2973,6 +2973,14 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       createdGroups: g.createdGroups,
       savedRoutes: g.savedRoutes,
       longestRideKm: g.longestRideKm,
+      fruehFahrten: g.fruehFahrten,
+      nachtFahrten: g.nachtFahrten,
+      wochenendFahrten: g.wochenendFahrten,
+      besteSerieTage: g.besteSerieTage,
+      kurvenjagdFahrten: g.kurvenjagdFahrten,
+      gefahreneStile: g.gefahreneStile,
+      rundkurse: g.rundkurse,
+      aNachBFahrten: g.aNachBFahrten,
     );
   }
 

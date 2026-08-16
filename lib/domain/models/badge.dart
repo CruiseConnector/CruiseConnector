@@ -209,6 +209,126 @@ class Badge {
       category: 'distance',
       assetPath: 'lib/images/badges/badge_22_hours_teal.png',
     ),
+    // 2026-08-16 (vucko Testfahrt T6): „die Badges sollen mehr werden" —
+    // vierzehn weitere Stufen, alle aus Fahrt-Sessions und Zaehlern
+    // berechenbar, die calculateAndSync ohnehin laedt. Fortschritt zu jedem
+    // in [badgeFortschrittFuer]. Embleme wieder als stilechte Farbvarianten
+    // der Bildserie (Austausch spaeter = nur den assetPath ersetzen).
+    Badge(
+      id: 'badge_23',
+      name: 'Frühstarter',
+      description:
+          'Eine Fahrt vor acht Uhr morgens gestartet. Die Straßen gehören dir.',
+      emoji: '\u{1F305}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_23_dawn_amber.png',
+    ),
+    Badge(
+      id: 'badge_24',
+      name: 'Nachtschwärmer',
+      description: 'Nach 22 Uhr noch unterwegs. Die Nacht ist deine Strecke.',
+      emoji: '\u{1F319}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_24_night_indigo.png',
+    ),
+    Badge(
+      id: 'badge_25',
+      name: 'Wochenendfahrer',
+      description: 'Fünf Fahrten am Wochenende. Samstag ist Cruise-Tag.',
+      emoji: '\u{1F4C6}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_25_weekend_lime.png',
+    ),
+    Badge(
+      id: 'badge_26',
+      name: 'Serienfahrer',
+      description: 'Sieben Tage in Folge gefahren. Das nennt man Gewohnheit.',
+      emoji: '\u{1F525}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_26_streak_flame.png',
+    ),
+    Badge(
+      id: 'badge_27',
+      name: 'Kurvenkönig',
+      description: 'Zehn Kurvenjagd-Fahrten bis zum Ende. Kein Bogen zu eng.',
+      emoji: '\u{1F3CE}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
+    ),
+    Badge(
+      id: 'badge_28',
+      name: 'Stilbewusst',
+      description:
+          'Alle vier Stile gefahren: Kurvenjagd, Sport Mode, Abendrunde und '
+          'Entdecker.',
+      emoji: '\u{1F3A8}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_28_styles_prism.png',
+    ),
+    Badge(
+      id: 'badge_29',
+      name: 'Rundkurs-Fan',
+      description: 'Fünfzehn Rundkurse. Immer wieder gern nach Hause.',
+      emoji: '\u{1F501}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_29_loop_teal.png',
+    ),
+    Badge(
+      id: 'badge_30',
+      name: 'Zielstrebig',
+      description: 'Fünfzehn Fahrten von A nach B. Du weißt, wo du hinwillst.',
+      emoji: '\u{1F3AF}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_30_target_blue.png',
+    ),
+    Badge(
+      id: 'badge_31',
+      name: '1.000 km',
+      description: 'Tausend Kilometer insgesamt. Vierstellig.',
+      emoji: '\u{1F6E3}',
+      category: 'distance',
+      assetPath: 'lib/images/badges/badge_31_1000km_gold.png',
+    ),
+    Badge(
+      id: 'badge_32',
+      name: '5.000 km',
+      description: 'Fünftausend Kilometer insgesamt. Halber Weg zur Legende.',
+      emoji: '\u{1F30D}',
+      category: 'distance',
+      assetPath: 'lib/images/badges/badge_32_5000km_violet.png',
+    ),
+    Badge(
+      id: 'badge_33',
+      name: '100 Stunden',
+      description: 'Hundert Stunden am Lenkrad. Die Straße kennt deinen Namen.',
+      emoji: '\u{231B}',
+      category: 'distance',
+      assetPath: 'lib/images/badges/badge_33_100h_bronze.png',
+    ),
+    Badge(
+      id: 'badge_34',
+      name: 'Sammler',
+      description: 'Fünfzehn Routen gespeichert. Deine Sammlung wächst.',
+      emoji: '\u{1F4DA}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_34_collector_emerald.png',
+    ),
+    Badge(
+      id: 'badge_35',
+      name: 'Gruppengründer',
+      description: 'Drei Gruppen gegründet. Du bringst Leute zusammen.',
+      emoji: '\u{1F465}',
+      category: 'group',
+      assetPath: 'lib/images/badges/badge_35_founder_ruby.png',
+    ),
+    Badge(
+      id: 'badge_36',
+      name: 'Community-Stimme',
+      description: 'Fünfzehn Routen geteilt. Andere fahren, was du findest.',
+      emoji: '\u{1F4E3}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_36_voice_coral.png',
+    ),
   ];
 
   static Badge? getById(String id) {
@@ -302,10 +422,59 @@ BadgeFortschritt? badgeFortschrittFuer({
   required int createdGroups,
   required int savedRoutes,
   required double longestRideKm,
+  // 2026-08-16 (T6): neue Zaehler fuer badge_23 … badge_36.
+  int fruehFahrten = 0,
+  int nachtFahrten = 0,
+  int wochenendFahrten = 0,
+  int besteSerieTage = 0,
+  int kurvenjagdFahrten = 0,
+  int gefahreneStile = 0,
+  int rundkurse = 0,
+  int aNachBFahrten = 0,
 }) {
   BadgeFortschritt p(double a, double z, String e, String t) =>
       BadgeFortschritt(aktuell: a, ziel: z, einheit: e, anleitung: t);
   switch (badgeId) {
+    case 'badge_23':
+      return p(fruehFahrten.toDouble(), 1, 'Fahrten',
+          'Starte eine Fahrt vor acht Uhr morgens (mindestens 5 km).');
+    case 'badge_24':
+      return p(nachtFahrten.toDouble(), 1, 'Fahrten',
+          'Sei nach 22 Uhr noch unterwegs (mindestens 5 km).');
+    case 'badge_25':
+      return p(wochenendFahrten.toDouble(), 5, 'Fahrten',
+          'Bringe fuenf Fahrten am Samstag oder Sonntag zu Ende.');
+    case 'badge_26':
+      return p(besteSerieTage.toDouble(), 7, 'Tage',
+          'Fahre an sieben Tagen hintereinander.');
+    case 'badge_27':
+      return p(kurvenjagdFahrten.toDouble(), 10, 'Fahrten',
+          'Bringe zehn Fahrten im Stil Kurvenjagd zu Ende.');
+    case 'badge_28':
+      return p(gefahreneStile.toDouble(), 4, 'Stile',
+          'Fahre je eine Route in Kurvenjagd, Sport Mode, Abendrunde und '
+          'Entdecker zu Ende.');
+    case 'badge_29':
+      return p(rundkurse.toDouble(), 15, 'Rundkurse',
+          'Bringe fuenfzehn Rundkurse zu Ende.');
+    case 'badge_30':
+      return p(aNachBFahrten.toDouble(), 15, 'Fahrten',
+          'Bringe fuenfzehn Fahrten von A nach B zu Ende.');
+    case 'badge_31':
+      return p(totalKm, 1000, 'km', 'Fahre insgesamt 1.000 Kilometer.');
+    case 'badge_32':
+      return p(totalKm, 5000, 'km', 'Fahre insgesamt 5.000 Kilometer.');
+    case 'badge_33':
+      return p(totalHours, 100, 'Std', 'Fahre insgesamt 100 Stunden.');
+    case 'badge_34':
+      return p(savedRoutes.toDouble(), 15, 'Routen',
+          'Speichere fuenfzehn verschiedene Routen.');
+    case 'badge_35':
+      return p(createdGroups.toDouble(), 3, 'Gruppen',
+          'Gruende drei Gruppen.');
+    case 'badge_36':
+      return p(routePosts.toDouble(), 15, 'Routen',
+          'Teile fuenfzehn Routen mit der Community.');
     case 'badge_01':
       return p(level.toDouble(), 10, 'Level', 'Sammle XP bis Level 10.');
     case 'badge_03':

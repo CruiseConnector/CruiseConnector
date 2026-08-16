@@ -266,6 +266,9 @@ void main() {
           'badge_20',
           'badge_21',
           'badge_22',
+          // 2026-08-16 (vucko Testfahrt T6): vierzehn weitere Stufen, alle
+          // ueber calculateAndSync (sessionKennzahlen).
+          for (var i = 23; i <= 36; i++) 'badge_$i',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);
