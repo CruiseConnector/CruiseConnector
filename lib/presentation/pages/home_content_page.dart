@@ -28,6 +28,7 @@ import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/data/services/unterbrochene_fahrt_verbuchung.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
@@ -1663,7 +1664,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     const SizedBox(height: 10),
                     _buildDashboardEditHint(),
                     // 2026-08-14 (vucko): Starter-Paket-Aufgaben + Doppel-XP-Countdown.
-                    const StarterPaketKarte(),
+                    StarterPaketKarte(onTabChange: widget.onTabChange),
                     _buildDashboard(),
                     if (_showLegacyHomeBodyForDebug) ...[
                       // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
@@ -6305,6 +6306,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
       },
       child: AnimatedContainer(
+        key: TutorialZielRegistry.key(TutorialZielRegistry.homeRouteSpeichern),
         duration: const Duration(milliseconds: 180),
         // 2026-06-08 (vucko Route-Widget): gleiche Höhe wie der Fahren-Button (44).
         width: 48,

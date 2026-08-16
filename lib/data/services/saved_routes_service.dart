@@ -412,6 +412,10 @@ class SavedRoutesService {
 
   /// Speichert eine bestehende Route (z.B. empfohlene Route) für den aktuellen User.
   static Future<void> saveExistingRoute(SavedRoute route) async {
+    // Starter-Aufgabe „Eine Route speichern" (2026-08-16, T5): Auch die
+    // Home-Empfehlung, Feed-Anhaenge usw. laufen hier — nicht nur der
+    // Abschluss einer Fahrt.
+    unawaited(StarterAufgabenService.instance.markiere('speichern'));
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
 

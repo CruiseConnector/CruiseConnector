@@ -31,6 +31,14 @@ class TutorialZielRegistry {
   static const cruiseModusAtoB = 'cruise_modus_atob';
   static const cruiseSuchknopf = 'cruise_suchknopf';
   static const zielsuche = 'zielsuche';
+  // 2026-08-16 (Testfahrt T5): Schritt-fuer-Schritt-Fuehrung im Strecken-Setup.
+  static const cruiseLaenge = 'cruise_laenge';
+  static const cruiseUmweg = 'cruise_umweg';
+  static const cruiseAutobahn = 'cruise_autobahn';
+  static const cruiseStil = 'cruise_stil';
+  static const cruiseSpeichern = 'cruise_speichern';
+  static const cruiseSetupHilfe = 'cruise_setup_hilfe';
+  static const homeRouteSpeichern = 'home_route_speichern';
 
   /// Liefert den Key für ein Ziel — legt ihn beim ersten Zugriff an.
   static GlobalKey key(String ziel) =>

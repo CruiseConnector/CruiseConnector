@@ -31,11 +31,13 @@ import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/data/services/unterbrochene_fahrt_verbuchung.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/data/services/route_poi_service.dart';
 import 'package:cruise_connect/data/services/opening_hours_parser.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/pip_baum_umschalter.dart';
+import 'package:cruise_connect/presentation/widgets/ziel_hinweis_overlay.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_detail_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_filter_sheet.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
@@ -151,6 +153,14 @@ class CruiseModePage extends StatefulWidget {
 
   static final ValueNotifier<SavedRoute?> pendingRoute =
       ValueNotifier<SavedRoute?>(null);
+
+  /// 2026-08-16 (vucko Testfahrt T5): Wunsch nach einer „So geht das"-Fuehrung
+  /// auf der Cruise-Seite ('route' | 'favorit'). Die Starter-Karte setzt ihn
+  /// und wechselt den Tab; die Cruise-Seite klappt das Setup auf und
+  /// highlightet die Stelle, an der die Aufgabe erledigt wird.
+  static final ValueNotifier<String?> hinweisWunsch = ValueNotifier<String?>(
+    null,
+  );
 
   /// 2026-05-24 (vucko Task #53): Trip-Resume-Signal.
   /// Wird gesetzt wenn HomeCarousel auf Trip-Resume-Card geklickt wird.
@@ -2285,6 +2295,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    CruiseModePage.hinweisWunsch.addListener(_onHinweisWunsch);
     CruiseModePage.pendingTripResume.addListener(_onPendingTripResume);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingRouteIfAvailable();
@@ -3892,6 +3903,200 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
+  // ── 2026-08-16 (vucko Testfahrt T5): „So geht das"-Fuehrungen ────────────
+  //
+  // Zwei Ausloeser: (a) die Starter-Karte auf Home (Aufgabe angetippt →
+  // hinweisWunsch), (b) das Fragezeichen im Strecken-Setup bzw. das erste
+  // Aufklappen nach dem Tutorial (Schritt fuer Schritt: welcher Modus was ist,
+  // Laenge/Umweg, Autobahn, Stil, Suchen).
+
+  static const String _setupFuehrungKey = 'cruise_setup_fuehrung_v1_gesehen';
+  bool _setupFuehrungGeprueft = false;
+  bool _fuehrungLaeuft = false;
+
+  void _onHinweisWunsch() {
+    final wunsch = CruiseModePage.hinweisWunsch.value;
+    if (wunsch == null || !mounted || _disposed) return;
+    CruiseModePage.hinweisWunsch.value = null;
+    unawaited(_zeigeStarterHinweis(wunsch));
+  }
+
+  /// Setup sichtbar machen (aufklappen, ggf. Modus wechseln) und einen Frame
+  /// warten, damit die Ziel-Widgets gebaut sind.
+  Future<void> _setupSichtbarMachen({bool? rundkurs}) async {
+    if (!mounted || _disposed) return;
+    if (_configCollapsed) setState(() => _configCollapsed = false);
+    if (rundkurs != null && _isRoundTrip != rundkurs) {
+      _handleRouteModeChanged(rundkurs);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _zeigeStarterHinweis(String aufgabe) async {
+    if (_fuehrungLaeuft || _isRouteConfirmed) return;
+    // Der Tab-Wechsel braucht einen Moment, bis die Seite vorne liegt.
+    await Future<void>.delayed(const Duration(milliseconds: 380));
+    if (!mounted || _disposed) return;
+    final schritte = switch (aufgabe) {
+      'route' => <HinweisSchritt>[
+        HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseModusRundkurs,
+          titel: 'Modus wählen',
+          text:
+              'Rundkurs bringt dich zurück zum Start, A nach B fährt zu einem '
+              'Ziel. Für die Aufgabe ist beides recht.',
+          vorbereitung: () => _setupSichtbarMachen(),
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseSuchknopf,
+          titel: 'Route suchen',
+          text:
+              'Tippe hier, die App sucht dir eine Strecke. Damit ist die '
+              'Aufgabe erledigt.',
+          aufblasen: 10,
+        ),
+      ],
+      'favorit' => <HinweisSchritt>[
+        HinweisSchritt(
+          ziel: TutorialZielRegistry.zielsuche,
+          titel: 'Ziel eingeben',
+          text:
+              'Tippe hier ein Ziel ein, zum Beispiel deinen Lieblingsplatz. '
+              'Beim Vorschlag den Stern antippen, dann liegt die Adresse in '
+              'deinen Favoriten und ist beim nächsten Mal mit einem Tipp da.',
+          symbol: Icons.star_rounded,
+          vorbereitung: () => _setupSichtbarMachen(rundkurs: false),
+        ),
+      ],
+      _ => const <HinweisSchritt>[],
+    };
+    if (schritte.isEmpty) return;
+    _fuehrungLaeuft = true;
+    try {
+      await showZielHinweise(context, schritte: schritte, letzterKnopf: 'Los geht\'s');
+    } finally {
+      _fuehrungLaeuft = false;
+    }
+  }
+
+  /// Schritt fuer Schritt durch das Strecken-Setup.
+  Future<void> _zeigeSetupFuehrung() async {
+    if (_fuehrungLaeuft || !mounted || _disposed) return;
+    _fuehrungLaeuft = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_setupFuehrungKey, true);
+      final warRundkurs = _isRoundTrip;
+      final schritte = <HinweisSchritt>[
+        HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseModusRundkurs,
+          titel: 'Rundkurs',
+          text:
+              'Du startest und endest am selben Punkt. Ideal für die '
+              'Feierabendrunde: Du sagst nur, wie lang, wir suchen die '
+              'kurvigen Straßen drumherum.',
+          vorbereitung: () => _setupSichtbarMachen(rundkurs: true),
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseLaenge,
+          titel: 'Länge',
+          text: 'So lang soll die Runde ungefähr werden.',
+        ),
+        HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseModusAtoB,
+          titel: 'A nach B',
+          text:
+              'Du gibst ein Ziel ein und wir bringen dich hin, auf Wunsch mit '
+              'Umweg über schöne Straßen statt der schnellsten Strecke.',
+          vorbereitung: () => _setupSichtbarMachen(rundkurs: false),
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.zielsuche,
+          titel: 'Ziel',
+          text:
+              'Name oder Adresse eintippen und einen Vorschlag wählen. Der '
+              'Stern merkt sich die Adresse für später.',
+          symbol: Icons.star_rounded,
+        ),
+        HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseUmweg,
+          titel: 'Umweg',
+          text:
+              'Direkt ist die schnellste Strecke. Kleiner, mittlerer und '
+              'großer Umweg machen die Fahrt etwa doppelt, dreifach oder '
+              'vierfach so lang, dafür schöner.',
+          vorbereitung: () async {
+            if (_selectedDetour == 'Direkt') {
+              setState(() => _selectedDetour = 'Kleiner Umweg');
+              await WidgetsBinding.instance.endOfFrame;
+            }
+          },
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseAutobahn,
+          titel: 'Autobahn an oder aus',
+          text:
+              'Aus heißt: keine Autobahn, nur Landstraßen. Für Cruisen meist '
+              'die schönere Wahl.',
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseStil,
+          titel: 'Stil',
+          text:
+              'Kurvenjagd sucht die engsten Kurven, Sport Mode zügige '
+              'Landstraßen, Abendrunde bleibt entspannt, Entdecker mischt.',
+        ),
+        const HinweisSchritt(
+          ziel: TutorialZielRegistry.cruiseSuchknopf,
+          titel: 'Suchen',
+          text:
+              'Alles eingestellt? Hier tippen. Danach zeigen wir dir die '
+              'Strecke auf der Karte, und mit „Fahrt starten" geht es los.',
+          aufblasen: 10,
+        ),
+      ];
+      if (!mounted || _disposed) return;
+      await showZielHinweise(context, schritte: schritte, letzterKnopf: 'Verstanden');
+      // Modus wieder so, wie der Nutzer ihn hatte.
+      if (mounted && !_disposed && _isRoundTrip != warRundkurs) {
+        _handleRouteModeChanged(warRundkurs);
+      }
+    } finally {
+      _fuehrungLaeuft = false;
+    }
+  }
+
+  /// Beim ERSTEN Aufklappen des Setups nach dem Tutorial einmal automatisch.
+  DateTime? _setupFuehrungLetztePruefung;
+  Future<void> _setupFuehrungBeimErstenMal() async {
+    if (_setupFuehrungGeprueft) return;
+    final jetzt = DateTime.now();
+    final letzte = _setupFuehrungLetztePruefung;
+    if (letzte != null && jetzt.difference(letzte) < const Duration(seconds: 5)) {
+      return;
+    }
+    _setupFuehrungLetztePruefung = jetzt;
+    _setupFuehrungGeprueft = true;
+    try {
+      if (!await AppTutorialService.hasCompleted()) {
+        // Tutorial laeuft/kommt noch — spaeter (gedrosselt) erneut pruefen.
+        _setupFuehrungGeprueft = false;
+        return;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_setupFuehrungKey) ?? false) return;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted || _disposed || _configCollapsed || _isRouteConfirmed) {
+        _setupFuehrungGeprueft = false;
+        return;
+      }
+      await _zeigeSetupFuehrung();
+    } catch (e) {
+      debugPrint('[CruiseMode] Setup-Fuehrung nicht gestartet: $e');
+    }
+  }
+
   void _onPendingRoute() {
     _consumePendingRouteIfAvailable();
   }
@@ -4182,6 +4387,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
+    CruiseModePage.hinweisWunsch.removeListener(_onHinweisWunsch);
     CruiseModePage.pendingTripResume.removeListener(_onPendingTripResume);
     _stopSimulation(restartLiveTracking: false);
     // 2026-07-24 (vucko Wakelock): Sicherheitsnetz — dispose() geht NICHT
@@ -6481,6 +6687,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _isWaypointPlanning &&
         !_showRouteInfoBanner &&
         _routeSearchNoticeTitle == null;
+    // 2026-08-16 (T5): Erstes Aufklappen nach dem Tutorial → Erklaerung.
+    if (!_isRouteConfirmed && widget.groupId == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_disposed && !_configCollapsed) {
+          unawaited(_setupFuehrungBeimErstenMal());
+        }
+      });
+    }
     return Stack(
       key: const ValueKey('config_expanded'),
       children: [
@@ -6658,6 +6872,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                         },
                         onRoundTripChanged: _handleRouteModeChanged,
                         onPlanningTypeChanged: _handlePlanningTypeChanged,
+                        onHilfe: _zeigeSetupFuehrung,
                         onLengthChanged: (v) {
                           if (kDebugMode) {
                             debugPrint('[RouteDebug][UIState] selectedKm=$v');
@@ -8283,6 +8498,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             child: _buildTripLifecycleActions(height: 46),
           ),
         Container(
+          key: TutorialZielRegistry.key(TutorialZielRegistry.cruiseSuchknopf),
           height: 60,
           width: double.infinity,
           decoration: BoxDecoration(

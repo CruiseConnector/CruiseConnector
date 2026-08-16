@@ -1,10 +1,14 @@
 import 'dart:async';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
+import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:cruise_connect/presentation/widgets/ziel_hinweis_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -18,7 +22,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 ///  * Bonus läuft     → „2× XP"-Countdown, tickt im Minutentakt.
 ///  * Bonus vorbei    → die Karte verschwindet ersatzlos.
 class StarterPaketKarte extends StatefulWidget {
-  const StarterPaketKarte({super.key});
+  const StarterPaketKarte({super.key, this.onTabChange});
+
+  /// 2026-08-16 (vucko Testfahrt T5): Aufgabe antippen → direkt hinfuehren
+  /// (Tab wechseln) und dort zeigen, was zu tun ist („so geht das").
+  final ValueChanged<int>? onTabChange;
 
   @override
   State<StarterPaketKarte> createState() => _StarterPaketKarteState();
@@ -215,51 +223,130 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
         ),
         const SizedBox(height: 12),
         for (final aufgabe in StarterAufgabenService.aufgaben)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 5),
-            child: Row(
-              children: [
-                Icon(
-                  dienst.erledigt(aufgabe.id)
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked,
-                  color: dienst.erledigt(aufgabe.id)
-                      ? accent
-                      : Colors.white24,
-                  size: 20,
+          _aufgabenZeile(context, accent, dienst, aufgabe),
+      ],
+    );
+  }
+
+  Widget _aufgabenZeile(
+    BuildContext context,
+    Color accent,
+    StarterAufgabenService dienst,
+    StarterAufgabe aufgabe,
+  ) {
+    final erledigt = dienst.erledigt(aufgabe.id);
+    return Semantics(
+      button: !erledigt,
+      label: erledigt ? '${aufgabe.titel}, erledigt' : '${aufgabe.titel}, zeigen wie',
+      child: InkWell(
+        key: ValueKey('starter_aufgabe_${aufgabe.id}'),
+        onTap: erledigt ? null : () => _fuehreHin(context, aufgabe.id),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+          child: Row(
+            children: [
+              Icon(
+                erledigt
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked,
+                color: erledigt ? accent : Colors.white24,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      aufgabe.titel,
+                      style: TextStyle(
+                        color: erledigt ? Colors.white38 : Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        decoration: erledigt ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
+                    Text(
+                      aufgabe.beschreibung,
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        aufgabe.titel,
-                        style: TextStyle(
-                          color: dienst.erledigt(aufgabe.id)
-                              ? Colors.white38
-                              : Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          decoration: dienst.erledigt(aufgabe.id)
-                              ? TextDecoration.lineThrough
-                              : null,
-                        ),
-                      ),
-                      Text(
-                        aufgabe.beschreibung,
-                        style: const TextStyle(
-                          color: Colors.white38,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+              ),
+              if (!erledigt) ...[
+                const SizedBox(width: 6),
+                // „So geht das": kleiner Hinweis, dass die Zeile hinfuehrt.
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    'Zeigen',
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
               ],
-            ),
+            ],
           ),
-      ],
+        ),
+      ),
     );
+  }
+
+  /// Fuehrt direkt zur Stelle, an der die Aufgabe erledigt wird, und zeigt
+  /// dort per Spotlight, was zu tun ist.
+  Future<void> _fuehreHin(BuildContext context, String id) async {
+    switch (id) {
+      case 'tutorial':
+        await AppTutorialService.requestReplay();
+      case 'route':
+      case 'favorit':
+        CruiseModePage.hinweisWunsch.value = id;
+        widget.onTabChange?.call(2);
+      case 'community':
+        widget.onTabChange?.call(1);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.communityDiscover,
+              titel: 'Community',
+              text:
+                  'Hier siehst du, wer unterwegs ist. Unter „Entdecken" findest '
+                  'du Gruppen und Leute in deiner Nähe. Aufgabe erledigt.',
+            ),
+          ],
+          letzterKnopf: 'Super',
+        );
+      case 'speichern':
+        // Bleibt auf Home: die Empfehlungs-Karte hat den Speichern-Knopf.
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.homeRouteSpeichern,
+              titel: 'Route speichern',
+              text:
+                  'Tippe hier auf der Empfehlungs-Karte, dann liegt die Strecke '
+                  'in deiner Sammlung. Das geht auch nach jeder Fahrt und bei '
+                  'jeder geteilten Route im Feed.',
+              symbol: Icons.bookmark_add_rounded,
+              aufblasen: 10,
+            ),
+          ],
+          letzterKnopf: 'Los geht\'s',
+        );
+      default:
+        break;
+    }
   }
 }

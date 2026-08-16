@@ -11,6 +11,7 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/gespeicherte_adressen_service.dart';
+import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/domain/models/place_suggestion.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/mode_explainer_bubble.dart';
 
@@ -65,6 +66,7 @@ class CruiseSetupCard extends StatefulWidget {
     this.replacingWaypointIndex,
     this.waypointActionsEnabled = true,
     this.onGenerateWaypointSeed,
+    this.onHilfe,
     this.onRemoveLastWaypoint,
     this.onDeleteSelectedWaypoint,
     this.onReplaceSelectedWaypoint,
@@ -112,6 +114,9 @@ class CruiseSetupCard extends StatefulWidget {
   final int? replacingWaypointIndex;
   final bool waypointActionsEnabled;
   final VoidCallback? onGenerateWaypointSeed;
+
+  /// 2026-08-16 (T5): Fragezeichen im Kopf: Schritt-fuer-Schritt-Erklaerung.
+  final VoidCallback? onHilfe;
   final VoidCallback? onRemoveLastWaypoint;
   final VoidCallback? onDeleteSelectedWaypoint;
   final VoidCallback? onReplaceSelectedWaypoint;
@@ -315,13 +320,49 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Strecken-Setup',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Strecken-Setup',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              // 2026-08-16 (vucko Testfahrt T5): Schritt-fuer-Schritt-Erklaerung
+              // des Setups — welcher Modus was ist, Laenge/Umweg, Autobahn,
+              // Stil, Suchen. Laeuft beim ersten Aufklappen automatisch und
+              // hier jederzeit erneut.
+              if (widget.onHilfe != null)
+                Semantics(
+                  button: true,
+                  label: 'Erklärung zum Strecken-Setup',
+                  child: InkWell(
+                    key: TutorialZielRegistry.key(
+                      TutorialZielRegistry.cruiseSetupHilfe,
+                    ),
+                    onTap: widget.onHilfe,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.question_mark_rounded,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 24),
           const Text(
@@ -337,6 +378,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             children: [
               Expanded(
                 child: _LargeModeButton(
+                  key: TutorialZielRegistry.key(
+                    TutorialZielRegistry.cruiseModusRundkurs,
+                  ),
                   label: 'Rundkurs',
                   icon: Icons.loop,
                   isActive: isRoundTrip,
@@ -355,6 +399,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               const SizedBox(width: 12),
               Expanded(
                 child: _LargeModeButton(
+                  key: TutorialZielRegistry.key(
+                    TutorialZielRegistry.cruiseModusAtoB,
+                  ),
                   label: 'A nach B',
                   icon: Icons.alt_route,
                   isActive: !isRoundTrip,
@@ -394,6 +441,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             const Divider(color: Colors.white10, height: 32),
             if (isRoundTrip && !isWaypointPlanning) ...[
               _SelectionRow(
+                key: TutorialZielRegistry.key(
+                  TutorialZielRegistry.cruiseLaenge,
+                ),
                 title: 'Länge',
                 // 2026-08-04 (Merge): Schreibweise bleibt KLEIN. Der Zustand
                 // in cruise_mode_page haelt '50 km'; mit 'Km' wuerde
@@ -406,6 +456,9 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               const Divider(color: Colors.white10, height: 32),
             ],
             _HighwayToggleSwitch(
+              key: TutorialZielRegistry.key(
+                TutorialZielRegistry.cruiseAutobahn,
+              ),
               isEnabled: _avoidHighways,
               onChanged: _setAvoidHighways,
             ),
@@ -432,6 +485,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
           if ((isRoundTrip && !isWaypointPlanning && !isRecording) ||
               (!isRoundTrip && widget.selectedDetour != 'Direkt')) ...[
             _SelectionRow(
+              key: TutorialZielRegistry.key(TutorialZielRegistry.cruiseStil),
               title: 'Stil',
               options: const [
                 'Kurvenjagd',
@@ -450,6 +504,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
 
   Widget _buildDetourSelection() {
     return _SelectionRow(
+      key: TutorialZielRegistry.key(TutorialZielRegistry.cruiseUmweg),
       title: 'Route',
       options: const [
         'Direkt',
@@ -840,205 +895,219 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
           ],
         ),
         const SizedBox(height: 10),
-        TypeAheadField<PlaceSuggestion>(
-          controller: widget.destinationController,
-          focusNode: _zielFokus,
-          debounceDuration: const Duration(milliseconds: 380),
-          suggestionsCallback: (pattern) async {
-            if (pattern.trim().length < 2) return [];
-            try {
-              return await CruiseSetupCard._geocodingService.searchSuggestions(
-                pattern,
-                proximityLatitude: widget.proximityLatitude,
-                proximityLongitude: widget.proximityLongitude,
-              );
-            } catch (e, stack) {
-              debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
-              debugPrintStack(stackTrace: stack);
-              return [];
-            }
-          },
-          // Abgerundete, abgesetzte Vorschlagsbox (wie Google-Maps-Dropdown).
-          decorationBuilder: (context, child) => Material(
-            color: const Color(0xFF161A22),
-            elevation: 8,
-            borderRadius: BorderRadius.circular(16),
-            shadowColor: Colors.black.withValues(alpha: 0.5),
-            clipBehavior: Clip.antiAlias,
-            child: child,
-          ),
-          offset: const Offset(0, 8),
-          constraints: const BoxConstraints(maxHeight: 320),
-          errorBuilder: (context, error) => Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              'Suche gerade nicht möglich. Netz prüfen und erneut versuchen.',
-              style: TextStyle(color: Colors.red.shade200, fontSize: 13),
+        KeyedSubtree(
+          key: TutorialZielRegistry.key(TutorialZielRegistry.zielsuche),
+          child: TypeAheadField<PlaceSuggestion>(
+            controller: widget.destinationController,
+            focusNode: _zielFokus,
+            debounceDuration: const Duration(milliseconds: 380),
+            suggestionsCallback: (pattern) async {
+              if (pattern.trim().length < 2) return [];
+              try {
+                return await CruiseSetupCard._geocodingService
+                    .searchSuggestions(
+                      pattern,
+                      proximityLatitude: widget.proximityLatitude,
+                      proximityLongitude: widget.proximityLongitude,
+                    );
+              } catch (e, stack) {
+                debugPrint('[CruiseSetup] Vorschlags-Suche fehlgeschlagen: $e');
+                debugPrintStack(stackTrace: stack);
+                return [];
+              }
+            },
+            // Abgerundete, abgesetzte Vorschlagsbox (wie Google-Maps-Dropdown).
+            decorationBuilder: (context, child) => Material(
+              color: const Color(0xFF161A22),
+              elevation: 8,
+              borderRadius: BorderRadius.circular(16),
+              shadowColor: Colors.black.withValues(alpha: 0.5),
+              clipBehavior: Clip.antiAlias,
+              child: child,
             ),
-          ),
-          itemBuilder: (context, suggestion) {
-            final parts = suggestion.placeName.split(',');
-            final primary = parts.first.trim();
-            final secondary = parts.length > 1
-                ? parts.sublist(1).join(',').trim()
-                : (suggestion.context ?? '');
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: accent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(11),
+            offset: const Offset(0, 8),
+            constraints: const BoxConstraints(maxHeight: 320),
+            errorBuilder: (context, error) => Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Suche gerade nicht möglich. Netz prüfen und erneut versuchen.',
+                style: TextStyle(color: Colors.red.shade200, fontSize: 13),
+              ),
+            ),
+            itemBuilder: (context, suggestion) {
+              final parts = suggestion.placeName.split(',');
+              final primary = parts.first.trim();
+              final secondary = parts.length > 1
+                  ? parts.sublist(1).join(',').trim()
+                  : (suggestion.context ?? '');
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: Icon(Icons.place_rounded, color: accent, size: 20),
                     ),
-                    child: Icon(Icons.place_rounded, color: accent, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          primary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        if (secondary.isNotEmpty ||
-                            suggestion.distanceMeters != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(
-                              [
-                                if (secondary.isNotEmpty) secondary,
-                                if (suggestion.distanceMeters != null)
-                                  _formatSuggestionDistance(
-                                    suggestion.distanceMeters!,
-                                  ),
-                              ].join(' · '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.5),
-                                fontSize: 12.5,
-                              ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            primary,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                      ],
+                          if (secondary.isNotEmpty ||
+                              suggestion.distanceMeters != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                [
+                                  if (secondary.isNotEmpty) secondary,
+                                  if (suggestion.distanceMeters != null)
+                                    _formatSuggestionDistance(
+                                      suggestion.distanceMeters!,
+                                    ),
+                                ].join(' · '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  fontSize: 12.5,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+            itemSeparatorBuilder: (context, index) => Divider(
+              height: 1,
+              thickness: 1,
+              color: Colors.white.withValues(alpha: 0.05),
+              indent: 62,
+            ),
+            onSelected: (suggestion) {
+              FocusScope.of(context).unfocus();
+              widget.onDestinationSelected(suggestion);
+            },
+            emptyBuilder: (context) => Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.search_off_rounded,
+                    color: Colors.white.withValues(alpha: 0.4),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Kein Treffer. Versuch z.B. „McDonald\'s Dornbirn" '
+                      'oder „Flughafen Zürich".',
+                      style: TextStyle(color: Colors.white54, fontSize: 13),
                     ),
                   ),
                 ],
               ),
-            );
-          },
-          itemSeparatorBuilder: (context, index) => Divider(
-            height: 1,
-            thickness: 1,
-            color: Colors.white.withValues(alpha: 0.05),
-            indent: 62,
-          ),
-          onSelected: (suggestion) {
-            FocusScope.of(context).unfocus();
-            widget.onDestinationSelected(suggestion);
-          },
-          emptyBuilder: (context) => Padding(
-            padding: const EdgeInsets.all(18),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.search_off_rounded,
-                  color: Colors.white.withValues(alpha: 0.4),
-                  size: 18,
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Kein Treffer. Versuch z.B. „McDonald\'s Dornbirn" '
-                    'oder „Flughafen Zürich".',
+            ),
+            loadingBuilder: (context) => Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      color: accent,
+                      strokeWidth: 2,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Suche läuft…',
                     style: TextStyle(color: Colors.white54, fontSize: 13),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          loadingBuilder: (context) => Padding(
-            padding: const EdgeInsets.all(18),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
+            builder: (context, controller, focusNode) => Container(
+              key: _zielFeldSchluessel,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: controller,
+                focusNode: focusNode,
+                maxLength: AppInputLimits.addressMaxLength,
+                inputFormatters: AppInputLimits.lengthFormatters(
+                  AppInputLimits.addressMaxLength,
+                ),
+                textInputAction: TextInputAction.search,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+                onChanged: widget.onDestinationInputChanged,
+                onTapOutside: (_) => FocusScope.of(context).unfocus(),
+                decoration: InputDecoration(
+                  counterText: '',
+                  filled: true,
+                  fillColor: const Color(0xFF1E232C),
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
                     color: accent,
-                    strokeWidth: 2,
+                    size: 22,
                   ),
-                ),
-                const SizedBox(width: 12),
-                const Text(
-                  'Suche läuft…',
-                  style: TextStyle(color: Colors.white54, fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-          builder: (context, controller, focusNode) => Container(
-            key: _zielFeldSchluessel,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              maxLength: AppInputLimits.addressMaxLength,
-              inputFormatters: AppInputLimits.lengthFormatters(
-                AppInputLimits.addressMaxLength,
-              ),
-              textInputAction: TextInputAction.search,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
-              onChanged: widget.onDestinationInputChanged,
-              onTapOutside: (_) => FocusScope.of(context).unfocus(),
-              decoration: InputDecoration(
-                counterText: '',
-                filled: true,
-                fillColor: const Color(0xFF1E232C),
-                prefixIcon: Icon(Icons.search_rounded, color: accent, size: 22),
-                hintText: 'z.B. McDonald\'s, Flughafen Zürich …',
-                hintStyle: const TextStyle(color: Colors.white38, fontSize: 15),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.08),
+                  hintText: 'z.B. McDonald\'s, Flughafen Zürich …',
+                  hintStyle: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 15,
                   ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: accent, width: 1.8),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: accent, width: 1.8),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 16,
+                  ),
                 ),
               ),
             ),
@@ -1135,10 +1204,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               },
             ),
             ListTile(
-              leading: const Icon(
-                Icons.delete_outline,
-                color: Colors.white70,
-              ),
+              leading: const Icon(Icons.delete_outline, color: Colors.white70),
               title: const Text(
                 'Entfernen',
                 style: TextStyle(color: Colors.white),
@@ -1886,6 +1952,7 @@ class _AuswahlAktion extends StatelessWidget {
 
 class _LargeModeButton extends StatelessWidget {
   const _LargeModeButton({
+    super.key,
     required this.label,
     required this.icon,
     required this.isActive,
@@ -1989,6 +2056,7 @@ class _ChoiceButton extends StatelessWidget {
 
 class _HighwayToggleSwitch extends StatelessWidget {
   const _HighwayToggleSwitch({
+    super.key,
     required this.isEnabled,
     required this.onChanged,
   });
@@ -2143,6 +2211,7 @@ class _HighwayToggleSwitch extends StatelessWidget {
 
 class _SelectionRow extends StatelessWidget {
   const _SelectionRow({
+    super.key,
     required this.title,
     required this.options,
     required this.selectedValue,
