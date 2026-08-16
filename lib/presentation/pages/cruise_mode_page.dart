@@ -15,7 +15,6 @@ import 'package:cruise_connect/core/cruise_ui_rules.dart';
 import 'package:flutter/services.dart'
     show HapticFeedback, SystemChrome, DeviceOrientation;
 import 'package:geolocator/geolocator.dart' as geo;
-import 'package:floating/floating.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -32,9 +31,11 @@ import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
+import 'package:cruise_connect/data/services/unterbrochene_fahrt_verbuchung.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/data/services/route_poi_service.dart';
 import 'package:cruise_connect/data/services/opening_hours_parser.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/pip_baum_umschalter.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_detail_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/poi_filter_sheet.dart';
 import 'package:cruise_connect/data/services/road_hazard_service.dart';
@@ -137,6 +138,16 @@ class CruiseModePage extends StatefulWidget {
   /// _uebernehmeAusstehendeRoute konsumiert ihn nach dem Laden der Route.
   static final ValueNotifier<ActiveRideSnapshot?> pendingResumeProgress =
       ValueNotifier<ActiveRideSnapshot?>(null);
+
+  /// 2026-08-16 (vucko Testfahrt T2): Laeuft in DIESEM Prozess gerade eine
+  /// Fahrt-Session (gestartet, pausiert oder im Abschluss)? Die Home-Seite
+  /// darf den lokalen Fahrt-Schnappschuss dann NICHT als „unterbrochene
+  /// Fahrt" behandeln — er gehoert zur laufenden Fahrt. Nur ein Schnappschuss
+  /// OHNE laufende Session ist der Rest einer toten App und wird verbucht /
+  /// zum Fortsetzen angeboten.
+  static final ValueNotifier<bool> fahrtLaeuftImProzess = ValueNotifier<bool>(
+    false,
+  );
 
   static final ValueNotifier<SavedRoute?> pendingRoute =
       ValueNotifier<SavedRoute?>(null);
@@ -771,6 +782,22 @@ class _CruiseModePageState extends State<CruiseModePage>
   // Ampel wird Uhr + Fahrweg genullt, der Watchdog braucht ≥ 75 m ECHTE Fahrt.
   double _watchdogDrivenM = 0.0;
   geo.Position? _watchdogLastPos;
+
+  // 2026-08-16 (vucko Testfahrt T1/T2): Kennung + geplante Laenge der
+  // laufenden Fahrt (fuer den Schnappschuss und den Fortschritt einer
+  // wiederaufgenommenen Fahrt). _istWiederaufnahme: die aktive Route ist die
+  // REST-Strecke einer unterbrochenen Fahrt (Anfahrt schliesst vorwaerts an,
+  // Fortschritt zaehlt gegen die geplante Gesamtlaenge).
+  // _wiederaufnahmeIstRundkurs: die unterbrochene Fahrt war ein Rundkurs —
+  // die Reststrecke wird zwar als A→B gefahren, gebucht/gespeichert wird sie
+  // aber weiter als Rundkurs.
+  String? _aktiveFahrtId;
+  double? _geplanteFahrtKm;
+  bool _istWiederaufnahme = false;
+  bool _wiederaufnahmeIstRundkurs = false;
+  // „Fahrt starten" laeuft gerade (GPS-Fix, Anfahrt, Streak) — das Panel
+  // zeigt sofort „Pause/Beenden", ein zweiter Tipp startet nichts doppelt.
+  bool _fahrtStartLaeuft = false;
   // 2026-06-23 (vucko 2-Geräte-Video „Nav-Freeze bei GPS-Verlust" + „GPS-Hinweis"):
   // GPS-Stall-Watchdog. Friert der Standort-Stream ein (Tunnel/Wald), clampt der
   // Smoother-Predict nach 1,5s → location-getriebener Nav-Tick + Puck + Banner
@@ -3896,10 +3923,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// `_resumeInterruptedRide` in home_content_page setzt. In diesem Fall wird
   /// direkt bestaetigt, damit nur noch EIN Druck noetig ist.
   ///
-  /// Bewusst NICHT auch die Fahrt automatisch starten: Wer die App beendet hat,
-  /// wollte vielleicht aufhoeren. Ein ungefragt weiterlaufender Trip wuerde XP,
-  /// Streak und Fahrtstatistik verfaelschen. Der letzte Druck bleibt beim
-  /// Fahrer.
+  /// 2026-08-16 (vucko Testfahrt T1/T2): „Route soll beim Zurueckwechseln
+  /// automatisch fortgesetzt werden, ohne manuellen Klick." Seit heute wird
+  /// die Fahrt nach dem Bestaetigen auch GESTARTET — mit Waechter
+  /// [_darfAutomatischWeiterfahren]: Der Fahrer muss nahe an der Route stehen
+  /// (≤ 500 m). Steht er weit weg (die Anfahrt waere lang), bleibt die
+  /// Vorschau mit „Fahrt starten", damit er den Anschluss sieht. Der Tipp auf
+  /// „Fahrt fortsetzen" auf der Startseite IST die Absicht weiterzufahren —
+  /// ein zweiter Druck war genau das, was Vucko stoerte.
+  ///
+  /// XP/km des abgebrochenen Teils sind zu diesem Zeitpunkt bereits verbucht
+  /// (UnterbrocheneFahrtVerbuchung beim App-Start). Der Anteil wird hier in
+  /// [_bereitsVerbuchteKm] & Co. gemerkt, damit der Abschluss dieser Fahrt
+  /// nur den REST bucht — angezeigt wird weiterhin die ganze Fahrt.
   Future<void> _uebernehmeAusstehendeRoute(SavedRoute route) async {
     await _loadSavedRoute(route);
     if (!mounted || _disposed) return;
@@ -3907,7 +3943,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       CruiseModePage.pendingResumeProgress.value = null;
       return;
     }
-    if (_isRouteConfirmed || _fullRouteCoordinates.length < 2) return;
+    if (_isRouteConfirmed || _fullRouteCoordinates.length < 2) {
+      // Laden fehlgeschlagen: Fortsetzen-Angebot auf Home wieder freigeben.
+      CruiseModePage.pendingResumeProgress.value = null;
+      CruiseModePage.fahrtLaeuftImProzess.value = false;
+      return;
+    }
 
     // 2026-08-14 (vucko, P2): „Beim spaeteren Fortsetzen wird der bisherige
     // Fortschritt gar nicht ausgewertet — unbedingt loesen."
@@ -3930,6 +3971,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         Duration(seconds: fortschritt.elapsedSeconds),
       );
       _totalPausedSeconds = fortschritt.pausedSeconds.toDouble();
+      _aktiveFahrtId = fortschritt.rideId;
+      _geplanteFahrtKm = fortschritt.plannedDistanceKm ?? fortschritt.distanceKm;
+      _istWiederaufnahme = true;
+      _wiederaufnahmeIstRundkurs = fortschritt.isRoundTrip;
       debugPrint(
         '[CruiseMode] Fortschritt wiederhergestellt: '
         '${fortschritt.drivenKm.toStringAsFixed(1)} km, '
@@ -3938,6 +3983,59 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     debugPrint('[CruiseMode] Wiederaufnahme — Route direkt bestaetigt');
     await _confirmRoute(preserveCurrentProgress: true);
+    if (!mounted || _disposed) return;
+
+    if (_darfAutomatischWeiterfahren(route)) {
+      debugPrint('[CruiseMode] Wiederaufnahme — Fahrt laeuft automatisch weiter');
+      _fahrtStartLaeuft = true;
+      _safeSetState(() {});
+      try {
+        await _startNavigationFlow();
+      } finally {
+        _fahrtStartLaeuft = false;
+        _safeSetState(() {});
+      }
+      // Toast nur, wenn wirklich getrackt wird (Standort-Erlaubnis kann fehlen).
+      if (mounted && !_disposed && _positionSubscription != null) {
+        TopToast.show(
+          context,
+          message: 'Fahrt fortgesetzt — gute Weiterfahrt!',
+          icon: Icons.play_arrow_rounded,
+          duration: const Duration(milliseconds: 2400),
+        );
+      }
+    } else {
+      debugPrint(
+        '[CruiseMode] Wiederaufnahme — zu weit von der Route, Vorschau bleibt',
+      );
+    }
+  }
+
+  /// Waechter fuer den automatischen Weiterstart nach einer Wiederaufnahme:
+  /// Die letzte bekannte Position (frisch aus _loadSavedRoute) muss hoechstens
+  /// [_autoWeiterfahrtMaxAbstandM] von der ORIGINAL-Geometrie der Fahrt
+  /// entfernt sein. Ohne Position: nicht automatisch starten.
+  static const double _autoWeiterfahrtMaxAbstandM = 500.0;
+
+  bool _darfAutomatischWeiterfahren(SavedRoute route) {
+    final pos = _userLocation;
+    if (pos == null) return false;
+    final coordsRaw = (route.geometry['coordinates'] as List?) ?? const [];
+    final coords = coordsRaw
+        .whereType<List>()
+        .where((c) => c.length >= 2)
+        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
+        .toList();
+    if (coords.length < 2) return false;
+    final match = findNearestInWindow(
+      position: pos,
+      coordinates: coords,
+      currentIndex: 0,
+      windowSize: coords.length,
+      maxJumpMeters: double.infinity,
+    );
+    return match.distanceMeters.isFinite &&
+        match.distanceMeters <= _autoWeiterfahrtMaxAbstandM;
   }
 
   // 2026-05-24 (vucko Task #53): Trip-Resume aus Home-Carousel.
@@ -4053,6 +4151,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   @override
   void dispose() {
     _disposed = true;
+    CruiseModePage.fahrtLaeuftImProzess.value = false;
     // 2026-06-17 (vucko 90°-Kipper): Orientierungs-Sperre der Fahransicht wieder
     // aufheben — der Rest der App darf drehen.
     SystemChrome.setPreferredOrientations(const [
@@ -5364,9 +5463,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// normale Aufbau unverändert durchgereicht.
   Widget _pipAware(Widget normal) {
     if (kIsWeb || !Platform.isAndroid) return normal;
-    return PiPSwitcher(
-      childWhenEnabled: _buildPipView(),
-      childWhenDisabled: normal,
+    // 2026-08-16 (vucko Testfahrt T1): NICHT mehr PiPSwitcher — der riss den
+    // ganzen Scaffold beim App-Wechsel ab und baute ihn neu (Fahrtsteuerung
+    // sprang auf „Fahrt starten"). Der eigene Umschalter laesst die
+    // Vollansicht gemountet (Offstage) und legt das PiP-Fenster darueber.
+    return PipBaumUmschalter(
+      vollansicht: normal,
+      pipAnsicht: (_) => _buildPipView(),
     );
   }
 
@@ -7196,6 +7299,9 @@ class _CruiseModePageState extends State<CruiseModePage>
                 ),
                 const SizedBox(height: 4),
                 DriveControlPanel(
+                  // 2026-08-16 (vucko Testfahrt T1): Zustand aus der Fahrt-
+                  // Session, nicht aus dem Widget — ueberlebt jeden Neuaufbau.
+                  driveState: _fahrtzustandFuerPanel,
                   // 2026-08-03 (vucko Route-Aufzeichnen): gleiche Steuerung,
                   // nur ehrlichere Beschriftung — es wird nicht navigiert,
                   // sondern aufgezeichnet.
@@ -7205,13 +7311,33 @@ class _CruiseModePageState extends State<CruiseModePage>
                       ? Icons.fiber_manual_record_rounded
                       : null,
                   onStart: () async {
+                    // 2026-08-16 (T1, Review-Fund): Waehrend des asynchronen
+                    // Starts (GPS-Fix bis 8 s, Anfahrt, Streak) sofort
+                    // „Pause/Beenden" zeigen und keinen zweiten Start zulassen.
+                    if (_fahrtStartLaeuft) return;
+                    _fahrtStartLaeuft = true;
                     _closePauseWindow();
                     _setGroupPaused(false);
-                    if (_isRecordingMode) {
-                      await _startRecordingSession();
-                      return;
+                    _safeSetState(() {});
+                    try {
+                      if (_isRecordingMode) {
+                        // „Weiter" nach Pause in der Aufzeichnung: nur den
+                        // GPS-Strom wieder anwerfen (Review-Fund, vorher lief
+                        // die Aufzeichnung nach einer Pause nicht weiter).
+                        if (_recordingActive && _positionSubscription == null) {
+                          _startNavigationTracking();
+                          _isCameraLocked = true;
+                          unawaited(_activateNavigationCamera());
+                        } else {
+                          await _startRecordingSession();
+                        }
+                      } else {
+                        await _startNavigationFlow();
+                      }
+                    } finally {
+                      _fahrtStartLaeuft = false;
+                      _safeSetState(() {});
                     }
-                    await _startNavigationFlow();
                   },
                   onPause: () {
                     // Pausen-Uhr starten (siehe _totalPausedSeconds).
@@ -7224,6 +7350,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     // 2026-07-06 (vucko Fahrt-Resume): Pause = wahrscheinlichster
                     // Moment vor einem späteren App-Kill → sofort sichern.
                     _persistActiveRideSnapshot(force: true, paused: true);
+                    _safeSetState(() {});
                   },
                   onStop: () {
                     // Wird waehrend einer Pause beendet, muss die laufende
@@ -7232,11 +7359,13 @@ class _CruiseModePageState extends State<CruiseModePage>
                     _setGroupPaused(false);
                     _stopNavigationTracking();
                     _stopSimulation(restartLiveTracking: false);
+                    _panelDurchNutzerGestoppt = true;
                     if (_isRecordingMode) {
                       _onRecordingStopped();
-                      return;
+                    } else {
+                      _onRouteEarlyStopped();
                     }
-                    _onRouteEarlyStopped();
+                    _safeSetState(() {});
                   },
                 ),
               ],
@@ -10282,6 +10411,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _totalDistanceDriven = 0.0;
       _sessionRouteStartIndexInActiveRoute = 0;
       _navigationStartTime = null;
+      CruiseModePage.fahrtLaeuftImProzess.value = false;
+      _aktiveFahrtId = null;
+      _geplanteFahrtKm = null;
+      _istWiederaufnahme = false;
+      _wiederaufnahmeIstRundkurs = false;
       _pauseStartedAt = null;
       _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
@@ -10832,6 +10966,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       _sessionRouteStartIndexInActiveRoute =
           snapshot.sessionRouteStartIndexInActiveRoute;
       _navigationStartTime = snapshot.navigationStartTime;
+      CruiseModePage.fahrtLaeuftImProzess.value =
+          snapshot.navigationStartTime != null;
       // 2026-06-15 (vucko N1): Eine wiederaufgenommene Fahrt ist per Definition
       // hinter dem Fahrt-Start → sofort als eingerastet behandeln, damit die
       // Kaltstart-Reroute-Sperre nicht erneut greift.
@@ -11237,6 +11373,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       _distanceToFinalTargetMeters = null;
       _sessionRouteStartIndexInActiveRoute = 0;
       _navigationStartTime = null;
+      CruiseModePage.fahrtLaeuftImProzess.value = false;
+      _aktiveFahrtId = null;
+      _geplanteFahrtKm = null;
+      _istWiederaufnahme = false;
+      _wiederaufnahmeIstRundkurs = false;
       _pauseStartedAt = null;
       _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
@@ -11612,6 +11753,29 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-08-16 (vucko Testfahrt T1): Der Zustand der Fahrtsteuerung aus der
+  /// Fahrt-Session — dieselbe Wahrheit wie der Schutz in [_startNavigationFlow]
+  /// (`fahrtLaeuftBereits`). Aufzeichnung: [_recordingActive]. Pause: das
+  /// offene Pausenfenster. Damit zeigt das Panel nach JEDEM Neuaufbau
+  /// (Bild-im-Bild, Speicherdruck, App-Wechsel) „Pause/Beenden" statt
+  /// „Fahrt starten", solange die Fahrt laeuft.
+  DriveState get _fahrtzustandFuerPanel {
+    if (_panelDurchNutzerGestoppt) return DriveState.stopped;
+    if (_fahrtStartLaeuft) return DriveState.started;
+    final laeuft = _isRecordingMode
+        ? _recordingActive
+        : _navigationStartTime != null &&
+              (_soloRideStarted || widget.groupId != null);
+    if (!laeuft) return DriveState.stopped;
+    return _pauseStartedAt != null ? DriveState.paused : DriveState.started;
+  }
+
+  /// „Beenden" gedrueckt: Bis zum naechsten Tracking-Start zeigt das Panel
+  /// „Fahrt starten" (das Abschluss-Blatt liegt dann ohnehin darueber). Wird
+  /// in [_startNavigationTracking] geloescht — jeder echte Start, auch der
+  /// programmatische in der Gruppe, hebt es auf.
+  bool _panelDurchNutzerGestoppt = false;
+
   Future<void> _startNavigationFlow() async {
     // 2026-08-12 (vucko): „Bei Appwechsel stoppt Route automatisch und man muss
     // extra wieder auf Route anfangen oder Route beginnen klicken mitten in der
@@ -11736,6 +11900,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _completionSheetShown = false; // neue Fahrt → genau ein Post-Sheet
     _stehtSeitAmZiel = null; // 2026-08-04: Steh-Uhr der vorigen Fahrt weg
     _navigationStartTime = null; // erzwingt eine frische Drive-Session
+    CruiseModePage.fahrtLaeuftImProzess.value = false;
     await _prepareXpStreakContext();
     if (!mounted || _disposed) return;
 
@@ -11963,7 +12128,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       // in der Vorschau, damit Vorschau und Fahrtstart nicht verschieden
       // andocken (das war das „komische" Verhalten). Frische Suchen bleiben
       // unveraendert: Dort ist das Vorwaerts-Andocken richtig.
-      final geladen = _isExistingRouteSession;
+      // 2026-08-16 (T2, Review-Fund): Eine WIEDERAUFNAHME ist keine geladene
+      // Route im Sinne von P3 — der Fahrer hat den Anfang gefahren, die
+      // aktive Route ist die Reststrecke. Beim automatischen Weiterstart
+      // eines FAHRENDEN Fahrers liegt Index 0 (Standpunkt beim Laden) schon
+      // hinter ihm; „Einstieg am Original-Start" haette eine Anfahrt zurueck
+      // plus „Bitte wenden" erzeugt. Also vorwaerts anschliessen.
+      final geladen = _isExistingRouteSession && !_istWiederaufnahme;
       final geschlossen = geladen
           ? _istGeometrischGeschlossen(sourceRoute)
           : _isRoundTrip;
@@ -11975,6 +12146,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         returnToSessionOrigin: geschlossen,
         rebaseClosedLoop: geschlossen,
         preferredJoinIndex: geladen && !geschlossen ? 0 : null,
+        joinNearestForward: _istWiederaufnahme,
         // 2026-07-29 (vucko „beim Rundkurs-Fortsetzen soll der Endpunkt
         // trotzdem zuhause sein"): Bei einer FORTGESETZTEN Runde ist der
         // Startpunkt der Fahrt nicht dort, wo man gerade steht, sondern dort,
@@ -13102,11 +13274,19 @@ class _CruiseModePageState extends State<CruiseModePage>
         forceAccessFromCurrentLocation: true,
         allowDistantAccess: true,
         // Geladene Route: Original bleibt Original, nie Abkuerzungen (P3).
-        nieKuerzen: true,
+        // 2026-08-16 (T1/T2): Eine WIEDERAUFNAHME ist keine Abkuerzung — der
+        // Fahrer hat den Anfang schon gefahren, die Reststrecke wird am
+        // naechsten Punkt voraus angeschlossen.
+        nieKuerzen: route.routeSource != 'resume',
       );
+      // Merker fuer den Start-Pfad (_prepareAccessLegForOffRouteStart) und den
+      // Fortschritt: siehe _istWiederaufnahme. Wird in _applyRouteResult
+      // (Reset) geloescht, deshalb NACH dem Reset setzen — s. u.
+      final istResume = route.routeSource == 'resume';
       if (_isRouteGenerationCancelled(generationId)) return;
 
       _applyRouteResult(preparedPreviewResult);
+      _istWiederaufnahme = istResume;
       _hideRouteSearchStatusForAcceptedRoute();
       final preparedCoordinates = preparedPreviewResult.coordinates;
       final lastCoordinate = preparedCoordinates.last;
@@ -13438,6 +13618,7 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   void _startNavigationTracking() {
+    _panelDurchNutzerGestoppt = false;
     _stopIdlePositionStream(); // Idle-Stream stoppen, Navigation übernimmt
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
@@ -13475,6 +13656,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Navigations-Startzeit setzen (nur beim ersten Start, nicht bei Resume)
     final startsNewDriveSession = _navigationStartTime == null;
     if (startsNewDriveSession) {
+      // 2026-08-16 (T2): Neue Fahrt-Kennung. Liegt vom letzten Mal noch der
+      // Schnappschuss einer NICHT fortgesetzten Fahrt (andere Kennung), wird
+      // ihr gefahrener Teil verbucht, BEVOR die neue Fahrt die Datei
+      // ueberschreibt — die Schreibvorgaenge warten so lange (Sperre im
+      // Service). Nur fuer Solo-Fahrten relevant (Gruppen/Trips sichern nicht).
+      final neueId = 'fahrt_${DateTime.now().millisecondsSinceEpoch}';
+      _aktiveFahrtId = neueId;
+      if (widget.groupId == null && !_tripModeEnabled) {
+        unawaited(
+          ActiveRideSnapshotService.vorNeuerFahrtSichern(
+            neueId,
+            (alt) => UnterbrocheneFahrtVerbuchung.verbucheUndLoesche(alt),
+          ),
+        );
+      }
       _drivenTrackRecorder.reset();
       _totalDistanceDriven = 0.0;
       _maxSpeedMps = 0.0; // 2026-06-23 (vucko Top-Speed): pro Fahrt frisch.
@@ -13492,6 +13688,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _navigationController.clearManeuverDistanceSmoothing();
     }
     _navigationStartTime ??= DateTime.now();
+    CruiseModePage.fahrtLaeuftImProzess.value = true;
     // 2026-07-06 (vucko Fahrt-Resume): Fahrtstart sofort persistieren, damit
     // die Strecke einen App-Kill überlebt (vorher lebte sie nur im RAM).
     _persistActiveRideSnapshot(force: true);
@@ -18466,18 +18663,28 @@ class _CruiseModePageState extends State<CruiseModePage>
       xpKurven: _estimateCompletionCurves(xpKoordinaten),
       trackGeometrie: _drivenTrackRecorder.snapshot().coordinates,
       stil: _selectedStyle,
-      istRundkurs: _isRoundTrip,
+      istRundkurs: _isRoundTrip || _wiederaufnahmeIstRundkurs,
       istAufzeichnung: _isRecordingMode,
       autobahnGemieden: _activeAvoidHighways || _avoidHighways,
       streakTage: _xpStreakDays,
       topSpeedKmh: _maxSpeedMps * 3.6,
+      geplanteKm: _istWiederaufnahme ? _geplanteFahrtKm : null,
     );
   }
 
   // Ab hier: Zugriffe, die im Hintergrund den eingefrorenen Wert bevorzugen.
+  /// Geplante Gesamtlaenge in Metern fuer den Fortschritt einer
+  /// wiederaufgenommenen Fahrt; null bei normalen Fahrten.
+  double? get _abschlussGeplanteWiederaufnahmeM {
+    final km = _eingefrorenerAbschluss != null
+        ? _eingefrorenerAbschluss!.geplanteKm
+        : (_istWiederaufnahme ? _geplanteFahrtKm : null);
+    return km != null && km > 0 ? km * 1000.0 : null;
+  }
   String get _abschlussStil => _eingefrorenerAbschluss?.stil ?? _selectedStyle;
   bool get _abschlussIstRundkurs =>
-      _eingefrorenerAbschluss?.istRundkurs ?? _isRoundTrip;
+      _eingefrorenerAbschluss?.istRundkurs ??
+      (_isRoundTrip || _wiederaufnahmeIstRundkurs);
   bool get _abschlussIstAufzeichnung =>
       _eingefrorenerAbschluss?.istAufzeichnung ?? _isRecordingMode;
   bool get _abschlussAutobahnGemieden =>
@@ -18548,8 +18755,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isRecordingMode) {
       return (drivenDistanceMeters ?? 0) > 0 ? 1.0 : 0.0;
     }
+    // 2026-08-16 (T2): Bei einer wiederaufgenommenen Fahrt ist die aktive
+    // Route nur die REST-Strecke; der Fortschritt (XP-Berechtigung, „voll
+    // gefahren") zaehlt gegen die geplante Gesamtlaenge, sonst waere die
+    // Fahrt mit dem eingespielten Vorlauf sofort „100 %".
     final plannedDistanceMeters =
-        _completionRouteResult?.distanceMeters ?? _originalRouteDistance;
+        _abschlussGeplanteWiederaufnahmeM ??
+        _completionRouteResult?.distanceMeters ??
+        _originalRouteDistance;
     if (drivenDistanceMeters == null || drivenDistanceMeters <= 0) {
       return 0.0;
     }
@@ -18816,9 +19029,9 @@ class _CruiseModePageState extends State<CruiseModePage>
   void _onRouteEarlyStopped() {
     if (!mounted || _disposed) return;
     final drivenKm = _drivenTrackRecorder.distanceMeters / 1000;
-    final totalKm = _completionRouteResult?.distanceMeters != null
-        ? _completionRouteResult!.distanceMeters! / 1000
-        : 0.0;
+    final geplantM =
+        _abschlussGeplanteWiederaufnahmeM ?? _completionRouteResult?.distanceMeters;
+    final totalKm = geplantM != null ? geplantM / 1000 : 0.0;
     final progressFraction = totalKm > 0
         ? (drivenKm / totalKm).clamp(0.0, 1.0)
         : 0.0;
@@ -19275,13 +19488,36 @@ class _CruiseModePageState extends State<CruiseModePage>
     final distanceKm =
         route.distanceKm ?? ((route.distanceMeters ?? 0) / 1000.0);
     if (distanceKm <= 0) return;
+    // 2026-08-16 (T2): Kennung einmal je Fahrt; geplante Laenge = die Route
+    // beim ersten Sichern (vor Reroutes), nicht die jeweils aktuelle Rest-Route.
+    _aktiveFahrtId ??= 'fahrt_${startedAt.millisecondsSinceEpoch}';
+    _geplanteFahrtKm ??= distanceKm;
+    final restM = _remainingDistance;
+    final restS = _remainingDuration;
+    // 2026-08-16 (T1/T2, Review-Fund): Gesichert wird die NOCH OFFENE Strecke
+    // ab dem aktuellen Routenpunkt, nicht die ganze Route. Beim Fortsetzen
+    // schliesst die Anfahrt dann am naechsten Punkt VORAUS an. Mit der vollen
+    // Route (Start 30 km hinter dem Fahrer) haette die P3-Regel „Einstieg am
+    // Original-Start" den Fahrer zurueckgeschickt; bei einem Rundkurs haette
+    // die Loop-Rotation die ganze Runde noch einmal aufgelegt.
+    final alle = _fullRouteCoordinates.length >= 2
+        ? _fullRouteCoordinates
+        : route.coordinates;
+    final ab = _currentRouteIndex.clamp(0, math.max(0, alle.length - 2)).toInt();
+    final restCoords = ab > 0 ? alle.sublist(ab) : alle;
+    final restGeometry = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': [
+        for (final c in restCoords) [c[0], c[1]],
+      ],
+    };
     final snapshot = ActiveRideSnapshot(
       savedAt: DateTime.now(),
       startedAt: startedAt,
       style: _selectedStyle,
-      distanceKm: distanceKm,
-      geometry: route.geometry,
-      isRoundTrip: _isRoundTrip,
+      distanceKm: _geplanteFahrtKm ?? distanceKm,
+      geometry: restGeometry,
+      isRoundTrip: _isRoundTrip || _wiederaufnahmeIstRundkurs,
       durationSeconds: route.durationSeconds,
       drivenKm: _totalDistanceDriven / 1000.0,
       elapsedSeconds: DateTime.now().difference(startedAt).inSeconds,
@@ -19293,6 +19529,12 @@ class _CruiseModePageState extends State<CruiseModePage>
           (paused && _pauseStartedAt != null
               ? DateTime.now().difference(_pauseStartedAt!).inSeconds
               : 0),
+      rideId: _aktiveFahrtId,
+      plannedDistanceKm: _geplanteFahrtKm,
+      remainingKm: restM != null && restM.isFinite ? restM / 1000.0 : null,
+      remainingDurationSeconds:
+          restS != null && restS.isFinite && restS > 0 ? restS : null,
+      userId: Supabase.instance.client.auth.currentUser?.id,
     );
     unawaited(
       force
@@ -20035,6 +20277,7 @@ class _AbschlussStand {
     required this.autobahnGemieden,
     required this.streakTage,
     required this.topSpeedKmh,
+    this.geplanteKm,
   });
 
   /// Die tatsaechlich gefahrene Strecke (Track auf die geplante Route gelegt).
@@ -20053,4 +20296,8 @@ class _AbschlussStand {
   final bool autobahnGemieden;
   final int streakTage;
   final double topSpeedKmh;
+
+  /// 2026-08-16 (T2): geplante Gesamtlaenge einer WIEDERAUFGENOMMENEN Fahrt
+  /// (Fortschritt zaehlt dagegen, nicht gegen die Rest-Route). Sonst null.
+  final double? geplanteKm;
 }

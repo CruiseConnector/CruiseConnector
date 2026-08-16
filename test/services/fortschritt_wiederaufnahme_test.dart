@@ -158,9 +158,11 @@ void main() {
     });
 
     test('der Fortschritt wird VOR der Route uebergeben', () {
-      final start = home.indexOf('void _resumeInterruptedRide(');
-      final rumpf = home.substring(start, start + 900);
-      final progress = rumpf.indexOf('pendingResumeProgress.value = ride');
+      final start = home.indexOf('_resumeInterruptedRide(ActiveRideSnapshot ride)');
+      final rumpf = home.substring(start, start + 3200);
+      // 2026-08-16 (T2): Uebergeben wird der FRISCH geladene Schnappschuss
+      // (`aktuell`), damit die Verbuchung vom App-Start nicht verloren geht.
+      final progress = rumpf.indexOf('pendingResumeProgress.value = aktuell');
       final route = rumpf.indexOf('pendingRoute.value = route');
       expect(progress, greaterThan(0));
       expect(

@@ -43,13 +43,32 @@ class ActiveRideSnapshot {
     this.lastLat,
     this.lastLng,
     this.pausedSeconds = 0,
+    this.rideId,
+    this.plannedDistanceKm,
+    this.remainingKm,
+    this.remainingDurationSeconds,
+    this.userId,
+    this.verworfen = false,
   });
 
   /// v2 (2026-08-14, P2): `paused_seconds` kam dazu, damit Vor-Kill-Pausen
   /// beim Fortsetzen nicht als Fahrzeit zaehlen. fromJson liest v1 TOLERANT
   /// (fehlendes Feld = 0) — ein striktes Verwerfen wuerde beim App-Update
   /// genau die Fahrt wegwerfen, die diese Funktion retten soll.
-  static const int schemaVersion = 2;
+  ///
+  /// v3 (2026-08-16, Testfahrt T1/T2): `ride_id`, `planned_distance_km`,
+  /// `remaining_km`, `remaining_duration_seconds`, `user_id`, `verworfen`.
+  ///  * Die Home-Karte zeigte „4 km Route · 33 km gefahren", weil
+  ///    [distanceKm] nach einem Reroute die REST-Route war. Jetzt gibt es die
+  ///    geplante Gesamtlaenge und die Reststrecke (km + Sekunden) als eigene
+  ///    Felder; [geometry] ist seither die NOCH OFFENE Strecke.
+  ///  * [userId]: Nur der Fahrer selbst bekommt die Fahrt angeboten/gebucht —
+  ///    nach einem Kontowechsel auf demselben Geraet nicht der andere.
+  ///  * [verworfen]: „Verwerfen" gedrueckt (oder abgelaufen), aber die
+  ///    Verbuchung des gefahrenen Teils ist noch nicht durch (offline) —
+  ///    Karte nicht mehr zeigen, beim naechsten Start nachbuchen und loeschen
+  ///    (siehe UnterbrocheneFahrtVerbuchung).
+  static const int schemaVersion = 3;
 
   final DateTime savedAt;
   final DateTime startedAt;
@@ -69,6 +88,63 @@ class ActiveRideSnapshot {
   /// Summe aller Pausen vor dem Sichern, in Sekunden.
   final int pausedSeconds;
 
+  /// Eindeutige Kennung dieser Fahrt (bleibt ueber Fortsetzen hinweg gleich).
+  final String? rideId;
+
+  /// Geplante Gesamtlaenge der Route beim Fahrtstart (vor Reroutes).
+  final double? plannedDistanceKm;
+
+  /// Reststrecke laut Navigation zum Zeitpunkt des Sicherns.
+  final double? remainingKm;
+
+  /// Restfahrzeit laut Navigation zum Zeitpunkt des Sicherns.
+  final double? remainingDurationSeconds;
+
+  /// Fahrer, dem die Fahrt gehoert (auth.uid). null bei alten Schnappschuessen.
+  final String? userId;
+
+  /// Fahrt wurde verworfen/ist abgelaufen — nur noch nachzubuchen, nicht
+  /// mehr anzubieten.
+  final bool verworfen;
+
+  /// Geplante Laenge fuer die Anzeige — v3-Feld, sonst der alte Wert.
+  double get anzeigeGeplantKm => plannedDistanceKm ?? distanceKm;
+
+  /// Reststrecke fuer die Anzeige — v3-Feld, sonst geplant minus gefahren.
+  double get anzeigeRestKm =>
+      remainingKm ?? (anzeigeGeplantKm - drivenKm).clamp(0.0, anzeigeGeplantKm);
+
+  /// Reine Fahrsekunden (ohne Pausen).
+  int get fahrSekunden => (elapsedSeconds - pausedSeconds).clamp(0, elapsedSeconds);
+
+  /// Anteil der geplanten Strecke, der schon gefahren ist (0..1+).
+  double get fortschritt =>
+      anzeigeGeplantKm > 0 ? drivenKm / anzeigeGeplantKm : 0.0;
+
+  ActiveRideSnapshot copyWith({DateTime? savedAt, bool? verworfen}) {
+    return ActiveRideSnapshot(
+      savedAt: savedAt ?? this.savedAt,
+      startedAt: startedAt,
+      style: style,
+      distanceKm: distanceKm,
+      geometry: geometry,
+      isRoundTrip: isRoundTrip,
+      durationSeconds: durationSeconds,
+      drivenKm: drivenKm,
+      elapsedSeconds: elapsedSeconds,
+      wasPaused: wasPaused,
+      lastLat: lastLat,
+      lastLng: lastLng,
+      pausedSeconds: pausedSeconds,
+      rideId: rideId,
+      plannedDistanceKm: plannedDistanceKm,
+      remainingKm: remainingKm,
+      remainingDurationSeconds: remainingDurationSeconds,
+      userId: userId,
+      verworfen: verworfen ?? this.verworfen,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
     'version': schemaVersion,
     'saved_at': savedAt.toIso8601String(),
@@ -84,6 +160,13 @@ class ActiveRideSnapshot {
     if (lastLat != null) 'last_lat': lastLat,
     if (lastLng != null) 'last_lng': lastLng,
     'paused_seconds': pausedSeconds,
+    if (rideId != null) 'ride_id': rideId,
+    if (plannedDistanceKm != null) 'planned_distance_km': plannedDistanceKm,
+    if (remainingKm != null) 'remaining_km': remainingKm,
+    if (remainingDurationSeconds != null)
+      'remaining_duration_seconds': remainingDurationSeconds,
+    if (userId != null) 'user_id': userId,
+    'verworfen': verworfen,
   };
 
   static ActiveRideSnapshot? fromJson(Map<String, dynamic> json) {
@@ -116,6 +199,13 @@ class ActiveRideSnapshot {
       lastLat: (json['last_lat'] as num?)?.toDouble(),
       lastLng: (json['last_lng'] as num?)?.toDouble(),
       pausedSeconds: (json['paused_seconds'] as num?)?.toInt() ?? 0,
+      rideId: json['ride_id'] as String?,
+      plannedDistanceKm: (json['planned_distance_km'] as num?)?.toDouble(),
+      remainingKm: (json['remaining_km'] as num?)?.toDouble(),
+      remainingDurationSeconds:
+          (json['remaining_duration_seconds'] as num?)?.toDouble(),
+      userId: json['user_id'] as String?,
+      verworfen: json['verworfen'] == true,
     );
   }
 }
@@ -142,6 +232,8 @@ class ActiveRideSnapshotService {
 
   /// Persistiert den Snapshot sofort (Pause, Backgrounding, Fahrtstart).
   static Future<void> save(ActiveRideSnapshot snapshot) async {
+    final sperre = _sperre;
+    if (sperre != null) await sperre;
     if (_writing) return; // laufenden Write nicht stapeln
     _writing = true;
     try {
@@ -161,14 +253,36 @@ class ActiveRideSnapshotService {
 
   /// Persistiert höchstens alle [_throttle] — für den Positions-Callback.
   static Future<void> saveThrottled(ActiveRideSnapshot snapshot) async {
+    final sperre = _sperre;
+    if (sperre != null) await sperre;
     final last = _lastWriteAt;
     if (last != null && DateTime.now().difference(last) < _throttle) return;
     await save(snapshot);
   }
 
-  /// Lädt den Snapshot; `null` wenn keiner existiert, er kaputt oder zu alt
-  /// ist (kaputte/alte Dateien werden dabei aufgeräumt).
+  /// Markiert den Schnappschuss als verworfen (Karte weg, Nachbuchung offen).
+  static Future<void> markiereVerworfen() async {
+    final s = await loadRoh();
+    if (s == null || s.verworfen) return;
+    await save(s.copyWith(verworfen: true));
+  }
+
+  /// Lädt den Snapshot; `null` wenn keiner existiert, er kaputt, verworfen
+  /// oder zu alt ist (kaputte Dateien werden dabei aufgeräumt; alte und
+  /// verworfene bleiben fuer die Nachbuchung liegen — siehe [loadRoh]).
   static Future<ActiveRideSnapshot?> load() async {
+    final snapshot = await loadRoh();
+    if (snapshot == null) return null;
+    if (snapshot.verworfen || istAbgelaufen(snapshot)) return null;
+    return snapshot;
+  }
+
+  static bool istAbgelaufen(ActiveRideSnapshot s) =>
+      DateTime.now().difference(s.savedAt) > maxAge;
+
+  /// 2026-08-16 (T2): Roh laden — auch verworfene/abgelaufene, damit die
+  /// Home-Seite den gefahrenen Teil noch verbuchen kann, bevor sie loescht.
+  static Future<ActiveRideSnapshot?> loadRoh() async {
     try {
       final file = await _file();
       if (!await file.exists()) return null;
@@ -177,8 +291,7 @@ class ActiveRideSnapshotService {
       final snapshot = decoded is Map<String, dynamic>
           ? ActiveRideSnapshot.fromJson(decoded)
           : null;
-      if (snapshot == null ||
-          DateTime.now().difference(snapshot.savedAt) > maxAge) {
+      if (snapshot == null) {
         await clear();
         return null;
       }
@@ -187,6 +300,36 @@ class ActiveRideSnapshotService {
       debugPrint('[ActiveRideSnapshot] load failed: $e');
       await clear();
       return null;
+    }
+  }
+
+  /// 2026-08-16 (T2): Bevor eine NEUE Fahrt den Schnappschuss ueberschreibt,
+  /// darf ein liegen gebliebener (andere ride_id) noch verbucht werden.
+  /// [verbuche] laeuft mit dem alten Schnappschuss; solange es laeuft, warten
+  /// alle Schreibvorgaenge ([save]/[saveThrottled]) — sonst wuerde der erste
+  /// GPS-Tick der neuen Fahrt den alten Stand wegschreiben, bevor er gelesen
+  /// ist.
+  static Future<void>? _sperre;
+
+  static Future<void> vorNeuerFahrtSichern(
+    String neueRideId,
+    Future<void> Function(ActiveRideSnapshot alt) verbuche,
+  ) async {
+    if (_sperre != null) return;
+    final lauf = () async {
+      try {
+        final alt = await loadRoh();
+        if (alt == null || alt.rideId == neueRideId) return;
+        await verbuche(alt);
+      } catch (e) {
+        debugPrint('[ActiveRideSnapshot] Altbuchung fehlgeschlagen: $e');
+      }
+    }();
+    _sperre = lauf;
+    try {
+      await lauf;
+    } finally {
+      _sperre = null;
     }
   }
 

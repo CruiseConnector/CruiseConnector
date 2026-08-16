@@ -66,9 +66,13 @@ void main() {
     );
   });
 
-  test('_loadSavedRoute aktiviert die Regel', () {
+  test('_loadSavedRoute aktiviert die Regel — ausser bei einer Wiederaufnahme', () {
+    // 2026-08-16 (Testfahrt T1/T2): Eine WIEDERAUFNAHME ist keine Abkuerzung —
+    // der Anfang ist gefahren, die Reststrecke wird vorwaerts angeschlossen.
+    // Fuer gespeicherte, gepostete und aufgezeichnete Routen gilt die Regel
+    // unveraendert (routeSource != 'resume').
     expect(
-      cruise.contains('nieKuerzen: true'),
+      cruise.contains("nieKuerzen: route.routeSource != 'resume'"),
       isTrue,
       reason: 'gespeicherte, gepostete und aufgezeichnete Routen laufen hier',
     );
@@ -77,7 +81,14 @@ void main() {
   test('Fahrtstart dockt nach denselben Regeln an wie die Vorschau', () {
     // Zwei verschiedene Regelwerke fuer denselben Vorgang waren das
     // gemeldete „komische" Verhalten.
-    expect(cruise.contains('final geladen = _isExistingRouteSession;'), isTrue);
+    // 2026-08-16 (Testfahrt T2): Eine WIEDERAUFNAHME ist keine geladene
+    // Route im P3-Sinn — sie schliesst vorwaerts an (siehe
+    // fahrt_weiter_nach_appwechsel_test). Fuer alle anderen geladenen Routen
+    // gilt die Regel unveraendert.
+    expect(
+      cruise.contains('final geladen = _isExistingRouteSession && !_istWiederaufnahme;'),
+      isTrue,
+    );
     expect(
       cruise.contains(
         'preferredJoinIndex: geladen && !geschlossen ? 0 : null,',

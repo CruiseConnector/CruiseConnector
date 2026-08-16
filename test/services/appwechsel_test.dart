@@ -136,11 +136,14 @@ void main() {
       final aufrufe = RegExp(
         r'_startNavigationFlow\(\)',
       ).allMatches(quelle).length;
+      // 2026-08-16 (Testfahrt T1/T2): Definition, der Aufruf vom Knopf und
+      // der automatische Weiterstart nach einer Wiederaufnahme
+      // (_uebernehmeAusstehendeRoute, hinter _darfAutomatischWeiterfahren).
       expect(
         aufrufe,
-        2,
+        3,
         reason:
-            'erwartet: genau die Definition und der eine Aufruf vom Knopf. '
+            'erwartet: Definition, Knopf, Auto-Weiterfahrt nach Wiederaufnahme. '
             'Mehr Aufrufer bedeuten, dass der Schutz auch einen legitimen Weg '
             'blockieren koennte.',
       );
@@ -166,18 +169,25 @@ void main() {
           isTrue);
     });
 
-    test('die Fahrt startet NICHT von selbst', () {
+    test('die Fahrt startet von selbst — aber nur nahe an der Route', () {
+      // 2026-08-16 (Testfahrt T1/T2, vucko): „Route soll beim Zurueckwechseln
+      // automatisch fortgesetzt werden, ohne manuellen Klick." Der Tipp auf
+      // „Fahrt fortsetzen" ist die Absicht; der Waechter verlangt ≤ 500 m
+      // Abstand zur Route, sonst bleibt die Vorschau mit „Fahrt starten".
       final start = quelle.indexOf(
         'Future<void> _uebernehmeAusstehendeRoute(',
       );
-      final rumpf = quelle.substring(start, start + 3200);
+      final rumpf = quelle.substring(start, start + 4500);
       expect(
-        rumpf.contains('_startNavigationFlow()'),
-        isFalse,
+        rumpf.contains('if (_darfAutomatischWeiterfahren(route)) {'),
+        isTrue,
+      );
+      expect(
+        rumpf.contains('await _startNavigationFlow();'),
+        isTrue,
         reason:
-            'wer die App beendet hat, wollte vielleicht aufhoeren. Ein '
-            'ungefragt weiterlaufender Trip wuerde XP, Streak und '
-            'Fahrtstatistik verfaelschen - der letzte Druck bleibt beim Fahrer.',
+            'Vucko (Testfahrt 15.08.): kein zweiter Klick nach dem '
+            'Fortsetzen — die Fahrt laeuft an der Position weiter.',
       );
     });
   });

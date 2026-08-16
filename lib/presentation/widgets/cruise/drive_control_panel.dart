@@ -17,6 +17,14 @@ class DriveControlPanel extends StatefulWidget {
   final String? stopLabel;
   final IconData? startIcon;
 
+  /// 2026-08-16 (vucko Testfahrt T1 „nach App-Wechsel muss ich die Route
+  /// neu starten"): Der Zustand kommt von AUSSEN (Quelle der Wahrheit ist die
+  /// Fahrt-Session der Seite). Vorher lebte er nur hier drin — wurde das Panel
+  /// neu gebaut (Bild-im-Bild, Speicherdruck, Neuaufbau nach App-Wechsel),
+  /// stand es wieder auf „Fahrt starten", obwohl die Fahrt lief. Ohne
+  /// [driveState] verhaelt sich das Panel wie bisher (eigener Zustand).
+  final DriveState? driveState;
+
   const DriveControlPanel({
     super.key,
     this.onStart,
@@ -25,6 +33,7 @@ class DriveControlPanel extends StatefulWidget {
     this.startLabel,
     this.stopLabel,
     this.startIcon,
+    this.driveState,
   });
 
   @override
@@ -32,23 +41,25 @@ class DriveControlPanel extends StatefulWidget {
 }
 
 class _DriveControlPanelState extends State<DriveControlPanel> {
-  DriveState _driveState = DriveState.stopped;
+  DriveState _lokalerZustand = DriveState.stopped;
+
+  DriveState get _driveState => widget.driveState ?? _lokalerZustand;
 
   void _handleStart() {
     if (!mounted) return;
-    setState(() => _driveState = DriveState.started);
+    setState(() => _lokalerZustand = DriveState.started);
     widget.onStart?.call();
   }
 
   void _handlePause() {
     if (!mounted) return;
-    setState(() => _driveState = DriveState.paused);
+    setState(() => _lokalerZustand = DriveState.paused);
     widget.onPause?.call();
   }
 
   void _handleStop() {
     if (!mounted) return;
-    setState(() => _driveState = DriveState.stopped);
+    setState(() => _lokalerZustand = DriveState.stopped);
     widget.onStop?.call();
   }
 

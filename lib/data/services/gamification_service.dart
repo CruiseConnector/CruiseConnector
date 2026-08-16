@@ -380,10 +380,14 @@ class GamificationService {
     double? topSpeedKmh,
     List<List<double>>? trackGeometry,
     String? photoUrl,
+    // 2026-08-16 (T2): Nachbuchung einer unterbrochenen Fahrt traegt das
+    // FAHRT-Datum, nicht den Tag der Buchung (Wochen-Chart, Streak).
+    DateTime? createdAt,
   }) {
     final safeDistanceKm = math.max(0.0, distanceKm);
     return {
       'user_id': userId,
+      if (createdAt != null) 'created_at': createdAt.toUtc().toIso8601String(),
       if (routeId?.trim().isNotEmpty == true) 'route_id': routeId!.trim(),
       'distance_km': double.parse(safeDistanceKm.toStringAsFixed(3)),
       'duration_seconds': math.max(0, durationSeconds),
@@ -438,6 +442,7 @@ class GamificationService {
     double? topSpeedKmh,
     List<List<double>>? trackGeometry,
     String? photoUrl,
+    DateTime? createdAt,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
@@ -458,6 +463,7 @@ class GamificationService {
       topSpeedKmh: topSpeedKmh,
       trackGeometry: trackGeometry,
       photoUrl: photoUrl,
+      createdAt: createdAt,
     );
 
     try {

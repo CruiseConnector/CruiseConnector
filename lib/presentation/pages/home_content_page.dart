@@ -28,6 +28,7 @@ import 'package:cruise_connect/presentation/widgets/community_carousel_card.dart
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:cruise_connect/data/services/active_ride_snapshot_service.dart';
+import 'package:cruise_connect/data/services/unterbrochene_fahrt_verbuchung.dart';
 import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
@@ -456,12 +457,42 @@ class _HomeContentPageState extends State<HomeContentPage>
   /// unschaedlich (gleicher Inhalt, nur frischer).
   Future<void> _ladeUnterbrocheneFahrtSofort() async {
     try {
-      final snapshot = await ActiveRideSnapshotService.load();
+      final snapshot = await _unterbrocheneFahrtLaden();
       if (!mounted || snapshot == null) return;
       setState(() => _resumableRide = snapshot);
     } catch (e) {
       debugPrint('[Home] Fahrt-Snapshot (sofort) laden fehlgeschlagen: $e');
     }
+  }
+
+  /// 2026-08-16 (vucko Testfahrt T2): Schnappschuss einer unterbrochenen Fahrt
+  /// holen — aber NUR, wenn in diesem Prozess keine Fahrt laeuft (sonst
+  /// gehoert er zur laufenden Fahrt und ist kein Fortsetzen-Angebot).
+  ///
+  /// Ist der Schnappschuss verworfen, abgelaufen (48 h) oder gehoert er einem
+  /// anderen Konto, wird er nicht angeboten, sondern im Hintergrund
+  /// abgeschlossen: gefahrener Teil verbuchen (Regeln wie vorzeitiges
+  /// Beenden), Datei loeschen — „was abgebrochen wurde, erfasst die App von
+  /// selbst". Sonst kommt die Karte SOFORT und ohne Netz (Regel vom 29.07.).
+  Future<ActiveRideSnapshot?> _unterbrocheneFahrtLaden() async {
+    if (CruiseModePage.fahrtLaeuftImProzess.value) return null;
+    final roh = await ActiveRideSnapshotService.loadRoh();
+    if (roh == null) return null;
+    if (CruiseModePage.fahrtLaeuftImProzess.value) return null;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final fremd = roh.userId != null && uid != null && roh.userId != uid;
+    if (roh.verworfen || fremd || ActiveRideSnapshotService.istAbgelaufen(roh)) {
+      unawaited(_fahrtImHintergrundAbschliessen(roh));
+      return null;
+    }
+    return roh;
+  }
+
+  /// Verbucht eine nicht fortgesetzte Fahrt und zieht danach die Startseiten-
+  /// Zahlen nach. Fehler bleiben still — der naechste Start versucht es wieder.
+  Future<void> _fahrtImHintergrundAbschliessen(ActiveRideSnapshot s) async {
+    final fertig = await UnterbrocheneFahrtVerbuchung.verbucheUndLoesche(s);
+    if (fertig && mounted) unawaited(_loadStats());
   }
 
   /// 2026-05-28 (vucko Task #68): Schneller initial-Render aus dem letzten
@@ -1364,7 +1395,11 @@ class _HomeContentPageState extends State<HomeContentPage>
       // System beendet), bieten wir „Fahrt fortsetzen" als Home-Card an.
       ActiveRideSnapshot? resumableRide;
       try {
-        resumableRide = await ActiveRideSnapshotService.load();
+        // 2026-08-16 (T2): gleiche Wache wie beim Sofort-Laden — laeuft im
+        // Prozess eine Fahrt, ist der Schnappschuss KEIN Fortsetzen-Angebot.
+        resumableRide = CruiseModePage.fahrtLaeuftImProzess.value
+            ? null
+            : await ActiveRideSnapshotService.load();
       } catch (e) {
         debugPrint('[Home] Fahrt-Snapshot laden fehlgeschlagen: $e');
       }
@@ -5119,12 +5154,14 @@ class _HomeContentPageState extends State<HomeContentPage>
     final ageLabel = ageMinutes < 60
         ? 'vor $ageMinutes Min'
         : 'vor ${(ageMinutes / 60).floor()} Std';
-    final remainingKm = (ride.distanceKm - ride.drivenKm).clamp(
-      0.0,
-      ride.distanceKm,
-    );
+    // 2026-08-16 (vucko Testfahrt T1/T2): Vorher „4 km Route · 33 km
+    // gefahren" — distanceKm war nach einem Reroute die REST-Route. Jetzt
+    // geplante Gesamtlaenge + echte Reststrecke aus dem Schnappschuss (v3),
+    // alte Schnappschuesse fallen auf die alte Rechnung zurueck.
+    final geplantKm = ride.anzeigeGeplantKm;
+    final remainingKm = ride.anzeigeRestKm;
     final metricsLine =
-        '${ride.distanceKm.toStringAsFixed(0)} km Route • '
+        '${geplantKm.toStringAsFixed(0)} km Route • '
         '${ride.drivenKm.toStringAsFixed(0)} km gefahren • ${ride.style}';
     return SizedBox(
       height: _carouselCardHeight,
@@ -5212,8 +5249,9 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
               const SizedBox(height: 4),
               Text(
-                'Noch ~${remainingKm.toStringAsFixed(0)} km offen. Die Route '
-                'wird an deiner Position wieder aufgenommen.',
+                'Noch ~${remainingKm.toStringAsFixed(0)} km offen. Die Fahrt '
+                'läuft an deiner Position automatisch weiter, alles bisher '
+                'Gefahrene zählt mit.',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 11.5,
@@ -5314,28 +5352,68 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  void _resumeInterruptedRide(ActiveRideSnapshot ride) {
+  Future<void> _resumeInterruptedRide(ActiveRideSnapshot ride) async {
+    // 2026-08-16 (T2): Immer den FRISCHEN Schnappschuss von der Platte nehmen
+    // — die Verbuchung beim App-Start hat ihn evtl. gerade fortgeschrieben
+    // (booked_*). Mit einem veralteten Stand wuerde der Abschluss der
+    // fortgesetzten Fahrt den schon gutgeschriebenen Teil erneut buchen.
+    final aktuell = await ActiveRideSnapshotService.load() ?? ride;
+    if (!mounted) return;
+    // Ab jetzt gehoert der Schnappschuss einer laufenden Session — kein
+    // Home-Refresh darf ihn zwischendurch als „tote Fahrt" verbuchen.
+    CruiseModePage.fahrtLaeuftImProzess.value = true;
+    // Die gesicherte Geometrie ist die noch OFFENE Reststrecke — Distanz und
+    // Dauer muessen dazu passen (sonst skaliert der Andock-Slice die Rest-
+    // strecke auf die Gesamtlaenge hoch). Geplante Gesamtlaenge und Rundkurs-
+    // Herkunft reist im Fortschritts-Schnappschuss mit (pendingResumeProgress).
+    final restKm = aktuell.remainingKm ?? _geometrieLaengeKm(aktuell.geometry);
+    final restSek = aktuell.remainingDurationSeconds ??
+        (aktuell.durationSeconds != null && aktuell.anzeigeGeplantKm > 0
+            ? aktuell.durationSeconds! * (restKm / aktuell.anzeigeGeplantKm)
+            : null);
     final route = SavedRoute(
-      id: 'local-resume-${ride.startedAt.millisecondsSinceEpoch}',
-      createdAt: ride.startedAt,
-      style: ride.style,
-      distanceKm: ride.distanceKm,
-      geometry: ride.geometry,
-      durationSeconds: ride.durationSeconds,
-      routeType: ride.isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
+      id: 'local-resume-${aktuell.startedAt.millisecondsSinceEpoch}',
+      createdAt: aktuell.startedAt,
+      style: aktuell.style,
+      distanceKm: restKm > 0 ? restKm : aktuell.anzeigeGeplantKm,
+      geometry: aktuell.geometry,
+      durationSeconds: restSek,
+      // Auch beim Rundkurs ein offener Bogen bis zurueck zum Start: als A→B
+      // laden, dann schliesst die Anfahrt vorwaerts an und die Ankunft zaehlt
+      // am Ende. Gebucht/gespeichert wird trotzdem als Rundkurs
+      // (cruise_mode_page: _wiederaufnahmeIstRundkurs).
+      routeType: 'POINT_TO_POINT',
       routeSource: 'resume',
     );
     // P2 (2026-08-14): Fortschritt VOR der Route setzen — der Route-Listener
     // feuert sofort, und _uebernehmeAusstehendeRoute liest den Fortschritt
     // direkt nach dem Laden.
-    CruiseModePage.pendingResumeProgress.value = ride;
+    CruiseModePage.pendingResumeProgress.value = aktuell;
     CruiseModePage.pendingRoute.value = route;
     widget.onTabChange?.call(2);
   }
 
+  /// „Verwerfen": Karte weg, gefahrener Teil wird im Hintergrund verbucht und
+  /// der Schnappschuss danach geloescht (T2 — nichts geht verloren).
   void _dismissInterruptedRide() {
-    unawaited(ActiveRideSnapshotService.clear());
+    final ride = _resumableRide;
     if (mounted) setState(() => _resumableRide = null);
+    if (ride != null) unawaited(_fahrtImHintergrundAbschliessen(ride));
+  }
+
+  static double _geometrieLaengeKm(Map<String, dynamic> geometry) {
+    final coords = (geometry['coordinates'] as List?) ?? const [];
+    var meter = 0.0;
+    List<double>? vorher;
+    for (final c in coords) {
+      if (c is! List || c.length < 2) continue;
+      final p = [(c[0] as num).toDouble(), (c[1] as num).toDouble()];
+      if (vorher != null) {
+        meter += geo.Geolocator.distanceBetween(vorher[1], vorher[0], p[1], p[0]);
+      }
+      vorher = p;
+    }
+    return meter / 1000.0;
   }
 
   // 2026-05-24 (vucko): Carousel-State für Trip+Heute-Slides.
