@@ -793,6 +793,8 @@ async function callGraphHopper(opts: {
   // senkrecht zur direkten Linie. Ohne diese Felder = direkte Route.
   detourBearingDeg?: number;
   detourPerpendicularKm?: number;
+  // 2026-08-16 (T3): Lage des Umweg-Vias entlang der Direktlinie (0..1).
+  detourAlong?: number;
   // Custom waypoints (zwischen start + end, in order)
   intermediateWaypoints?: Array<{ lat: number; lng: number }>;
   // 2026-06-09 (vucko U-Turn-Fix): Fahrtrichtung am Startpunkt (Grad, 0=Nord).
@@ -839,16 +841,29 @@ async function callGraphHopper(opts: {
     // Auto-detour via senkrecht-Offset (klein/mittel/groß umweg)
     else if (opts.detourPerpendicularKm != null && opts.detourPerpendicularKm > 0
           && opts.detourBearingDeg != null) {
-      const midLat = (opts.startLat + opts.endLat) / 2;
-      const midLng = (opts.startLng + opts.endLng) / 2;
-      // Senkrecht zur direkten Linie:
+      // 2026-08-16 (vucko Testfahrt T3 „A→B zackt, Stufen unterscheiden sich
+      // kaum"): Ein Via senkrecht zur Direktlinie — jetzt nicht mehr nur in
+      // der Mitte, sondern je Kandidat bei [detourAlong] (0.38 / 0.5 / 0.62).
+      // Live an GraphHopper gemessen: Ein Bogen aus drei Vias brachte NICHT
+      // weniger Wenden (die Vias landen in den Bergen auf Sackgassen) und
+      // deutlich laengere Routen; asymmetrische Einzel-Vias erzeugen dagegen
+      // verschieden geformte Schleifen und mehr 0-Wende-Kandidaten. Die
+      // eigentliche Waffe gegen den Stachel ist die Kandidatenwahl (mehr
+      // Kandidaten, harte Wende-Strafe) plus pass_through unten.
+      const along = opts.detourAlong ?? 0.5;
+      const viaLat = opts.startLat + (opts.endLat - opts.startLat) * along;
+      const viaLng = opts.startLng + (opts.endLng - opts.startLng) * along;
       const directBearing = bearingDeg(opts.startLat, opts.startLng, opts.endLat, opts.endLng);
       const perpBearing = (directBearing + opts.detourBearingDeg + 360) % 360;
-      const offset = offsetCoord(midLat, midLng, opts.detourPerpendicularKm, perpBearing);
+      const offset = offsetCoord(viaLat, viaLng, opts.detourPerpendicularKm, perpBearing);
       points.push([offset.lng, offset.lat]);
     }
     points.push([opts.endLng, opts.endLat]);
   }
+  const hatUmwegBogen =
+    !opts.isRoundTrip && opts.detourPerpendicularKm != null &&
+    opts.detourPerpendicularKm > 0 && opts.detourBearingDeg != null &&
+    !(opts.intermediateWaypoints && opts.intermediateWaypoints.length > 0);
   // deno-lint-ignore no-explicit-any
   const ghBody: Record<string, any> = {
     points,
@@ -860,6 +875,12 @@ async function callGraphHopper(opts: {
     locale: 'de',
     // road_class/road_environment Details für echte Autobahn-Erkennung in meta.
     details: ['road_class', 'road_environment'],
+    // 2026-08-16 (T3): Am Umweg-Via NICHT wenden, wenn es eine Weiterfahrt
+    // gibt — GH faehrt dann in Fahrtrichtung durch (heading_penalty). Live
+    // gemessen: macht aus manchem 1-Wende-Kandidaten einen 0-Wende-Kandidaten;
+    // auf einer Sackgasse aendert es nichts (dort hilft nur ein anderer Via).
+    // Nur fuer Umweg-Vias; Wegpunkte-Modus und Rundkurs bleiben wie bisher.
+    ...(hatUmwegBogen ? { pass_through: true } : {}),
   };
   // 2026-06-09 (vucko U-Turn-Fix): EIN heading-Wert = gilt für den Startpunkt.
   // 2026-06-13 (vucko Reroute-Videos): Der POST-Body-Feldname ist `headings`
@@ -1385,7 +1406,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // detour_level 2 = mittel (Sub-WP 6-12 km, 4 Versuche)
   // detour_level 3 = groß (Sub-WP 12-25 km, 5 Versuche)
   const detourLevel = isRoundTrip ? 0 : (req.detour_level ?? 0);
-  const detourSpec: Array<{ bearing: number; distKm: number; side: -1 | 1; family: number }> = [];
+  const detourSpec: Array<{ bearing: number; distKm: number; side: -1 | 1; family: number; along: number }> = [];
   if (!isRoundTrip && req.target_location && detourLevel > 0) {
     const directKm = (() => {
       const R = 6371;
@@ -1441,19 +1462,33 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       ...rotatedAbsBearings.map((b) => b * preferredSide),
       ...rotatedAbsBearings.map((b) => -b * preferredSide),
     ];
-    const limit = detourLevel === 1 ? 4 : detourLevel === 2 ? 6 : 8;
+    // 2026-08-16 (vucko Testfahrt T3): mehr Kandidaten je Stufe (4/6/8 →
+    // 8/12/14) und das Via zusaetzlich bei 38 % / 62 % der Direktlinie statt
+    // nur in der Mitte. Live-Befund: Mit nur einem Mitten-Via hatte fast
+    // jede Umweg-Route eine Wende (Stachel: hin und auf demselben Weg
+    // zurueck) — es fehlte schlicht an Kandidaten OHNE Wende. Die Kandidaten
+    // laufen parallel, die Latenz bleibt bei der laengsten Einzelanfrage.
+    const limit = detourLevel === 1 ? 8 : detourLevel === 2 ? 12 : 14;
     // 2026-05-22 (vucko Task #11): Pro Bearing zwei distanzen probieren —
     // wenn der primäre Sub-WP im Wasser/Berg landet, fängt der kleinere
     // baseKm-Wert oft trotzdem. Verdoppelt effektiv die Erfolgsrate
     // ohne Latenz zu sprengen (Promise.all parallel).
     const seedJitter = 0.90 + (variantSeed % 17) / 100;
+    // 2026-08-16 (T3): Nur noch zwei Distanzen je Peilung (Basis + kleiner).
+    // Die 1,22-fache Variante fuer mittel/gross ist raus — Ueberschuss war
+    // das Problem, nicht Mangel — dafuer decken die Kandidaten mehr Peilungen
+    // ab (verschiedene Taeler/Strassen → mehr wendefreie Kandidaten).
     const distanceVariants = detourLevel >= 2
-      ? [baseKm * seedJitter, Math.max(2, baseKm * 0.68), baseKm * 1.22]
+      ? [baseKm * seedJitter, Math.max(2, baseKm * 0.68)]
       : [baseKm * seedJitter, Math.max(2, baseKm * 0.62)];
+    const alongVariants = [0.5, 0.38, 0.62];
+    let alongIdx = variantSeed % alongVariants.length;
     for (const b of bearingsForStyle) {
       for (const d of distanceVariants) {
         const side = b < 0 ? -1 : 1;
-        detourSpec.push({ bearing: b, distKm: d, side, family: detourSpec.length });
+        const along = alongVariants[alongIdx % alongVariants.length];
+        alongIdx++;
+        detourSpec.push({ bearing: b, distKm: d, side, family: detourSpec.length, along });
         if (detourSpec.length >= limit) break;
       }
       if (detourSpec.length >= limit) break;
@@ -1950,6 +1985,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           preferMainRoads: req.reroute_request === true,
           detourBearingDeg: spec.bearing,
           detourPerpendicularKm: spec.distKm,
+          detourAlong: spec.along,
           // 2026-06-09 (vucko U-Turn-Fix): Reroute startet in Fahrtrichtung.
           headingDeg: req.reroute_request === true ? req.current_heading : undefined,
         }).then((result) => {
@@ -1960,6 +1996,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             result.meta.detour_offset_side = spec.side;
             result.meta.detour_bearing_deg = spec.bearing;
             result.meta.detour_perpendicular_km = Number(spec.distKm.toFixed(2));
+            result.meta.detour_along = spec.along;
             result.meta.detour_family = spec.family;
           }
           return { result, seed: idx };
@@ -2353,10 +2390,16 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     //   1 U-Turn  → 14  (mild; Client akzeptiert, Distanz-Korrektur darf gewinnen)
     //   ≥2 U-Turns → 250+  (quasi Hard-Reject — nur wenn buchstäblich nichts
     //                       anderes existiert, dann lieber als NO_ROUTE)
+    // 2026-08-16 (vucko Testfahrt T3): Bei A→B-UMWEGEN ist EINE Wende genau
+    // der haessliche Stachel (hin und auf demselben Weg zurueck), den der
+    // Nutzer sieht. Dort wiegt sie 60 (statt 14): Ein wendefreier Kandidat
+    // darf bis ~60 % neben der Zieldistanz liegen und gewinnt trotzdem gegen
+    // den exakt passenden Stachel. Rundkurse und Direkt-A→B unveraendert.
+    const einzelWendeStrafe = detourLevel > 0 ? 60 : 14;
     const uTurnPenalty = uTurns === 0
         ? 0
         : uTurns === 1
-        ? 14
+        ? einzelWendeStrafe
         : 250 + (uTurns - 2) * 120;
     const country = countryRouteMetrics(
       c.result.geometry.coordinates as [number, number][],
@@ -2376,7 +2419,18 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       foreignPointFraction: country.foreignPointFraction,
       foreignDistanceFraction: country.foreignDistanceFraction,
       maxForeignSegmentMeters: country.maxForeignSegmentMeters,
-      score: c.deltaPct + stylePenalty + speedPenalty + highwayPenalty +
+      // 2026-08-16 (T3): Bei A→B-Umwegen wiegt ein UEBERSCHUSS ueber die
+      // Zieldistanz 1,6-fach — sonst kippt „mittel" gern auf die Laenge von
+      // „gross" (wendefreie Kandidaten sind bei kleineren Offsets haeufiger,
+      // die Stufen sollen unterscheidbar bleiben).
+      score:
+        (detourLevel > 0 && c.result.distanceKm > targetKm
+          // ab +40 % Ueberschuss zusaetzlich steil — sonst faellt „mittel"
+          // in die Laenge von „gross" (Live-Befund Dornbirn→Bezau: 69 km
+          // fuer Ziel 45).
+          ? c.deltaPct * 1.6 + Math.max(0, c.deltaPct - 40) * 3
+          : c.deltaPct) +
+        stylePenalty + speedPenalty + highwayPenalty +
         uTurnPenalty + countryScorePenalty + mainRoadPenalty +
         (countryRejected ? 10000 : 0),
     };
