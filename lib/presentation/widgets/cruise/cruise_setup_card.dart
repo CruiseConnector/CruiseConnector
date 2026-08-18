@@ -28,6 +28,29 @@ const String kRecordingPlanningType = 'Aufzeichnen';
 class CruiseSetupCard extends StatefulWidget {
   const CruiseSetupCard({
     super.key,
+    // 2026-08-18 (vucko, Aufnahme 07): "Wenn man eine Gruppe erstellen will,
+    // verschwinden die Routentypen - also entweder Rundkurs oder A nach B
+    // verschwindet auf einmal."
+    //
+    // Ursache: Diese Karte steht in ZWEI Seiten (cruise_mode_page.dart und
+    // create_group_page.dart), und beide sind gleichzeitig im Widget-Baum -
+    // home_page.dart baut die Tabs als IndexedStack, der einmal besuchte
+    // Cruise-Tab bleibt fuer immer gemountet. Die Tutorial-Registry vergibt
+    // aber PROZESSWEIT genau EINEN GlobalKey je Ziel-Id
+    // (tutorial_ziel_registry.dart: putIfAbsent). Zwei lebende Widgets mit
+    // demselben GlobalKey = Kollision: im Debug ein roter Assert, im
+    // RELEASE-Build ein stiller Element-Diebstahl. Deshalb sah Vucko die
+    // Knoepfe einfach verschwinden, ohne Fehlermeldung.
+    //
+    // Die beiden Modus-Knoepfe trifft es IMMER, weil sie als einzige
+    // Registry-Ziele in beiden Seiten unbedingt gebaut werden - Laenge,
+    // Autobahn, Stil und Umweg haengen an Modus-Bedingungen und kollidieren
+    // nur zufaellig.
+    //
+    // Loesung: Nur die Cruise-Seite beansprucht die Tutorial-Keys. Das
+    // Tutorial fuehrt ausschliesslich durch den Cruise-Tab, die Gruppenseite
+    // hat gar keine Tutorial-Schritte.
+    this.tutorialZieleRegistrieren = true,
     required this.isRoundTrip,
     required this.planningType,
     required this.selectedLength,
@@ -73,6 +96,10 @@ class CruiseSetupCard extends StatefulWidget {
     this.zeigeAuswahlAktionen = false,
     this.onClearWaypoints,
   });
+
+  /// Siehe Kommentar im Konstruktor: nur EINE Seite darf die
+  /// prozessweit eindeutigen Tutorial-GlobalKeys tragen.
+  final bool tutorialZieleRegistrieren;
 
   final bool isRoundTrip;
   final String planningType;
@@ -140,6 +167,12 @@ class CruiseSetupCard extends StatefulWidget {
 
 class _CruiseSetupCardState extends State<CruiseSetupCard>
     with WidgetsBindingObserver {
+  /// Liefert den Tutorial-GlobalKey nur fuer die Seite, die ihn beanspruchen
+  /// darf. Sonst null - ein Widget ohne Key funktioniert vollstaendig, es ist
+  /// nur fuer das Tutorial nicht auffindbar.
+  Key? _zielKey(String ziel) =>
+      widget.tutorialZieleRegistrieren ? TutorialZielRegistry.key(ziel) : null;
+
   late bool _avoidHighways;
 
   /// 2026-08-12 (vucko): „wenn man das Ziel suchen will, muss man immer
@@ -341,9 +374,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
                   button: true,
                   label: 'Erklärung zum Strecken-Setup',
                   child: InkWell(
-                    key: TutorialZielRegistry.key(
-                      TutorialZielRegistry.cruiseSetupHilfe,
-                    ),
+                    key: _zielKey(TutorialZielRegistry.cruiseSetupHilfe),
                     onTap: widget.onHilfe,
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
@@ -378,9 +409,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             children: [
               Expanded(
                 child: _LargeModeButton(
-                  key: TutorialZielRegistry.key(
-                    TutorialZielRegistry.cruiseModusRundkurs,
-                  ),
+                  key: _zielKey(TutorialZielRegistry.cruiseModusRundkurs),
                   label: 'Rundkurs',
                   icon: Icons.loop,
                   isActive: isRoundTrip,
@@ -399,9 +428,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               const SizedBox(width: 12),
               Expanded(
                 child: _LargeModeButton(
-                  key: TutorialZielRegistry.key(
-                    TutorialZielRegistry.cruiseModusAtoB,
-                  ),
+                  key: _zielKey(TutorialZielRegistry.cruiseModusAtoB),
                   label: 'A nach B',
                   icon: Icons.alt_route,
                   isActive: !isRoundTrip,
@@ -441,9 +468,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             const Divider(color: Colors.white10, height: 32),
             if (isRoundTrip && !isWaypointPlanning) ...[
               _SelectionRow(
-                key: TutorialZielRegistry.key(
-                  TutorialZielRegistry.cruiseLaenge,
-                ),
+                key: _zielKey(TutorialZielRegistry.cruiseLaenge),
                 title: 'Länge',
                 // 2026-08-04 (Merge): Schreibweise bleibt KLEIN. Der Zustand
                 // in cruise_mode_page haelt '50 km'; mit 'Km' wuerde
@@ -456,9 +481,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               const Divider(color: Colors.white10, height: 32),
             ],
             _HighwayToggleSwitch(
-              key: TutorialZielRegistry.key(
-                TutorialZielRegistry.cruiseAutobahn,
-              ),
+              key: _zielKey(TutorialZielRegistry.cruiseAutobahn),
               isEnabled: _avoidHighways,
               onChanged: _setAvoidHighways,
             ),
@@ -485,7 +508,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
           if ((isRoundTrip && !isWaypointPlanning && !isRecording) ||
               (!isRoundTrip && widget.selectedDetour != 'Direkt')) ...[
             _SelectionRow(
-              key: TutorialZielRegistry.key(TutorialZielRegistry.cruiseStil),
+              key: _zielKey(TutorialZielRegistry.cruiseStil),
               title: 'Stil',
               options: const [
                 'Kurvenjagd',
@@ -504,7 +527,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
 
   Widget _buildDetourSelection() {
     return _SelectionRow(
-      key: TutorialZielRegistry.key(TutorialZielRegistry.cruiseUmweg),
+      key: _zielKey(TutorialZielRegistry.cruiseUmweg),
       title: 'Route',
       options: const [
         'Direkt',
@@ -896,7 +919,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
         ),
         const SizedBox(height: 10),
         KeyedSubtree(
-          key: TutorialZielRegistry.key(TutorialZielRegistry.zielsuche),
+          key: _zielKey(TutorialZielRegistry.zielsuche),
           child: TypeAheadField<PlaceSuggestion>(
             controller: widget.destinationController,
             focusNode: _zielFokus,

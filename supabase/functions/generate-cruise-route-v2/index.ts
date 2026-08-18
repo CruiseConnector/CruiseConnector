@@ -1340,10 +1340,18 @@ async function raceForFirstAcceptable<T>(
 // es nochmal. 113-mal.
 //
 // Die Wahrheit steht in GraphHopper selbst: `/info` liefert die Bounding-Box
-// des importierten Graphen. Gemessen auf beiden Mini-PCs am 18.08.:
-// lat 32.90..50.57, lng -5.52..41.66. Alles noerdlich davon — Koeln,
-// Duesseldorf, Dortmund, Hannover, Leipzig, Dresden, Berlin, Hamburg — kann
-// heute keine Route bekommen, egal wie oft man tippt.
+// des importierten Graphen.
+//
+// Gemessen am 18.08. frueh: lat 32.90..50.57 — die Nordkante lief quer durch
+// Deutschland, Frankfurt war die noerdlichste erreichbare Grossstadt. Koeln,
+// Duesseldorf, Dortmund, Hannover, Leipzig, Dresden, Berlin und Hamburg
+// bekamen nie eine Route, egal wie oft jemand tippte.
+//
+// Am 18.08. nachmittags behoben: Norddeutschland wurde in den Ausschnitt
+// aufgenommen, ohne im Sueden etwas aufzugeben (Griechenland, Tuerkei und
+// Rumaenien sind unveraendert drin). Bezahlt wurde das damit, dass PC2
+// keine Fuss- und Radwege mehr importiert — 28,5 Millionen Kanten, die kein
+// Auto und kein Motorrad je befahren kann.
 //
 // WICHTIG: Die Quelle ist der Graph, NICHT die Tabelle `route_pool_coverage`.
 // Die kennt nur Vorarlberg, Baden-Wuerttemberg und Wien und wuerde Villach,
@@ -1504,11 +1512,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       user_message: _draussen.was === 'Startpunkt'
         ? 'Deine Region ist noch nicht freigeschaltet. Wir bauen die Abdeckung ' +
           'Schritt für Schritt aus und haben deine Gegend jetzt vorgemerkt. ' +
-          'Routen funktionieren derzeit im Alpenraum: Österreich, Schweiz, ' +
-          'Süddeutschland, Norditalien und der Balkan.'
+          'Routen funktionieren derzeit in ganz Deutschland, Österreich und ' +
+          'der Schweiz, dazu Norditalien und der Balkan bis Griechenland.'
         : `Dein ${_draussen.was} liegt außerhalb unseres Liefergebiets. ` +
-          'Wir decken derzeit den Alpenraum ab: Österreich, Schweiz, ' +
-          'Süddeutschland, Norditalien und den Balkan.',
+          'Wir decken derzeit ganz Deutschland, Österreich und die Schweiz ab, ' +
+          'dazu Norditalien und den Balkan bis Griechenland.',
       debug_message:
         `coverage_precheck ${_draussen.was} lat=${_draussen.lat.toFixed(4)} lng=${_draussen.lng.toFixed(4)} boxes=${JSON.stringify(_boxen)}`,
       region: classifyCountry(_draussen.lat, _draussen.lng) ?? 'unknown',

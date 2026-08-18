@@ -1334,6 +1334,20 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       if (_lastRoute != null) _buildRouteStats(),
 
                       CruiseSetupCard(
+                        // 2026-08-18 (vucko, Aufnahme 07): "Wenn man eine
+                        // Gruppe erstellen will, verschwinden die Routentypen
+                        // - also entweder Rundkurs oder A nach B verschwindet
+                        // auf einmal."
+                        //
+                        // Diese Seite darf die prozessweit eindeutigen
+                        // Tutorial-GlobalKeys NICHT beanspruchen: Die
+                        // Cruise-Seite bleibt gleichzeitig im Baum
+                        // (home_page.dart baut die Tabs als IndexedStack), und
+                        // zwei lebende Widgets mit demselben GlobalKey
+                        // loeschen sich im Release-Build still gegenseitig aus
+                        // dem Baum. Das Tutorial fuehrt ohnehin nur durch den
+                        // Cruise-Tab; hier gibt es keinen einzigen Schritt.
+                        tutorialZieleRegistrieren: false,
                         isRoundTrip: _isRoundTrip,
                         planningType: _planningType,
                         selectedLength: _selectedLength,
