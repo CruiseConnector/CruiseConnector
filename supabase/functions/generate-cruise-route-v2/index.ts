@@ -1920,10 +1920,31 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       ...absBearingsForStyle.slice(rotation),
       ...absBearingsForStyle.slice(0, rotation),
     ];
-    const bearingsForStyle = [
-      ...rotatedAbsBearings.map((b) => b * preferredSide),
-      ...rotatedAbsBearings.map((b) => -b * preferredSide),
-    ];
+    // 2026-08-19 (Aufgabe 1.4, Live-Messung gegen Produktion): Die beiden
+    // Seiten werden VERSCHRAENKT, nicht hintereinander gehaengt.
+    //
+    // Der Fehler davor: Die Liste war [alle Peilungen Seite A, dann alle
+    // Seite B]. Die Kandidatenschleife bricht aber bei `limit` ab, und bei
+    // zwei Distanzen je Peilung reichen 12 Kandidaten nur fuer 6 Peilungen -
+    // also ausschliesslich fuer Seite A. Die Gegenseite kam NIE dran.
+    //
+    // Gemessen am 19.08. gegen die Produktion, Feldkirch nach Bludenz
+    // (enges Walgau-Tal): Stufe 1 und 2 lieferten jeweils rund 39 %
+    // gegenlaeufige Ueberlappung, also fast vierzig Prozent der Strecke auf
+    // derselben Strasse zurueck. Genau Vuckos Beschwerde vom 16.08. Das
+    // Verdoppeln der Ueberlappungsstrafe aenderte NICHTS - identische Werte,
+    // weil ALLE zwoelf Kandidaten auf derselben Talseite lagen und damit alle
+    // gleich schlecht waren. Eine Strafe kann nur auswaehlen, was erzeugt
+    // wurde.
+    //
+    // Verschraenkt bekommt schon der erste Kandidat einen Gegenspieler auf der
+    // anderen Seite. Die Zahl der Kandidaten bleibt gleich, die Latenz auch
+    // (sie laufen in einem Promise.all).
+    const bearingsForStyle: number[] = [];
+    for (const b of rotatedAbsBearings) {
+      bearingsForStyle.push(b * preferredSide);
+      bearingsForStyle.push(-b * preferredSide);
+    }
     // 2026-08-16 (vucko Testfahrt T3): mehr Kandidaten je Stufe (4/6/8 →
     // 8/12/14) und das Via zusaetzlich bei 38 % / 62 % der Direktlinie statt
     // nur in der Mitte. Live-Befund: Mit nur einem Mitten-Via hatte fast
@@ -2914,16 +2935,30 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     // die HALBE Strecke doppelt faehrt, kostet 0,5 * 60 = 30 Grundstrafe. Bei
     // A→B-Umwegen kommt ab 0,15 ein steiler Teil dazu (300 je voller Einheit),
     // weil dort genau dieser Stachel die Beschwerde war:
-    //   Anteil 0,10 →  6     (Rauschen, z.B. eine Ortsdurchfahrt zweimal)
-    //   Anteil 0,15 →  9     (Schwelle, ab hier steil)
-    //   Anteil 0,30 → 18 + 45 = 63   (rund eine Wende)
-    //   Anteil 0,50 → 30 + 105 = 135 (schlaegt jede Distanz-Feinabstimmung)
+    //   Anteil 0,10 →  12    (Rauschen, z.B. eine Ortsdurchfahrt zweimal)
+    //   Anteil 0,15 →  18    (Schwelle, ab hier steil)
+    //   Anteil 0,30 →  36 + 105 = 141
+    //   Anteil 0,40 →  48 + 175 = 223
+    //   Anteil 0,50 →  60 + 245 = 305 (schlaegt jede Distanz-Abweichung)
     // Rundkurse bekommen nur den Grundterm: dort ist ein Stueck doppelt oft
-    // topologisch unvermeidbar (Taleingang, einzige Brücke).
+    // topologisch unvermeidbar (Taleingang, einzige Bruecke).
+    //
+    // 2026-08-19 NACHGEBESSERT nach der Live-Messung gegen Produktion.
+    // Die erste Fassung wog 60 und 300. Gemessen an drei echten Paaren:
+    // Feldkirch nach Bludenz lieferte bei Stufe 1 und 2 jeweils rund 39 %
+    // gegenlaeufige Ueberlappung - also fast vierzig Prozent der Strecke auf
+    // derselben Strasse zurueck, genau Vuckos Beschwerde. Die Strafe betrug
+    // dort 96 Punkte und damit ungefaehr so viel wie "60 % zu lang"; die
+    // Distanzterme haben sie schlicht ueberstimmt. Dass es anders geht, zeigt
+    // dieselbe Strecke bei Stufe 3: 0,000 Ueberlappung.
+    // Verdoppelt auf 120, steiler Teil auf 700. Bei 39 % kostet das jetzt 216
+    // statt 96 Punkte. Sind ALLE Kandidaten schlecht (einziges Tal, einzige
+    // Bruecke), gewinnt weiterhin der am wenigsten schlechte - es wird nichts
+    // hart verworfen.
     const selbstUeberlappung = Number(c.result.meta.self_overlap_fraction ?? 0);
     const ueberlappStrafe =
-      selbstUeberlappung * 60 +
-      (detourLevel > 0 ? Math.max(0, selbstUeberlappung - 0.15) * 300 : 0);
+      selbstUeberlappung * 120 +
+      (detourLevel > 0 ? Math.max(0, selbstUeberlappung - 0.15) * 700 : 0);
     const country = countryRouteMetrics(
       c.result.geometry.coordinates as [number, number][],
       homeCountryCode,
