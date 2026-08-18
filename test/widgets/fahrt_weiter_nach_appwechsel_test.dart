@@ -354,7 +354,9 @@ void main() {
     test('Home: laufende Fahrt im Prozess ist kein Fortsetzen-Angebot; Karte sofort', () {
       expect(home.contains('CruiseModePage.fahrtLaeuftImProzess.value'), isTrue);
       final i = home.indexOf('Future<void> _ladeUnterbrocheneFahrtSofort()');
-      final rumpf = home.substring(i, i + 500);
+      // 2026-08-18: Fenster grosszuegiger — die Methode entscheidet seit der
+      // Auto-Fortsetzung (Aufgabe 2.2) erst, ob sie die Fahrt selbst startet.
+      final rumpf = home.substring(i, i + 1200);
       expect(rumpf.contains('_unterbrocheneFahrtLaden()'), isTrue);
       expect(rumpf.contains('setState(() => _resumableRide = snapshot)'), isTrue);
       expect(home.contains('await ActiveRideSnapshotService.load() ?? ride'), isTrue);

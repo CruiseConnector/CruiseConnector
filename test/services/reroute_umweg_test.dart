@@ -18,6 +18,11 @@ import 'package:flutter_test/flutter_test.dart';
 /// Varianten-Suche laeuft beim Reroute mit Budget 1 und 4,5 s und fiele fast
 /// immer auf direkt zurueck. Und Faktor 3 auf die REST-Luftlinie ergaebe
 /// mitten in der Fahrt eine voellig neue Schleife statt der gewaehlten.
+///
+/// 2026-08-18 (vucko, 1.1): derselbe Sprung im TRIP-Modus. Die Bedingung
+/// verlangte `_activeIntermediateWaypoints.isEmpty`, Trips setzen aber sehr
+/// wohl eine Stufe (tripDetourVariant aus _selectedDetour) — fuer sie lief
+/// weiter der Ziel-Zweig. Gelockert auf „keine NOCH OFFENEN Stopps".
 void main() {
   late String quelle;
 
@@ -46,23 +51,60 @@ void main() {
     );
   });
 
-  test('Trips mit Zwischenstopps behalten den Ziel-Zweig', () {
-    // Das bewusste Ueberspringen verpasster Stopps haengt am Ziel-Zweig
-    // (_remainingWaypointsForReroute). Der Umweg-Bypass darf nur fuer
-    // A nach B OHNE Zwischenstopps gelten.
+  test('Trips mit gewaehlter Umwegs-Stufe verlieren sie nicht mehr', () {
+    // 2026-08-18 (1.1): Die alte Bedingung war
+    //   (_activeDetourVariant > 0 || _activePointToPointScenic) &&
+    //   _activeIntermediateWaypoints.isEmpty;
+    // Jede Fahrt mit Zwischenstopps fiel damit in den Ziel-Zweig, obwohl der
+    // Trip-Zweig tripDetourVariant setzt. Ohne den Fix waere dieser Test rot.
+    final flagStart = quelle.indexOf('final umwegAktiv =');
+    expect(flagStart, greaterThan(0));
+    final flagRumpf = quelle.substring(flagStart, flagStart + 200);
     expect(
-      quelle.contains('_activeIntermediateWaypoints.isEmpty'),
+      flagRumpf.contains('_activeIntermediateWaypoints.isEmpty'),
+      isFalse,
+      reason:
+          'Trips setzen sehr wohl eine Umwegs-Stufe — „gar keine Stopps" ist '
+          'die falsche Bedingung',
+    );
+    expect(
+      flagRumpf.contains('offeneStopps == 0'),
       isTrue,
+      reason: 'richtig ist: keine NOCH OFFENEN Zwischenstopps',
+    );
+    expect(
+      quelle.contains('if (!_passedWaypointIndices.contains(i)) offeneStopps++;'),
+      isTrue,
+      reason: 'offeneStopps muss die bereits abgehakten Stopps ausnehmen',
+    );
+  });
+
+  test('Trips mit noch offenen Stopps behalten den Ziel-Zweig als Vorab-Zweig', () {
+    // Das bewusste Ueberspringen verpasster Stopps haengt am Ziel-Zweig
+    // (_remainingWaypointsForReroute). Solange Stopps offen sind, muss er
+    // seinen Vorrang behalten — sonst haengt der Rejoin die alte Route samt
+    // verpasstem Stopp wieder an.
+    final vorab = quelle.indexOf(
+      'if (zielZweigMoeglich && offeneStopps > 0) {',
+    );
+    expect(
+      vorab,
+      greaterThan(0),
       reason:
           'sonst verliert der Trip-Modus das Stopp-Ueberspringen beim Reroute',
+    );
+    final leiter = quelle.indexOf('while (rejoinLohntSich &&');
+    expect(leiter, greaterThan(0));
+    expect(
+      vorab,
+      lessThan(leiter),
+      reason: 'der Vorab-Zweig muss VOR der Rejoin-Leiter stehen',
     );
   });
 
   test('der Bypass steht VOR dem Ziel-Zweig', () {
     final flag = quelle.indexOf('final umwegAktiv =');
-    final zweig = quelle.indexOf(
-      '!accessLegMode &&\n          !umwegAktiv',
-    );
+    final zweig = quelle.indexOf('final zielZweigMoeglich =');
     expect(flag, greaterThan(0));
     expect(
       zweig,
@@ -83,6 +125,21 @@ void main() {
       rumpf.contains('umwegDirektFallback'),
       isFalse,
       reason: 'bewusste Entscheidung, dokumentiert im Kommentar',
+    );
+    // Der Ziel-Zweig als letzter Netz-Versuch darf bei aktivem Umweg NICHT
+    // greifen — er haengt an zielZweigMoeglich, und das enthaelt !umwegAktiv.
+    expect(
+      quelle.contains(
+        'if (rerouteResult == null && zielZweigMoeglich && mounted && !_disposed) {',
+      ),
+      isTrue,
+    );
+    expect(
+      quelle.contains(
+        '!_isRoundTrip && destination != null && !accessLegMode && !umwegAktiv',
+      ),
+      isTrue,
+      reason: 'sonst faende der Umweg doch noch den Weg in den Ziel-Zweig',
     );
   });
 }

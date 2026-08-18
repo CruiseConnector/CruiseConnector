@@ -269,6 +269,9 @@ void main() {
           // 2026-08-16 (vucko Testfahrt T6): vierzehn weitere Stufen, alle
           // ueber calculateAndSync (sessionKennzahlen).
           for (var i = 23; i <= 36; i++) 'badge_$i',
+          // 2026-08-18 (Aufgabe 4.2): zwanzig neue Stufen, die die Familien
+          // auf je drei auffuellen. Bestehende IDs blieben unveraendert.
+          for (var i = 37; i <= 56; i++) 'badge_$i',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);

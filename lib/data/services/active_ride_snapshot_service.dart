@@ -26,8 +26,45 @@ import 'package:path_provider/path_provider.dart';
 /// joinNearestForward-Mechanismus schließt dabei automatisch am nächsten
 /// Routenpunkt an, auch wenn der User inzwischen weitergefahren ist.
 ///
-/// Gruppen-Fahrten (Lobby-Rejoin) und Trips (trips-Tabelle) haben eigene
-/// Resume-Mechanismen und werden hier bewusst NICHT gespeichert.
+/// 2026-08-18 (vucko, Aufgabe 2.1 „Fortschritt geht nach App-Neustart oder
+/// Pause verloren"): Der Schnappschuss beschreibt seit v4 eine FAHRT, nicht
+/// mehr nur eine Solo-Route.
+///
+/// Gemessener Ausgangsstand: `_persistActiveRideSnapshot` stieg bei gesetzter
+/// `groupId` oder aktivem Trip-Modus SOFORT aus, und die freie Aufzeichnung
+/// fiel durch die Bedingung `route == null`. Drei von vier Fahrtarten hatten
+/// also gar keinen Schnappschuss — ein Abschuss durch Android loeschte dort
+/// alles. Der Kommentar „haben eigene Resume-Mechanismen" stimmte nur zur
+/// Haelfte: Gruppen-Rejoin und Trip-Resume holen die ROUTE zurueck, aber
+/// keinen einzigen gefahrenen Kilometer.
+///
+/// Deshalb: [fahrtArt] + [groupId] + [tripId]. Wer die Fahrt fortsetzt, kommt
+/// weiterhin ueber den fuer seine Art vorgesehenen Weg zurueck (Lobby, Trip-
+/// Karte, Fortsetzen-Karte); der Schnappschuss liefert dabei den Fortschritt.
+enum FahrtArt {
+  /// Einzelfahrt auf einer geplanten Route.
+  solo('solo'),
+
+  /// Gruppenfahrt (Rueckweg fuehrt ueber die Lobby).
+  gruppe('gruppe'),
+
+  /// Trip-Modus (Rueckweg fuehrt ueber die Trip-Karte).
+  trip('trip'),
+
+  /// Freie Aufzeichnung ohne geplante Route.
+  aufzeichnung('aufzeichnung');
+
+  const FahrtArt(this.code);
+  final String code;
+
+  static FahrtArt vonCode(String? code) {
+    for (final a in FahrtArt.values) {
+      if (a.code == code) return a;
+    }
+    return FahrtArt.solo;
+  }
+}
+
 class ActiveRideSnapshot {
   const ActiveRideSnapshot({
     required this.savedAt,
@@ -49,6 +86,11 @@ class ActiveRideSnapshot {
     this.remainingDurationSeconds,
     this.userId,
     this.verworfen = false,
+    this.fahrtArt = FahrtArt.solo,
+    this.groupId,
+    this.tripId,
+    this.topSpeedKmh = 0,
+    this.autobahnGemieden = false,
   });
 
   /// v2 (2026-08-14, P2): `paused_seconds` kam dazu, damit Vor-Kill-Pausen
@@ -68,7 +110,18 @@ class ActiveRideSnapshot {
   ///    Verbuchung des gefahrenen Teils ist noch nicht durch (offline) —
   ///    Karte nicht mehr zeigen, beim naechsten Start nachbuchen und loeschen
   ///    (siehe UnterbrocheneFahrtVerbuchung).
-  static const int schemaVersion = 3;
+  ///
+  /// v4 (2026-08-18, Aufgabe 2.1/2.3): `fahrt_art`, `group_id`, `trip_id`,
+  /// `top_speed_kmh`, `autobahn_gemieden`.
+  ///  * [fahrtArt]: Gruppenfahrt, Trip und freie Aufzeichnung werden jetzt
+  ///    mitgesichert. Vorher hatten sie GAR KEINEN Schnappschuss.
+  ///  * [topSpeedKmh]: Die Hoechstgeschwindigkeit stand in keinem Feld, geht
+  ///    aber als `top_speed_kmh` in die Fahrt ein. Nach dem Fortsetzen stand
+  ///    sie wieder auf 0 — wer vor dem Abschuss 180 fuhr und danach nur noch
+  ///    50, bekam 50 in seine Fahrt geschrieben.
+  ///  * [autobahnGemieden]: gleiche Sorte Verlust, geht in die gespeicherte
+  ///    Strecke ein.
+  static const int schemaVersion = 4;
 
   final DateTime savedAt;
   final DateTime startedAt;
@@ -107,6 +160,25 @@ class ActiveRideSnapshot {
   /// mehr anzubieten.
   final bool verworfen;
 
+  /// Um welche Art Fahrt geht es (bestimmt den Rueckweg).
+  final FahrtArt fahrtArt;
+
+  /// Gruppe, in der gefahren wurde (nur bei [FahrtArt.gruppe]).
+  final String? groupId;
+
+  /// Trip, zu dem die Fahrt gehoert (nur bei [FahrtArt.trip]).
+  final String? tripId;
+
+  /// Hoechstgeschwindigkeit in km/h bis zum Sichern.
+  final double topSpeedKmh;
+
+  /// Fahrt lief mit „Autobahn aus".
+  final bool autobahnGemieden;
+
+  /// Eine freie Aufzeichnung hat keine geplante Route — Fortschritts- und
+  /// Restrechnungen, die auf eine Planung zeigen, gelten fuer sie nicht.
+  bool get hatGeplanteRoute => fahrtArt != FahrtArt.aufzeichnung;
+
   /// Geplante Laenge fuer die Anzeige — v3-Feld, sonst der alte Wert.
   double get anzeigeGeplantKm => plannedDistanceKm ?? distanceKm;
 
@@ -118,8 +190,39 @@ class ActiveRideSnapshot {
   int get fahrSekunden => (elapsedSeconds - pausedSeconds).clamp(0, elapsedSeconds);
 
   /// Anteil der geplanten Strecke, der schon gefahren ist (0..1+).
-  double get fortschritt =>
-      anzeigeGeplantKm > 0 ? drivenKm / anzeigeGeplantKm : 0.0;
+  ///
+  /// Eine freie Aufzeichnung hat kein Soll — sie ist per Definition komplett,
+  /// sonst wuerde die Mindestfortschritts-Regel (20 %) sie wegwerfen, obwohl
+  /// jeder aufgezeichnete Kilometer echt gefahren ist.
+  double get fortschritt => !hatGeplanteRoute
+      ? 1.0
+      : (anzeigeGeplantKm > 0 ? drivenKm / anzeigeGeplantKm : 0.0);
+
+  /// 2026-08-18 (vucko, Aufgabe 2.2 „dass man halt noch manuell klicken muss,
+  /// dass man die Route erneut starten muss"): Darf diese Fahrt OHNE jeden
+  /// Tipp weiterlaufen, sobald die App wieder da ist?
+  ///
+  /// Bewusst eng, denn niemand darf in einer Fahrt landen, die er nicht mehr
+  /// wollte. Der zweite Waechter sitzt in der Fahransicht
+  /// (`_darfAutomatischWeiterfahren`, Abstand zur Route); scheitert einer von
+  /// beiden, bleibt die Vorschau mit „Fahrt starten" erreichbar.
+  ///
+  ///  * Nur Einzelfahrten: Gruppe und Trip kommen ueber Lobby bzw. Trip-Karte
+  ///    zurueck, eine Aufzeichnung startet man bewusst.
+  ///  * Nicht pausiert: Wer pausiert hat, hat sich gegen das Weiterfahren
+  ///    entschieden.
+  ///  * Frisch: [autoFortsetzenFrist] seit dem letzten Sichern. Wer am
+  ///    naechsten Morgen die App oeffnet, will keine Navigation.
+  ///  * Es muss etwas gefahren UND etwas offen sein.
+  static const Duration autoFortsetzenFrist = Duration(minutes: 15);
+
+  bool get darfOhneTippFortsetzen {
+    if (fahrtArt != FahrtArt.solo) return false;
+    if (verworfen || wasPaused) return false;
+    if (DateTime.now().difference(savedAt) > autoFortsetzenFrist) return false;
+    if (drivenKm < 0.2) return false;
+    return anzeigeRestKm > 0.1;
+  }
 
   ActiveRideSnapshot copyWith({DateTime? savedAt, bool? verworfen}) {
     return ActiveRideSnapshot(
@@ -142,6 +245,11 @@ class ActiveRideSnapshot {
       remainingDurationSeconds: remainingDurationSeconds,
       userId: userId,
       verworfen: verworfen ?? this.verworfen,
+      fahrtArt: fahrtArt,
+      groupId: groupId,
+      tripId: tripId,
+      topSpeedKmh: topSpeedKmh,
+      autobahnGemieden: autobahnGemieden,
     );
   }
 
@@ -167,6 +275,11 @@ class ActiveRideSnapshot {
       'remaining_duration_seconds': remainingDurationSeconds,
     if (userId != null) 'user_id': userId,
     'verworfen': verworfen,
+    'fahrt_art': fahrtArt.code,
+    if (groupId != null) 'group_id': groupId,
+    if (tripId != null) 'trip_id': tripId,
+    'top_speed_kmh': topSpeedKmh,
+    'autobahn_gemieden': autobahnGemieden,
   };
 
   static ActiveRideSnapshot? fromJson(Map<String, dynamic> json) {
@@ -183,8 +296,15 @@ class ActiveRideSnapshot {
         distanceKm == null) {
       return null;
     }
+    final fahrtArt = FahrtArt.vonCode(json['fahrt_art'] as String?);
     final coords = geometry['coordinates'];
-    if (coords is! List || coords.length < 2) return null;
+    // 2026-08-18 (Aufgabe 2.1): Eine geplante Route BRAUCHT zwei Punkte —
+    // ohne sie ist der Schnappschuss nutzlos und wird wie bisher verworfen.
+    // Eine freie Aufzeichnung hat dagegen gar keine Planung; ihre Geometrie
+    // ist der bisher gefahrene Track und darf beim allerersten Sichern noch
+    // leer sein. Frueher fiel genau diese Fahrt hier heraus.
+    if (coords is! List) return null;
+    if (fahrtArt != FahrtArt.aufzeichnung && coords.length < 2) return null;
     return ActiveRideSnapshot(
       savedAt: savedAt,
       startedAt: startedAt,
@@ -206,6 +326,11 @@ class ActiveRideSnapshot {
           (json['remaining_duration_seconds'] as num?)?.toDouble(),
       userId: json['user_id'] as String?,
       verworfen: json['verworfen'] == true,
+      fahrtArt: fahrtArt,
+      groupId: json['group_id'] as String?,
+      tripId: json['trip_id'] as String?,
+      topSpeedKmh: (json['top_speed_kmh'] as num?)?.toDouble() ?? 0,
+      autobahnGemieden: json['autobahn_gemieden'] == true,
     );
   }
 }
@@ -249,6 +374,14 @@ class ActiveRideSnapshotService {
     } finally {
       _writing = false;
     }
+  }
+
+  /// 2026-08-18 (Aufgabe 2.1): Steht der naechste gedrosselte Schreibvorgang
+  /// ueberhaupt an? Der Aufrufer baut den Schnappschuss (Geometrie kopieren)
+  /// sonst im Sekundentakt zusammen, nur damit [saveThrottled] ihn wegwirft.
+  static bool get schreibfaellig {
+    final last = _lastWriteAt;
+    return last == null || DateTime.now().difference(last) >= _throttle;
   }
 
   /// Persistiert höchstens alle [_throttle] — für den Positions-Callback.

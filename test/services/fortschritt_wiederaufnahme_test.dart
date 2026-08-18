@@ -158,7 +158,10 @@ void main() {
     });
 
     test('der Fortschritt wird VOR der Route uebergeben', () {
-      final start = home.indexOf('_resumeInterruptedRide(ActiveRideSnapshot ride)');
+      // 2026-08-18: Anker auf die DEFINITION statt auf die volle
+      // Parameterliste — die Methode hat seit der Auto-Fortsetzung einen
+      // benannten Parameter (`ohneTipp`) und damit eine umbrochene Signatur.
+      final start = home.indexOf('Future<void> _resumeInterruptedRide(');
       final rumpf = home.substring(start, start + 3200);
       // 2026-08-16 (T2): Uebergeben wird der FRISCH geladene Schnappschuss
       // (`aktuell`), damit die Verbuchung vom App-Start nicht verloren geht.

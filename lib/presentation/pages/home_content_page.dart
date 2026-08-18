@@ -472,15 +472,40 @@ class _HomeContentPageState extends State<HomeContentPage>
   /// Holt den lokalen Fahrt-Snapshot sofort, ohne auf irgendetwas zu warten.
   /// [_loadStats] setzt spaeter denselben Wert nochmal — das ist gewollt und
   /// unschaedlich (gleicher Inhalt, nur frischer).
+  ///
+  /// 2026-08-18 (vucko, Aufgabe 2.2): „dass man halt noch manuell klicken
+  /// muss, dass man die Route erneut starten muss."
+  ///
+  /// Bis heute gab es genau EINEN Aufrufer von [_resumeInterruptedRide]: den
+  /// Knopf auf der Karte. Der Waechter fuer die automatische Weiterfahrt in
+  /// der Fahransicht lief also erst, NACHDEM der Fahrer getippt hatte — dieser
+  /// Tipp war der Rest, den er von Hand machte. Ist die Fahrt frisch
+  /// abgerissen (`darfOhneTippFortsetzen`: Einzelfahrt, nicht pausiert,
+  /// juenger als 15 Minuten, etwas gefahren und etwas offen), setzt die App
+  /// sie jetzt von selbst fort. Scheitert es dort (zu weit von der Route, kein
+  /// GPS), bleibt die Vorschau mit „Fahrt starten" erreichbar — niemand soll
+  /// in einer Fahrt landen, die er nicht wollte.
   Future<void> _ladeUnterbrocheneFahrtSofort() async {
     try {
       final snapshot = await _unterbrocheneFahrtLaden();
       if (!mounted || snapshot == null) return;
+      if (!_autoFortsetzenVersucht && snapshot.darfOhneTippFortsetzen) {
+        _autoFortsetzenVersucht = true;
+        debugPrint('[Home] Fahrt laeuft ohne Tipp weiter (${snapshot.rideId})');
+        await _resumeInterruptedRide(snapshot, ohneTipp: true);
+        return;
+      }
+      if (!mounted) return;
       setState(() => _resumableRide = snapshot);
     } catch (e) {
       debugPrint('[Home] Fahrt-Snapshot (sofort) laden fehlgeschlagen: $e');
     }
   }
+
+  /// Der Selbstlauf wird pro Sitzung genau einmal versucht — sonst wuerde ein
+  /// zweiter Home-Refresh den Fahrer erneut in die Fahransicht schieben,
+  /// nachdem er bewusst zurueckgegangen ist.
+  bool _autoFortsetzenVersucht = false;
 
   /// 2026-08-16 (vucko Testfahrt T2): Schnappschuss einer unterbrochenen Fahrt
   /// holen — aber NUR, wenn in diesem Prozess keine Fahrt laeuft (sonst
@@ -500,6 +525,15 @@ class _HomeContentPageState extends State<HomeContentPage>
     final fremd = roh.userId != null && uid != null && roh.userId != uid;
     if (roh.verworfen || fremd || ActiveRideSnapshotService.istAbgelaufen(roh)) {
       unawaited(_fahrtImHintergrundAbschliessen(roh));
+      return null;
+    }
+    // 2026-08-18 (Aufgabe 2.1): Gruppenfahrt und Trip haben seit heute einen
+    // Schnappschuss — ihr Rueckweg fuehrt aber ueber die Lobby bzw. die
+    // Trip-Karte, nicht ueber diese Karte. Wuerden wir sie hier als Einzel-
+    // fahrt anbieten, verloere der Fahrer genau das, weswegen er zurueckkommt:
+    // seine Gruppe. Der Schnappschuss bleibt liegen und wird beim Wieder-
+    // einstieg eingespielt (cruise_mode_page) oder nach Ablauf verbucht.
+    if (roh.fahrtArt == FahrtArt.gruppe || roh.fahrtArt == FahrtArt.trip) {
       return null;
     }
     return roh;
@@ -1443,9 +1477,11 @@ class _HomeContentPageState extends State<HomeContentPage>
       try {
         // 2026-08-16 (T2): gleiche Wache wie beim Sofort-Laden — laeuft im
         // Prozess eine Fahrt, ist der Schnappschuss KEIN Fortsetzen-Angebot.
-        resumableRide = CruiseModePage.fahrtLaeuftImProzess.value
-            ? null
-            : await ActiveRideSnapshotService.load();
+        // 2026-08-18 (Aufgabe 2.1): Ueber denselben Filter wie das
+        // Sofort-Laden — sonst kaeme eine Gruppen- oder Trip-Fahrt hier doch
+        // noch als Einzelfahrt-Angebot durch, und ein verworfener/abgelaufener
+        // Schnappschuss wuerde nicht verbucht.
+        resumableRide = await _unterbrocheneFahrtLaden();
       } catch (e) {
         debugPrint('[Home] Fahrt-Snapshot laden fehlgeschlagen: $e');
       }
@@ -5215,9 +5251,36 @@ class _HomeContentPageState extends State<HomeContentPage>
     // alte Schnappschuesse fallen auf die alte Rechnung zurueck.
     final geplantKm = ride.anzeigeGeplantKm;
     final remainingKm = ride.anzeigeRestKm;
-    final metricsLine =
-        '${geplantKm.toStringAsFixed(0)} km Route • '
-        '${ride.drivenKm.toStringAsFixed(0)} km gefahren • ${ride.style}';
+    final istAufzeichnung = ride.fahrtArt == FahrtArt.aufzeichnung;
+    final metricsLine = istAufzeichnung
+        ? '${ride.drivenKm.toStringAsFixed(0)} km aufgezeichnet • ${ride.style}'
+        : '${geplantKm.toStringAsFixed(0)} km Route • '
+              '${ride.drivenKm.toStringAsFixed(0)} km gefahren • ${ride.style}';
+    // 2026-08-18 (vucko, Aufgabe 2.3): „Nach komplettem Schliessen und
+    // Wiederoeffnen sind die vorher gesammelten XP und Fahrtdaten schon
+    // eingetragen."
+    //
+    // Als zweite Zeile in `user_drive_sessions` darf das NICHT passieren
+    // (CLAUDE.md: eine gefahrene Fahrt = genau eine Zeile, sonst zaehlen
+    // Badges wie „Anzahl Fahrten" doppelt). Sichtbar sein muss es trotzdem,
+    // sonst wirkt die Fahrt wie verloren. Also: Zwischenstand beziffern und
+    // dazusagen, dass am Ende EINE Fahrt daraus wird.
+    //
+    // Die XP werden ohne Streak-Multiplikator gerechnet (der braucht das
+    // Netz, die Karte kommt bewusst ohne). Deshalb „ca." — es wird am Ende
+    // eher mehr, nie weniger.
+    final zwischen = UnterbrocheneFahrtVerbuchung.zwischenstand(
+      ride,
+      streakTage: 0,
+    );
+    final minuten = math.max(1, (zwischen.sekunden / 60).round());
+    final zwischenText =
+        'Bisher ${zwischen.km.toStringAsFixed(1)} km, $minuten min, '
+        'ca. ${zwischen.xp} XP.';
+    final hinweis = istAufzeichnung
+        ? '$zwischenText Die Aufzeichnung läuft an deiner Position weiter.'
+        : '$zwischenText Noch ~${remainingKm.toStringAsFixed(0)} km offen, '
+              'alles zählt am Ende als eine Fahrt.';
     return SizedBox(
       height: _carouselCardHeight,
       child: Container(
@@ -5259,7 +5322,9 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const SizedBox(width: 7),
                   Text(
-                    'FAHRT UNTERBROCHEN',
+                    istAufzeichnung
+                        ? 'AUFZEICHNUNG UNTERBROCHEN'
+                        : 'FAHRT UNTERBROCHEN',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.66),
                       fontSize: 11.5,
@@ -5282,7 +5347,11 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
               const SizedBox(height: 6),
               Text(
-                ride.isRoundTrip ? 'Rundkurs fortsetzen' : 'Fahrt fortsetzen',
+                istAufzeichnung
+                    ? 'Aufzeichnung fortsetzen'
+                    : (ride.isRoundTrip
+                          ? 'Rundkurs fortsetzen'
+                          : 'Fahrt fortsetzen'),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -5304,9 +5373,7 @@ class _HomeContentPageState extends State<HomeContentPage>
               ),
               const SizedBox(height: 4),
               Text(
-                'Noch ~${remainingKm.toStringAsFixed(0)} km offen. Die Fahrt '
-                'läuft an deiner Position automatisch weiter, alles bisher '
-                'Gefahrene zählt mit.',
+                hinweis,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 11.5,
@@ -5395,6 +5462,10 @@ class _HomeContentPageState extends State<HomeContentPage>
   /// „Verwerfen".
   void _spaeterEntscheiden() {
     if (!mounted) return;
+    // 2026-08-18 (Aufgabe 2.2): „Spaeter" ist eine Entscheidung GEGEN das
+    // Weiterfahren. Der Selbstlauf darf sie in dieser Sitzung nicht
+    // ueberstimmen.
+    _autoFortsetzenVersucht = true;
     setState(() => _resumableRide = null);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -5407,7 +5478,10 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Future<void> _resumeInterruptedRide(ActiveRideSnapshot ride) async {
+  Future<void> _resumeInterruptedRide(
+    ActiveRideSnapshot ride, {
+    bool ohneTipp = false,
+  }) async {
     // 2026-08-16 (T2): Immer den FRISCHEN Schnappschuss von der Platte nehmen
     // — die Verbuchung beim App-Start hat ihn evtl. gerade fortgeschrieben
     // (booked_*). Mit einem veralteten Stand wuerde der Abschluss der
@@ -5417,6 +5491,20 @@ class _HomeContentPageState extends State<HomeContentPage>
     // Ab jetzt gehoert der Schnappschuss einer laufenden Session — kein
     // Home-Refresh darf ihn zwischendurch als „tote Fahrt" verbuchen.
     CruiseModePage.fahrtLaeuftImProzess.value = true;
+    // 2026-08-18 (Aufgabe 2.2): Ein Tipp ist eine erklaerte Absicht, ein
+    // Selbstlauf nicht — die Fahransicht prueft danach unterschiedlich streng,
+    // wie weit der Fahrer von seiner Route entfernt sein darf.
+    CruiseModePage.pendingResumeOhneTipp = ohneTipp;
+    setState(() => _resumableRide = null);
+    // 2026-08-18 (Aufgabe 2.1, zweiter Fund): Eine freie Aufzeichnung hat gar
+    // keine Route. Fuer sie gibt es nichts zu laden — sie wird in der
+    // Fahransicht direkt wieder scharf gemacht und bekommt den geretteten
+    // Stand eingespielt.
+    if (aktuell.fahrtArt == FahrtArt.aufzeichnung) {
+      CruiseModePage.pendingResumeProgress.value = aktuell;
+      widget.onTabChange?.call(2);
+      return;
+    }
     // Die gesicherte Geometrie ist die noch OFFENE Reststrecke — Distanz und
     // Dauer muessen dazu passen (sonst skaliert der Andock-Slice die Rest-
     // strecke auf die Gesamtlaenge hoch). Geplante Gesamtlaenge und Rundkurs-

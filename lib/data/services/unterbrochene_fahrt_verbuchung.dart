@@ -39,6 +39,33 @@ class UnterbrocheneFahrtVerbuchung {
   static VerbuchungsPosten? posten(ActiveRideSnapshot s, {required int streakTage}) {
     if (s.drivenKm < _mindestKm) return null;
     if (s.fortschritt < GamificationService.minRouteProgressForXp) return null;
+    return _rechne(s, streakTage);
+  }
+
+  /// 2026-08-18 (vucko, Aufgabe 2.3): „Nach komplettem Schliessen und
+  /// Wiederoeffnen sind die vorher gesammelten XP und Fahrtdaten schon
+  /// eingetragen."
+  ///
+  /// Wortwoertlich umgesetzt hiesse das: den abgebrochenen Teil als eigene
+  /// Zeile buchen und den Rest spaeter noch einmal. Das verbietet CLAUDE.md:
+  /// „Eine gefahrene Fahrt = GENAU EINE Zeile" in `user_drive_sessions` —
+  /// sonst zaehlen Badges wie „Anzahl Fahrten" doppelt, und die 100-km-Fahrt
+  /// zerfaellt in zwei halbe.
+  ///
+  /// Deshalb der ZWISCHENSTAND: derselbe Rechenkern, aber nur zum ANZEIGEN
+  /// beim Fortsetzen. Gebucht wird weiterhin genau einmal, am Ende der
+  /// fortgesetzten Fahrt — dann aber inklusive dieses Teils, weil Kilometer,
+  /// Fahrzeit und Hoechstgeschwindigkeit in den Rekorder eingespielt werden.
+  ///
+  /// Unterschied zu [posten]: KEINE Mindestfortschritts-Schwelle. Wer 5 % der
+  /// Strecke gefahren hat, bekommt dafuer zwar keine eigene Fahrt gebucht,
+  /// aber seine 3 km sind trotzdem gefahren und muessen sichtbar bleiben.
+  static VerbuchungsPosten zwischenstand(
+    ActiveRideSnapshot s, {
+    required int streakTage,
+  }) => _rechne(s, streakTage);
+
+  static VerbuchungsPosten _rechne(ActiveRideSnapshot s, int streakTage) {
     final xp = GamificationService.calculateRouteXpBreakdown(
       distanceKm: s.drivenKm,
       curves: 0,

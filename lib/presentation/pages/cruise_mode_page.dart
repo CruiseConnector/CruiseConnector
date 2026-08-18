@@ -119,6 +119,151 @@ import 'package:cruise_connect/domain/models/group_member.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
+/// 2026-08-18 (vucko, 1.2b): „Erst zurueck auf die Route, bei Fehlschlag
+/// mehrfach wiederholen, erst dann direkt zum Ziel."
+///
+/// Gemessen war die Leiter wirkungslos: Die Rejoin-Schleife in
+/// `_runRerouteCycle` hatte 2 Durchlaeufe und ueberschrieb den Andockindex am
+/// Schleifenkopf bedingungslos mit `fallbackRejoinIndex + (attempt-1)*60` —
+/// fuer attempt 1 also mit dem Ausgangswert. Alle sieben Vorrueckungen um 80,
+/// die vor einem `continue` gesetzt wurden, wurden damit sofort wieder
+/// verworfen und nie in eine Anfrage uebersetzt.
+///
+/// Diese Funktion ist die eine Stelle, an der der Andockindex weiterrueckt:
+/// streng monoton VORWAERTS, nie zurueck, nie ueber das Routenende hinaus.
+int naechsterAndockIndex({
+  required int aktuellerIndex,
+  required int schritt,
+  required int maxIndex,
+}) {
+  if (maxIndex <= 0) return 0;
+  final basis = aktuellerIndex < 0
+      ? 0
+      : (aktuellerIndex > maxIndex ? maxIndex : aktuellerIndex);
+  final vorwaerts = schritt <= 0 ? 0 : schritt;
+  final ziel = basis + vorwaerts;
+  return ziel > maxIndex ? maxIndex : ziel;
+}
+
+/// ── 2026-08-19 (Aufgabe 3.1) ─────────────────────────────────────────────
+/// vucko: „Startet man eine vorher aufgenommene Route von einer anderen
+/// Position aus, verhalten sich die Undock-Punkte komisch."
+///
+/// DIE ENTSCHEIDUNG, und WARUM sie so faellt:
+///
+///  * GESCHLOSSENE Runde (Anfang und Ende naeher als 80 m beieinander): Es
+///    wird an der GEOMETRIE neu aufgesetzt. Der Einstieg darf ueberall
+///    liegen, denn die Runde wird nur ROTIERT: Einstieg bei km 12 heisst
+///    km 12 bis Ende plus km 0 bis km 12. Jeder Meter der Originalstrecke
+///    wird gefahren und das Ende liegt wieder am Original-Start. Es geht
+///    also nichts verloren.
+///  * OFFENE Route: Es wird IMMER eine Anfahrt zum Original-Start gebaut.
+///    Eine offene Route hat keinen Rueckweg zu ihrem Anfang. Wer mitten
+///    drin einsteigt, kann den uebersprungenen Anfang nie nachholen — das
+///    ist endgueltig die Abkuerzung, die vucko ausgeschlossen hat.
+///
+/// Ob geschlossen oder offen, entscheidet bei einer GELADENEN Route die
+/// GEOMETRIE (80-m-Probe) und NICHT das gespeicherte `route_type`-Flag:
+/// aufgezeichnete Tracks tragen das Flag unzuverlaessig — eine gemeinsame
+/// Aufzeichnung schreibt pauschal `ROUND_TRIP`, auch wenn der Track
+/// irgendwo im Nirgendwo endet. Bei einer FRISCH gesuchten Route bleibt das
+/// Flag massgeblich: dort ist es die bewusste Auswahl des Fahrers, und die
+/// Route wurde ohnehin von der eigenen Position aus gebaut.
+///
+/// GEMESSENE LUECKE (Aufgabe 3.1): Seit 6fe7b01 galt dieses Regelwerk nur
+/// solo. `_buildGroupAccessPlanForCurrentPosition` dockte eine geteilte
+/// Gruppenroute weiter nach den ALTEN Regeln an: `preferredJoinIndex: null`,
+/// `rebaseClosedLoop` am Flag statt an der Geometrie, `joinNearestForward`
+/// als dessen Verneinung. Faehrt eine Gruppe eine aufgezeichnete oder
+/// gepostete OFFENE Route, bekam ein spaet einsteigendes Mitglied damit
+/// genau die Abkuerzung, die solo ausgeschlossen ist.
+class AndockRegel {
+  const AndockRegel({
+    required this.geschlossen,
+    required this.zubringerErlaubt,
+    required this.preferredJoinIndex,
+    required this.rebaseClosedLoop,
+    required this.joinNearestForward,
+    required this.nurStartNaeheZaehlt,
+    required this.hinweisZumOriginalStart,
+  });
+
+  /// Geschlossene Runde? Bei geladenen Routen aus der Geometrie, sonst aus
+  /// dem Flag der frischen Suche.
+  final bool geschlossen;
+
+  /// Darf ueberhaupt ein lokaler Zubringer vor die geteilte Route gebaut
+  /// werden?
+  final bool zubringerErlaubt;
+
+  /// Fester Einstiegsindex. 0 heisst: Original-Start, keine Abkuerzung.
+  final int? preferredJoinIndex;
+
+  final bool rebaseClosedLoop;
+  final bool joinNearestForward;
+
+  /// Bei einer offenen geladenen Route zaehlt „ich stehe schon an der Route"
+  /// NUR in Startnaehe. Mitten drin danebenzustehen ist kein Grund, den
+  /// Zubringer wegzulassen — das WAERE die Abkuerzung.
+  final bool nurStartNaeheZaehlt;
+
+  /// Der Fahrer wird zuerst zum Original-Start gefuehrt und muss das auch
+  /// erfahren, sonst wirkt es wie der gemeldete komische Sprung.
+  final bool hinweisZumOriginalStart;
+}
+
+/// Ein Ort fuer das Regelwerk, damit Solo- und Gruppen-Pfad nicht wieder
+/// auseinanderlaufen. Reine Logik, absichtlich ohne Routing-Aufruf testbar.
+AndockRegel andockRegelFuerGeteilteRoute({
+  required bool istGeladeneRoute,
+  required bool endpunkteGeschlossen,
+  required bool flagIstRundkurs,
+}) {
+  final geschlossen = istGeladeneRoute ? endpunkteGeschlossen : flagIstRundkurs;
+  // Frische Leader-Routen bleiben bei der alten Erlaubnis (nur Rundkurse
+  // duerfen einen Zubringer bekommen, siehe groupRouteAccessLegAllowed).
+  // Eine GELADENE offene Route braucht ihn dagegen zwingend — ohne ihn
+  // steigt das Mitglied dort ein, wo es gerade steht.
+  final zubringerErlaubt =
+      istGeladeneRoute || groupRouteAccessLegAllowed(isRoundTrip: geschlossen);
+  final offenUndGeladen = istGeladeneRoute && !geschlossen;
+  return AndockRegel(
+    geschlossen: geschlossen,
+    zubringerErlaubt: zubringerErlaubt,
+    preferredJoinIndex: offenUndGeladen ? 0 : null,
+    rebaseClosedLoop: geschlossen,
+    // Das Vorwaerts-Andocken (mit nur 8 Prozent Rest-Minimum) bleibt
+    // frischen Suchen vorbehalten. Bei geladenen Routen ist es die
+    // Abkuerzung.
+    joinNearestForward: istGeladeneRoute ? false : !geschlossen,
+    nurStartNaeheZaehlt: offenUndGeladen,
+    hinweisZumOriginalStart: zubringerErlaubt && offenUndGeladen,
+  );
+}
+
+/// Woran eine GELADENE Route erkennbar ist: gespeichert, gepostet oder
+/// aufgezeichnet. Diese Quellen tragen fremde Geometrie, die nicht von der
+/// eigenen Position aus gebaut wurde — nur fuer sie gilt das Regelwerk oben.
+const Set<String> geladeneRoutenQuellen = <String>{
+  'saved',
+  'saved_route_copy',
+  'existing_route_copy',
+  'recorded_track',
+  'driven_track',
+};
+
+bool istGeladeneRoutenQuelle(Map<String, dynamic>? edgeMeta) {
+  if (edgeMeta == null || edgeMeta.isEmpty) return false;
+  if (edgeMeta['explicit_route_handoff'] == true) return true;
+  if (edgeMeta['saved_route_id'] != null) return true;
+  final quelle = (edgeMeta['route_source'] ?? edgeMeta['source'])
+      ?.toString()
+      .trim()
+      .toLowerCase();
+  if (quelle == null || quelle.isEmpty) return false;
+  return geladeneRoutenQuellen.contains(quelle);
+}
+
 class CruiseModePage extends StatefulWidget {
   const CruiseModePage({super.key, this.initialRoute, this.groupId});
 
@@ -141,6 +286,17 @@ class CruiseModePage extends StatefulWidget {
   /// _uebernehmeAusstehendeRoute konsumiert ihn nach dem Laden der Route.
   static final ValueNotifier<ActiveRideSnapshot?> pendingResumeProgress =
       ValueNotifier<ActiveRideSnapshot?>(null);
+
+  /// 2026-08-18 (vucko, Aufgabe 2.2 „dass man halt noch manuell klicken muss,
+  /// dass man die Route erneut starten muss"): Wurde diese Wiederaufnahme OHNE
+  /// jeden Tipp ausgeloest (Startseite hat die frische Fahrt selbst erkannt)?
+  ///
+  /// Der Unterschied ist kein Schoenheitsfehler, sondern der Sicherheitsgurt:
+  /// Ein Tipp auf „Fortsetzen" IST die erklaerte Absicht weiterzufahren — dann
+  /// darf die Anfahrt auch laenger sein. Laeuft es von selbst, muss der Fahrer
+  /// dicht an seiner Route stehen, sonst bleibt die Vorschau mit „Fahrt
+  /// starten" stehen. Niemand soll in einer Fahrt landen, die er nicht wollte.
+  static bool pendingResumeOhneTipp = false;
 
   /// 2026-08-16 (vucko Testfahrt T2): Laeuft in DIESEM Prozess gerade eine
   /// Fahrt-Session (gestartet, pausiert oder im Abschluss)? Die Home-Seite
@@ -806,6 +962,22 @@ class _CruiseModePageState extends State<CruiseModePage>
   double? _geplanteFahrtKm;
   bool _istWiederaufnahme = false;
   bool _wiederaufnahmeIstRundkurs = false;
+
+  // 2026-08-18 (vucko, Aufgabe 2.1/2.2/2.3): Zustand einer Wiederaufnahme, der
+  // vorher zwischen Abschuss und Fortsetzen verloren ging.
+  //
+  // _wiederaufnahmeAutobahnGemieden: „Autobahn aus" der urspruenglichen Fahrt.
+  //   Das Laden der Rest-Route setzt _activeAvoidHighways zurueck, gespeichert
+  //   und gebucht wird die Fahrt aber mit diesem Merkmal.
+  // _wiederaufnahmeOhneTipp: Die Fahrt wird fortgesetzt, OHNE dass jemand
+  //   „Fortsetzen" gedrueckt hat (Aufgabe 2.2). Dann gilt der strenge
+  //   Abstandswaechter — ein Tipp ist eine Absicht, ein Selbstlauf nicht.
+  // _uebernommenerZwischenstand: Was der abgebrochene Teil eingebracht hat
+  //   (km, Fahrzeit, XP). Wird ANGEZEIGT, nicht gebucht — CLAUDE.md: eine
+  //   gefahrene Fahrt ist genau eine Zeile in user_drive_sessions.
+  bool _wiederaufnahmeAutobahnGemieden = false;
+  bool _wiederaufnahmeOhneTipp = false;
+  VerbuchungsPosten? _uebernommenerZwischenstand;
   // „Fahrt starten" laeuft gerade (GPS-Fix, Anfahrt, Streak) — das Panel
   // zeigt sofort „Pause/Beenden", ein zweiter Tipp startet nichts doppelt.
   bool _fahrtStartLaeuft = false;
@@ -2296,10 +2468,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
     }
     CruiseModePage.pendingRoute.addListener(_onPendingRoute);
+    // 2026-08-18 (Aufgabe 2.1/2.2): Eine freie Aufzeichnung hat keine Route,
+    // kommt also NICHT ueber pendingRoute zurueck. Sie braucht einen eigenen
+    // Draht, sonst waere sie die einzige Fahrtart ohne Fortsetzen.
+    CruiseModePage.pendingResumeProgress.addListener(_onPendingResumeProgress);
     CruiseModePage.hinweisWunsch.addListener(_onHinweisWunsch);
     CruiseModePage.pendingTripResume.addListener(_onPendingTripResume);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingRouteIfAvailable();
+      unawaited(_consumeAufzeichnungWiederaufnahme());
       // 2026-06-10 (vucko Resume-Crash-Fix): Intent kann einen Crash/Fehlversuch
       // überleben (wird erst nach Erfolg konsumiert) — beim Page-Aufbau einmal
       // initial prüfen, nicht nur auf Listener-Events warten.
@@ -2802,8 +2979,28 @@ class _CruiseModePageState extends State<CruiseModePage>
         result.edgeMeta['route_rebased_to_user'] == true) {
       return null;
     }
-    final isRoundTrip = _routeDataDescribesRoundTrip(routeData, result);
-    if (!groupRouteAccessLegAllowed(isRoundTrip: isRoundTrip)) {
+    // ── 2026-08-19 (Aufgabe 3.1) ───────────────────────────────────────────
+    // vucko: „Startet man eine vorher aufgenommene Route von einer anderen
+    // Position aus, verhalten sich die Undock-Punkte komisch."
+    //
+    // Hier stand bis heute das ALTE Regelwerk: `preferredJoinIndex: null`,
+    // `rebaseClosedLoop` am Flag `route_type` statt an der Geometrie und
+    // `joinNearestForward` als dessen Verneinung. Das war in 6fe7b01 bewusst
+    // ausgeklammert worden. Gemessene Folge: Faehrt eine Gruppe eine
+    // aufgezeichnete oder gepostete OFFENE Route, bekam ein spaet
+    // einsteigendes Mitglied genau die Abkuerzung, die solo ausgeschlossen
+    // ist. Der Gruppen-Pfad laeuft jetzt ueber dasselbe Regelwerk
+    // (`andockRegelFuerGeteilteRoute`) wie der Solo-Pfad — samt der
+    // 80-m-Geometrieprobe statt des Flags, weil aufgezeichnete Tracks das
+    // Flag unzuverlaessig tragen (die gemeinsame Aufzeichnung schreibt
+    // pauschal `ROUND_TRIP`).
+    final geladen = istGeladeneRoutenQuelle(result.edgeMeta);
+    final regel = andockRegelFuerGeteilteRoute(
+      istGeladeneRoute: geladen,
+      endpunkteGeschlossen: _istGeometrischGeschlossen(result),
+      flagIstRundkurs: _routeDataDescribesRoundTrip(routeData, result),
+    );
+    if (!regel.zubringerErlaubt) {
       return null;
     }
 
@@ -2817,9 +3014,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       windowSize: result.coordinates.length,
       maxJumpMeters: double.infinity,
     );
+    // „Ich stehe schon fast auf der Route, also brauche ich keinen Zubringer"
+    // gilt bei einer offenen GELADENEN Route nur in Startnaehe. Sonst waere
+    // genau das die Abkuerzung: neben km 30 einer 40-km-Strecke stehen und
+    // dort einsteigen. Der Solo-Pfad prueft dieselbe Startnaehe
+    // (`matchesRouteStartIndex`).
+    final nahAmEinstieg =
+        !regel.nurStartNaeheZaehlt || match.index <= _startNaeheIndexFenster;
     if (match.distanceMeters.isFinite &&
         match.distanceMeters <=
-            RouteAccessPlanner.nearbyPassJoinDistanceMeters) {
+            RouteAccessPlanner.nearbyPassJoinDistanceMeters &&
+        nahAmEinstieg) {
       return null;
     }
 
@@ -2834,21 +3039,32 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Route am User (Hohenems) vorbeiläuft. chooseJoinPoint wählt jetzt den
       // nächsten sinnvollen Punkt: Rundkurs → bester Loop-Einstieg (Ende bleibt
       // Original-Start), A→B → nächster Vorwärts-Einstieg (joinNearestForward).
+      // — Gilt seit Aufgabe 3.1 (2026-08-19) NUR noch fuer frisch gesuchte
+      // Leader-Routen. Geladene Routen (gespeichert, gepostet, aufgezeichnet)
+      // folgen dem Regelwerk oben.
+      //
+      // `returnToSessionOrigin` bleibt hier bewusst false: Bei einer
+      // geschlossenen Runde endet die rotierte Route ohnehin am
+      // Original-Start; eine zusaetzliche Rueck-Etappe wuerde das Ende
+      // doppeln. Bei einer offenen Route wuerde sie aus A→B einen Loop machen.
       final plan = await _routeService.buildAccessRouteToExistingRoute(
         currentPosition: position,
         existingRoute: result,
         mode: style,
         avoidHighways: avoidHighways,
-        preferredJoinIndex: null,
+        preferredJoinIndex: regel.preferredJoinIndex,
         returnToSessionOrigin: false,
-        rebaseClosedLoop: isRoundTrip,
-        joinNearestForward: !isRoundTrip,
+        rebaseClosedLoop: regel.rebaseClosedLoop,
+        joinNearestForward: regel.joinNearestForward,
       );
       _logAccessLegMeta(plan);
       if (plan.hasAccessLeg ||
           plan.joinPoint.index > 0 ||
           plan.routeStartDistanceMeters >
               RouteAccessPlanner.directJoinDistanceMeters) {
+        if (regel.hinweisZumOriginalStart && plan.hasAccessLeg) {
+          _zeigeStartpunktHinweis();
+        }
         return plan;
       }
     } catch (e) {
@@ -4116,6 +4332,45 @@ class _CruiseModePageState extends State<CruiseModePage>
     _consumePendingRouteIfAvailable();
   }
 
+  void _onPendingResumeProgress() {
+    unawaited(_consumeAufzeichnungWiederaufnahme());
+  }
+
+  /// 2026-08-18 (vucko, Aufgabe 2.1, zweiter Fund): „Eine Aufzeichnung ohne
+  /// geplante Route ist nach einem Abschuss komplett weg."
+  ///
+  /// Sie hat keine Route, also auch keinen `pendingRoute`-Weg zurueck. Die
+  /// Startseite legt hier nur den Schnappschuss ab; die Aufzeichnung wird neu
+  /// scharf gemacht und bekommt den geretteten Stand eingespielt. Fuer alle
+  /// Fahrtarten MIT Route bleibt der bewaehrte Weg ueber pendingRoute.
+  Future<void> _consumeAufzeichnungWiederaufnahme() async {
+    if (!mounted || _disposed) return;
+    final s = CruiseModePage.pendingResumeProgress.value;
+    if (s == null || s.fahrtArt != FahrtArt.aufzeichnung) return;
+    if (_recordingActive || _isLoading) return;
+    CruiseModePage.pendingResumeProgress.value = null;
+    // Der Fahrtstart darf diesen Schnappschuss NICHT als fremde tote Fahrt
+    // verbuchen — es ist genau die Fahrt, die fortgesetzt wird.
+    _erwarteteWiederaufnahmeId = s.rideId;
+    _safeSetState(() => _planningType = kRecordingPlanningType);
+    await _startRecordingSession();
+    if (!mounted || _disposed) return;
+    if (!_recordingActive) {
+      // Start gescheitert (z. B. Standort-Erlaubnis): Angebot auf der
+      // Startseite wieder freigeben statt es still zu verschlucken.
+      _erwarteteWiederaufnahmeId = null;
+      CruiseModePage.fahrtLaeuftImProzess.value = false;
+      return;
+    }
+    // Regelfall: Der Fahrtstart hat den Schnappschuss ueber
+    // [_entscheideUeberLiegengebliebeneFahrt] schon eingespielt. War die
+    // Sperre besetzt, holen wir es hier nach (seedDistance setzt, addiert
+    // nicht — ein zweiter Durchlauf bleibt folgenlos).
+    if (_uebernommenerZwischenstand == null) {
+      _uebernimmFortschrittAusSchnappschuss(s);
+    }
+  }
+
   void _consumePendingRouteIfAvailable() {
     if (!mounted || _disposed) return;
     final route = CruiseModePage.pendingRoute.value;
@@ -4152,17 +4407,42 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// „Fahrt fortsetzen" auf der Startseite IST die Absicht weiterzufahren —
   /// ein zweiter Druck war genau das, was Vucko stoerte.
   ///
-  /// XP/km des abgebrochenen Teils sind zu diesem Zeitpunkt bereits verbucht
-  /// (UnterbrocheneFahrtVerbuchung beim App-Start). Der Anteil wird hier in
-  /// [_bereitsVerbuchteKm] & Co. gemerkt, damit der Abschluss dieser Fahrt
-  /// nur den REST bucht — angezeigt wird weiterhin die ganze Fahrt.
+  /// 2026-08-18 (Aufgabe 2.3, Richtigstellung): Hier stand, XP und Kilometer
+  /// des abgebrochenen Teils seien „zu diesem Zeitpunkt bereits verbucht" und
+  /// wuerden in einem Feld gemerkt, das die Klasse nie besessen hat. Beides
+  /// war falsch: `UnterbrocheneFahrtVerbuchung`
+  /// laeuft ausschliesslich in den NICHT-Fortsetzen-Zweigen (Verwerfen,
+  /// Ablauf, fremdes Konto, neue Fahrt). Wer fortsetzt, hat zu diesem
+  /// Zeitpunkt NICHTS gebucht.
+  ///
+  /// Das ist auch richtig so: CLAUDE.md — „Eine gefahrene Fahrt = GENAU EINE
+  /// Zeile" in `user_drive_sessions`. Zwei Zeilen wuerden Badges wie „Anzahl
+  /// Fahrten" doppelt zaehlen und eine 100-km-Fahrt in zwei halbe zerlegen.
+  ///
+  /// Vuckos Wunsch („nach dem Wiederoeffnen sind die vorher gesammelten XP und
+  /// Fahrtdaten schon eingetragen") wird deshalb ueber die ANZEIGE geloest:
+  /// Der Zwischenstand des abgebrochenen Teils wird berechnet, dem Fahrer
+  /// gezeigt und in [_uebernommenerZwischenstand] gehalten. Gebucht wird
+  /// weiterhin genau einmal — am Ende der fortgesetzten Fahrt, dann aber
+  /// inklusive dieses Teils, weil Kilometer, Fahrzeit und Hoechst-
+  /// geschwindigkeit unten in den Rekorder eingespielt werden.
+  ///
+  /// Zwei dieser Werte fielen beim Fortsetzen bisher still auf null:
+  /// `_maxSpeedMps` (geht als `top_speed_kmh` in die Fahrt) und „Autobahn aus"
+  /// (geht in die gespeicherte Strecke). Beide kommen jetzt aus dem
+  /// Schnappschuss zurueck.
   Future<void> _uebernehmeAusstehendeRoute(SavedRoute route) async {
+    // Vor dem Laden lesen: _loadSavedRoute laeuft ueber mehrere await-Punkte,
+    // und die Startseite kann in der Zeit schon den naechsten Wunsch setzen.
+    final ohneTipp = CruiseModePage.pendingResumeOhneTipp;
+    CruiseModePage.pendingResumeOhneTipp = false;
     await _loadSavedRoute(route);
     if (!mounted || _disposed) return;
     if (route.routeSource != 'resume') {
       CruiseModePage.pendingResumeProgress.value = null;
       return;
     }
+    _wiederaufnahmeOhneTipp = ohneTipp;
     if (_isRouteConfirmed || _fullRouteCoordinates.length < 2) {
       // Laden fehlgeschlagen: Fortsetzen-Angebot auf Home wieder freigeben.
       CruiseModePage.pendingResumeProgress.value = null;
@@ -4195,15 +4475,33 @@ class _CruiseModePageState extends State<CruiseModePage>
       _geplanteFahrtKm = fortschritt.plannedDistanceKm ?? fortschritt.distanceKm;
       _istWiederaufnahme = true;
       _wiederaufnahmeIstRundkurs = fortschritt.isRoundTrip;
+      _maxSpeedMps = math.max(_maxSpeedMps, fortschritt.topSpeedKmh / 3.6);
+      _wiederaufnahmeAutobahnGemieden = fortschritt.autobahnGemieden;
+      _uebernommenerZwischenstand = UnterbrocheneFahrtVerbuchung.zwischenstand(
+        fortschritt,
+        streakTage: _xpStreakDays,
+      );
       debugPrint(
         '[CruiseMode] Fortschritt wiederhergestellt: '
         '${fortschritt.drivenKm.toStringAsFixed(1)} km, '
-        '${fortschritt.elapsedSeconds} s (${fortschritt.pausedSeconds} s Pause)',
+        '${fortschritt.elapsedSeconds} s, '
+        '${_uebernommenerZwischenstand?.xp ?? 0} XP',
       );
     }
     debugPrint('[CruiseMode] Wiederaufnahme — Route direkt bestaetigt');
     await _confirmRoute(preserveCurrentProgress: true);
     if (!mounted || _disposed) return;
+
+    // 2026-08-18 (Aufgabe 2.2, zweite Aussteigestelle): Der Waechter unten
+    // braucht eine bekannte Position — und genau die fehlt nach einem
+    // Kaltstart regelmaessig, weil der Standort-Stream erst anlaeuft. Vorher
+    // hiess „noch kein Fix" schlicht „nicht automatisch weiterfahren", und der
+    // Fahrer musste doch wieder tippen. Jetzt holen wir aktiv einen Fix (8 s
+    // Zeitlimit, mit Rueckfall auf die letzte bekannte Position).
+    if (_userLocation == null) {
+      await _resolveCurrentPositionForNavigationStart();
+      if (!mounted || _disposed) return;
+    }
 
     if (_darfAutomatischWeiterfahren(route)) {
       debugPrint('[CruiseMode] Wiederaufnahme — Fahrt laeuft automatisch weiter');
@@ -4219,16 +4517,51 @@ class _CruiseModePageState extends State<CruiseModePage>
       if (mounted && !_disposed && _positionSubscription != null) {
         TopToast.show(
           context,
-          message: 'Fahrt fortgesetzt — gute Weiterfahrt!',
+          message: _fortsetzenMeldung(),
           icon: Icons.play_arrow_rounded,
-          duration: const Duration(milliseconds: 2400),
+          duration: const Duration(milliseconds: 3200),
         );
       }
     } else {
       debugPrint(
         '[CruiseMode] Wiederaufnahme — zu weit von der Route, Vorschau bleibt',
       );
+      // 2026-08-18 (Aufgabe 2.2): Die Automatik ist ausgestiegen. Der Fahrer
+      // darf damit nicht alleingelassen werden — die Vorschau mit „Fahrt
+      // starten" ist erreichbar, und der uebernommene Stand ist trotzdem
+      // schon da. Ohne diesen Hinweis sieht er nur eine Karte und weiss
+      // nicht, dass seine Kilometer noch mitzaehlen.
+      if (mounted && !_disposed) {
+        TopToast.show(
+          context,
+          message:
+              '${_zwischenstandText() ?? 'Fahrt wiederhergestellt'} • zu weit '
+              'von der Route: mit „Fahrt starten" geht es weiter.',
+          icon: Icons.play_circle_outline_rounded,
+          duration: const Duration(milliseconds: 4000),
+        );
+      }
     }
+  }
+
+  /// Meldung nach dem automatischen Weiterfahren.
+  ///
+  /// 2026-08-18 (vucko, Aufgabe 2.3): „Nach komplettem Schliessen und
+  /// Wiederoeffnen sind die vorher gesammelten XP und Fahrtdaten schon
+  /// eingetragen." Gebucht wird der Teil hier bewusst NICHT (eine gefahrene
+  /// Fahrt = genau eine Zeile), aber er wird beziffert — sonst wirkt die
+  /// fortgesetzte Fahrt wie ein Neuanfang bei null.
+  String _fortsetzenMeldung() {
+    final text = _zwischenstandText();
+    if (text == null) return 'Fahrt fortgesetzt — gute Weiterfahrt!';
+    return 'Fahrt fortgesetzt — $text zaehlen mit.';
+  }
+
+  String? _zwischenstandText() {
+    final z = _uebernommenerZwischenstand;
+    if (z == null || z.km <= 0) return null;
+    final minuten = math.max(1, (z.sekunden / 60).round());
+    return '${z.km.toStringAsFixed(1)} km, $minuten min und ${z.xp} XP';
   }
 
   /// Waechter fuer den automatischen Weiterstart nach einer Wiederaufnahme:
@@ -4236,6 +4569,117 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// [_autoWeiterfahrtMaxAbstandM] von der ORIGINAL-Geometrie der Fahrt
   /// entfernt sein. Ohne Position: nicht automatisch starten.
   static const double _autoWeiterfahrtMaxAbstandM = 500.0;
+
+  /// 2026-08-18 (vucko, Aufgabe 2.2): Grenze NACH einem Tipp auf „Fortsetzen".
+  ///
+  /// Die 500 m waren die erste von zwei Stellen, an denen die Automatik heute
+  /// aussteigt — und beim getippten Fortsetzen sind sie zu streng: Der Tipp
+  /// IST die Absicht weiterzufahren, die Anfahrt zur Route rechnet die App
+  /// ohnehin (`_prepareAccessLegForOffRouteStart`). Genau diesen Rest machte
+  /// Vucko noch von Hand: erst „Fortsetzen", dann nochmal „Fahrt starten".
+  ///
+  /// Nicht unbegrenzt: Ab 5 km waere die Anfahrt eine eigene Fahrt. Dann
+  /// bleibt die Vorschau stehen, damit der Fahrer sieht, worauf er sich
+  /// einlaesst, statt in einer Navigation zu landen, die er nicht wollte.
+  static const double _autoWeiterfahrtMaxAbstandNachTippM = 5000.0;
+
+  /// Wie lange nach dem Abschuss gilt ein Gruppen-/Trip-Schnappschuss noch als
+  /// „dieselbe Fahrt"? Eine Gruppenausfahrt oder ein Trip dauert einen halben
+  /// Tag; nach 6 Stunden ist die Fahrt eine andere.
+  static const Duration _fortsetzenFensterGruppeTrip = Duration(hours: 6);
+
+  /// Kennung einer Fahrt, deren Fortsetzung gerade eingeleitet wird (freie
+  /// Aufzeichnung). Ohne diese Notiz wuerde der Start der Aufzeichnung den
+  /// eigenen Schnappschuss als „fremde tote Fahrt" verbuchen — genau die
+  /// Fahrt, die der Nutzer gerade fortsetzen will.
+  String? _erwarteteWiederaufnahmeId;
+
+  /// 2026-08-18 (vucko, Aufgaben 2.1 + 2.3): EINE Entscheidung ueber den
+  /// liegengebliebenen Schnappschuss, gefaellt beim Start einer Fahrt-Session.
+  ///
+  /// Gehoert er zu DIESER Fahrt (gleiche Gruppe, gleicher Trip, oder die
+  /// Aufzeichnung, die gerade fortgesetzt wird), wird sein Fortschritt
+  /// UEBERNOMMEN — kein zweiter Datensatz, denn CLAUDE.md sagt: „Eine
+  /// gefahrene Fahrt = GENAU EINE Zeile" in `user_drive_sessions`.
+  ///
+  /// Gehoert er zu etwas anderem, ist er der Rest einer toten App und wird wie
+  /// bisher verbucht (Regeln des vorzeitigen Beendens) und geloescht.
+  Future<void> _entscheideUeberLiegengebliebeneFahrt(
+    ActiveRideSnapshot alt,
+  ) async {
+    if (_gehoertZurLaufendenFahrt(alt)) {
+      _uebernimmFortschrittAusSchnappschuss(alt);
+      return;
+    }
+    await UnterbrocheneFahrtVerbuchung.verbucheUndLoesche(alt);
+  }
+
+  bool _gehoertZurLaufendenFahrt(ActiveRideSnapshot alt) {
+    if (alt.verworfen) return false;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (alt.userId != null && uid != null && alt.userId != uid) return false;
+    // Eine Fortsetzung, die wir selbst eingeleitet haben, gilt immer.
+    if (alt.rideId != null && alt.rideId == _erwarteteWiederaufnahmeId) {
+      return true;
+    }
+    if (DateTime.now().difference(alt.savedAt) > _fortsetzenFensterGruppeTrip) {
+      return false;
+    }
+    switch (alt.fahrtArt) {
+      case FahrtArt.gruppe:
+        return widget.groupId != null && alt.groupId == widget.groupId;
+      case FahrtArt.trip:
+        return _activeTripId != null && alt.tripId == _activeTripId;
+      case FahrtArt.solo:
+      case FahrtArt.aufzeichnung:
+        // Diese beiden kommen ueber die Fortsetzen-Karte zurueck und sind
+        // dann ueber [_erwarteteWiederaufnahmeId] bzw. den Resume-Pfad
+        // abgedeckt. Ein Start ohne diesen Weg ist eine NEUE Fahrt.
+        return false;
+    }
+  }
+
+  /// Spielt einen geretteten Fortschritt in die laufende Session ein.
+  ///
+  /// Der Seed fliesst durch den Rekorder, nicht in einen blossen Zaehler —
+  /// jedes GPS-Sample wuerde einen Zaehlerwert sofort ueberschreiben. Die
+  /// Startzeit wird RUECKDATIERT, damit die Luecke zwischen Abschuss und
+  /// Fortsetzen von selbst nicht als Fahrzeit zaehlt.
+  void _uebernimmFortschrittAusSchnappschuss(ActiveRideSnapshot alt) {
+    if (!mounted || _disposed) return;
+    if (alt.drivenKm <= 0 && alt.elapsedSeconds <= 0) return;
+    _drivenTrackRecorder.seedDistance(alt.drivenKm * 1000.0);
+    _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
+    _navigationStartTime = DateTime.now().subtract(
+      Duration(seconds: alt.elapsedSeconds),
+    );
+    _totalPausedSeconds = alt.pausedSeconds.toDouble();
+    _aktiveFahrtId = alt.rideId ?? _aktiveFahrtId;
+    _erwarteteWiederaufnahmeId = null;
+    _maxSpeedMps = math.max(_maxSpeedMps, alt.topSpeedKmh / 3.6);
+    _wiederaufnahmeAutobahnGemieden = alt.autobahnGemieden;
+    _uebernommenerZwischenstand = UnterbrocheneFahrtVerbuchung.zwischenstand(
+      alt,
+      streakTage: _xpStreakDays,
+    );
+    debugPrint(
+      '[CruiseMode] Fortschritt uebernommen (${alt.fahrtArt.code}): '
+      '${alt.drivenKm.toStringAsFixed(1)} km, ${alt.elapsedSeconds} s, '
+      'Zwischenstand ${_uebernommenerZwischenstand?.xp ?? 0} XP',
+    );
+    // Sofort wieder sichern: Ab jetzt gilt der zusammengefuehrte Stand.
+    _persistActiveRideSnapshot(force: true);
+    final text = _zwischenstandText();
+    if (text != null && mounted && !_disposed) {
+      TopToast.show(
+        context,
+        message: 'Weiter wie gehabt — $text zaehlen mit.',
+        icon: Icons.play_arrow_rounded,
+        duration: const Duration(milliseconds: 3200),
+      );
+    }
+    _safeSetState(() {});
+  }
 
   bool _darfAutomatischWeiterfahren(SavedRoute route) {
     final pos = _userLocation;
@@ -4254,8 +4698,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       windowSize: coords.length,
       maxJumpMeters: double.infinity,
     );
-    return match.distanceMeters.isFinite &&
-        match.distanceMeters <= _autoWeiterfahrtMaxAbstandM;
+    final grenze = _wiederaufnahmeOhneTipp
+        ? _autoWeiterfahrtMaxAbstandM
+        : _autoWeiterfahrtMaxAbstandNachTippM;
+    return match.distanceMeters.isFinite && match.distanceMeters <= grenze;
   }
 
   // 2026-05-24 (vucko Task #53): Trip-Resume aus Home-Carousel.
@@ -4402,6 +4848,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     _cameraAnimController?.dispose();
     CruiseModePage.isFullscreen.value = false;
     CruiseModePage.pendingRoute.removeListener(_onPendingRoute);
+    CruiseModePage.pendingResumeProgress.removeListener(
+      _onPendingResumeProgress,
+    );
     CruiseModePage.hinweisWunsch.removeListener(_onHinweisWunsch);
     CruiseModePage.pendingTripResume.removeListener(_onPendingTripResume);
     _stopSimulation(restartLiveTracking: false);
@@ -10653,6 +11102,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _geplanteFahrtKm = null;
       _istWiederaufnahme = false;
       _wiederaufnahmeIstRundkurs = false;
+      _wiederaufnahmeAutobahnGemieden = false;
+      _wiederaufnahmeOhneTipp = false;
+      _uebernommenerZwischenstand = null;
       _pauseStartedAt = null;
       _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
@@ -10681,6 +11133,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Endpunkte naeher als das gelten als geschlossene Runde — robust gegen
   /// GPS-Rauschen am Ende aufgezeichneter Tracks.
   static const double _loopSchlussMeter = 80.0;
+
+  /// 2026-08-19 (Aufgabe 3.1): Bis zu diesem Punktindex gilt „am Einstieg".
+  /// Derselbe Wert, den der Solo-Pfad in `matchesRouteStartIndex` benutzt —
+  /// die beiden Pfade duerfen sich nicht wieder auseinanderentwickeln.
+  static const int _startNaeheIndexFenster = 24;
+
+  /// 2026-08-19 (Aufgabe 3.1) — vucko: „Startet man eine vorher aufgenommene
+  /// Route von einer anderen Position aus, verhalten sich die Undock-Punkte
+  /// komisch."
+  ///
+  /// Ein Teil des „komischen" Eindrucks war, dass die Entscheidung unsichtbar
+  /// blieb: Bei einer offenen Route wird eine Anfahrt zum Original-Start
+  /// gebaut, ohne dass es jemand sagt. Wer das nicht weiss, sieht nur, dass
+  /// die Navigation ihn zunaechst irgendwo anders hin schickt.
+  void _zeigeStartpunktHinweis() {
+    if (!mounted || _disposed) return;
+    TopToast.show(
+      context,
+      message:
+          'Du wirst zuerst zum Startpunkt der Route geführt. '
+          'So fährst du die Strecke komplett.',
+      icon: Icons.route_rounded,
+      duration: const Duration(seconds: 4),
+      // Waehrend der Navigation unter das Manöver-Banner, damit es keine
+      // Ansage verdeckt (siehe 2026-06-24).
+      topOffset: _isRouteConfirmed ? 96.0 : 0.0,
+    );
+  }
 
   bool _istGeometrischGeschlossen(RouteResult route) {
     final c = route.coordinates;
@@ -10817,6 +11297,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       return result;
     }
     _logAccessLegMeta(accessPlan);
+    // 2026-08-19 (Aufgabe 3.1): Eine offene geladene Route wird hier
+    // kommentarlos zum Original-Start gefuehrt — genau das wirkt wie der von
+    // vucko gemeldete komische Sprung. Also einmal kurz sagen, was passiert.
+    if (nieKuerzen &&
+        !_istGeometrischGeschlossen(result) &&
+        accessPlan.hasAccessLeg) {
+      _zeigeStartpunktHinweis();
+    }
     final prepared = _withMergedRouteMeta(accessPlan.activeRoute, {
       'route_source':
           result.edgeMeta['route_source'] ?? result.edgeMeta['source'],
@@ -11563,6 +12051,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       _geplanteFahrtKm = null;
       _istWiederaufnahme = false;
       _wiederaufnahmeIstRundkurs = false;
+      _wiederaufnahmeAutobahnGemieden = false;
+      _wiederaufnahmeOhneTipp = false;
+      _uebernommenerZwischenstand = null;
       _pauseStartedAt = null;
       _totalPausedSeconds = 0.0;
       _offRouteCount = 0;
@@ -12305,6 +12796,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       return;
     }
 
+    // P3 (2026-08-14) / Aufgabe 3.1 (2026-08-19): vor dem try, weil der
+    // Hinweis-Text unten (Anfahrt zum Original-Start ja/nein) dieselbe
+    // Entscheidung braucht.
+    final geladen = _isExistingRouteSession && !_istWiederaufnahme;
+    final geschlossen = geladen
+        ? _istGeometrischGeschlossen(sourceRoute)
+        : _isRoundTrip;
+
     RouteAccessPlan accessPlan;
     try {
       // P3 (2026-08-14): Bei einer GELADENEN Route (gespeichert, gepostet,
@@ -12319,10 +12818,6 @@ class _CruiseModePageState extends State<CruiseModePage>
       // eines FAHRENDEN Fahrers liegt Index 0 (Standpunkt beim Laden) schon
       // hinter ihm; „Einstieg am Original-Start" haette eine Anfahrt zurueck
       // plus „Bitte wenden" erzeugt. Also vorwaerts anschliessen.
-      final geladen = _isExistingRouteSession && !_istWiederaufnahme;
-      final geschlossen = geladen
-          ? _istGeometrischGeschlossen(sourceRoute)
-          : _isRoundTrip;
       accessPlan = await _routeService.buildAccessRouteToExistingRoute(
         currentPosition: position,
         existingRoute: sourceRoute,
@@ -12406,8 +12901,14 @@ class _CruiseModePageState extends State<CruiseModePage>
       // über die Pause/Beenden-Buttons legen.
       TopToast.show(
         context,
-        message:
-            'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
+        // 2026-08-19 (Aufgabe 3.1): Bei einer OFFENEN geladenen Route geht es
+        // zuerst zum Original-Start. Der alte Satz („Anfahrts-Abschnitt
+        // aktiv") sagte nicht WOHIN — und ohne das Wohin wirkt die Anfahrt
+        // wie der gemeldete komische Sprung.
+        message: (geladen && !geschlossen)
+            ? 'Du wirst zuerst zum Startpunkt der Route geführt. '
+                  'So fährst du die Strecke komplett.'
+            : 'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
         icon: Icons.route_rounded,
         // 2026-06-24 (vucko Video): bei aktiver Navigation UNTER das Manöver-
         // Banner, damit es z.B. eine Kreisverkehr-Ansage nicht verdeckt.
@@ -12648,6 +13149,34 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// eines Reroute-Connectors. Während der Fahrt ist der User AUF einer Straße
   /// — legitimes Snapping liegt unter ~100 m (Edge nutzt start_radius_m=65).
   static const double _rerouteMaxStartOffsetMeters = 120.0;
+
+  /// 2026-08-18 (vucko, 1.2b): Anzahl echter Netz-Versuche der Rejoin-Leiter.
+  /// Vorher 2, davon war einer wirkungslos (der Andockindex wurde am
+  /// Schleifenkopf zurueckgesetzt) und ein weiterer konnte vom 160-m-Fall ohne
+  /// jeden Routing-Aufruf verbrannt werden — in der Praxis blieb oft EIN
+  /// Versuch uebrig. Vier Versuche a max. 4,5 s bleiben unter dem
+  /// Wiederhol-Takt des Zyklus und geben der Leiter (4 x 80 Punkte
+  /// Vorruecken) genug Weg, um an einer Naht vorbeizukommen.
+  static const int _rejoinLeiterVersuche = 4;
+
+  /// Harte Obergrenze fuer Schleifendurchlaeufe. Der 160-m-Fall zaehlt bewusst
+  /// NICHT als Versuch (er ruft nichts auf), darf die Schleife aber auch nicht
+  /// endlos drehen lassen.
+  static const int _rejoinLeiterMaxSchritte = 24;
+
+  /// 2026-08-18 (vucko, 1.2a): „Erst zurueck auf die Route [...], erst dann
+  /// direkt zum Ziel." Abbruchbedingung fuer den Rueckweg auf die Route.
+  ///
+  /// Der Ziel-Zweig wurde am 09.06. bewusst nach vorn gezogen, damit ein weit
+  /// abgekommener Fahrer nicht zurueckgeschickt wird. Diese Schwelle haelt
+  /// beides zusammen: Off-Route beginnt bei 50 m, ein normales Verfahren
+  /// (Ausfahrt verpasst, falsch abgebogen) liegt bei ein paar hundert Metern —
+  /// da lohnt der Rueckweg. Ab 2 km Abweichung ist der Rueckweg selbst eine
+  /// eigene Fahrt (bei 50 km/h rund 5 Minuten nur fuer das Zurueck), und der
+  /// Fahrer will erkennbar nicht mehr zurueck. Dann gilt wieder: direkt zum
+  /// Ziel. Zusaetzlich muss der Andockpunkt naeher liegen als das Ziel selbst,
+  /// sonst waere der Rueckweg in jedem Fall ein Umweg.
+  static const double _rejoinMaxAbweichungMeters = 2000.0;
 
   /// Maximaler Abstand zwischen der Commit-Position und der Route, die sichtbar
   /// übernommen oder in die Gruppe publiziert werden darf. Liegt der Fahrer nach
@@ -13866,14 +14395,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Service). Nur fuer Solo-Fahrten relevant (Gruppen/Trips sichern nicht).
       final neueId = 'fahrt_${DateTime.now().millisecondsSinceEpoch}';
       _aktiveFahrtId = neueId;
-      if (widget.groupId == null && !_tripModeEnabled) {
-        unawaited(
-          ActiveRideSnapshotService.vorNeuerFahrtSichern(
-            neueId,
-            (alt) => UnterbrocheneFahrtVerbuchung.verbucheUndLoesche(alt),
-          ),
-        );
-      }
+      // 2026-08-18 (Aufgabe 2.1/2.3): Frueher lief das NUR fuer Solo-Fahrten,
+      // weil Gruppe und Trip gar keinen Schnappschuss hatten. Jetzt haben sie
+      // einen — und beim Fahrtstart faellt genau EINE Entscheidung darueber.
+      unawaited(
+        ActiveRideSnapshotService.vorNeuerFahrtSichern(
+          neueId,
+          _entscheideUeberLiegengebliebeneFahrt,
+        ),
+      );
       _drivenTrackRecorder.reset();
       _totalDistanceDriven = 0.0;
       _maxSpeedMps = 0.0; // 2026-06-23 (vucko Top-Speed): pro Fahrt frisch.
@@ -17034,25 +17564,53 @@ class _CruiseModePageState extends State<CruiseModePage>
       // zurueckfallen — und Faktor 3 auf die REST-Luftlinie ergaebe mitten
       // in der Fahrt eine voellig neue Schleife statt der gewaehlten.
       //
-      // Nur fuer A nach B OHNE Zwischenstopps: Bei Trips haengt das bewusste
-      // Ueberspringen von Stopps an genau diesem Ziel-Zweig.
+      // Damals nur fuer A nach B OHNE Zwischenstopps, weil das bewusste
+      // Ueberspringen von Stopps an genau diesem Ziel-Zweig haengt. Genau
+      // diese Einschraenkung war zu grob — siehe direkt darunter.
+      //
+      // 2026-08-18 (vucko, 1.1): „Im A-nach-B-Modus greift beim Rerouting die
+      // vorher gewaehlte Umwegs-Einstellung nicht mehr. War vorher mittlerer
+      // Umweg gewaehlt, springt die Navigation beim Rerouting direkt auf den
+      // Endpunkt." Der Fix vom 14.08. griff nur fuer A nach B OHNE
+      // Zwischenstopps: die Bedingung verlangte `_activeIntermediateWaypoints
+      // .isEmpty`. Trips SETZEN aber sehr wohl eine Stufe (tripDetourVariant
+      // aus _selectedDetour) — fuer sie lief weiter der Ziel-Zweig mit mode
+      // Standard, scenic false, routeVariant 0, also genau der gemeldete
+      // Sprung.
+      //
+      // Gelockert von „gar keine Zwischenstopps" auf „keine NOCH OFFENEN
+      // Zwischenstopps": Ab dem letzten abgehakten Stopp gibt es nichts mehr
+      // zu ueberspringen, der Rejoin haengt den Original-Rest an und erhaelt
+      // den Umweg damit von selbst. Solange noch Stopps offen sind, behaelt
+      // der Ziel-Zweig seinen Vorrang (Vorab-Zweig unten) — sonst geht das
+      // bewusste Ueberspringen verpasster Stopps verloren.
+      var offeneStopps = 0;
+      for (var i = 0; i < _activeIntermediateWaypoints.length; i++) {
+        if (!_passedWaypointIndices.contains(i)) offeneStopps++;
+      }
       final umwegAktiv =
           (_activeDetourVariant > 0 || _activePointToPointScenic) &&
-          _activeIntermediateWaypoints.isEmpty;
-      if (!_isRoundTrip &&
-          destination != null &&
-          !accessLegMode &&
-          !umwegAktiv) {
+          offeneStopps == 0;
+      final zielZweigMoeglich =
+          !_isRoundTrip && destination != null && !accessLegMode && !umwegAktiv;
+
+      // Der Ziel-Zweig als eigene Einheit — er wird an ZWEI Stellen gebraucht:
+      // als Vorab-Zweig fuer Trips mit noch offenen Stopps und als letzter
+      // Netz-Versuch nach der Rejoin-Leiter. Rueckgabe: true = committet,
+      // false = hart gescheitert, null = nicht zustaendig/kein Kandidat.
+      Future<bool?> zielZweigVersuchen() async {
+        final ziel = destination;
+        if (ziel == null) return null;
         // 2026-06-09 (vucko Trip-Skip): Reroute führt durch die VERBLEIBENDEN
         // Zwischenstopps (übersprungene werden automatisch abgehakt) statt
         // stumm direkt zum Endziel.
         final rerouteWaypoints = _remainingWaypointsForReroute(
           position,
-          destination,
+          ziel,
         );
         final destinationRerouteSeed = Object.hash(
-          destination[0].round(),
-          destination[1].round(),
+          ziel[0].round(),
+          ziel[1].round(),
           0,
           rerouteAvoidHighways,
           0x44525252,
@@ -17061,8 +17619,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         try {
           destinationResult = await _routeService.generatePointToPoint(
             startPosition: position,
-            destinationLat: destination[1],
-            destinationLng: destination[0],
+            destinationLat: ziel[1],
+            destinationLng: ziel[0],
             mode: 'Standard',
             scenic: false,
             routeVariant: 0,
@@ -17144,8 +17702,8 @@ class _CruiseModePageState extends State<CruiseModePage>
             try {
               final forced = await _routeService.generatePointToPoint(
                 startPosition: position,
-                destinationLat: destination[1],
-                destinationLng: destination[0],
+                destinationLat: ziel[1],
+                destinationLng: ziel[0],
                 mode: 'Standard',
                 scenic: false,
                 routeVariant: 0,
@@ -17213,8 +17771,8 @@ class _CruiseModePageState extends State<CruiseModePage>
               rejoinPointDistanceMeters: geo.Geolocator.distanceBetween(
                 position.latitude,
                 position.longitude,
-                destination[1],
-                destination[0],
+                ziel[1],
+                ziel[0],
               ),
             );
 
@@ -17232,7 +17790,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               remainingDistanceBeforeMeters: remainingDistanceBeforeMeters,
             );
             if (!committed) {
-              cycleFailures.add('distance_guard(destination)');
+              cycleFailures.add('distance_guard(ziel)');
               // 2026-06-23 (vucko 2-Geräte-Gruppen-Video „Reroute oszilliert,
               // ETA hängt auf alter Route"): Auch der ZIEL-Pfad braucht das
               // Local-Reanchor-Netz (wie Redock + no_candidate). Ein NICHT-
@@ -17270,6 +17828,17 @@ class _CruiseModePageState extends State<CruiseModePage>
             return true;
           }
         }
+        return null;
+      }
+
+      // 2026-08-18 (vucko, 1.1): VORAB-ZWEIG. Solange noch Zwischenstopps
+      // offen sind, behaelt der Ziel-Zweig seinen Vorrang: nur er faehrt ueber
+      // _remainingWaypointsForReroute die verbleibenden Stopps an und hakt
+      // bewusst uebersprungene ab. Ohne diesen Vorrang wuerde der Rejoin die
+      // alte Route samt bereits verpasstem Stopp wieder anhaengen.
+      if (zielZweigMoeglich && offeneStopps > 0) {
+        final zielErgebnis = await zielZweigVersuchen();
+        if (zielErgebnis != null) return zielErgebnis;
       }
 
       final maxRejoinIndex = math.max(0, planningCoordinates.length - 2);
@@ -17282,20 +17851,84 @@ class _CruiseModePageState extends State<CruiseModePage>
         maxAlignmentDeltaDegrees: 105,
       ).clamp(0, maxRejoinIndex).toInt();
 
+      // 2026-08-18 (vucko, 1.2a): „Erst zurueck auf die Route, bei Fehlschlag
+      // mehrfach wiederholen, erst dann direkt zum Ziel." Der Ziel-Zweig steht
+      // deshalb jetzt HINTER der Rejoin-Leiter und dem garantierten Re-Dock.
+      //
+      // Der Ziel-Zweig wurde am 09.06. bewusst nach vorn gezogen; die Umkehr
+      // kostet Zeit, wenn der Fahrer weit weg ist und gar nicht mehr zurueck
+      // will. Deshalb diese Abbruchbedingung: Der Rueckweg wird nur versucht,
+      // solange der Andockpunkt naeher liegt als das Ziel selbst UND die
+      // Abweichung von der Route unter _rejoinMaxAbweichungMeters bleibt.
+      // Greift der Ziel-Zweig ohnehin nicht (Rundkurs, Zufahrts-Abschnitt,
+      // aktive Umweg-Stufe), gibt es keinen Ersatz — dann wird der Rueckweg
+      // IMMER versucht, sonst blieben diese Fahrten ohne Netz-Kandidat.
+      final abstandZurRoute = globalMatch.distanceMeters;
+      final abstandZumZiel = destination == null
+          ? double.infinity
+          : geo.Geolocator.distanceBetween(
+              position.latitude,
+              position.longitude,
+              destination[1],
+              destination[0],
+            );
+      final andockPunkt = planningCoordinates.isEmpty
+          ? null
+          : planningCoordinates[fallbackRejoinIndex.clamp(
+              0,
+              planningCoordinates.length - 1,
+            )];
+      final abstandZumAndockpunkt = andockPunkt == null
+          ? double.infinity
+          : geo.Geolocator.distanceBetween(
+              position.latitude,
+              position.longitude,
+              andockPunkt[1],
+              andockPunkt[0],
+            );
+      final rejoinLohntSich =
+          !zielZweigMoeglich ||
+          (abstandZumAndockpunkt < abstandZumZiel &&
+              abstandZurRoute.isFinite &&
+              abstandZurRoute <= _rejoinMaxAbweichungMeters);
+      if (!rejoinLohntSich) {
+        debugPrint(
+          '[CruiseMode][Reroute] Rueckweg uebersprungen: '
+          'Abweichung=${abstandZurRoute.toStringAsFixed(0)}m '
+          'Andockpunkt=${abstandZumAndockpunkt.toStringAsFixed(0)}m '
+          'Ziel=${abstandZumZiel.toStringAsFixed(0)}m — direkt zum Ziel',
+        );
+      }
+
       RouteResult? rerouteResult;
       SmartReroutePlan? acceptedPlan;
       var rejoinIndex = smartPlan.rejoinIndex.clamp(0, maxRejoinIndex).toInt();
 
-      for (var attempt = 0; attempt < 2; attempt++) {
-        final useFallbackPlan = attempt > 0;
-        rejoinIndex = useFallbackPlan
-            ? math
-                  .min(
-                    fallbackRejoinIndex + ((attempt - 1) * 60),
-                    maxRejoinIndex,
-                  )
-                  .toInt()
-            : rejoinIndex;
+      // 2026-08-18 (vucko, 1.2b): echte Leiter statt Scheinversuchen.
+      // `attempt` zaehlt nur noch DURCHGEFUEHRTE Routing-Anfragen; der
+      // 160-m-Fall (Andockpunkt zu nah) rueckt nur den Index vor und
+      // verbrennt keinen Versuch mehr. `rejoinIndex` wird am Schleifenkopf
+      // NICHT mehr zurueckgesetzt, sondern nur noch vorwaerts gezogen —
+      // vorher landete er bei jedem Durchlauf wieder auf dem Ausgangswert und
+      // die sieben Vorrueckungen um 80 waren wirkungslos.
+      var attempt = 0;
+      var leiterSchritte = 0;
+      var leiterAktiv = false;
+      while (rejoinLohntSich &&
+          attempt < _rejoinLeiterVersuche &&
+          leiterSchritte < _rejoinLeiterMaxSchritte) {
+        leiterSchritte++;
+        final useFallbackPlan = attempt > 0 || leiterAktiv;
+        if (useFallbackPlan) {
+          // Monoton vorwaerts: nie hinter einen bereits verworfenen
+          // Andockpunkt zurueck, mindestens aber der heading-gepruefte
+          // Vorwaerts-Index.
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: math.max(rejoinIndex, fallbackRejoinIndex),
+            schritt: 0,
+            maxIndex: maxRejoinIndex,
+          );
+        }
         final activePlan = useFallbackPlan
             ? SmartReroutePlan(
                 anchorCoordinate: planningCoordinates[rejoinIndex],
@@ -17317,16 +17950,31 @@ class _CruiseModePageState extends State<CruiseModePage>
           rejoinPoint[0],
         );
         if (distToRejoin < 160 && rejoinIndex < maxRejoinIndex) {
-          rejoinIndex = math.min(rejoinIndex + 60, maxRejoinIndex).toInt();
+          // 2026-08-18 (vucko, 1.2b): Der Andockpunkt liegt zu nah — hier wird
+          // NICHTS geroutet, also darf das auch keinen Versuch kosten. Vorher
+          // verbrannte genau dieser Fall den Durchlauf 0 komplett. Ab jetzt
+          // laeuft der naechste Durchlauf ueber den Fallback-Plan, dessen
+          // Anker dem vorgerueckten Index folgt (der Smart-Plan-Anker ist
+          // fest — sonst haette die Schleife hier auf der Stelle gedreht).
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 60,
+            maxIndex: maxRejoinIndex,
+          );
+          leiterAktiv = true;
           continue;
         }
+
+        // Ab hier folgt ein echter Netz-Aufruf → dieser Durchlauf zaehlt.
+        final versuchNr = attempt;
+        attempt++;
 
         final joinRerouteSeed = Object.hash(
           rejoinPoint[0].round(),
           rejoinPoint[1].round(),
           0,
           rerouteAvoidHighways,
-          attempt,
+          versuchNr,
         );
         RouteResult candidate;
         try {
@@ -17348,21 +17996,29 @@ class _CruiseModePageState extends State<CruiseModePage>
             locationAccuracyMeters: rerouteAccuracyMeters,
           );
         } catch (e) {
-          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
           final cause = _classifyRerouteError(e);
           cycleFailures.add(cause);
           debugPrint(
-            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${versuchNr + 1} '
             'cause=$cause detail=$e',
           );
           continue;
         }
 
         if (candidate.coordinates.length < 2) {
-          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
           cycleFailures.add('no_route(leere_geometrie)');
           debugPrint(
-            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${versuchNr + 1} '
             'cause=no_route(leere_geometrie)',
           );
           continue;
@@ -17377,12 +18033,16 @@ class _CruiseModePageState extends State<CruiseModePage>
           candidate.coordinates.first[0],
         );
         if (candidateStartOffset > _rerouteMaxStartOffsetMeters) {
-          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
           cycleFailures.add(
             'start_offset(${candidateStartOffset.toStringAsFixed(0)}m)',
           );
           debugPrint(
-            '[CruiseMode][RerouteFail] stage=rejoin attempt=${attempt + 1} '
+            '[CruiseMode][RerouteFail] stage=rejoin attempt=${versuchNr + 1} '
             'cause=start_offset '
             'offset=${candidateStartOffset.toStringAsFixed(0)}m '
             'limit=${_rerouteMaxStartOffsetMeters.toStringAsFixed(0)}m '
@@ -17406,13 +18066,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (!candidateQuality.passed ||
             candidateTooFewPoints ||
             highwayViolation) {
-          rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+          rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
           cycleFailures.add(
             'validator_reject(rejoin: quality=${!candidateQuality.passed} '
             'fewPoints=$candidateTooFewPoints highway=$highwayViolation)',
           );
           debugPrint(
-            '[CruiseMode] Reroute-Attempt ${attempt + 1}: Kandidat verworfen (Qualität/Highway-Policy)',
+            '[CruiseMode] Reroute-Attempt ${versuchNr + 1}: Kandidat verworfen (Qualität/Highway-Policy)',
           );
           continue;
         }
@@ -17427,12 +18091,16 @@ class _CruiseModePageState extends State<CruiseModePage>
             originalJoinPoint[0],
           );
           if (joinDistance > 45.0 && rejoinIndex < maxRejoinIndex) {
-            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
             cycleFailures.add(
               'validator_reject(join_gap ${joinDistance.toStringAsFixed(0)}m)',
             );
             debugPrint(
-              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-Gap ${joinDistance.toStringAsFixed(0)}m, rejoinIndex=$rejoinIndex',
+              '[CruiseMode] Reroute-Attempt ${versuchNr + 1}: Join-Gap ${joinDistance.toStringAsFixed(0)}m, rejoinIndex=$rejoinIndex',
             );
             continue;
           }
@@ -17443,10 +18111,14 @@ class _CruiseModePageState extends State<CruiseModePage>
             rejoinIndex: rejoinIndex,
           );
           if (producesUTurn && rejoinIndex < maxRejoinIndex) {
-            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
             cycleFailures.add('validator_reject(join_uturn)');
             debugPrint(
-              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Join-U-Turn erkannt, rejoinIndex=$rejoinIndex',
+              '[CruiseMode] Reroute-Attempt ${versuchNr + 1}: Join-U-Turn erkannt, rejoinIndex=$rejoinIndex',
             );
             continue;
           }
@@ -17464,10 +18136,14 @@ class _CruiseModePageState extends State<CruiseModePage>
             ),
           );
           if (foldsBack && rejoinIndex < maxRejoinIndex) {
-            rejoinIndex = math.min(rejoinIndex + 80, maxRejoinIndex).toInt();
+            rejoinIndex = naechsterAndockIndex(
+            aktuellerIndex: rejoinIndex,
+            schritt: 80,
+            maxIndex: maxRejoinIndex,
+          );
             cycleFailures.add('validator_reject(merge_folds_back)');
             debugPrint(
-              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet zurück, rejoinIndex=$rejoinIndex',
+              '[CruiseMode] Reroute-Attempt ${versuchNr + 1}: Merge-Naht faltet zurück, rejoinIndex=$rejoinIndex',
             );
             continue;
           }
@@ -17476,7 +18152,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             // NICHT mergen; der garantierte Re-Dock / Fallback übernimmt.
             cycleFailures.add('validator_reject(merge_folds_back_final)');
             debugPrint(
-              '[CruiseMode] Reroute-Attempt ${attempt + 1}: Merge-Naht faltet auch am Ende — Kandidat verworfen',
+              '[CruiseMode] Reroute-Attempt ${versuchNr + 1}: Merge-Naht faltet auch am Ende — Kandidat verworfen',
             );
             continue;
           }
@@ -17493,7 +18169,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       // wir eine DIREKTE Verbindung vom aktuellen GPS zu einem Vorwärts-Punkt der
       // Originalroute (forceAcceptDirect) und mergen mit dem Original-Rest → der
       // Fahrer dockt smooth wieder an, statt dass das System aufgibt.
-      if (rerouteResult == null && mounted && !_disposed) {
+      // 2026-08-18 (vucko, 1.2a): Auch der Re-Dock ist ein Rueckweg AUF die
+      // Route — er haengt deshalb an derselben Abbruchbedingung wie die
+      // Rejoin-Leiter.
+      if (rerouteResult == null && rejoinLohntSich && mounted && !_disposed) {
         try {
           // 2026-06-06 (vucko P2-Fix): untere Schranke nie > obere — sonst wirft
           // clamp ArgumentError, wenn der Match schon am Routenende sitzt.
@@ -17642,6 +18321,19 @@ class _CruiseModePageState extends State<CruiseModePage>
             '[CruiseMode][RerouteFail] stage=redock cause=$cause detail=$e',
           );
         }
+      }
+
+      // 2026-08-18 (vucko, 1.2a): „Erst zurueck auf die Route, bei Fehlschlag
+      // mehrfach wiederholen, erst dann direkt zum Ziel." Der Ziel-Zweig ist
+      // jetzt der LETZTE Netz-Versuch — nach der Rejoin-Leiter und nach dem
+      // garantierten Re-Dock, aber noch vor dem lokalen Re-Anker. Vorher hatte
+      // er Vorrang: genau das war das gemeldete „ans Ziel abkuerzen".
+      // Trips mit noch offenen Stopps haben ihn schon oben als Vorab-Zweig
+      // gehabt; ein zweiter Anlauf hier schadet nicht, weil der Zweig bei
+      // Erfolg vorher zurueckgekehrt waere.
+      if (rerouteResult == null && zielZweigMoeglich && mounted && !_disposed) {
+        final zielErgebnis = await zielZweigVersuchen();
+        if (zielErgebnis != null) return zielErgebnis;
       }
 
       if (!mounted || _disposed) {
@@ -18868,7 +19560,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       stil: _selectedStyle,
       istRundkurs: _isRoundTrip || _wiederaufnahmeIstRundkurs,
       istAufzeichnung: _isRecordingMode,
-      autobahnGemieden: _activeAvoidHighways || _avoidHighways,
+      // 2026-08-18 (Aufgabe 2.1): Bei einer Wiederaufnahme setzt das Laden der
+      // Rest-Route _activeAvoidHighways zurueck — „Autobahn aus" der
+      // urspruenglichen Fahrt kommt deshalb aus dem Schnappschuss dazu.
+      autobahnGemieden:
+          _activeAvoidHighways || _avoidHighways || _wiederaufnahmeAutobahnGemieden,
       streakTage: _xpStreakDays,
       topSpeedKmh: _maxSpeedMps * 3.6,
       geplanteKm: _istWiederaufnahme ? _geplanteFahrtKm : null,
@@ -18892,7 +19588,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _eingefrorenerAbschluss?.istAufzeichnung ?? _isRecordingMode;
   bool get _abschlussAutobahnGemieden =>
       _eingefrorenerAbschluss?.autobahnGemieden ??
-      (_activeAvoidHighways || _avoidHighways);
+      (_activeAvoidHighways || _avoidHighways || _wiederaufnahmeAutobahnGemieden);
   int get _abschlussStreakTage =>
       _eingefrorenerAbschluss?.streakTage ?? _xpStreakDays;
   double get _abschlussTopSpeedKmh =>
@@ -19674,27 +20370,60 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
   }
 
-  /// 2026-07-06 (vucko Fahrt-Resume): Snapshot der laufenden SOLO-Fahrt
-  /// persistieren. Gruppen (Lobby-Rejoin) und Trips (trips-Tabelle) haben
-  /// eigene Resume-Mechanismen und werden bewusst übersprungen.
+  /// Welche Art Fahrt laeuft gerade? Bestimmt, ueber welchen Weg der Fahrer
+  /// zurueckkommt — und damit, was der Schnappschuss mitfuehren muss.
+  ///
+  /// Reihenfolge ist Absicht: Wer in einer Gruppe faehrt, kommt IMMER ueber
+  /// die Lobby zurueck, auch wenn er dabei aufzeichnet.
+  FahrtArt get _aktuelleFahrtArt {
+    if (widget.groupId != null) return FahrtArt.gruppe;
+    if (_recordingActive || _isRecordingMode) return FahrtArt.aufzeichnung;
+    if (_tripModeEnabled || _activeTripId != null) return FahrtArt.trip;
+    return FahrtArt.solo;
+  }
+
+  /// 2026-07-06 (vucko Fahrt-Resume): Snapshot der laufenden Fahrt sichern.
+  ///
+  /// 2026-08-18 (vucko, Aufgabe 2.1 „Fortschritt geht nach App-Neustart oder
+  /// Pause verloren"): Bis heute stand hier `if (widget.groupId != null ||
+  /// _tripModeEnabled) return;` — Gruppenfahrt und Trip-Modus hatten GAR
+  /// KEINEN Schnappschuss. Dazu kam die freie Aufzeichnung: `_startRecording
+  /// Session` ruft `_resetGeneratedRouteUiState()`, das `_lastRouteResult` und
+  /// `_sessionRouteResult` nullt, worauf die Bedingung `route == null` griff.
+  /// Drei von vier Fahrtarten waren nach einem Abschuss also restlos weg.
+  ///
+  /// Der Einwand „die haben eigene Resume-Mechanismen" stimmt nur fuer die
+  /// ROUTE: Der Trip-Resume-Pfad laedt die offenen Stopps und generiert die
+  /// Strecke NEU, der Gruppen-Rejoin holt die Lobby. Gefahrene Kilometer,
+  /// Fahrzeit, Hoechstgeschwindigkeit und damit XP holt keiner von beiden
+  /// zurueck — die entstehen nur hier.
   void _persistActiveRideSnapshot({
     bool force = false,
     bool paused = false,
     double? lat,
     double? lng,
   }) {
-    if (widget.groupId != null || _tripModeEnabled) return;
     final startedAt = _navigationStartTime;
     if (!_isRouteConfirmed || startedAt == null) return;
+    // Gedrosselte Aufrufe kommen im Sekundentakt aus dem Positions-Callback.
+    // Ist der naechste Schreibvorgang noch gar nicht faellig, sparen wir uns
+    // das Zusammenbauen der Geometrie komplett.
+    if (!force && !ActiveRideSnapshotService.schreibfaellig) return;
+    final fahrtArt = _aktuelleFahrtArt;
     final route = _sessionRouteResult ?? _lastRouteResult;
-    if (route == null || route.coordinates.length < 2) return;
-    final distanceKm =
-        route.distanceKm ?? ((route.distanceMeters ?? 0) / 1000.0);
-    if (distanceKm <= 0) return;
+    final hatRoute = route != null && route.coordinates.length >= 2;
+    final gefahreneKm = _totalDistanceDriven / 1000.0;
+    // Ohne geplante Route (freie Aufzeichnung) ist der gefahrene Track die
+    // ganze Wahrheit. Mit Route bleibt es beim bisherigen Verhalten.
+    if (!hatRoute && fahrtArt != FahrtArt.aufzeichnung) return;
+    final geplantKm = hatRoute
+        ? (route.distanceKm ?? ((route.distanceMeters ?? 0) / 1000.0))
+        : gefahreneKm;
+    if (hatRoute && geplantKm <= 0) return;
     // 2026-08-16 (T2): Kennung einmal je Fahrt; geplante Laenge = die Route
     // beim ersten Sichern (vor Reroutes), nicht die jeweils aktuelle Rest-Route.
     _aktiveFahrtId ??= 'fahrt_${startedAt.millisecondsSinceEpoch}';
-    _geplanteFahrtKm ??= distanceKm;
+    if (hatRoute) _geplanteFahrtKm ??= geplantKm;
     final restM = _remainingDistance;
     final restS = _remainingDuration;
     // 2026-08-16 (T1/T2, Review-Fund): Gesichert wird die NOCH OFFENE Strecke
@@ -19703,11 +20432,22 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Route (Start 30 km hinter dem Fahrer) haette die P3-Regel „Einstieg am
     // Original-Start" den Fahrer zurueckgeschickt; bei einem Rundkurs haette
     // die Loop-Rotation die ganze Runde noch einmal aufgelegt.
-    final alle = _fullRouteCoordinates.length >= 2
-        ? _fullRouteCoordinates
-        : route.coordinates;
-    final ab = _currentRouteIndex.clamp(0, math.max(0, alle.length - 2)).toInt();
-    final restCoords = ab > 0 ? alle.sublist(ab) : alle;
+    final List<List<double>> restCoords;
+    if (hatRoute) {
+      final alle = _fullRouteCoordinates.length >= 2
+          ? _fullRouteCoordinates
+          : route.coordinates;
+      final ab = _currentRouteIndex
+          .clamp(0, math.max(0, alle.length - 2))
+          .toInt();
+      restCoords = ab > 0 ? alle.sublist(ab) : alle;
+    } else {
+      // Aufzeichnung: der bisher gefahrene Track. Beim allererstem Sichern
+      // (direkt nach „Aufzeichnung starten") ist er noch leer — das ist
+      // gewollt, denn schon die Fahrt-Kennung und die Startzeit sind es wert,
+      // gesichert zu werden.
+      restCoords = _drivenTrackRecorder.snapshot().coordinates;
+    }
     final restGeometry = <String, dynamic>{
       'type': 'LineString',
       'coordinates': [
@@ -19718,11 +20458,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       savedAt: DateTime.now(),
       startedAt: startedAt,
       style: _selectedStyle,
-      distanceKm: _geplanteFahrtKm ?? distanceKm,
+      distanceKm: _geplanteFahrtKm ?? geplantKm,
       geometry: restGeometry,
       isRoundTrip: _isRoundTrip || _wiederaufnahmeIstRundkurs,
-      durationSeconds: route.durationSeconds,
-      drivenKm: _totalDistanceDriven / 1000.0,
+      durationSeconds: route?.durationSeconds,
+      drivenKm: gefahreneKm,
       elapsedSeconds: DateTime.now().difference(startedAt).inSeconds,
       wasPaused: paused,
       lastLat: lat,
@@ -19738,6 +20478,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       remainingDurationSeconds:
           restS != null && restS.isFinite && restS > 0 ? restS : null,
       userId: Supabase.instance.client.auth.currentUser?.id,
+      fahrtArt: fahrtArt,
+      groupId: widget.groupId,
+      tripId: _activeTripId,
+      // 2026-08-18 (Aufgabe 2.1, dritter Fund): Die Hoechstgeschwindigkeit
+      // stand in KEINEM Feld, geht aber als top_speed_kmh in die Fahrt ein.
+      // Wer vor dem Abschuss 180 fuhr und danach nur noch 50, bekam 50.
+      topSpeedKmh: _maxSpeedMps * 3.6,
+      autobahnGemieden:
+          _activeAvoidHighways || _avoidHighways || _wiederaufnahmeAutobahnGemieden,
     );
     unawaited(
       force
