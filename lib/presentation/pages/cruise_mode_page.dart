@@ -29,6 +29,7 @@ import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
+import 'package:cruise_connect/data/services/kamera_tangente.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
 import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
@@ -2665,7 +2666,21 @@ class _CruiseModePageState extends State<CruiseModePage>
     const groupReanchorCorridorMeters = 400.0;
     var groupRouteIndex = resumeState?.routeIndex ?? 0;
     var groupIndexUnanchored = false;
-    if (resumeState == null && wasConfirmed) {
+    // 2026-08-18 (Aufgabe 3.3): Die Bedingung hiess frueher
+    // `resumeState == null && wasConfirmed`. Damit lief die Neu-Verankerung
+    // beim Gruppen-BOOTSTRAP gar nicht: dort ruft `_bootstrapGroupSession`
+    // mit `autoConfirm: true` auf, `_isRouteConfirmed` ist zu dem Zeitpunkt
+    // aber noch false, also war `wasConfirmed` false. Der Routenindex blieb
+    // auf 0 am fernen Leader-Routenanfang stehen, OHNE dass `_offRouteSince`
+    // gesetzt wurde - und damit haengt der Schutz gegen die drehende Kamera
+    // allein am 80-m-Anker in KameraTangente. Faellt der weg, ist der
+    // Drehfehler sofort zurueck.
+    //
+    // Jetzt verankert auch der Bootstrap. `_offRouteSince` wird dabei
+    // bewusst NICHT gesetzt (die Fahrt laeuft noch nicht), aber
+    // `groupIndexUnanchored` gemerkt - der Index wird dann beim ersten
+    // GPS-Tick sauber nachgezogen.
+    if (resumeState == null) {
       final here = _userLocation;
       if (here != null) {
         final match = findNearestOnRoutePreferIndex(
@@ -10990,78 +11005,26 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// voraus und liefert die Richtung dorthin → die befahrene Straße zeigt im
   /// Display senkrecht nach oben (wie Apple/Google). Liefert null bei Off-Route
   /// oder zu kurzer Restroute (dann GPS-Heading-Fallback).
+  /// Fahrtrichtung entlang der Route fuer die Kamera.
+  ///
+  /// 2026-08-18 (Aufgabe 3.3): Die Rechnung liegt jetzt in
+  /// [KameraTangente.peilung] - reine Geometrie, ohne Widget und ohne
+  /// Plattform, damit sie pruefbar ist. Hier bleibt nur das Einsammeln des
+  /// Zustands. Der 80-m-Anker gegen die Fernpeilung, der die drehende Kamera
+  /// bei Gruppenfahrten verhindert, steckt in der Funktion und ist dort durch
+  /// test/services/gruppen_kamera_tangente_test.dart abgesichert.
   double? _routeTangentCameraBearing(
     LatLng head, {
     double lookAheadMeters = 30.0,
   }) {
-    if (_offRouteSince != null) return null;
-    final coords = _fullRouteCoordinates;
-    if (coords.length < 2) return null;
-    final idx = _currentRouteIndex.clamp(0, coords.length - 2).toInt();
-    // 2026-08-09 (vucko, Gruppen-Video): Die Tangente MUSS am Fahrer hängen.
-    //
-    // Der Fehler, den das verhindert: Steht `_currentRouteIndex` nicht zum
-    // Fahrzeug (im Gruppenmodus sprang er beim Übernehmen der Leader-Route auf
-    // 0, also auf den Routenanfang), dann läuft die Schleife unten ab einem
-    // Punkt los, der kilometerweit weg liegt. Der erste Abstand `head → coords[idx+1]`
-    // überspringt sofort `lookAheadMeters`, und interpoliert wird ein Punkt
-    // 30 m vom FAHRER Richtung dieses fernen Ziels. Heraus kommt die Peilung
-    // auf einen FESTEN geografischen Punkt — und wer daran vorbeifährt, dessen
-    // Karte dreht sich stetig weiter, obwohl er geradeaus fährt. Genau das war
-    // im Video zu sehen (mehrfach ~180° in 2 s, auch im Stand).
-    //
-    // Die bisherige Prüfung unten (`dist < 5.0`) misst nur die LÄNGE des
-    // Vorausschau-Vektors, nicht ob der Fahrer überhaupt bei diesem Segment
-    // ist — eine Fernpeilung rutscht dort glatt durch.
-    //
-    // 80 m liegt komfortabel über dem breitesten Off-Route-Korridor, echte
-    // Fahrten werden also nie beschnitten. Greift die Sperre, fällt die Kamera
-    // auf den ohnehin vorhandenen GPS-Kurs-Fallback zurück (siehe Aufrufer).
-    final anchorLat = coords[idx][1];
-    final anchorLng = coords[idx][0];
-    final anchorGap = geo.Geolocator.distanceBetween(
-      head.latitude,
-      head.longitude,
-      anchorLat,
-      anchorLng,
+    return KameraTangente.peilung(
+      kopfLat: head.latitude,
+      kopfLng: head.longitude,
+      koordinaten: _fullRouteCoordinates,
+      index: _currentRouteIndex,
+      offRoute: _offRouteSince != null,
+      vorausschauMeter: lookAheadMeters,
     );
-    if (!anchorGap.isFinite || anchorGap > 80.0) return null;
-    var acc = 0.0;
-    var prevLat = head.latitude;
-    var prevLng = head.longitude;
-    double? aheadLat;
-    double? aheadLng;
-    for (var i = idx + 1; i < coords.length; i++) {
-      final lat = coords[i][1];
-      final lng = coords[i][0];
-      final d = geo.Geolocator.distanceBetween(prevLat, prevLng, lat, lng);
-      if (!d.isFinite || d <= 0) {
-        prevLat = lat;
-        prevLng = lng;
-        continue;
-      }
-      if (acc + d >= lookAheadMeters) {
-        final f = ((lookAheadMeters - acc) / d).clamp(0.0, 1.0);
-        aheadLat = prevLat + (lat - prevLat) * f;
-        aheadLng = prevLng + (lng - prevLng) * f;
-        break;
-      }
-      acc += d;
-      prevLat = lat;
-      prevLng = lng;
-      aheadLat = lat;
-      aheadLng = lng;
-    }
-    if (aheadLat == null || aheadLng == null) return null;
-    final dist = geo.Geolocator.distanceBetween(
-      head.latitude,
-      head.longitude,
-      aheadLat,
-      aheadLng,
-    );
-    // Zu kurzer Vorlauf → unzuverlässige Tangente, lieber GPS-Fallback.
-    if (dist < 5.0) return null;
-    return GeoBearing.bearingDegrees(head.latitude, head.longitude, aheadLat, aheadLng);
   }
 
   bool _isApproachingCurrentDestination(geo.Position position) {
@@ -13360,6 +13323,24 @@ class _CruiseModePageState extends State<CruiseModePage>
       _currentRouteIndex = reanchor.index.clamp(
         0,
         math.max(0, result.coordinates.length - 1),
+      );
+    } else {
+      // 2026-08-18 (Aufgabe 3.3): Schlaegt die Neu-Verankerung fehl, bleibt
+      // `_currentRouteIndex` auf 0 stehen - und weiter oben wurde
+      // `_offRouteSince` gerade pauschal geloescht. Damit haelt die Kamera
+      // den Routenanfang faelschlich fuer den Standort des Fahrers und peilt
+      // einen festen Punkt in der Ferne an: genau der Drehfehler aus der
+      // Gruppenfahrt, nur ueber den Reroute-Weg statt ueber den Bootstrap.
+      //
+      // `_offRouteSince` wieder setzen schaltet die Tangente sauber ab, die
+      // Kamera nimmt den GPS-Kurs. Der naechste GPS-Tick verankert den Index
+      // regulaer und loescht den Merker von selbst.
+      _offRouteSince ??= DateTime.now();
+      debugPrint(
+        '[CruiseMode][Reroute] Neu-Verankerung fehlgeschlagen '
+        '(${reanchor.distanceMeters.toStringAsFixed(0)} m > '
+        '${_rerouteCommitMaxRouteOffsetMeters.toStringAsFixed(0)} m) - '
+        'Kamera faellt auf den GPS-Kurs zurueck',
       );
     }
     // 2026-06-09 (vucko Voll-Route-Sichtbar): volle Reststrecke (Puck→Ende) für
