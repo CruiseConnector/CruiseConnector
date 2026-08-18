@@ -9981,7 +9981,13 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Trip (mit group_id) ist der Rejoin-Anker: er erscheint als Home-Card
         // und führt per pendingGroupView zurück in die Lobby → „Zur laufenden
         // Route". Best-effort, fail silent.
-        if (widget.groupId != null &&
+        // 2026-08-18 (Defekt 2): `_tripModeEnabled` fehlte hier, stand aber im
+        // A→B-Zweig darüber. Wer den Trip-Modus für einen RUNDKURS einschaltet
+        // (mehrere Stopps, mehrtägig), bekam deshalb keinen Trip — und damit
+        // keine Home-Card und kein Resume nach App-Kill. Gemessen am 18.08.:
+        // 12 Trips von 2 Personen gegenüber 116 Fahr-Sessions. Beide Zweige
+        // stellen jetzt dieselbe Frage.
+        if ((_tripModeEnabled || widget.groupId != null) &&
             result.distanceMeters != null &&
             result.distanceMeters! > 0) {
           unawaited(
