@@ -52,6 +52,12 @@ class SupabaseRouteInvoker implements RouteEdgeInvoker {
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
     final client = Supabase.instance.client;
+    // 2026-08-18 (Defekt 5): Jede Anfrage aus der App sagt, dass sie aus der
+    // App kommt. Ohne diese Angabe sahen 47 % der Zeilen im Ereignisprotokoll
+    // nach „unbekannter Nutzer" aus — tatsächlich stammten sie aus
+    // Messläufen (am 16.08. 399 Stück in 16 Minuten). Messharnesse setzen
+    // `origin: 'test'`, Hintergrund-Jobs `origin: 'worker'`.
+    body = {...body, 'origin': body['origin'] ?? 'app'};
     // 2026-06-02 (vucko): „keine Route" = 401 (abgelaufenes User-Token bei langer
     // Session). KERN-ERKENNTNIS aus den Edge-Logs: functions.invoke WIRFT bei 401
     // NICHT immer — es liefert oft eine FunctionResponse mit status:401 zurück.

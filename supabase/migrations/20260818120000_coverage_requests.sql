@@ -33,4 +33,6 @@ drop policy if exists "coverage_requests_select_own" on public.coverage_requests
 create policy "coverage_requests_select_own"
   on public.coverage_requests for select
   to authenticated
-  using (auth.uid() = user_id);
+  -- `(select auth.uid())` statt `auth.uid()`: sonst wertet Postgres die
+  -- Funktion je Zeile neu aus (Advisor-Befund auth_rls_initplan).
+  using ((select auth.uid()) = user_id);

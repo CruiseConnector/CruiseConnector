@@ -377,6 +377,9 @@ interface RouteRequest {
   /// 2026-08-18 (D1c): Vom Handler aus dem JWT gesetzt — NIE vom Client. Wird
   /// nur gebraucht, um einen Abdeckungswunsch dem richtigen Konto zuzuordnen.
   _subject_id?: string | null;
+  /// 2026-08-18 (D5): 'app' | 'test' | 'worker'. Trennt echte Nutzung von
+  /// Messlaeufen im Ereignisprotokoll.
+  origin?: string;
 }
 
 // Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
@@ -3087,7 +3090,17 @@ const _rlAdmin = (() => {
   }
 })();
 
-function rlExtractKey(req: Request): { key: string; tier: 'authed' | 'anon' } {
+/// Liefert den Rate-Limit-Schluessel UND — getrennt davon — die Identitaet.
+///
+/// 2026-08-18 (Defekt 5): Vorher gab es nur `key` und `tier`, und die
+/// Telemetrie holte sich die Nutzer-ID mit `rl.key.slice(4)` aus dem
+/// Rate-Limit-Schluessel zurueck. Das ist eine stille Kopplung: aendert
+/// jemand das Praefix `uid:`, schreibt das Ereignisprotokoll ab sofort
+/// unbrauchbare IDs, ohne dass ein Test oder ein Fehler das meldet. Ein
+/// Rate-Limit-Schluessel ist ein Rate-Limit-Schluessel, keine Identitaet.
+function rlExtractKey(
+  req: Request,
+): { key: string; tier: 'authed' | 'anon'; subjectId: string | null } {
   try {
     const auth = req.headers.get('authorization') ?? '';
     const token = auth.replace(/^Bearer\s+/i, '');
@@ -3101,7 +3114,11 @@ function rlExtractKey(req: Request): { key: string; tier: 'authed' | 'anon' } {
         typeof payload.sub === 'string' &&
         payload.sub.length > 0
       ) {
-        return { key: `uid:${payload.sub}`, tier: 'authed' };
+        return {
+          key: `uid:${payload.sub}`,
+          tier: 'authed',
+          subjectId: payload.sub,
+        };
       }
     }
   } catch (_) {
@@ -3110,7 +3127,22 @@ function rlExtractKey(req: Request): { key: string; tier: 'authed' | 'anon' } {
   const ip =
     req.headers.get('cf-connecting-ip') ??
     (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim();
-  return { key: ip ? `ip:${ip}` : 'anon:shared', tier: 'anon' };
+  return {
+    key: ip ? `ip:${ip}` : 'anon:shared',
+    tier: 'anon',
+    subjectId: null,
+  };
+}
+
+/// Woher kam die Anfrage? Ohne diese Angabe sah es aus, als haetten 47 % der
+/// Routenanfragen keinen Nutzer. Tatsaechlich stammen die anonymen Zeilen aus
+/// Messlaeufen: am 16.08. 399 Stueck in 16 Minuten (25 pro Minute), am 30.07.
+/// 52 in 11 Minuten. An 17 von 21 Tagen war KEINE einzige Zeile ohne Konto.
+/// Mit dieser Spalte laesst sich das trennen, statt es zu raten.
+function normalizeOrigin(roh: unknown): 'app' | 'test' | 'worker' | 'unknown' {
+  const v = typeof roh === 'string' ? roh.trim().toLowerCase() : '';
+  if (v === 'app' || v === 'test' || v === 'worker') return v;
+  return 'unknown';
 }
 
 async function rlAllows(
@@ -3239,7 +3271,7 @@ async function handler(req: Request): Promise<Response> {
   // 2026-08-18 (D1c): Identitaet aus dem JWT in den Body reichen, damit ein
   // Abdeckungswunsch dem Konto zugeordnet werden kann. Bewusst NACH
   // normalizeRequest, das den Feldwert des Clients verwirft.
-  body._subject_id = rl.tier === 'authed' ? rl.key.slice(4) : null;
+  body._subject_id = rl.subjectId;
   const res = await generateRoute(body);
   if (!isReroute && _rlAdmin) {
     try {
@@ -3258,13 +3290,14 @@ async function handler(req: Request): Promise<Response> {
       const logPromise = _rlAdmin
         .from('route_generation_events')
         .insert({
-          user_id: rl.tier === 'authed' ? rl.key.slice(4) : null,
+          user_id: rl.subjectId,
           route_type: (b.route_type as string) ?? 'ROUND_TRIP',
           style_key: (b.selected_style ?? b.mode)?.toString().slice(0, 40) ?? null,
           distance_km:
             Math.round(Number(b.target_distance_km ?? b.targetDistance ?? 0)) || null,
           avoid_highways: b.avoid_highways === true,
           source: 'edge_v2',
+          origin: normalizeOrigin((body as Record<string, unknown>).origin),
           success,
           error_code: genErrCode,
           duration_ms: Date.now() - genStartedAt,

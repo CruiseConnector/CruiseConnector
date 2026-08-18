@@ -16,6 +16,11 @@ class _LiveHttpInvoker implements RouteEdgeInvoker {
   Map<String, dynamic>? lastBody;
   @override
   Future<dynamic> invoke(Map<String, dynamic> body) async {
+    // 2026-08-18 (Defekt 5): Messläufe kennzeichnen sich selbst. Genau dieses
+    // Harness hat am 16.08. um 03:05 in 16 Minuten 399 Ereignisse ohne
+    // Nutzer-ID erzeugt und den Eindruck entstehen lassen, die Hälfte der
+    // Nutzer sei unbekannt.
+    body = {...body, 'origin': 'test'};
     lastBody = Map<String, dynamic>.from(body);
     final result = await Process.run('curl', [
       '-sS', '--http1.1', '-X', 'POST', endpoint.toString(),
