@@ -346,6 +346,11 @@ interface RouteRequest {
   offsetSide?: number;
   previous_route_fingerprints?: string[];
   client_trigger?: string;
+  /// 2026-08-18 (Aufgabe 1.3): Der Client schickt dieses Feld
+  /// (route_service.dart:3242 und :3323), die Edge hat es nie gelesen.
+  /// Es wird BEWUSST ignoriert, siehe die Begruendung bei `maxAttempts`.
+  /// Hier steht es nur, damit es getypt ist und im Meta sichtbar wird.
+  max_candidate_attempts?: number;
   // 2026-05-22 (Task #41): A→B Detour-Level (0=direkt, 1=klein, 2=mittel, 3=groß)
   detour_level?: number;
   detourLevel?: number;
@@ -693,6 +698,272 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+
+/// 2026-08-18 (Aufgabe 1.3): Welcher Term hat die Umweg-Basisdistanz bestimmt?
+export type UmwegBasisTerm = 'absolut' | 'untergrenze' | 'faktor' | 'zieldistanz';
+
+/// 2026-08-18 (Aufgabe 1.3): Basisdistanz des seitlichen Umweg-Wegpunkts.
+///
+/// GEMESSEN: Bis heute standen hier VIER Terme in einem Math.max, und einer
+/// davon war nachweislich tot. Der Kommentar behauptete, `baseFactor`
+/// (0,15 / 0,30 / 0,50) trenne die Stufen. Nachgerechnet mit den Werten, die
+/// der Client wirklich schickt (route_service.dart: detour_factor 2,00 / 3,00
+/// / 4,00):
+///     factorKm-Anteil = (detour_factor - 1) * 0,55 = 0,55 / 1,10 / 1,65
+///     baseFactor      =                              0,15 / 0,30 / 0,50
+/// Der Faktor-Term ist in JEDER Stufe das 3,3- bis 3,7-Fache des baseFactor.
+/// Beide werden mit demselben Profil-Multiplikator skaliert, der kuerzt sich
+/// also weg. baseFactor konnte den Vergleich nie gewinnen — bei 5 bis 80 km
+/// Luftlinie gewann immer `faktor` oder `zieldistanz`.
+///
+/// ZWEI VARIANTEN durchgerechnet:
+///  (a) Als Untergrenze WIRKSAM machen: dafuer muesste baseFactor ueber 0,55 /
+///      1,10 / 1,65 steigen, also auf mehr als das Dreifache. Der seitliche
+///      Wegpunkt wanderte damit drei Mal so weit hinaus und die Routen wuerden
+///      deutlich laenger als die angeforderte Zieldistanz. Genau das war der
+///      Befund vom 16.08. („Ueberschuss war das Problem, nicht Mangel",
+///      Dornbirn→Bezau: 69 km fuer Ziel 45). Verworfen.
+///  (b) STREICHEN als eigener Term und den Wert dorthin legen, wo er wirklich
+///      als Untergrenze wirkt: in den Faktor-Term, der bisher eine feste
+///      Untergrenze von 0,08 hatte. Das ist rechnerisch identisch
+///      (max(0,15 ; 0,08) = 0,15) und laesst nur EINEN Term stehen, der
+///      genau das tut, was der Kommentar sagt. Gewaehlt.
+///
+/// Wirksam wird die Untergrenze damit dort, wo sie gebraucht wird: bei
+/// Anfragen OHNE `detour_factor` (alte App-Versionen bleiben installiert und
+/// schicken das Feld nicht). Ohne sie fiele der Umweg dort von 0,15/0,30/0,50
+/// auf 0,08 der Luftlinie zusammen — Stufe 1, 2 und 3 waeren nicht mehr zu
+/// unterscheiden.
+export function umwegBasisKm(opts: {
+  directKm: number;
+  detourLevel: number;
+  detourFactor: number;
+  requestedTargetKm: number;
+  profileMultiplier: number;
+}): { km: number; term: UmwegBasisTerm } {
+  const untergrenzeAnteil = opts.detourLevel === 1
+    ? 0.15
+    : opts.detourLevel === 2
+    ? 0.30
+    : 0.50;
+  // Die Untergrenze steckt hier drin: unter 0,15 / 0,30 / 0,50 der Luftlinie
+  // faellt der seitliche Wegpunkt nie, egal was der Client schickt.
+  const faktorAnteil = Math.max(untergrenzeAnteil, (opts.detourFactor - 1) * 0.55);
+  const faktorKm = opts.directKm * faktorAnteil * opts.profileMultiplier;
+  const zielKm = Math.max(0, opts.requestedTargetKm - opts.directKm) * 0.48;
+  // 2 km absolute Untergrenze: darunter liegt der seitliche Wegpunkt noch im
+  // selben Ort und GraphHopper liefert schlicht die direkte Strecke.
+  let km = 2;
+  let term: UmwegBasisTerm = 'absolut';
+  if (faktorKm > km) {
+    km = faktorKm;
+    // Nur wenn der Faktor-Term GENAU auf der Untergrenze sitzt, hat die
+    // Untergrenze entschieden — sonst der vom Client geschickte Faktor.
+    term = faktorAnteil <= untergrenzeAnteil ? 'untergrenze' : 'faktor';
+  }
+  if (zielKm > km) {
+    km = zielKm;
+    term = 'zieldistanz';
+  }
+  return { km, term };
+}
+
+// ─────────── Selbst-Ueberlappung: hin und dieselbe Strasse zurueck ────────
+//
+// 2026-08-18 (Aufgabe 1.4, vucko am 16.08.): „Die Strecken muessen sauber sein
+// und nicht in eine Richtung und dann die gleiche Strasse wieder zurueckfinden."
+//
+// GEMESSEN vor dieser Aenderung: Das Wort „overlap" kam in dieser Datei kein
+// einziges Mal vor, weder im Repo noch in der deployten Fassung. Serverseitig
+// gab es nur `u_turn_count` aus den GraphHopper-Vorzeichen -8/8/-98 und die
+// Strafe darauf. Eine Strecke, die OHNE signalisierte Wende hin und zurueck
+// ueber dieselbe Strasse laeuft (Schleife durchs Dorf und auf der
+// Parallelfahrbahn zurueck), wurde vom Server weder erkannt noch bestraft.
+// Sie konnte als bester Kandidat gewinnen und musste dann im Client verworfen
+// werden. Das Live-Harness test/route/a2b_umweg_live_probe_test.dart:73-79 hat
+// am 16.08. Ueberlappungen bis 21 % gemessen — der Server sah davon nichts.
+//
+// VERFAHREN, absichtlich gleich parametrisiert wie dieses Harness:
+//   * Geometrie auf ein 100-m-Raster abtasten
+//   * Naehe: unter 40 m
+//   * Mindest-Indexabstand: 60 Rasterpunkte (rund 6 km entlang der Strecke),
+//     damit Kurven, Kreisverkehre und Alpen-Kehren nicht mitzaehlen
+//
+// DREI UNTERSCHIEDE zum Harness, alle drei gemessen begruendet:
+//   1. RICHTUNGSBEWUSST: ein Paar zaehlt nur, wenn die beiden Durchfahrten
+//      GEGENLAEUFIG sind (Peilungsunterschied ueber 120 Grad, also
+//      Skalarprodukt der Fahrtrichtungen unter -0,5). Genau das ist „hin und
+//      dieselbe Strasse zurueck". Eine Kreuzung im Rundkurs (rund 90 Grad)
+//      zaehlt damit nicht mit. Rechenprobe (c): Rundkurs mit genau einer
+//      Kreuzung → 0,000.
+//   2. SYMMETRISCH: das Harness sucht den Partner nur vorwaerts (j > i + 60)
+//      und kommt bei einer reinen Hin-und-Rueckfahrt deshalb auf rund 0,5.
+//      Hier zaehlen BEIDE Durchfahrten, eine komplett doppelt befahrene
+//      Strecke ergibt also rund 1,0 = „die ganze Strecke wurde zweimal
+//      gefahren". Wer Harness-Zahlen vergleicht: Server rund 2x Harness.
+//   3. PUNKT GEGEN SEGMENT statt Punkt gegen Punkt, und echte Abtastung statt
+//      Ausduennen. Die erste Fassung verglich Rasterpunkt mit Rasterpunkt und
+//      duennte die vorhandenen Stuetzpunkte nur aus. Gemessen in der
+//      Rechenprobe: der Fall „zurueck auf der Parallelfahrbahn, 25 m daneben"
+//      ergab damit 0,000 statt rund 0,95 — die Rasterpunkte von Hin- und
+//      Rueckrichtung lagen um rund 100 m phasenverschoben und liefen
+//      aneinander vorbei. Mit interpolierter 100-m-Abtastung und dem Abstand
+//      Punkt-zu-Segment ist das Ergebnis unabhaengig davon, wo GraphHopper
+//      seine Stuetzpunkte gesetzt hat.
+//
+// BEKANNTE LUECKE, bewusst in Kauf genommen: Durch den Mindest-Indexabstand
+// von 60 Rasterpunkten sind die letzten rund 6 km vor und nach einem
+// Wendepunkt unsichtbar. Ein kurzer Stachel (Sackgasse mit Wendekreis, 3 km
+// raus und 3 km zurueck) wird von dieser Kennzahl NICHT erfasst — den deckt
+// `u_turn_count` ab, weil GraphHopper dort ein Wende-Vorzeichen setzt. Den
+// Schwellwert zu senken wuerde Alpen-Serpentinen treffen, also genau die
+// Strassen, die „Kurvenjagd" haben will. Messbar in der Rechenprobe: 60 km
+// hin und zurueck ergibt 0,950, dieselbe Figur mit nur 10 km ergibt 0,700.
+//
+// LAUFZEIT: Die Funktion laeuft fuer JEDEN Kandidaten (bis zu 14 parallel).
+// Deshalb KEINE naive O(n^2)-Schleife: die Rasterpunkte kommen in ein
+// 160-m-Gitter (Hash auf lokale Meter-Koordinaten), gesucht wird nur in den 9
+// Nachbarzellen. Damit ist der Aufwand linear in der Punktzahl.
+const UEBERLAPP_RASTER_M = 100;
+const UEBERLAPP_NAEHE_M = 40;
+const UEBERLAPP_MIN_INDEXABSTAND = 60;
+const UEBERLAPP_GEGENLAEUFIG_COS = -0.5; // entspricht mehr als 120 Grad
+// Zellenkante des Suchgitters. Muss groesser sein als Naehe + Rasterschritt
+// (40 + 100 = 140), sonst kann die 3x3-Nachbarschaft ein Segment uebersehen,
+// das dem Punkt naeher als 40 m kommt.
+const UEBERLAPP_ZELLE_M = 160;
+// Schutz gegen entartete Geometrien: mehr als 20.000 Rasterpunkte entspraechen
+// ueber 2.000 km Strecke. Danach wird nur noch gruober abgetastet.
+const UEBERLAPP_MAX_PUNKTE = 20000;
+
+/// Streckengleiche Abtastung: liefert lokale Meter-Koordinaten im festen
+/// Abstand `schrittM`, auch wenn die Eingabe lange Kanten ohne Zwischenpunkte
+/// hat (Autobahn-Kanten zwischen Anschlussstellen sind mehrere Kilometer lang).
+/// Ohne diese Interpolation haengt das Ergebnis davon ab, wo GraphHopper
+/// zufaellig Stuetzpunkte gesetzt hat.
+function ueberlappRaster(
+  coords: [number, number][],
+  schrittM: number,
+): { xs: Float64Array; ys: Float64Array; n: number } {
+  const lat0 = coords[0][1];
+  const lng0 = coords[0][0];
+  const mProLng = 111320 * Math.cos((lat0 * Math.PI) / 180);
+  const mProLat = 110540;
+  const px: number[] = [];
+  const py: number[] = [];
+  let vx = 0;
+  let vy = 0;
+  px.push(0);
+  py.push(0);
+  let rest = schrittM;
+  for (let i = 1; i < coords.length; i++) {
+    const nx = (coords[i][0] - lng0) * mProLng;
+    const ny = (coords[i][1] - lat0) * mProLat;
+    let dx = nx - vx;
+    let dy = ny - vy;
+    let len = Math.sqrt(dx * dx + dy * dy);
+    // `len > 0` ist Pflicht: GraphHopper liefert gelegentlich zwei identische
+    // Stuetzpunkte hintereinander. Ohne die Bedingung teilt die naechste Zeile
+    // durch null und die ganze Kennzahl wird NaN.
+    while (len > 0 && len >= rest && px.length < UEBERLAPP_MAX_PUNKTE) {
+      vx += (dx / len) * rest;
+      vy += (dy / len) * rest;
+      px.push(vx);
+      py.push(vy);
+      dx = nx - vx;
+      dy = ny - vy;
+      len = Math.sqrt(dx * dx + dy * dy);
+      rest = schrittM;
+    }
+    rest -= len;
+    vx = nx;
+    vy = ny;
+  }
+  return { xs: Float64Array.from(px), ys: Float64Array.from(py), n: px.length };
+}
+
+/// Anteil der Strecke (0..1), der ein zweites Mal in Gegenrichtung befahren
+/// wird. Koordinaten sind wie ueberall [longitude, latitude].
+function selbstUeberlappungAnteil(coords: [number, number][]): number {
+  if (!coords || coords.length < 2) return 0;
+  const { xs, ys, n } = ueberlappRaster(coords, UEBERLAPP_RASTER_M);
+  // Kuerzer als der Mindest-Indexabstand → es KANN keine Ueberlappung geben.
+  if (n <= UEBERLAPP_MIN_INDEXABSTAND + 1) return 0;
+  // Fahrtrichtung je Rasterpunkt als Einheitsvektor (Nachbar davor/danach)
+  const rx = new Float64Array(n);
+  const ry = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = i > 0 ? i - 1 : 0;
+    const b = i < n - 1 ? i + 1 : n - 1;
+    let dx = xs[b] - xs[a];
+    let dy = ys[b] - ys[a];
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > 0) {
+      dx /= len;
+      dy /= len;
+    }
+    rx[i] = dx;
+    ry[i] = dy;
+  }
+  // Suchgitter aufbauen
+  const zelle = UEBERLAPP_ZELLE_M;
+  const gitter = new Map<number, number[]>();
+  const schluessel = (cx: number, cy: number) => cx * 1000003 + cy;
+  for (let i = 0; i < n; i++) {
+    const k = schluessel(Math.floor(xs[i] / zelle), Math.floor(ys[i] / zelle));
+    const eimer = gitter.get(k);
+    if (eimer) eimer.push(i);
+    else gitter.set(k, [i]);
+  }
+  const naeheQuadrat = UEBERLAPP_NAEHE_M * UEBERLAPP_NAEHE_M;
+  // Abstand Punkt i zum Segment j→j+1, plus Richtungsvergleich.
+  const passt = (i: number, j: number): boolean => {
+    if (j < 0 || j + 1 >= n) return false;
+    // Beide Segmentenden muessen weit genug entfernt liegen, sonst zaehlt eine
+    // enge Kehre als Ueberlappung.
+    if (Math.abs(j - i) < UEBERLAPP_MIN_INDEXABSTAND) return false;
+    if (Math.abs(j + 1 - i) < UEBERLAPP_MIN_INDEXABSTAND) return false;
+    const sx = xs[j];
+    const sy = ys[j];
+    let ex = xs[j + 1] - sx;
+    let ey = ys[j + 1] - sy;
+    const laengeQuadrat = ex * ex + ey * ey;
+    let t = 0;
+    if (laengeQuadrat > 0) {
+      t = ((xs[i] - sx) * ex + (ys[i] - sy) * ey) / laengeQuadrat;
+      if (t < 0) t = 0;
+      else if (t > 1) t = 1;
+    }
+    const ddx = xs[i] - (sx + ex * t);
+    const ddy = ys[i] - (sy + ey * t);
+    if (ddx * ddx + ddy * ddy >= naeheQuadrat) return false;
+    const len = Math.sqrt(laengeQuadrat);
+    if (len === 0) return false;
+    ex /= len;
+    ey /= len;
+    return rx[i] * ex + ry[i] * ey <= UEBERLAPP_GEGENLAEUFIG_COS;
+  };
+  let treffer = 0;
+  for (let i = 0; i < n; i++) {
+    const cx = Math.floor(xs[i] / zelle);
+    const cy = Math.floor(ys[i] / zelle);
+    let gefunden = false;
+    for (let ox = -1; ox <= 1 && !gefunden; ox++) {
+      for (let oy = -1; oy <= 1 && !gefunden; oy++) {
+        const eimer = gitter.get(schluessel(cx + ox, cy + oy));
+        if (!eimer) continue;
+        for (const j of eimer) {
+          if (passt(i, j) || passt(i, j - 1)) {
+            gefunden = true;
+            break;
+          }
+        }
+      }
+    }
+    if (gefunden) treffer++;
+  }
+  return Number((treffer / n).toFixed(3));
+}
 
 // ─────────────────── Style-Quality Metriken ───────────────────────────────
 //
@@ -1260,6 +1531,12 @@ async function callGraphHopper(opts: {
       const s = (i as Record<string, unknown>).sign;
       return s === -8 || s === 8 || s === -98;
     }).length;
+    // 2026-08-18 (Aufgabe 1.4, vucko am 16.08.): „Die Strecken muessen sauber
+    // sein und nicht in eine Richtung und dann die gleiche Strasse wieder
+    // zurueckfinden." u_turn_count sieht NUR Wenden, die GraphHopper selbst
+    // signalisiert. Diese Kennzahl sieht die Faelle ohne Vorzeichen: Schleife
+    // durchs Dorf und auf der Parallelfahrbahn zurueck.
+    const selbstUeberlappung = selbstUeberlappungAnteil(coords as [number, number][]);
     return {
       geometry: p.points,
       distanceKm,
@@ -1277,6 +1554,7 @@ async function callGraphHopper(opts: {
         uses_motorway: usesMotorway,
         uses_trunk: usesTrunk,
         u_turn_count: uTurnCount,
+        self_overlap_fraction: selbstUeberlappung,
         start_on_motorway: startOnMotorway,
         prefer_main_roads: opts.preferMainRoads === true,
         motorway_distance_fraction: motorwayFraction,
@@ -1583,6 +1861,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // detour_level 3 = groß (Sub-WP 12-25 km, 5 Versuche)
   const detourLevel = isRoundTrip ? 0 : (req.detour_level ?? 0);
   const detourSpec: Array<{ bearing: number; distKm: number; side: -1 | 1; family: number; along: number }> = [];
+  // 2026-08-18 (Aufgabe 1.3): Welcher Term die Umweg-Basisdistanz bestimmt hat,
+  // wandert ins Antwort-Meta. Ohne diese Anzeige ist im Feld nicht zu sehen,
+  // dass ein Term im Math.max wirkungslos ist — genau so blieb der falsche
+  // Kommentar monatelang unbemerkt.
+  let detourBasisTerm: UmwegBasisTerm | undefined;
   if (!isRoundTrip && req.target_location && detourLevel > 0) {
     const directKm = (() => {
       const R = 6371;
@@ -1602,17 +1885,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       : profile === 'motorcycle_abendrunde' ? 0.7
       : profile === 'motorcycle_entdecker' ? 1.0
       : 1.0;
-    const baseFactor = detourLevel === 1 ? 0.15 : detourLevel === 2 ? 0.30 : 0.50;
     const detourFactor = Math.max(1, finiteNumberOr(req.detour_factor, 1));
     const requestedTargetKm = finiteNumberOr(req.target_distance_km, directKm);
-    const factorKm = directKm * Math.max(0.08, (detourFactor - 1) * 0.55);
-    const targetExtraKm = Math.max(0, requestedTargetKm - directKm) * 0.48;
-    const baseKm = Math.max(
-      2,
-      directKm * baseFactor * profileDetourMultiplier,
-      factorKm * profileDetourMultiplier,
-      targetExtraKm,
-    );
+    // 2026-08-18 (Aufgabe 1.3): war ein Math.max mit vier Termen, von denen
+    // einer (baseFactor 0,15/0,30/0,50) nachweislich nie gewinnen konnte.
+    // Herleitung und Zahlen stehen bei umwegBasisKm().
+    const umwegBasis = umwegBasisKm({
+      directKm,
+      detourLevel,
+      detourFactor,
+      requestedTargetKm,
+      profileMultiplier: profileDetourMultiplier,
+    });
+    const baseKm = umwegBasis.km;
+    detourBasisTerm = umwegBasis.term;
     const variantSeed =
       Math.abs(Math.round(finiteNumberOr(req.randomSeed, 0))) +
       stableHashInt(req.route_variant_hint) +
@@ -1644,7 +1930,20 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     // jede Umweg-Route eine Wende (Stachel: hin und auf demselben Weg
     // zurueck) — es fehlte schlicht an Kandidaten OHNE Wende. Die Kandidaten
     // laufen parallel, die Latenz bleibt bei der laengsten Einzelanfrage.
-    const limit = detourLevel === 1 ? 8 : detourLevel === 2 ? 12 : 14;
+    // 2026-08-18 (Aufgabe 1.3): Stufe 1 hatte mit 8 die WENIGSTEN Kandidaten
+    // (gegen 12 und 14) — bei zwei Distanzen je Peilung sind das nur 4
+    // Peilungen, ausgerechnet dort, wo wendefreie Kandidaten am knappsten
+    // sind: ein kleiner seitlicher Versatz landet oft in einer Sackgasse oder
+    // im Wohngebiet, aus dem GraphHopper nur mit Wenden herauskommt. Stufe 1
+    // bekommt jetzt 12, also 6 Peilungen statt 4.
+    //
+    // KOSTEN: keine zusaetzliche Latenz. Die Kandidaten werden weiter unten in
+    // EINEM Promise.all abgefeuert (Suche nach „detourLevel > 0: parallel mit
+    // verschiedenen Sub-Waypoint-Positionen"), die Antwortzeit ist also die
+    // laengste EINZELNE GraphHopper-Anfrage, nicht ihre Summe. Was steigt, ist
+    // die Last auf GraphHopper: 4 zusaetzliche gleichzeitige Anfragen je
+    // Stufe-1-Suche. Stufe 3 faehrt mit 14 schon laenger so.
+    const limit = detourLevel === 1 ? 12 : detourLevel === 2 ? 12 : 14;
     // 2026-05-22 (vucko Task #11): Pro Bearing zwei distanzen probieren —
     // wenn der primäre Sub-WP im Wasser/Berg landet, fängt der kleinere
     // baseKm-Wert oft trotzdem. Verdoppelt effektiv die Erfolgsrate
@@ -1689,6 +1988,22 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // Motorway, keine U-Turns) braucht die Auswahl mehr saubere Kandidaten zum
   // Vergleichen. generateSeeds liefert 10 — wir nutzen jetzt mehr davon. Der
   // Racer bricht Verlierer ab, sobald ein sauberer da ist → Latenz bleibt < 10s.
+  //
+  // 2026-08-18 (Aufgabe 1.3): `max_candidate_attempts` aus dem Request wird
+  // hier BEWUSST NICHT ausgewertet. Gemessen, was der Client schickt:
+  // route_service.dart:3170 sendet fuer A→B den Vorgabewert 3, :3287 den Wert
+  // 5, fuer Rundkurse :1697 die Werte 18 bzw. 30. Wuerden wir das als
+  // Obergrenze nehmen, faellt A→B von 13 bis 14 Kandidaten auf 3 bis 5 zurueck
+  // — das macht exakt den Befund vom 16.08. rueckgaengig (17 von 18
+  // Umweg-Routen mit einer Wende, weil es an wendefreien Kandidaten fehlte).
+  // Als Untergrenze taugt es ebenso wenig: 30 gleichzeitige Anfragen
+  // saturieren den GraphHopper-Thread-Pool und treiben die laengste
+  // Einzelanfrage nach oben. Die Zahl gehoert an die Stelle, die weiss, wie
+  // viele saubere Kandidaten die Auswahl braucht — und das ist der Server.
+  // Der Wert wandert nur zur Nachvollziehbarkeit ins Antwort-Meta.
+  const clientCandidateBudget = Number.isFinite(Number(req.max_candidate_attempts))
+    ? Number(req.max_candidate_attempts)
+    : undefined;
   const maxAttempts = isRoundTrip
     ? (isAlpineHotspot
         ? (needsDiversity ? 8 : 7)
@@ -2060,6 +2375,10 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           engine: 'graphhopper-8',
           profile: profileToUse,
           bbox: segResults[0].meta.bbox,
+          // 2026-08-18 (Aufgabe 1.4): Auch die zusammengenaehte Stopp-Kette
+          // bekommt die Kennzahl. Gerade hier entsteht Hin-und-zurueck, weil
+          // die Segmente einzeln geroutet werden und keines vom anderen weiss.
+          self_overlap_fraction: selbstUeberlappungAnteil(stitchedCoords),
         },
       };
       console.log(`Stitched ${segments.length} segments: ${totalDistKm.toFixed(1)}km`);
@@ -2490,6 +2809,11 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
               engine: 'graphhopper-8',
               profile: 'motorcycle_entdecker',
               bbox: br.meta.bbox,
+              // 2026-08-18 (Aufgabe 1.4): Diese Notfallroute ist per Bauart
+              // hin-und-zurueck. Sie umgeht das Scoring (sie wird als einziger
+              // Kandidat gesetzt), die Kennzahl steht hier also nur zum
+              // Mitmessen im Monitoring — nicht zur Auswahl.
+              self_overlap_fraction: selbstUeberlappungAnteil(coords),
             },
           };
           console.log(`[SYNTH-OUTBACK] success: ${dist.toFixed(1)}km (delta ${delta.toFixed(0)}%, ${coords.length} pts)`);
@@ -2577,6 +2901,29 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         : uTurns === 1
         ? einzelWendeStrafe
         : 250 + (uTurns - 2) * 120;
+    // 2026-08-18 (Aufgabe 1.4, vucko am 16.08.): „Die Strecken muessen sauber
+    // sein und nicht in eine Richtung und dann die gleiche Strasse wieder
+    // zurueckfinden."
+    //
+    // Die Ueberlappung wirkt in der AUSWAHL, nicht erst in der Ablehnung —
+    // gemessen war der Zustand: der Server kannte die Kennzahl gar nicht, ein
+    // hin-und-zurueck-Kandidat konnte gewinnen und wurde erst im Client
+    // weggeworfen („keine Route").
+    //
+    // Gewicht in der Groessenordnung der Wende-Strafe (60): Ein Kandidat, der
+    // die HALBE Strecke doppelt faehrt, kostet 0,5 * 60 = 30 Grundstrafe. Bei
+    // A→B-Umwegen kommt ab 0,15 ein steiler Teil dazu (300 je voller Einheit),
+    // weil dort genau dieser Stachel die Beschwerde war:
+    //   Anteil 0,10 →  6     (Rauschen, z.B. eine Ortsdurchfahrt zweimal)
+    //   Anteil 0,15 →  9     (Schwelle, ab hier steil)
+    //   Anteil 0,30 → 18 + 45 = 63   (rund eine Wende)
+    //   Anteil 0,50 → 30 + 105 = 135 (schlaegt jede Distanz-Feinabstimmung)
+    // Rundkurse bekommen nur den Grundterm: dort ist ein Stueck doppelt oft
+    // topologisch unvermeidbar (Taleingang, einzige Brücke).
+    const selbstUeberlappung = Number(c.result.meta.self_overlap_fraction ?? 0);
+    const ueberlappStrafe =
+      selbstUeberlappung * 60 +
+      (detourLevel > 0 ? Math.max(0, selbstUeberlappung - 0.15) * 300 : 0);
     const country = countryRouteMetrics(
       c.result.geometry.coordinates as [number, number][],
       homeCountryCode,
@@ -2591,7 +2938,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     return {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow, foreignFraction, countryRejected, countryScorePenalty,
-      mainRoadPenalty,
+      mainRoadPenalty, selbstUeberlappung, ueberlappStrafe,
       foreignPointFraction: country.foreignPointFraction,
       foreignDistanceFraction: country.foreignDistanceFraction,
       maxForeignSegmentMeters: country.maxForeignSegmentMeters,
@@ -2607,7 +2954,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           ? c.deltaPct * 1.6 + Math.max(0, c.deltaPct - 40) * 3
           : c.deltaPct) +
         stylePenalty + speedPenalty + highwayPenalty +
-        uTurnPenalty + countryScorePenalty + mainRoadPenalty +
+        uTurnPenalty + ueberlappStrafe + countryScorePenalty + mainRoadPenalty +
         (countryRejected ? 10000 : 0),
     };
   });
@@ -2897,6 +3244,14 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         detour_offset_side: bestCandidate.meta.detour_offset_side,
         detour_bearing_deg: bestCandidate.meta.detour_bearing_deg,
         detour_perpendicular_km: bestCandidate.meta.detour_perpendicular_km,
+        // 2026-08-18 (Aufgabe 1.3): welcher Term die Umweg-Basisdistanz
+        // bestimmt hat, und wie viele Kandidaten wirklich losgeschickt wurden.
+        detour_base_term: detourBasisTerm,
+        detour_candidate_count: detourSpec.length > 0 ? detourSpec.length : undefined,
+        // Vom Client geschickt, vom Server bewusst ignoriert (Begruendung bei
+        // maxAttempts). Steht hier, damit „toter Parameter" messbar bleibt.
+        client_candidate_budget: clientCandidateBudget,
+        client_candidate_budget_ignored: clientCandidateBudget !== undefined,
         // v1-kompatible meta-Felder
         distance_km: Number(bestCandidate.distanceKm.toFixed(2)),
         duration_seconds: Math.round(bestCandidate.durationSeconds),
@@ -2907,6 +3262,16 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         avg_speed_kmh: Number((selectedScored?.avgSpeedKmh ?? 0).toFixed(1)),
         speed_penalty: Number((selectedScored?.speedPenalty ?? 0).toFixed(1)),
         main_road_penalty: Number((selectedScored?.mainRoadPenalty ?? 0).toFixed(1)),
+        // 2026-08-18 (Aufgabe 1.4): Anteil der Strecke, der ein zweites Mal in
+        // Gegenrichtung befahren wird, plus die daraus gezogene Strafe.
+        // Rueckfall auf das Kandidaten-Meta: die Notfallrouten (stitched-outback)
+        // umgehen das Scoring, `selectedScored` ist dort undefined — ohne den
+        // Rueckfall wuerde ausgerechnet die hin-und-zurueck-Route 0 melden.
+        self_overlap_fraction: Number(
+          (selectedScored?.selbstUeberlappung ??
+            Number(bestCandidate.meta.self_overlap_fraction ?? 0)).toFixed(3),
+        ),
+        self_overlap_penalty: Number((selectedScored?.ueberlappStrafe ?? 0).toFixed(1)),
         profile_fallback_used: usedProfileFallback,
         country_preference: countryPreference,
         home_country_code: homeCountryCode,

@@ -419,6 +419,90 @@ class RouteService {
   /// Key = konkrete Variant-/Request-Signatur, Value = RouteResult.
   static final Map<String, RouteResult> _sessionCache = {};
 
+  /// 2026-08-18 (vucko, Aufgabe 1.3): „Kleiner Umweg ist noch nicht so gut,
+  /// mittlerer Umweg zeigt schon viel staerkere Verbesserungen an, und grosser
+  /// Umweg auch."
+  ///
+  /// Gemessene Ursache fuer den kleinen Umweg: die Umwegsfenster wurden gegen
+  /// die LUFTLINIE bemessen, obwohl eine echte Strassenroute typisch das 1,2-
+  /// bis 1,4-fache davon ist. Eine Route an der alten Untergrenze 1,60x
+  /// Luftlinie war damit nur 15 bis 30 Prozent laenger als die Direktfahrt und
+  /// wirkte wie gar kein Umweg.
+  ///
+  /// Hier merkt sich der Dienst die LAENGE einer tatsaechlich gelieferten
+  /// Direktroute je Verbindung (Direkt-Auswahl oder Direkt-Rueckfall). Ist sie
+  /// bekannt, bemessen sich alle Umwegsstufen daran statt an einer Schaetzung.
+  /// Nur Hauptspeicher, absichtlich klein und ohne Persistenz.
+  static final Map<String, double> _measuredDirectRoadKm = {};
+  static const int _measuredDirectRoadKmLimit = 32;
+
+  /// Schluessel auf rund 100 m gerundet: dieselbe Verbindung soll denselben
+  /// Eintrag treffen, auch wenn der GPS-Startpunkt leicht wandert.
+  static String _directRoadKey({
+    required double startLat,
+    required double startLng,
+    required double destLat,
+    required double destLng,
+  }) {
+    String r(double v) => v.toStringAsFixed(3);
+    return '${r(startLat)},${r(startLng)}>${r(destLat)},${r(destLng)}';
+  }
+
+  static double? _measuredDirectRoadKmFor({
+    required double startLat,
+    required double startLng,
+    required double destLat,
+    required double destLng,
+  }) {
+    return _measuredDirectRoadKm[_directRoadKey(
+      startLat: startLat,
+      startLng: startLng,
+      destLat: destLat,
+      destLng: destLng,
+    )];
+  }
+
+  /// Uebernimmt die Laenge einer gelieferten Direktroute als Bezugsgroesse.
+  /// Plausibilitaetsband: mindestens 0,98x und hoechstens 3,0x Luftlinie -
+  /// alles darunter ist eine abgeschnittene Geometrie, alles darueber war in
+  /// Wahrheit kein direkter Weg.
+  static void _rememberDirectRoadDistance({
+    required double startLat,
+    required double startLng,
+    required double destLat,
+    required double destLng,
+    required double airlineKm,
+    required double roadKm,
+  }) {
+    if (airlineKm <= 0 || !roadKm.isFinite) return;
+    if (roadKm < airlineKm * 0.98 || roadKm > airlineKm * 3.0) return;
+    final key = _directRoadKey(
+      startLat: startLat,
+      startLng: startLng,
+      destLat: destLat,
+      destLng: destLng,
+    );
+    if (!_measuredDirectRoadKm.containsKey(key) &&
+        _measuredDirectRoadKm.length >= _measuredDirectRoadKmLimit) {
+      _measuredDirectRoadKm.remove(_measuredDirectRoadKm.keys.first);
+    }
+    _measuredDirectRoadKm[key] = roadKm;
+  }
+
+  /// Nur fuer Tests und Diagnose.
+  @visibleForTesting
+  static double? measuredDirectRoadDistanceKmForTest({
+    required double startLat,
+    required double startLng,
+    required double destLat,
+    required double destLng,
+  }) => _measuredDirectRoadKmFor(
+    startLat: startLat,
+    startLng: startLng,
+    destLat: destLat,
+    destLng: destLng,
+  );
+
   /// Globaler Request-Zähler als Fallback für Legacy-Aufrufer.
   static int _globalDiversityIndex = 0;
 
@@ -452,6 +536,7 @@ class RouteService {
     _recentSuccessfulRoutes.clear();
     _recentDisplayedRoutes.clear();
     _scenarioVariantCounters.clear();
+    _measuredDirectRoadKm.clear();
     _globalDiversityIndex = 0;
     _workerLimitCooldownUntil = null;
     _resetRouteDebugState();
@@ -1901,12 +1986,28 @@ class RouteService {
           1000.0,
       1.0,
     );
-    final scenicTargetKm = switch (normalizedVariant) {
-      1 => directDistanceKm * 2.00,
-      2 => directDistanceKm * 3.00,
-      3 => directDistanceKm * 4.00,
-      _ => scenic ? directDistanceKm * 1.15 : directDistanceKm,
-    };
+    // 2026-08-18 (vucko, Aufgabe 1.3): „Kleiner Umweg ist noch nicht so gut,
+    // mittlerer Umweg zeigt schon viel staerkere Verbesserungen an, und
+    // grosser Umweg auch." Die Zielgroesse haengt jetzt an der direkten
+    // STRASSENSTRECKE statt an der Luftlinie: klein rund 1,5x, mittel 2,6x,
+    // gross 4,2x. Gemessen wurde, dass eine Strassenroute typisch das 1,2- bis
+    // 1,4-fache der Luftlinie ist - die alten 2,00x/3,00x/4,00x Luftlinie
+    // entsprachen also nur etwa 1,5x/2,3x/3,1x Strassenstrecke, und die alte
+    // Annahme-Untergrenze fuer „klein" (1,60x Luftlinie) liess Routen durch,
+    // die nur 15 bis 30 Prozent ueber der Direktfahrt lagen.
+    final measuredDirectRoadKm = _measuredDirectRoadKmFor(
+      startLat: startPosition.latitude,
+      startLng: startPosition.longitude,
+      destLat: destinationLat,
+      destLng: destinationLng,
+    );
+    final scenicTargetKm = normalizedVariant > 0
+        ? RouteStyleConfig.pointToPointDetourTargetKm(
+            directDistanceKm: directDistanceKm,
+            detourVariant: normalizedVariant,
+            measuredDirectRoadDistanceKm: measuredDirectRoadKm,
+          )
+        : (scenic ? directDistanceKm * 1.15 : directDistanceKm);
     final initialTargetDistanceKm = math.max(
       scenicTargetKm,
       directDistanceKm + detourMinimumExtraKm,
@@ -1916,6 +2017,7 @@ class RouteService {
       directDistanceKm: directDistanceKm,
       scenic: scenic,
       detourVariant: normalizedVariant,
+      measuredDirectRoadDistanceKm: measuredDirectRoadKm,
     );
     final shouldDiversify = scenic || normalizedVariant > 0;
     final scenario = RouteScenario(
@@ -5303,6 +5405,22 @@ class RouteService {
     return delivered.clamp(0, scenario.detourLevel).toInt();
   }
 
+  /// 2026-08-18 (vucko, Aufgabe 1.3): gemessene direkte Strassenstrecke zu
+  /// diesem Szenario, falls schon einmal eine Direktroute geliefert wurde.
+  static double? _scenarioDirectRoadKm(RouteScenario scenario) {
+    final destLat = scenario.destinationLatitude;
+    final destLng = scenario.destinationLongitude;
+    if (!scenario.isPointToPoint || destLat == null || destLng == null) {
+      return null;
+    }
+    return _measuredDirectRoadKmFor(
+      startLat: scenario.startLatitude,
+      startLng: scenario.startLongitude,
+      destLat: destLat,
+      destLng: destLng,
+    );
+  }
+
   double? _edgeMetaDouble(RouteResult route, String key) {
     final raw = route.edgeMeta[key];
     if (raw is num) return raw.toDouble();
@@ -5353,6 +5471,35 @@ class RouteService {
       lastRouteDeadEndSpikeDetected = true;
     }
     final destinationReached = _pointToPointDestinationReached(scenario, route);
+    // 2026-08-18 (vucko, Aufgabe 1.3): Bezugsgroesse aller Umwegsfenster ist
+    // die direkte STRASSENSTRECKE. Liefert die Suche eine Direktroute (Stufe 0
+    // oder Direkt-Rueckfall), wird ihre Laenge als Messwert gemerkt und alle
+    // folgenden Bewertungen derselben Verbindung rechnen damit statt mit der
+    // Schaetzung aus der Luftlinie.
+    // Nur eine ECHT angefragte Direktroute zaehlt als Messwert: entweder hat
+    // der Nutzer „Direkt" gewaehlt, oder es lief der Direkt-Rueckfall. Eine
+    // blosse Herabstufung darf sich nicht selbst zur Bezugsgroesse machen -
+    // sonst wuerde jede zu lange Route ihr eigenes Fenster aufziehen.
+    final istEchteDirektroute =
+        scenario.detourLevel <= 0 ||
+        route.edgeMeta['detour_fallback_stage'] == 'client_direct_fallback';
+    if (scenario.isPointToPoint &&
+        destinationReached &&
+        istEchteDirektroute &&
+        pointToPointEvaluationDetourLevel <= 0 &&
+        scenario.destinationLatitude != null &&
+        scenario.destinationLongitude != null &&
+        (directDistanceKm ?? 0.0) > 0) {
+      _rememberDirectRoadDistance(
+        startLat: scenario.startLatitude,
+        startLng: scenario.startLongitude,
+        destLat: scenario.destinationLatitude!,
+        destLng: scenario.destinationLongitude!,
+        airlineKm: directDistanceKm!,
+        roadKm: actualDistanceKm,
+      );
+    }
+    final measuredDirectRoadKm = _scenarioDirectRoadKm(scenario);
     final styleFitScore = styleConfig.scoreStyleFit(
       coordinates: route.coordinates,
       distanceKm: actualDistanceKm,
@@ -5451,6 +5598,7 @@ class RouteService {
                 directDistanceKm: directDistanceKm ?? 0.0,
                 scenic: true,
                 detourVariant: pointToPointEvaluationDetourLevel,
+                measuredDirectRoadDistanceKm: measuredDirectRoadKm,
               );
     final pointToPointMaxDistance =
         !scenario.isPointToPoint || pointToPointEvaluationDetourLevel <= 0
@@ -5461,6 +5609,7 @@ class RouteService {
                 directDistanceKm: directDistanceKm ?? 0.0,
                 scenic: true,
                 detourVariant: pointToPointEvaluationDetourLevel,
+                measuredDirectRoadDistanceKm: measuredDirectRoadKm,
               );
     final detourDistanceOk =
         !scenario.isPointToPoint || pointToPointEvaluationDetourLevel <= 0
@@ -5475,6 +5624,7 @@ class RouteService {
       detourLevel: pointToPointEvaluationDetourLevel,
       minDistanceKm: pointToPointMinDistance,
       maxDistanceKm: pointToPointMaxDistance,
+      measuredDirectRoadDistanceKm: measuredDirectRoadKm,
     );
     final pointToPointDetourShapeOk = _pointToPointDetourShapeRenderable(
       scenario: scenario,
@@ -5533,8 +5683,31 @@ class RouteService {
               return actualDistanceKm >= directKm * 0.96 &&
                   actualDistanceKm <= maxKm;
             }
+            // 2026-08-18 (vucko, Aufgabe 1.4): Die Obergrenze fuer eine
+            // DIREKTE A-nach-B-Route hing an der Luftlinie (1,35x). Eine echte
+            // Strassenroute ist aber typisch das 1,2- bis 1,4-fache der
+            // Luftlinie, in den Bergen mehr - die Grenze lag also praktisch auf
+            // der Direktfahrt selbst. Sie bemisst sich jetzt an der direkten
+            // STRASSENSTRECKE.
+            //
+            // Zweiter Fall: der Nutzer wollte einen Umweg und bekam den
+            // Direkt-Rueckfall (delivered_detour_level = 0). Dann darf die
+            // Route bis an die Untergrenze des KLEINEN Umwegs reichen, aber
+            // keinen Meter darueber - sonst waere sie in Wahrheit ein Umweg,
+            // der sich an keinem Umwegsfenster messen lassen muss.
+            final roadKm = RouteStyleConfig.pointToPointRoadReferenceKm(
+              directDistanceKm: directKm,
+              measuredDirectRoadDistanceKm: measuredDirectRoadKm,
+            );
+            final downgradedToDirect = scenario.detourLevel > 0;
+            final directMaxKm = downgradedToDirect
+                ? RouteStyleConfig.pointToPointDetourBoundaryKm(
+                    roadReferenceKm: roadKm,
+                    boundaryIndex: 0,
+                  )
+                : math.max(roadKm * 1.15, roadKm + 6.0);
             return actualDistanceKm >= directKm * 0.92 &&
-                actualDistanceKm <= math.max(directKm * 1.35, directKm + 6.0);
+                actualDistanceKm <= directMaxKm;
           })();
     final renderableDistanceOk =
         scenario.isPointToPoint && pointToPointEvaluationDetourLevel > 0
@@ -5693,6 +5866,16 @@ class RouteService {
         quality.overlapPercent <= 26.0 &&
         quality.microZigzagPercent <= 34.0 &&
         quality.shapePenalty <= 72.0;
+    // 2026-08-18 (vucko, Aufgabe 1.4): A nach B OHNE Umweg (Stufe 0) hatte gar
+    // kein Ueberlappungstor - es reichten genug Punkte und ein erreichtes Ziel.
+    // Eine kaputte Geometrie, die dieselbe Strasse hin und zurueck faehrt,
+    // rutschte damit ungeprueft durch. Weiches Tor bei 30 Prozent: die
+    // kuerzeste Strecke erreicht das nie, betroffen sind nur kaputte
+    // Geometrien.
+    final directOverlapOk =
+        !scenario.isPointToPoint ||
+        pointToPointEvaluationDetourLevel > 0 ||
+        quality.overlapPercent <= 30.0;
     final qualityAcceptable = scenario.isRoundTrip
         ? classification.isAcceptable ||
               rescueRoundTripAcceptable ||
@@ -5700,6 +5883,7 @@ class RouteService {
               serverApprovedSportRescue ||
               cleanCurvyRescue
         : destinationReached &&
+              directOverlapOk &&
               (pointToPointEvaluationDetourLevel <= 0 ||
                   pointToPointDetourShapeOk);
     final isPoolFallbackRoute =
@@ -5767,12 +5951,20 @@ class RouteService {
     // (die sind für Kurven-Rundkurse gedacht, nicht für die Direktstrecke).
     // Greift sowohl beim expliziten „Direkte Route nehmen" (forceAcceptDirect)
     // als auch wenn der User im Dropdown „Direkt" gewählt hat (detour 0).
+    // 2026-08-18 (vucko, Aufgabe 1.4): Herabstufungs-Loch. Hier stand die
+    // GELIEFERTE Stufe (min aus geliefert und angefordert). Setzte der Client
+    // beim Direkt-Rueckfall delivered_detour_level = 0, wurde diese Bedingung
+    // wahr, forceDirectAcceptable griff und ALLE Formtore wurden uebersprungen
+    // - obwohl der Nutzer einen Umweg angefordert hatte. Massgeblich ist jetzt
+    // die ANGEFORDERTE Stufe: nur wer wirklich „Direkt" gewaehlt hat (oder
+    // „Direkte Route nehmen" drueckt), bekommt den Freifahrtschein.
     final isDirectPointToPoint =
-        scenario.isPointToPoint && pointToPointEvaluationDetourLevel <= 0;
+        scenario.isPointToPoint && scenario.detourLevel <= 0;
     final forceDirectAcceptable =
         (forceAcceptDirect || isDirectPointToPoint) &&
         hasEnoughPoints &&
-        destinationReached;
+        destinationReached &&
+        directOverlapOk;
     // 2026-05-31 (vucko): Länder-Filter. Ausland-Anteil EINMAL berechnen.
     // „onlyHome" lehnt foreign-lastige Rundkurse jetzt als Kandidat AB
     // (countryRejected) — der reine Score-Penalty reichte nicht, weil bei nur
@@ -6089,6 +6281,7 @@ class RouteService {
     required int detourLevel,
     required double minDistanceKm,
     required double maxDistanceKm,
+    double? measuredDirectRoadDistanceKm,
   }) {
     if (!scenario.isPointToPoint || detourLevel <= 0) return true;
     if (actualDistanceKm >= minDistanceKm &&
@@ -6101,14 +6294,24 @@ class RouteService {
       3 => 2.6,
       _ => 0.0,
     };
+    // 2026-08-18 (vucko, Aufgabe 1.3): Auch die Rettungs-Untergrenze bemisst
+    // sich an der direkten STRASSENSTRECKE. Vorher stand hier die Luftlinie:
+    // bei Stufe 1 rettete der Faktor 1,10 eine Route, die nur zehn Prozent
+    // ueber der Luftlinie lag - also KUERZER als eine normale Direktfahrt und
+    // damit kein Umweg. Die Faktoren liegen jetzt knapp unter der jeweiligen
+    // Fenster-Untergrenze (1,30x / 2,25x / 3,65x Strassenstrecke).
+    final roadReferenceKm = RouteStyleConfig.pointToPointRoadReferenceKm(
+      directDistanceKm: directDistanceKm,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
+    );
     final rescueMinFactor = switch (detourLevel) {
-      1 => 1.10,
-      2 => 1.28,
-      3 => 1.55,
+      1 => 1.20,
+      2 => 2.05,
+      3 => 3.35,
       _ => 1.0,
     };
     final rescueMinKm = math.max(
-      directDistanceKm * rescueMinFactor,
+      roadReferenceKm * rescueMinFactor,
       minDistanceKm - rescueSlackKm,
     );
     final rescueMaxKm = math.max(
@@ -6118,6 +6321,7 @@ class RouteService {
             directDistanceKm: directDistanceKm,
             scenic: true,
             detourVariant: detourLevel,
+            measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
           ) *
           1.04,
     );
@@ -8870,20 +9074,22 @@ class RouteService {
             3 => 2.10,
             _ => 1.15,
           };
-          final scenicMinimumExtraKm = switch (fallbackDetourLevel) {
-            1 => 3.0,
-            2 => 7.0,
-            3 => 14.0,
-            _ => 2.0,
-          };
+          // 2026-08-18 (vucko, Aufgabe 1.3): Auch der vereinfachte Rueckfall
+          // zielt jetzt auf die direkte STRASSENSTRECKE (klein rund 1,5x,
+          // mittel 2,6x, gross 4,2x). Vorher stand hier 1,32x/1,65x/2,10x der
+          // LUFTLINIE - bei einer Strassenstrecke von 1,3x Luftlinie war der
+          // „kleine Umweg" damit nur ein Prozent laenger als die Direktfahrt
+          // und fiel prompt unter die Fenster-Untergrenze.
           final scenicTargetKm = scenicStyleConfig.clampPointToPointTargetKm(
-            math.max(
-              directDistanceKm * scenicDetourFactor,
-              directDistanceKm + scenicMinimumExtraKm,
+            RouteStyleConfig.pointToPointDetourTargetKm(
+              directDistanceKm: directDistanceKm,
+              detourVariant: fallbackDetourLevel,
+              measuredDirectRoadDistanceKm: _scenarioDirectRoadKm(scenario),
             ),
             directDistanceKm: directDistanceKm,
             scenic: true,
             detourVariant: fallbackDetourLevel,
+            measuredDirectRoadDistanceKm: _scenarioDirectRoadKm(scenario),
           );
           final scenicBody = _buildPointToPointRequest(
             startPosition: startPosition,
@@ -9073,6 +9279,7 @@ class RouteService {
       directDistanceKm: directDistanceKm,
       scenic: true,
       detourVariant: deliveredDetourLevel,
+      measuredDirectRoadDistanceKm: _scenarioDirectRoadKm(scenario),
     );
     final preferredSlackKm = switch (deliveredDetourLevel) {
       1 => 0.0,

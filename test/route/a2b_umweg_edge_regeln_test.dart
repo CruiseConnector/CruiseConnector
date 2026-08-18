@@ -35,8 +35,15 @@ void main() {
   });
 
   test('mehr Kandidaten je Stufe, zwei Distanzen je Peilung', () {
+    // 2026-08-18 (Aufgabe 1.3): Stufe 1 stieg von 8 auf 12 Kandidaten.
+    // Vucko am 16.08.: „Kleiner Umweg ist noch nicht so gut, mittlerer Umweg
+    // zeigt schon viel staerkere Verbesserungen an."
+    // Gemessene Ursache: Bei zwei Distanzen je Peilung sind 8 Kandidaten nur
+    // 4 Peilungen - ausgerechnet bei der Stufe, wo wendefreie Kandidaten am
+    // knappsten sind. Die Kandidaten laufen in EINEM Promise.all, die
+    // Antwortzeit ist also die laengste Einzelanfrage, nicht ihre Summe.
     expect(
-      edge.contains('const limit = detourLevel === 1 ? 8 : detourLevel === 2 ? 12 : 14;'),
+      edge.contains('const limit = detourLevel === 1 ? 12 : detourLevel === 2 ? 12 : 14;'),
       isTrue,
     );
     expect(

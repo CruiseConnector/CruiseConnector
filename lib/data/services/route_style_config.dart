@@ -504,6 +504,7 @@ class RouteStyleConfig {
     required double directDistanceKm,
     required bool scenic,
     required int detourVariant,
+    double? measuredDirectRoadDistanceKm,
   }) {
     if (!scenic && detourVariant <= 0) {
       return directDistanceKm;
@@ -512,88 +513,177 @@ class RouteStyleConfig {
       directDistanceKm: directDistanceKm,
       scenic: scenic,
       detourVariant: detourVariant,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
     );
     final upperBound = maximumPointToPointDistanceKm(
       targetKm: requestedKm,
       directDistanceKm: directDistanceKm,
       scenic: scenic,
       detourVariant: detourVariant,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
     );
     return requestedKm.clamp(lowerBound, upperBound);
   }
 
-  // Scenic-Umwege starten clientseitig nur mit Luftlinien-Distanz. Für kurze
-  // A→B-Strecken unterschätzt das die tatsächlich "direkte" Fahrdistanz oft
-  // deutlich, wodurch Klein/Mittel/Groß zu ähnlich werden. Diese Referenz
-  // hebt nur den Scenic-Basispunkt leicht an; direkte A→B-Routen bleiben
-  // unverändert.
-  double pointToPointScenicReferenceDistanceKm({
-    required double directDistanceKm,
-    required int detourVariant,
-  }) {
-    if (detourVariant <= 0) return directDistanceKm;
-
-    final shortHop = directDistanceKm <= 12.0;
-    final midHop = directDistanceKm <= 25.0;
-    final roadFactor = shortHop
+  // 2026-08-18 (vucko, Aufgabe 1.3): „Kleiner Umweg ist noch nicht so gut,
+  // mittlerer Umweg zeigt schon viel staerkere Verbesserungen an, und grosser
+  // Umweg auch."
+  //
+  // GEMESSENE URSACHE: Alle Umwegs-Fenster wurden gegen die LUFTLINIE
+  // bemessen. Eine echte A-nach-B-Strassenroute ist aber typisch das 1,2- bis
+  // 1,4-fache der Luftlinie. Die alte Untergrenze fuer „klein" lag bei 1,60x
+  // Luftlinie, also nur 15 bis 30 Prozent ueber der Direktfahrt: das fuehlt
+  // sich nach gar keinem Umweg an. Fuer „mittel" (2,35x) und „gross" (3,10x)
+  // war der Abstand gross genug, genau deshalb sagt Vucko, die beiden zeigten
+  // „schon viel staerkere Verbesserungen".
+  //
+  // Seither ist die Bezugsgroesse die direkte STRASSENSTRECKE. Ist sie
+  // gemessen (eine zuvor gelieferte Direktroute derselben Verbindung), wird
+  // sie benutzt; sonst wird sie aus der Luftlinie geschaetzt.
+  //
+  // Schaetzfaktoren aus der Erhebung vom 16.08. (36 Live-Routen, drei Paare in
+  // Vorarlberg) und aus dem allgemeinen 1,2 bis 1,4-Band: kurze Strecken
+  // muessen mehr Ortsdurchfahrten mitnehmen, lange Strecken laufen laenger
+  // ueber Schnellstrassen und naehern sich der Luftlinie an.
+  static double estimatedDirectRoadDistanceKm(double airlineDistanceKm) {
+    if (!airlineDistanceKm.isFinite || airlineDistanceKm <= 0) return 0.0;
+    final factor = airlineDistanceKm <= 8.0
+        ? 1.38
+        : airlineDistanceKm <= 20.0
         ? 1.32
-        : midHop
-        ? 1.24
-        : 1.18;
-    final roadPaddingKm = switch (detourVariant) {
-      1 => shortHop ? 1.8 : (midHop ? 2.2 : 2.8),
-      2 => shortHop ? 2.6 : (midHop ? 3.1 : 3.8),
-      3 => shortHop ? 3.8 : (midHop ? 4.5 : 5.2),
-      _ => shortHop ? 1.5 : (midHop ? 2.0 : 2.5),
-    };
+        : airlineDistanceKm <= 60.0
+        ? 1.25
+        : 1.20;
+    return airlineDistanceKm * factor;
+  }
 
+  /// Bezugsgroesse aller A-nach-B-Umwegsfenster: die direkte
+  /// STRASSENSTRECKE. `measuredDirectRoadDistanceKm` ist die Laenge einer
+  /// tatsaechlich gelieferten Direktroute derselben Verbindung; fehlt sie,
+  /// wird geschaetzt. Der Messwert wird nur uebernommen, wenn er plausibel
+  /// ist (mindestens Luftlinie, hoechstens das Dreifache) - sonst wuerde eine
+  /// kaputte Geometrie alle Fenster verschieben.
+  static double pointToPointRoadReferenceKm({
+    required double directDistanceKm,
+    double? measuredDirectRoadDistanceKm,
+  }) {
+    final airline = directDistanceKm.isFinite && directDistanceKm > 0
+        ? directDistanceKm
+        : 0.0;
+    if (airline <= 0) return 0.0;
+    final measured = measuredDirectRoadDistanceKm;
+    if (measured != null &&
+        measured.isFinite &&
+        measured >= airline &&
+        measured <= airline * 3.0) {
+      return measured;
+    }
+    return estimatedDirectRoadDistanceKm(airline);
+  }
+
+  // Die vier Fenstergrenzen b0 < b1 < b2 < b3, jeweils als Vielfaches der
+  // direkten Strassenstrecke plus einem additiven Sockel fuer kurze Strecken:
+  //
+  //   klein  = [b0, b1]   Ziel rund 1,5x Strassenstrecke
+  //   mittel = [b1, b2]
+  //   gross  = [b2, b3]
+  //
+  // Weil OBERgrenze der Stufe n und UNTERgrenze der Stufe n+1 exakt dieselbe
+  // Zahl aus derselben Funktion sind, gibt es weder eine Ueberlappung noch
+  // eine Luecke - unabhaengig von der Streckenlaenge. Vorher nahm „klein"
+  // 1,60x bis 2,70x Luftlinie und „mittel" 2,35x bis 3,90x: bei 10 km
+  // Luftlinie war jede Route zwischen 23,5 und 30 km fuer BEIDE Stufen
+  // gueltig, deshalb fuehlten sie sich gleich an.
+  //
+  // Belegt an der Live-Erhebung vom 16.08. (Median je Stufe 2,25x / 4,2x /
+  // 6,0x Luftlinie, das sind rund 1,65x / 3,1x / 4,4x Strassenstrecke): die
+  // Grenzen 2,25x und 3,65x liegen jeweils zwischen zwei gemessenen Medianen,
+  // die gelieferten Routen fallen also weiterhin in genau ihre Stufe.
+  static const List<double> _detourBoundaryFactors = <double>[
+    1.30,
+    2.25,
+    3.65,
+    6.00,
+  ];
+
+  // Additiver Sockel, damit kurze Strecken nicht an den Faktoren scheitern:
+  // bei 4 km Strassenstrecke waeren 1,30x nur 5,2 km, das fuehlt sich nach
+  // keinem Umweg an. Beide Reihen sind streng steigend, deshalb bleiben auch
+  // die Grenzen bei jeder Streckenlaenge streng steigend.
+  static const List<double> _detourBoundaryAddendsKm = <double>[
+    3.0,
+    9.0,
+    22.0,
+    45.0,
+  ];
+
+  /// Fenstergrenze `boundaryIndex` (0 bis 3) fuer die A-nach-B-Umwegsstufen.
+  static double pointToPointDetourBoundaryKm({
+    required double roadReferenceKm,
+    required int boundaryIndex,
+  }) {
+    final index = boundaryIndex.clamp(0, _detourBoundaryFactors.length - 1);
     return math.max(
-      directDistanceKm,
-      math.max(directDistanceKm * roadFactor, directDistanceKm + roadPaddingKm),
+      roadReferenceKm * _detourBoundaryFactors[index],
+      roadReferenceKm + _detourBoundaryAddendsKm[index],
     );
   }
 
-  // Detour-Fenster — entkoppelt, damit Klein/Mittel/Groß sich tatsächlich
-  // unterschiedlich anfühlen. Vorher überlappten die Bereiche so stark, dass
-  // eine Route mit 1.85× direkter Distanz für alle drei Stufen gültig war.
-  // Aktuelle Fenster:
-  //   Klein:  1.20×–1.45× direkt   (~Faktor 1.32×)
-  //   Mittel: 1.50×–1.90× direkt   (~Faktor 1.65×)
-  //   Groß:   1.90×–2.80× direkt   (~Faktor 2.10×)
-  // Bewusst etwas weiter als zuvor, damit Mapbox bei Bergland (Dornbirn,
-  // Bregenzerwald) das Fenster wirklich treffen kann. Eine schmale ~10%
-  // Überlappung an den Rändern bleibt absichtlich erhalten, damit der
-  // Fallback nicht ständig auf "direkt" zurückfällt und alle drei Stufen
-  // wieder identisch wirken. Falls der Mapbox-Kandidat zu kurz ist, sieht
-  // _tryPointToPointFallback in route_service.dart die Stufe noch immer.
+  /// Zielgroesse einer Umwegsstufe: fuer „klein" rund das 1,5-fache der
+  /// direkten Strassenstrecke, danach 2,6x und 4,2x. Liegt immer INNERHALB
+  /// des jeweiligen Fensters (der Test rechnet das ueber 5/10/20/40/80 km
+  /// Luftlinie nach).
+  static double pointToPointDetourTargetKm({
+    required double directDistanceKm,
+    required int detourVariant,
+    double? measuredDirectRoadDistanceKm,
+  }) {
+    final road = pointToPointRoadReferenceKm(
+      directDistanceKm: directDistanceKm,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
+    );
+    if (road <= 0) return directDistanceKm;
+    final factor = switch (detourVariant) {
+      1 => 1.50,
+      2 => 2.60,
+      3 => 4.20,
+      _ => 1.10,
+    };
+    final paddingKm = switch (detourVariant) {
+      1 => 5.0,
+      2 => 15.0,
+      3 => 32.0,
+      _ => 2.0,
+    };
+    return math.max(road * factor, road + paddingKm);
+  }
+
   double minimumPointToPointDistanceKm({
     required double directDistanceKm,
     required bool scenic,
     required int detourVariant,
+    double? measuredDirectRoadDistanceKm,
   }) {
     if (!scenic && detourVariant <= 0) return directDistanceKm;
-    final reference = pointToPointScenicReferenceDistanceKm(
+    final road = pointToPointRoadReferenceKm(
       directDistanceKm: directDistanceKm,
-      detourVariant: detourVariant,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
     );
-    // 2026-08-09 (vucko): Zielwerte sind jetzt 2× / 3× / 4× der Ursprungsstrecke
-    // (route_service.dart, detourFactor). Die Untergrenze muss mitwachsen, sonst
-    // würde eine 1,14×-Route weiterhin als „kleiner Umweg" durchgehen und sich
-    // von „direkt" kaum unterscheiden. Bewusst mit Luft nach unten zum Ziel
-    // (1,60 statt 2,00), damit in engem Gelände nicht alles verworfen wird.
-    final minByDirect = switch (detourVariant) {
-      1 => math.max(directDistanceKm * 1.60, directDistanceKm + 5.0),
-      2 => math.max(directDistanceKm * 2.35, directDistanceKm + 13.0),
-      3 => math.max(directDistanceKm * 3.10, directDistanceKm + 24.0),
-      _ => math.max(directDistanceKm * 1.08, directDistanceKm + 2.0),
-    };
-    final minByReference = switch (detourVariant) {
-      1 => reference * 0.94,
-      2 => reference * 1.02,
-      3 => reference * 1.10,
-      _ => reference * 0.92,
-    };
-    return math.max(directDistanceKm, math.max(minByDirect, minByReference));
+    if (detourVariant <= 0) {
+      // Scenic ohne Umwegsstufe: unveraendert an der Luftlinie bemessen, diese
+      // Kombination fordert gar keinen Umweg an.
+      return math.max(
+        directDistanceKm,
+        math.max(directDistanceKm * 1.08, directDistanceKm + 2.0),
+      );
+    }
+    return math.max(
+      directDistanceKm,
+      pointToPointDetourBoundaryKm(
+        roadReferenceKm: road,
+        boundaryIndex: detourVariant - 1,
+      ),
+    );
   }
 
   double maximumPointToPointDistanceKm({
@@ -601,6 +691,7 @@ class RouteStyleConfig {
     required double directDistanceKm,
     required bool scenic,
     required int detourVariant,
+    double? measuredDirectRoadDistanceKm,
   }) {
     if (!scenic && detourVariant <= 0) {
       // 2026-05-23 (vucko Bug-Fix A→B): Direct mode max muss auch
@@ -608,32 +699,17 @@ class RouteStyleConfig {
       // Real-Route kann 1.5× der Luftlinie sein. Großzügig:
       return math.max(directDistanceKm + 20.0, directDistanceKm * 1.80);
     }
-    // 2026-05-23 (vucko Bug-Fix A→B): Großzügige Obergrenze damit auch
-    // Bergregionen (Bregenz→Innsbruck via Alpen) und detour=3 nie
-    // abgelehnt werden. Direct distance × 4× als hartes Limit reicht
-    // selbst für die windigsten Routen.
-    // 2026-08-09 (vucko): Muss ÜBER dem Ziel liegen, nicht darauf. Bei Ziel 3,00×
-    // und Decke 3,00× würde eine Route, die minimal länger ausfällt als geplant,
-    // wieder abgeschnitten — genau das hatte die Umwege künstlich klein gehalten.
-    // „Groß" darf bis 5,2× gehen: Vucko nannte für eine 20-km-Strecke 80–100 km.
-    final maxByDirect = switch (detourVariant) {
-      1 => directDistanceKm * 2.70,
-      2 => directDistanceKm * 3.90,
-      3 => directDistanceKm * 5.20,
-      _ => directDistanceKm * 1.80,
-    };
-    // Der additive Sockel MUSS über dem Mindest-Zuschlag der jeweiligen Stufe
-    // liegen (route_service.dart: +8 / +20 / +35 km), sonst rutscht bei kurzen
-    // Strecken die Untergrenze über die Obergrenze — und `clamp` wirft dann eine
-    // Ausnahme, statt eine Route zu liefern. Nachgerechnet für 1 bis 200 km
-    // Luftlinie: mit diesen Sockeln bleibt Untergrenze <= Obergrenze überall.
-    final sockelKm = switch (detourVariant) {
-      1 => 20.0,
-      2 => 35.0,
-      3 => 55.0,
-      _ => 20.0,
-    };
-    return math.max(directDistanceKm + sockelKm, maxByDirect);
+    if (detourVariant <= 0) {
+      return math.max(directDistanceKm + 20.0, directDistanceKm * 1.80);
+    }
+    final road = pointToPointRoadReferenceKm(
+      directDistanceKm: directDistanceKm,
+      measuredDirectRoadDistanceKm: measuredDirectRoadDistanceKm,
+    );
+    return pointToPointDetourBoundaryKm(
+      roadReferenceKm: road,
+      boundaryIndex: detourVariant,
+    );
   }
 
   Map<String, dynamic> toRequestHints() {
