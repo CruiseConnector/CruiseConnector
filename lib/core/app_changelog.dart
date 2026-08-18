@@ -42,6 +42,37 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.16',
+      titel: 'Saubere Umwege, Abzeichen mit Stufen, Fahrt läuft weiter',
+      punkte: <String>[
+        'A nach B: Kleiner, mittlerer und großer Umweg unterscheiden sich '
+            'jetzt wirklich. Vorher konnte dieselbe Strecke gleichzeitig als '
+            'klein und als mittel durchgehen.',
+        'Die Umwege fahren nicht mehr hin und auf derselben Straße zurück. '
+            'Die Routenvorschläge kommen jetzt von beiden Seiten des Tals, '
+            'nicht nur von einer.',
+        'Verfährst du dich, führt dich die App zuerst auf deine Route '
+            'zurück und probiert das mehrfach. Erst wenn das nicht klappt, '
+            'geht es direkt zum Ziel. Dein gewählter Umweg bleibt dabei '
+            'erhalten, auch bei Fahrten mit Zwischenstopps.',
+        'Kommst du nach einem App-Wechsel oder einem Neustart zurück, läuft '
+            'die Fahrt ohne Antippen weiter. Gruppenfahrten, Touren mit '
+            'Stopps und Aufzeichnungen werden jetzt ebenfalls gesichert, '
+            'samt Höchstgeschwindigkeit.',
+        'Beim Erstellen einer Gruppe bleiben Rundkurs und A nach B sichtbar. '
+            'Sie waren unter bestimmten Umständen einfach verschwunden.',
+        'Bei Gruppenfahrten dreht sich die Karte nicht mehr grundlos.',
+        'Abzeichen haben jetzt Stufen. Kurvenkönig gibt es dreimal, und die '
+            'meisten anderen ebenso. Du siehst, wie weit du bis zur nächsten '
+            'Stufe bist.',
+        'Das Abzeichen für die Gründungszeit wird nur noch einmal verliehen '
+            'statt bei jedem Öffnen der Startseite.',
+        'Fährst du eine geteilte oder aufgezeichnete Strecke, bringt dich die '
+            'App zuerst zum Startpunkt, damit du sie ganz fährst. Bei '
+            'Rundkursen steigst du weiterhin dort ein, wo du bist.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.15',
       titel: 'Weiterfahren ohne Klick, schönere Umwege, mehr Abzeichen',
       punkte: <String>[
