@@ -91,11 +91,45 @@ function isInDachCoverage(lat: number, lng: number): boolean {
   return classifyPoint(lat, lng) === GeoRegion.dach;
 }
 
+// 2026-08-18 (D1b2, gemessen): Die alte IT-Box `lat < 46.85 && lng 6.6..13.9`
+// verschluckte GANZ Osttirol und den Westen Kaerntens, die SI-Box
+// `lat 45.4..46.9 && lng 13.4..16.6` den Rest Kaerntens. Gemessen an der
+// Produktions-Edge: Villach (46.610/13.856) -> IT, Lienz (46.830/12.769) -> IT,
+// Klagenfurt (46.625/14.308) -> SI. Fuer diese Nutzer war „Im Land bleiben"
+// unbenutzbar, sobald irgendjemand die Laenderkennung korrekt setzt.
+//
+// Die Suedgrenze Oesterreichs laeuft nicht auf einer Breite, sondern springt
+// entlang des Alpenhauptkamms. Diese Bandtabelle folgt den realen
+// Grenzuebergaengen: Reschen 46.84, Brenner 47.00, Innichen/Sillian 46.73,
+// Ploeckenpass 46.60, Nassfeld 46.56, Thoerl-Maglern 46.52, Loibl 46.43,
+// Seebergsattel 46.47, Radlpass 46.66, Spielfeld 46.70.
+// Alles NOERDLICH der Bandgrenze ist Oesterreich und darf nicht mehr in die
+// IT- oder SI-Box fallen.
+function austriaSouthLimit(lng: number): number {
+  if (lng < 11.00) return 46.85; // Reschenpass / Vinschgau
+  if (lng < 12.00) return 46.90; // Brenner, Timmelsjoch
+  if (lng < 12.35) return 46.78; // Innichen bleibt Italien
+  if (lng < 12.60) return 46.68; // Sillian, Kartitsch = Osttirol
+  if (lng < 13.50) return 46.55; // Ploeckenpass, Nassfeld
+  if (lng < 13.75) return 46.53; // Thoerl-Maglern: Arnoldstein AT / Tarvis IT
+  if (lng < 14.20) return 46.45; // Karawankentunnel: Villach AT / Jesenice SI
+  if (lng < 14.60) return 46.44; // Loibl: Ferlach AT
+  if (lng < 14.90) return 46.47; // Seebergsattel, Koralpe
+  if (lng < 15.50) return 46.62; // Drau: Lavamuend AT / Dravograd SI
+  if (lng < 15.80) return 46.695; // Mur: Spielfeld/Mureck AT, Sentilj SI
+  return 46.683; // Mur: Bad Radkersburg AT, Gornja Radgona SI
+}
+
 function classifyCountry(lat: number, lng: number): string | null {
   if (isLiechtensteinApprox(lat, lng)) return 'LI';
   if (lat >= 47.52 && lat <= 47.58 && lng >= 9.63 && lng <= 9.74) return 'DE';
   if (isVorarlbergAustria(lat, lng)) return 'AT';
   if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.66) return 'CH';
+  // Oesterreich-Sued VOR IT/SI pruefen — sonst gewinnen die groben Boxen.
+  if (lng >= 10.00 && lng <= 17.16 && lat >= austriaSouthLimit(lng) &&
+      lat <= austriaNorthLimit(lng)) {
+    return 'AT';
+  }
   if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) return 'IT';
   if (lat >= 45.4 && lat <= 46.9 && lng >= 13.4 && lng <= 16.6) return 'SI';
   if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
@@ -340,6 +374,9 @@ interface RouteRequest {
   avoidCrossBorder?: boolean;
   allowed_countries?: string[];
   allowedCountries?: string[];
+  /// 2026-08-18 (D1c): Vom Handler aus dem JWT gesetzt — NIE vom Client. Wird
+  /// nur gebraucht, um einen Abdeckungswunsch dem richtigen Konto zuzuordnen.
+  _subject_id?: string | null;
 }
 
 // Normalisierung: ergänzt fehlende v2-Felder aus den Flutter-Aliassen
@@ -361,6 +398,7 @@ function normalizeRequest(raw: RouteRequest): RouteRequest {
     home_country_code: normalizeCountryCode(raw.home_country_code ?? raw.homeCountryCode) ?? undefined,
     avoid_cross_border: raw.avoid_cross_border ?? raw.avoidCrossBorder ?? false,
     allowed_countries: raw.allowed_countries ?? raw.allowedCountries,
+    _subject_id: null, // wird erst im Handler aus dem JWT gefuellt
   };
 }
 
@@ -1291,6 +1329,85 @@ async function raceForFirstAcceptable<T>(
 
 // ─────────────────── Route-Generation mit Retries + Compensation ───────────
 
+// ── Abdeckungs-Vorabpruefung (2026-08-18, D1c) ───────────────────────────────
+// Gemessen am 18.08.: 165 `coverage_out_of_bounds` in 14 Tagen, davon 113 von
+// einem einzigen Nutzer. Bisher merkte die Edge das erst, NACHDEM sie bis zu
+// acht GraphHopper-Versuche verbraucht hatte — und meldete es als 502, also
+// als „unser Server spinnt gerade, versuch es nochmal". Der Nutzer versuchte
+// es nochmal. 113-mal.
+//
+// Die Wahrheit steht in GraphHopper selbst: `/info` liefert die Bounding-Box
+// des importierten Graphen. Gemessen auf beiden Mini-PCs am 18.08.:
+// lat 32.90..50.57, lng -5.52..41.66. Alles noerdlich davon — Koeln,
+// Duesseldorf, Dortmund, Hannover, Leipzig, Dresden, Berlin, Hamburg — kann
+// heute keine Route bekommen, egal wie oft man tippt.
+//
+// WICHTIG: Die Quelle ist der Graph, NICHT die Tabelle `route_pool_coverage`.
+// Die kennt nur Vorarlberg, Baden-Wuerttemberg und Wien und wuerde Villach,
+// Klagenfurt, Innsbruck und Muenchen faelschlich abweisen — die funktionieren
+// heute nachweislich.
+interface GhBbox { minLng: number; minLat: number; maxLng: number; maxLat: number }
+let _bboxCache: { at: number; boxes: GhBbox[] } | null = null;
+const BBOX_CACHE_MS = 10 * 60 * 1000;
+// Rueckfallwert = die am 18.08. auf PC1 und PC2 gemessene Box. Wird nur
+// benutzt, wenn `/info` gerade nicht erreichbar ist; dann lieber grosszuegig
+// durchlassen als faelschlich abweisen.
+const BBOX_FALLBACK: GhBbox = { minLng: -5.52, minLat: 32.90, maxLng: 41.66, maxLat: 50.57 };
+
+async function graphhopperBboxes(): Promise<GhBbox[]> {
+  const now = Date.now();
+  if (_bboxCache && now - _bboxCache.at < BBOX_CACHE_MS) return _bboxCache.boxes;
+  const urls = [...new Set([GRAPHHOPPER_URL, GRAPHHOPPER_DE_URL, GRAPHHOPPER_EU_URL])];
+  const boxes: GhBbox[] = [];
+  await Promise.all(urls.map(async (u) => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2500);
+      const r = await fetch(`${u}/info`, { signal: ctrl.signal });
+      clearTimeout(t);
+      if (!r.ok) return;
+      const j = await r.json() as { bbox?: number[] };
+      const b = j?.bbox;
+      if (Array.isArray(b) && b.length === 4 && b.every((n) => typeof n === 'number')) {
+        boxes.push({ minLng: b[0], minLat: b[1], maxLng: b[2], maxLat: b[3] });
+      }
+    } catch (_) {
+      // Server gerade nicht erreichbar — zaehlt nicht als „ausserhalb".
+    }
+  }));
+  const ergebnis = boxes.length > 0 ? boxes : [BBOX_FALLBACK];
+  _bboxCache = { at: now, boxes: ergebnis };
+  return ergebnis;
+}
+
+// Kleiner Rand, damit ein Punkt exakt auf der Kante nicht abgewiesen wird.
+const BBOX_RAND_GRAD = 0.02;
+
+function ausserhalbAllerBoxen(lat: number, lng: number, boxes: GhBbox[]): boolean {
+  return !boxes.some((b) =>
+    lat >= b.minLat - BBOX_RAND_GRAD && lat <= b.maxLat + BBOX_RAND_GRAD &&
+    lng >= b.minLng - BBOX_RAND_GRAD && lng <= b.maxLng + BBOX_RAND_GRAD);
+}
+
+/// Traegt einen Punkt ausserhalb der Abdeckung in die Warteliste ein, damit wir
+/// zum ersten Mal WISSEN, wo die Nutzer sitzen, die nie eine Route bekommen.
+/// Best-effort: ein Fehler hier darf die Antwort nie aufhalten.
+function merkeAbdeckungswunsch(
+  lat: number, lng: number, userId: string | null, land: string | null,
+): void {
+  if (!_rlAdmin) return;
+  const p: Promise<void> = Promise.resolve(
+    _rlAdmin.from('coverage_requests').insert({
+      user_id: userId,
+      lat: Math.round(lat * 1000) / 1000,
+      lng: Math.round(lng * 1000) / 1000,
+      country_code: land,
+    }),
+  ).then(() => {}, () => {});
+  const er = (globalThis as { EdgeRuntime?: { waitUntil?: (x: Promise<unknown>) => void } }).EdgeRuntime;
+  if (er?.waitUntil) er.waitUntil(p); else void p;
+}
+
 async function generateRoute(req: RouteRequest): Promise<Response> {
   // 2026-07-03 (vucko Wegpunkte-jede-Distanz, Geräte-Video 07-03): Pflicht-
   // Wegpunkte als echte durchgeroutete Punktkette behandeln — NICHT als
@@ -1356,8 +1473,56 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       debug_message: 'Edge v2: missing start_location',
     }, 400);
   }
+  // ── Abdeckung PRUEFEN, bevor GraphHopper acht Mal vergeblich rechnet ──
+  const _boxen = await graphhopperBboxes();
+  const _zuPruefen: Array<{ lat: number; lng: number; was: string }> = [
+    { lat: startLocation.latitude, lng: startLocation.longitude, was: 'Startpunkt' },
+  ];
+  if (req.target_location) {
+    _zuPruefen.push({
+      lat: req.target_location.latitude,
+      lng: req.target_location.longitude,
+      was: 'Ziel',
+    });
+  }
+  for (const wp of req.waypoints ?? []) {
+    _zuPruefen.push({ lat: wp.latitude, lng: wp.longitude, was: 'Zwischenstopp' });
+  }
+  const _draussen = _zuPruefen.find((pt) => ausserhalbAllerBoxen(pt.lat, pt.lng, _boxen));
+  if (_draussen) {
+    merkeAbdeckungswunsch(
+      _draussen.lat,
+      _draussen.lng,
+      req._subject_id ?? null,
+      classifyCountry(_draussen.lat, _draussen.lng),
+    );
+    return jsonResponse({
+      error: 'coverage_out_of_bounds',
+      user_message: _draussen.was === 'Startpunkt'
+        ? 'Deine Region ist noch nicht freigeschaltet. Wir bauen die Abdeckung ' +
+          'Schritt für Schritt aus und haben deine Gegend jetzt vorgemerkt. ' +
+          'Routen funktionieren derzeit im Alpenraum: Österreich, Schweiz, ' +
+          'Süddeutschland, Norditalien und der Balkan.'
+        : `Dein ${_draussen.was} liegt außerhalb unseres Liefergebiets. ` +
+          'Wir decken derzeit den Alpenraum ab: Österreich, Schweiz, ' +
+          'Süddeutschland, Norditalien und den Balkan.',
+      debug_message:
+        `coverage_precheck ${_draussen.was} lat=${_draussen.lat.toFixed(4)} lng=${_draussen.lng.toFixed(4)} boxes=${JSON.stringify(_boxen)}`,
+      region: classifyCountry(_draussen.lat, _draussen.lng) ?? 'unknown',
+      waitlisted: _draussen.was === 'Startpunkt',
+    }, 422);
+  }
+
   const countryPreference = normalizeCountryPreference(req.country_preference);
-  const homeCountryCode = normalizeCountryCode(req.home_country_code);
+  // 2026-08-18 (D1b2): Das Heimatland wird SELBST aus dem Startpunkt
+  // abgeleitet, nicht vom Client uebernommen. Grund: Client und Edge hatten
+  // beide dieselbe kaputte Laenderlogik (Villach/Lienz -> IT, Klagenfurt -> SI)
+  // und hoben sich dadurch gegenseitig auf. Repariert man nur eine Seite,
+  // verlieren genau diese Nutzer ihre Routen — alte App-Versionen bleiben
+  // installiert und senden weiter den falschen Wert. Der Startpunkt ist die
+  // einzige Quelle, die beide Seiten gleich sehen.
+  const _homeAusStart = classifyCountry(startLocation.latitude, startLocation.longitude);
+  const homeCountryCode = _homeAusStart ?? normalizeCountryCode(req.home_country_code);
   const strictInland =
     isRoundTrip &&
     (req.avoid_cross_border === true || countryPreference === 'only_home') &&
@@ -2796,13 +2961,30 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   }
 
 
+  // 2026-08-18 (D1b): Statuscode nach URSACHE, nicht pauschal 502. Der Client
+  // stempelt jeden 5xx als „temporaerer Serverfehler, gleich nochmal
+  // versuchen" — bei diesen drei Faellen ist das eine Luege: die Anfrage ist
+  // so nicht erfuellbar, egal wie oft man sie wiederholt. 422 sagt das.
+  // `cross_border_server_offline` bleibt 5xx (503), denn da IST der Server weg.
+  const fachlich = errCode === 'coverage_out_of_bounds' ||
+    errCode === 'point_off_road' ||
+    errCode === 'no_land_route';
+  const status = fachlich ? 422 : (errCode === 'cross_border_server_offline' ? 503 : 502);
+  if (errCode === 'coverage_out_of_bounds' && req.start_location) {
+    merkeAbdeckungswunsch(
+      req.start_location.latitude,
+      req.start_location.longitude,
+      req._subject_id ?? null,
+      classifyCountry(req.start_location.latitude, req.start_location.longitude),
+    );
+  }
   return jsonResponse({
     error: errCode,
     user_message: userMessage,
     debug_message: lastError,
     region: region.label,
     attempts: Math.min(maxAttempts, seeds.length),
-  }, 502);
+  }, status);
 }
 
 // ─────────────────── Seed-Generation ──────────────────────────────────────
@@ -3054,6 +3236,10 @@ async function handler(req: Request): Promise<Response> {
   // Logging ist ihr schlanker Ersatz. Best-effort: Telemetrie-Fehler dürfen
   // NIEMALS das Routing beeinträchtigen. Reroutes zählen nicht als Suche.
   const genStartedAt = Date.now();
+  // 2026-08-18 (D1c): Identitaet aus dem JWT in den Body reichen, damit ein
+  // Abdeckungswunsch dem Konto zugeordnet werden kann. Bewusst NACH
+  // normalizeRequest, das den Feldwert des Clients verwirft.
+  body._subject_id = rl.tier === 'authed' ? rl.key.slice(4) : null;
   const res = await generateRoute(body);
   if (!isReroute && _rlAdmin) {
     try {

@@ -9149,6 +9149,14 @@ class RouteService {
     };
     final responseCode =
         edgeMeta['response_code']?.toString() ?? edgeMeta['code']?.toString();
+    // 2026-08-18 (D1): Die Edge legt den fachlichen Code in das TOP-LEVEL-Feld
+    // `error` und den fertigen deutschen Satz in `user_message`. Beides wurde
+    // bisher nirgends gelesen — `responseCode` sucht nur in `meta`. Ohne diese
+    // zwei Zeilen kann kein Zweig unten „coverage_out_of_bounds" je sehen.
+    final fachCode = (detailsMap?['error']?.toString().isNotEmpty ?? false)
+        ? detailsMap!['error'].toString()
+        : responseCode;
+    final edgeText = detailsMap?['user_message']?.toString();
 
     if (statusCode == 401 || statusCode == 403 || lower.contains('jwt')) {
       return RouteServiceException(
@@ -9218,6 +9226,39 @@ class RouteService {
             'Die berechnete Route startete zu weit von deinem Standort entfernt. Bitte versuche es erneut.',
         debugMessage:
             'Start-offset error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
+        statusCode: statusCode,
+        stackTrace: stackTrace,
+        edgeMeta: edgeMeta,
+      );
+    }
+
+    // 2026-08-18 (D1, gemessen): 165 Fehlversuche in 14 Tagen, davon 114 von
+    // EINEM Nutzer, der eine Minute nach der Registrierung anfing. Grund: Die
+    // Edge liefert „ausserhalb des Liefergebiets" mit HTTP 502 aus, der Zweig
+    // unten stempelt jeden 5xx als „temporaerer Serverfehler, in wenigen
+    // Sekunden erneut versuchen" — und der Nutzer folgt der Aufforderung, bei
+    // einem Fehler, der sich nie von selbst behebt.
+    //
+    // Diese beiden Codes sind FACHLICH: die Anfrage ist so nicht erfuellbar.
+    // Sie muessen vor der Statuscode-Pruefung stehen, damit sie den Satz der
+    // Edge durchreichen und NICHT zum Wiederholen auffordern. Der Zweig
+    // funktioniert sowohl mit dem neuen 422 als auch mit dem alten 502, damit
+    // installierte App-Versionen von der Edge-Aenderung sofort profitieren.
+    if (fachCode == 'coverage_out_of_bounds' ||
+        fachCode == 'no_inland_route' ||
+        fachCode == 'point_off_road' ||
+        fachCode == 'no_land_route' ||
+        lower.contains('coverage_out_of_bounds') ||
+        lower.contains('no_inland_route')) {
+      return RouteServiceException(
+        type: RouteErrorType.noRoute,
+        userMessage:
+            edgeText?.trim().isNotEmpty == true
+            ? edgeText!.trim()
+            : 'Für diesen Startpunkt können wir gerade keine Route bauen. '
+                  'Probiere einen anderen Startort.',
+        debugMessage:
+            'Fachlicher Routing-Fehler $fachCode (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
         stackTrace: stackTrace,
         edgeMeta: edgeMeta,

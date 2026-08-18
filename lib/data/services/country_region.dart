@@ -104,6 +104,21 @@ class CountryRegion {
     if (lat >= 45.80 && lat <= 47.81 && lng >= 5.95 && lng <= 9.66) {
       return 'CH';
     }
+    // 2026-08-18 (Defekt 1b2, gemessen): Die IT-Box unten verschluckte GANZ
+    // Osttirol und Westkärnten, die SI-Box den Rest Kärntens. Gemessen:
+    // Villach (46,610/13,856) → IT, Lienz (46,830/12,769) → IT,
+    // Klagenfurt (46,625/14,308) → SI. Für diese Nutzer war „Im Land bleiben"
+    // unbrauchbar. Die Südgrenze Österreichs springt entlang des
+    // Alpenhauptkamms, deshalb eine Bandtabelle statt einer Box —
+    // identisch mit `austriaSouthLimit` in generate-cruise-route-v2/index.ts.
+    // Beide Seiten MÜSSEN gleich rechnen, sonst weist der Server Routen ab,
+    // die der Client für inländisch hält.
+    if (lng >= 10.00 &&
+        lng <= 17.16 &&
+        lat >= _austriaSouthLimit(lng) &&
+        lat <= _austriaNorthLimit(lng)) {
+      return 'AT';
+    }
     // Italien (Südtirol/Norditalien) — südlich der Alpen.
     if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) {
       return 'IT';
@@ -192,6 +207,28 @@ class CountryRegion {
     if (lng < 12.6) return 47.60; // Inntal/Kufstein
     if (lng < 13.4) return 47.82; // Salzburg
     return 48.80; // Ost-Österreich (OÖ/NÖ reichen weit hoch)
+  }
+
+  /// 2026-08-18 (Defekt 1b2): Südgrenze Österreichs, stückweise entlang der
+  /// echten Grenzübergänge. Muss zeichengleich zu `austriaSouthLimit` in
+  /// supabase/functions/generate-cruise-route-v2/index.ts bleiben — der Server
+  /// klassifiziert die Routenpunkte mit derselben Tabelle. Geprüft an 37 Orten
+  /// beidseits der Grenze (Villach, Lienz, Klagenfurt, Arnoldstein, Ferlach,
+  /// Lavamünd, Spielfeld, Bad Radkersburg gegen Bozen, Meran, Innichen,
+  /// Tarvis, Jesenice, Dravograd, Radlje, Šentilj, Gornja Radgona).
+  static double _austriaSouthLimit(double lng) {
+    if (lng < 11.00) return 46.85; // Reschenpass / Vinschgau
+    if (lng < 12.00) return 46.90; // Brenner, Timmelsjoch
+    if (lng < 12.35) return 46.78; // Innichen bleibt Italien
+    if (lng < 12.60) return 46.68; // Sillian, Kartitsch = Osttirol
+    if (lng < 13.50) return 46.55; // Plöckenpass, Nassfeld
+    if (lng < 13.75) return 46.53; // Thörl-Maglern: Arnoldstein AT / Tarvis IT
+    if (lng < 14.20) return 46.45; // Karawankentunnel: Villach AT / Jesenice SI
+    if (lng < 14.60) return 46.44; // Loibl: Ferlach AT
+    if (lng < 14.90) return 46.47; // Seebergsattel, Koralpe
+    if (lng < 15.50) return 46.62; // Drau: Lavamünd AT / Dravograd SI
+    if (lng < 15.80) return 46.695; // Mur: Spielfeld/Mureck AT, Šentilj SI
+    return 46.683; // Mur: Bad Radkersburg AT, Gornja Radgona SI
   }
 
   /// Anteil der Routenpunkte, die NICHT im Heimatland liegen (0..1).

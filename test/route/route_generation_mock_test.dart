@@ -1950,6 +1950,101 @@ void main() {
   // ─────────────────────── Fehlerbehandlung ──────────────────────────────────
 
   group('RouteService – Fehlerbehandlung', () {
+    // ── 2026-08-18, Defekt 1a aus dem Produktionsbericht ──────────────────
+    // Gemessen: 165 `coverage_out_of_bounds` in 14 Tagen, 113 davon von einem
+    // einzigen Nutzer. Die Edge lieferte den Fehler als HTTP 502 aus; der
+    // Mapper stempelte jeden 5xx als „temporärer Serverfehler … in wenigen
+    // Sekunden erneut versuchen" — eine Aufforderung zum Wiederholen bei
+    // einem Fehler, der sich nie von selbst behebt. Der Zweig muss VOR der
+    // Statuscode-Prüfung greifen, und zwar bei 422 (neu) wie 502 (alte Edge,
+    // damit installierte App-Versionen sofort profitieren).
+    for (final status in const [422, 502]) {
+      test('coverage_out_of_bounds ($status) fordert NICHT zum Wiederholen auf', () async {
+        const edgeText =
+            'Deine Region ist noch nicht freigeschaltet. Wir bauen die '
+            'Abdeckung Schritt für Schritt aus und haben deine Gegend jetzt '
+            'vorgemerkt.';
+        when(mockInvoker.invoke(any)).thenAnswer((_) async {
+          throw FunctionException(
+            status: status,
+            details: const {
+              'error': 'coverage_out_of_bounds',
+              'user_message': edgeText,
+              'debug_message': 'coverage_precheck Startpunkt lat=50.9375 lng=6.9603',
+              'region': 'DE',
+              'waitlisted': true,
+            },
+            reasonPhrase: status == 422 ? 'Unprocessable Entity' : 'Bad Gateway',
+          );
+        });
+        await expectLater(
+          service.generateRoundTrip(
+            startPosition: _munich(),
+            targetDistanceKm: 50,
+            mode: 'Sport Mode',
+            planningType: 'Zufall',
+          ),
+          throwsA(
+            isA<RouteServiceException>()
+                .having((e) => e.userMessage, 'userMessage', edgeText)
+                .having((e) => e.type, 'type', RouteErrorType.noRoute),
+          ),
+        );
+      });
+    }
+
+    test('no_inland_route reicht den Satz der Edge durch', () async {
+      const edgeText =
+          'Im gewünschten Land ließ sich keine Runde bauen. Erlaube '
+          'Grenzübertritte oder wähle einen anderen Startpunkt.';
+      when(mockInvoker.invoke(any)).thenAnswer((_) async {
+        throw const FunctionException(
+          status: 422,
+          details: {
+            'error': 'no_inland_route',
+            'user_message': edgeText,
+          },
+          reasonPhrase: 'Unprocessable Entity',
+        );
+      });
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>()
+              .having((e) => e.userMessage, 'userMessage', edgeText)
+              .having((e) => e.type, 'type', RouteErrorType.noRoute),
+        ),
+      );
+    });
+
+    test('echter 5xx bleibt ein Serverfehler mit Wiederholungshinweis', () async {
+      when(mockInvoker.invoke(any)).thenAnswer((_) async {
+        throw const FunctionException(
+          status: 503,
+          details: {'error': 'cross_border_server_offline'},
+          reasonPhrase: 'Service Unavailable',
+        );
+      });
+      await expectLater(
+        service.generateRoundTrip(
+          startPosition: _munich(),
+          targetDistanceKm: 50,
+          mode: 'Sport Mode',
+          planningType: 'Zufall',
+        ),
+        throwsA(
+          isA<RouteServiceException>()
+              .having((e) => e.type, 'type', RouteErrorType.server)
+              .having((e) => e.userMessage, 'userMessage', contains('erneut versuchen')),
+        ),
+      );
+    });
+
     test('wirft Exception wenn null zurückgegeben wird', () async {
       when(mockInvoker.invoke(any)).thenAnswer((_) async => null);
       await expectLater(
