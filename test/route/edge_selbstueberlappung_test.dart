@@ -76,14 +76,20 @@ void main() {
           'AUSWAHL wirken, nicht erst in der Ablehnung im Client.',
     );
 
-    // Gewicht in der Groessenordnung der Wende-Strafe (60), ab 0,15 steiler.
+    // 2026-08-19 nachgezogen: Gewichte von 60/300 auf 120/700 verschaerft.
+    // Grund war eine Live-Messung, nicht Geschmack: Feldkirch nach Bludenz
+    // lieferte 39 % gegenlaeufige Ueberlappung, und das Verdoppeln allein
+    // aenderte NICHTS, weil alle Kandidaten auf derselben Talseite lagen.
+    // Erst das Verschraenken der Seiten half (0,391 auf 0,286 bzw. 0,000).
+    // Die hoeheren Gewichte bleiben, weil sie jetzt echte Alternativen
+    // gegeneinander abwaegen koennen.
     expect(
-      src.contains('selbstUeberlappung * 60 +'),
+      src.contains('selbstUeberlappung * 120 +'),
       isTrue,
       reason: 'Grundgewicht der Ueberlappungsstrafe stimmt nicht mehr.',
     );
     expect(
-      src.contains('Math.max(0, selbstUeberlappung - 0.15) * 300'),
+      src.contains('Math.max(0, selbstUeberlappung - 0.15) * 700'),
       isTrue,
       reason: 'Der steilere Teil ab Anteil 0,15 fehlt.',
     );
@@ -148,6 +154,34 @@ void main() {
       isTrue,
       reason:
           'Dass der Wert bewusst ignoriert wird, muss im Meta sichtbar sein.',
+    );
+  });
+
+  test('beide Talseiten werden verschraenkt, nicht hintereinander gehaengt', () {
+    final src = edge.readAsStringSync();
+    // 2026-08-19 (Aufgabe 1.4): Der Fehler, den dieser Test verhindert.
+    // Die Peilungsliste war [alle Peilungen Seite A, dann alle Seite B]. Die
+    // Kandidatenschleife bricht bei `limit` ab, und bei zwei Distanzen je
+    // Peilung reichen 12 Kandidaten nur fuer 6 Peilungen - also nur fuer
+    // Seite A. Die Gegenseite kam nie dran, alle Kandidaten lagen auf
+    // derselben Talseite und mussten auf demselben Weg zurueck.
+    // Gemessen: Feldkirch nach Bludenz 39 % Ueberlappung, und das Verdoppeln
+    // der Strafe aenderte daran nichts.
+    expect(
+      src.contains('bearingsForStyle.push(b * preferredSide);'),
+      isTrue,
+      reason: 'die Seiten muessen abwechselnd eingereiht werden',
+    );
+    expect(
+      src.contains('bearingsForStyle.push(-b * preferredSide);'),
+      isTrue,
+    );
+    expect(
+      src.contains('...rotatedAbsBearings.map((b) => -b * preferredSide),'),
+      isFalse,
+      reason:
+          'die alte Form haengt die Gegenseite hinten an, wo sie das '
+          'Kandidatenlimit nie erreicht',
     );
   });
 }
