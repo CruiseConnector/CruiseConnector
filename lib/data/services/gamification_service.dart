@@ -776,60 +776,38 @@ class GamificationService {
     final savedRouteReferenceCount = extraCounts[2];
 
     // 4. Badges prüfen
-    final currentlyQualifiedBadges = <String>[];
-
-    // Level-Badges
-    if (level.level >= 10) currentlyQualifiedBadges.add('badge_01');
-    if (level.level >= 25) currentlyQualifiedBadges.add('badge_03');
-    if (level.level >= 50) currentlyQualifiedBadges.add('badge_08');
-    if (level.level >= UserLevel.maxLevel) {
-      currentlyQualifiedBadges.add('badge_14');
-    }
-
-    // Routen- und Gruppen-Badges
-    if (completedSessions.isNotEmpty) currentlyQualifiedBadges.add('badge_02');
-    if (completedGroupRides >= 1) currentlyQualifiedBadges.add('badge_04');
-    if (routePostCount >= 1) currentlyQualifiedBadges.add('badge_05');
-    if (createdGroupCount >= 1) currentlyQualifiedBadges.add('badge_07');
-    if (savedRouteReferenceCount >= 5) {
-      currentlyQualifiedBadges.add('badge_09');
-    }
-
-    // 2026-08-15 (vucko): sechs neue Stufen — alle aus Daten, die hier
-    // ohnehin schon liegen. Keine einzige zusaetzliche Abfrage.
-    if (completedSessions.length >= 10) {
-      currentlyQualifiedBadges.add('badge_17');
-    }
-    if (completedSessions.length >= 50) {
-      currentlyQualifiedBadges.add('badge_18');
-    }
-    if (completedGroupRides >= 5) currentlyQualifiedBadges.add('badge_19');
-    if (completedSessions.any((s) => s.distanceKm >= 100)) {
-      currentlyQualifiedBadges.add('badge_20');
-    }
-    if (routePostCount >= 5) currentlyQualifiedBadges.add('badge_21');
-    if (totalSecs >= 25 * 3600) currentlyQualifiedBadges.add('badge_22');
-    // 2026-08-16 (T6): badge_23 … badge_36.
+    //
+    // 2026-08-18 (Aufgabe 4.2): Hier standen rund dreissig einzelne
+    // `if`-Zeilen, und dieselben Schwellen noch einmal in
+    // `badgeFortschrittFuer`. Beide Listen konnten auseinanderlaufen — genau
+    // davor warnte badge.dart. Jetzt liest BEIDES dieselbe Datentabelle
+    // [badgeFamilien]; eine neue Stufe ist eine Zeile Daten, keine Zeile Code.
     final kz = sessionKennzahlen(sessions);
-    if (kz.fruehFahrten >= 1) currentlyQualifiedBadges.add('badge_23');
-    if (kz.nachtFahrten >= 1) currentlyQualifiedBadges.add('badge_24');
-    if (kz.wochenendFahrten >= 5) currentlyQualifiedBadges.add('badge_25');
-    if (kz.besteSerieTage >= 7) currentlyQualifiedBadges.add('badge_26');
-    if (kz.kurvenjagdFahrten >= 10) currentlyQualifiedBadges.add('badge_27');
-    if (kz.gefahreneStile >= 4) currentlyQualifiedBadges.add('badge_28');
-    if (kz.rundkurse >= 15) currentlyQualifiedBadges.add('badge_29');
-    if (kz.aNachBFahrten >= 15) currentlyQualifiedBadges.add('badge_30');
-    if (totalKm >= 1000) currentlyQualifiedBadges.add('badge_31');
-    if (totalKm >= 5000) currentlyQualifiedBadges.add('badge_32');
-    if (totalSecs >= 100 * 3600) currentlyQualifiedBadges.add('badge_33');
-    if (savedRouteReferenceCount >= 15) currentlyQualifiedBadges.add('badge_34');
-    if (createdGroupCount >= 3) currentlyQualifiedBadges.add('badge_35');
-    if (routePostCount >= 15) currentlyQualifiedBadges.add('badge_36');
-
-    // Distanz-Badges
-    if (totalKm >= 500) currentlyQualifiedBadges.add('badge_06');
-    if (totalKm >= 2500) currentlyQualifiedBadges.add('badge_10');
-    if (totalKm >= 10000) currentlyQualifiedBadges.add('badge_13');
+    final longestRideKm = completedSessions.isEmpty
+        ? 0.0
+        : completedSessions
+              .map((s) => s.distanceKm)
+              .reduce((a, b) => a > b ? a : b);
+    final metriken = badgeMetriken(
+      level: level.level,
+      totalKm: totalKm,
+      totalHours: totalSecs / 3600,
+      completedRides: completedSessions.length,
+      completedGroupRides: completedGroupRides,
+      routePosts: routePostCount,
+      createdGroups: createdGroupCount,
+      savedRoutes: savedRouteReferenceCount,
+      longestRideKm: longestRideKm,
+      fruehFahrten: kz.fruehFahrten,
+      nachtFahrten: kz.nachtFahrten,
+      wochenendFahrten: kz.wochenendFahrten,
+      besteSerieTage: kz.besteSerieTage,
+      kurvenjagdFahrten: kz.kurvenjagdFahrten,
+      gefahreneStile: kz.gefahreneStile,
+      rundkurse: kz.rundkurse,
+      aNachBFahrten: kz.aNachBFahrten,
+    );
+    final currentlyQualifiedBadges = erfuellteBadgeIds(metriken);
 
     // 2026-08-14 (vucko Tutorial-Badge): „Gründungszeit" (badge_15) bekommt
     // JEDER registrierte Nutzer — bewusst OHNE Bedingung. Bestandsnutzer
@@ -923,11 +901,7 @@ class GamificationService {
       routePosts: routePostCount,
       createdGroups: createdGroupCount,
       savedRoutes: savedRouteReferenceCount,
-      longestRideKm: completedSessions.isEmpty
-          ? 0
-          : completedSessions
-                .map((s) => s.distanceKm)
-                .reduce((a, b) => a > b ? a : b),
+      longestRideKm: longestRideKm,
       fruehFahrten: kz.fruehFahrten,
       nachtFahrten: kz.nachtFahrten,
       wochenendFahrten: kz.wochenendFahrten,
@@ -941,11 +915,17 @@ class GamificationService {
 
   static Future<int> _countCreatedGroups(String userId) async {
     try {
+      // 2026-08-18 (Aufgabe 4.2): Hier stand `.limit(2)`. Das reichte, solange
+      // nur badge_07 („eine Gruppe") daran hing. Mit den Stufen 3 und 10
+      // (badge_35, badge_38) haette der Zaehler bei 2 festgeklebt: die Stufen
+      // waeren NIE freigeschaltet worden und der Fortschritt haette ewig
+      // „2 von 10 Gruppen" gezeigt. Die Grenze liegt jetzt ueber der hoechsten
+      // Schwelle.
       final rows = await _db
           .from('groups')
           .select('id')
           .eq('created_by', userId)
-          .limit(2);
+          .limit(64);
       return (rows as List).length;
     } catch (e) {
       debugPrint('[Gamification] Gruppen-Zähler fehlgeschlagen: $e');

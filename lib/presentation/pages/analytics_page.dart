@@ -2695,6 +2695,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         children: [
           _buildBadgeProgressPanel(progress),
           const SizedBox(height: 16),
+          // 2026-08-18 (Aufgabe 4.2): Die Sammlung ist nach FAMILIEN
+          // gegliedert, nicht mehr eine lange Reihe gleichwertiger Kacheln.
+          // Ueber jedem Block steht, wie weit die naechste Stufe entfernt ist.
           LayoutBuilder(
             builder: (context, constraints) {
               final crossAxisCount = constraints.maxWidth >= 700
@@ -2705,26 +2708,134 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               final cardWidth =
                   (constraints.maxWidth - (crossAxisCount - 1) * 8) /
                   crossAxisCount;
-              return Wrap(
-                spacing: 8,
-                runSpacing: 8,
+              final erreichteIds = _earnedBadges.map((b) => b.id).toSet();
+              final metriken = _badgeMetriken();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final badge in app.Badge.all)
-                    SizedBox(
-                      width: cardWidth,
-                      height: 138,
-                      // 2026-08-15 (vucko): Jede Kachel oeffnet das Overlay —
-                      // freigeschaltet mit Beschreibung, gesperrt mit
-                      // Bedingung und Fortschritt.
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => _oeffneBadge(badge),
-                        child: _buildBadgeTile(badge),
-                      ),
+                  for (final schluessel in app.Badge.familienReihenfolge)
+                    _buildBadgeFamilienBlock(
+                      schluessel: schluessel,
+                      erreichteIds: erreichteIds,
+                      cardWidth: cardWidth,
+                      metriken: metriken,
                     ),
+                  _buildBadgeFamilienBlock(
+                    schluessel: null,
+                    erreichteIds: erreichteIds,
+                    cardWidth: cardWidth,
+                    metriken: metriken,
+                  ),
                 ],
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Ein Familien-Block: Ueberschrift, Fortschritt zur naechsten Stufe und die
+  /// Kacheln der Familie. [schluessel] null = die Badges ohne Familie.
+  Widget _buildBadgeFamilienBlock({
+    required String? schluessel,
+    required Set<String> erreichteIds,
+    required double cardWidth,
+    required Map<app.BadgeMetrik, double>? metriken,
+  }) {
+    final badges = schluessel == null
+        ? app.Badge.all.where((b) => b.familie == null).toList()
+        : app.Badge.familienBadges(schluessel);
+    if (badges.isEmpty) return const SizedBox.shrink();
+
+    final titel = schluessel == null
+        ? 'Weitere'
+        : (app.badgeFamilieVon(schluessel)?.titel ?? schluessel);
+    final erreicht = badges.where((b) => erreichteIds.contains(b.id)).length;
+    final fortschritt = (schluessel == null || metriken == null)
+        ? null
+        : app.badgeFamilienFortschritt(
+            familie: schluessel,
+            erreichteBadgeIds: erreichteIds,
+            metriken: metriken,
+          );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  titel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              Text(
+                '$erreicht/${badges.length}',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.42),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+          if (fortschritt != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
+                    child: LinearProgressIndicator(
+                      value: fortschritt.anteil,
+                      minHeight: 4,
+                      backgroundColor: Colors.white.withValues(alpha: 0.07),
+                      color: AppAccentColors.accent,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  fortschritt.zahlen,
+                  style: TextStyle(
+                    color: AppAccentColors.accent.withValues(alpha: 0.85),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final badge in badges)
+                SizedBox(
+                  width: cardWidth,
+                  height: 138,
+                  // 2026-08-15 (vucko): Jede Kachel oeffnet das Overlay —
+                  // freigeschaltet mit Beschreibung, gesperrt mit
+                  // Bedingung und Fortschritt.
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => _oeffneBadge(badge),
+                    child: _buildBadgeTile(badge),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
@@ -2959,11 +3070,13 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
-  app.BadgeFortschritt? _fortschrittFuer(app.Badge badge) {
+  /// Die Kennzahlen des Nutzers in der Form, die die Badge-Tabelle versteht.
+  /// Dieselbe Tabelle entscheidet im GamificationService ueber die
+  /// Freischaltung — Anzeige und Vergabe koennen nicht auseinanderlaufen.
+  Map<app.BadgeMetrik, double>? _badgeMetriken() {
     final g = _gamResult;
     if (g == null) return null;
-    return app.badgeFortschrittFuer(
-      badgeId: badge.id,
+    return app.badgeMetriken(
       level: g.level.level,
       totalKm: g.totalDistanceKm,
       totalHours: g.totalHours,
@@ -2982,6 +3095,12 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       rundkurse: g.rundkurse,
       aNachBFahrten: g.aNachBFahrten,
     );
+  }
+
+  app.BadgeFortschritt? _fortschrittFuer(app.Badge badge) {
+    final metriken = _badgeMetriken();
+    if (metriken == null) return null;
+    return app.badgeFortschrittAus(badge.id, metriken);
   }
 
   Future<void> _oeffneBadge(app.Badge badge) {
@@ -3033,6 +3152,26 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               size: 16,
             ),
           ),
+          // 2026-08-18 (Aufgabe 4.2): Roemische Ziffer in der freien Ecke —
+          // die rechte ist seit jeher Schloss bzw. Haken. Farbe abgestuft:
+          // Bronze, Silber, Gold.
+          if (badge.stufe > 0)
+            Positioned(
+              top: 7,
+              left: 9,
+              child: Text(
+                app.Badge.stufenZeichen[badge.stufe],
+                style: TextStyle(
+                  color: _stufenFarbe(
+                    badge.stufe,
+                  ).withValues(alpha: earned ? 1 : 0.3),
+                  fontSize: 11,
+                  height: 1.2,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
           Center(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
@@ -3097,7 +3236,14 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     height: 14,
                     child: Center(
                       child: Text(
-                        earned ? 'Freigeschaltet' : badge.category,
+                        earned
+                            ? 'Freigeschaltet'
+                            : (badge.familie == null
+                                  ? badge.category
+                                  : app
+                                            .badgeFamilieVon(badge.familie!)
+                                            ?.titel ??
+                                        badge.category),
                         style: TextStyle(
                           color: earned
                               ? accent
@@ -3119,6 +3265,13 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       ),
     );
   }
+
+  /// Bronze, Silber, Gold — die Stufe soll auf einen Blick lesbar sein.
+  Color _stufenFarbe(int stufe) => switch (stufe) {
+    1 => const Color(0xFFCD7F32),
+    2 => const Color(0xFFC7CEDB),
+    _ => const Color(0xFFFFD166),
+  };
 
   Color _badgeAccentColor(app.Badge badge) {
     return switch (badge.category) {

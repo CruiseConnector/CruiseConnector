@@ -50,15 +50,16 @@ void main() {
   });
 
   test('jedes Badge mit Sync-Bedingung hat einen Fortschritt', () {
-    // Wer in calculateAndSync eine Bedingung hat, muss hier auftauchen —
-    // sonst zeigt die Sammlung „Noch gesperrt" ohne Erklaerung.
-    final sync = File(
-      'lib/data/services/gamification_service.dart',
-    ).readAsStringSync();
-    final ids = RegExp(r"add\('(badge_\d+)'\)")
-        .allMatches(sync)
-        .map((m) => m.group(1)!)
-        .toSet();
+    // 2026-08-18 (Aufgabe 4.2): Frueher las dieser Test die `add('badge_XX')`
+    // Zeilen aus dem Quelltext des GamificationService. Die gibt es nicht
+    // mehr — Freischaltung UND Fortschritt lesen jetzt dieselbe Datentabelle
+    // [badgeFamilien]. Genau das prueft der Test nun: jede Zeile der Tabelle
+    // liefert auch einen Fortschritt, sonst zeigt die Sammlung
+    // „Noch gesperrt" ohne Erklaerung.
+    final ids = <String>{
+      for (final familie in badgeFamilien)
+        for (final stufe in familie.alleStufen) stufe.id,
+    };
     for (final id in ids) {
       expect(
         f(id),
@@ -67,6 +68,19 @@ void main() {
       );
     }
     expect(ids.length, greaterThanOrEqualTo(15));
+
+    // Der Dienst darf die Tabelle nicht umgehen: keine handverdrahteten
+    // Badge-IDs mehr in der Freischaltung (Ausnahme: das bedingungslose
+    // Gruendungs-Badge, das ueber [Badge.membershipBadgeId] laeuft).
+    final sync = File(
+      'lib/data/services/gamification_service.dart',
+    ).readAsStringSync();
+    expect(sync.contains('erfuellteBadgeIds(metriken)'), isTrue);
+    expect(
+      RegExp(r"add\('badge_\d+'\)").hasMatch(sync),
+      isFalse,
+      reason: 'Schwellwerte gehoeren in badgeFamilien, nicht in if-Zeilen',
+    );
   });
 
   test('Sammlung: Kacheln oeffnen das Overlay', () {

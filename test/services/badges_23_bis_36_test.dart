@@ -132,8 +132,13 @@ void main() {
   test('Sync bindet die Kennzahlen an (Quelle: sessionKennzahlen)', () {
     final g = File('lib/data/services/gamification_service.dart').readAsStringSync();
     expect(g.contains('final kz = sessionKennzahlen(sessions);'), isTrue);
+    // 2026-08-18 (Aufgabe 4.2): Die Freischaltung steht nicht mehr als
+    // einzelne if-Zeilen im Dienst, sondern in der Tabelle [badgeFamilien].
+    // Geprueft wird deshalb, dass jede der vierzehn IDs dort eine Schwelle
+    // hat und der Dienst diese Tabelle auswertet.
+    expect(g.contains('erfuellteBadgeIds(metriken)'), isTrue);
     for (var i = 23; i <= 36; i++) {
-      expect(g.contains("add('badge_$i')"), isTrue, reason: 'badge_$i');
+      expect(badgeBedingungFuer('badge_$i'), isNotNull, reason: 'badge_$i');
     }
     final a = File('lib/presentation/pages/analytics_page.dart').readAsStringSync();
     expect(a.contains('besteSerieTage: g.besteSerieTage'), isTrue);

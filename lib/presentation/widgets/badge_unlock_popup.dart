@@ -161,10 +161,16 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text(
-                              'Badge freigeschaltet',
+                            Text(
+                              // 2026-08-18 (Aufgabe 4.2): Bei mehrstufigen
+                              // Badges soll sofort klar sein, welche Stufe
+                              // gerade dazugekommen ist.
+                              badge.stufe > 0
+                                  ? 'Stufe ${app.Badge.stufenZeichen[badge.stufe]} '
+                                        'freigeschaltet'
+                                  : 'Badge freigeschaltet',
                               textAlign: TextAlign.center,
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 24,
                                 fontWeight: FontWeight.w900,

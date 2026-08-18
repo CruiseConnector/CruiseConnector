@@ -313,6 +313,12 @@ class ProfileBadgeShowcase extends StatelessWidget {
                       fontWeight: FontWeight.w900,
                     ),
                   ),
+                  // 2026-08-18 (Aufgabe 4.2): Bei mehrstufigen Badges zeigt
+                  // eine Leiste, an welcher Stelle der Familie man steht.
+                  if (badge.stufe > 0) ...[
+                    const SizedBox(height: 10),
+                    _StufenLeiste(badge: badge),
+                  ],
                   const SizedBox(height: 8),
                   Text(
                     description,
@@ -1606,5 +1612,84 @@ class _BadgeImage extends StatelessWidget {
       );
     }
     return Text(badge.emoji, style: TextStyle(fontSize: size * 0.7));
+  }
+}
+
+/// 2026-08-18 (Aufgabe 4.2, vucko Sprachnachricht 09 vom 16.08.):
+/// „Mehrstufige Badges, das heisst, Kurvenkoenig gibt es drei Stufen."
+/// Die Leiste zeigt I, II, III und hebt die Stufe hervor, die man gerade
+/// betrachtet. Farben: Bronze, Silber, Gold.
+class _StufenLeiste extends StatelessWidget {
+  const _StufenLeiste({required this.badge});
+
+  final app.Badge badge;
+
+  static Color _farbe(int stufe) => switch (stufe) {
+    1 => const Color(0xFFCD7F32),
+    2 => const Color(0xFFC7CEDB),
+    _ => const Color(0xFFFFD166),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final familie = badge.familie;
+    if (familie == null || badge.stufe == 0) return const SizedBox.shrink();
+    final stufen = app.Badge.familienBadges(
+      familie,
+    ).where((b) => b.stufe > 0).toList();
+    if (stufen.length < 2) return const SizedBox.shrink();
+    final titel = app.badgeFamilieVon(familie)?.titel;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (final stufe in stufen) ...[
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: 30,
+                height: 22,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: stufe.id == badge.id
+                      ? _farbe(stufe.stufe).withValues(alpha: 0.18)
+                      : Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: stufe.id == badge.id
+                        ? _farbe(stufe.stufe).withValues(alpha: 0.7)
+                        : Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+                child: Text(
+                  app.Badge.stufenZeichen[stufe.stufe],
+                  style: TextStyle(
+                    color: stufe.id == badge.id
+                        ? _farbe(stufe.stufe)
+                        : Colors.white.withValues(alpha: 0.3),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          titel == null
+              ? 'Stufe ${badge.stufe} von ${stufen.length}'
+              : 'Stufe ${badge.stufe} von ${stufen.length} \u00b7 $titel',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.45),
+            fontSize: 11.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
   }
 }
