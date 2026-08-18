@@ -328,7 +328,7 @@ Deno.serve(async (req) => {
   if (aktion !== 'daten') return json({ error: 'Unbekannte Aktion.' }, 400);
 
   // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
-  const [schnappschuesse, infra, wuensche] = await Promise.all([
+  const [schnappschuesse, infra, wuensche, abwanderung] = await Promise.all([
     db.from('admin_metric_snapshots')
       .select('taken_at, slot_key, metrics, history, today, compare, analytics, leute')
       .order('taken_at', { ascending: false })
@@ -341,6 +341,9 @@ Deno.serve(async (req) => {
     // man sofort sehen, wo jemand angeklopft hat. Ein indizierter SELECT
     // (coverage_requests_created_at_idx), gedeckelt auf 500 Zeilen.
     abdeckungswuenscheLesen(),
+    // 2026-08-19 (vucko): "wie viele schon abgesprungen sind von der app oder
+    // sie deinstalliert haben?"
+    abwanderungLesen(),
   ]);
 
   const { data: reihen, error } = schnappschuesse;
@@ -378,6 +381,7 @@ Deno.serve(async (req) => {
       aeltester: reihen[reihen.length - 1]?.taken_at ?? null,
     },
     abdeckungswuensche: wuensche,
+    abwanderung,
     infra,
   });
 });
@@ -453,6 +457,49 @@ async function abdeckungswuenscheLesen(): Promise<{
     return { gesamt: data.length, woche, personen: konten.size, regionen };
   } catch (_) {
     // Das Monitoring darf an dieser Zusatzinfo niemals scheitern.
+    return null;
+  }
+}
+
+/// Wie viele Leute sind abgesprungen, und wie viele haben die App vermutlich
+/// deinstalliert?
+///
+/// 2026-08-19 (vucko): "wie viele schon abgesprungen sind von der app oder sie
+/// deinstalliert haben?"
+///
+/// EHRLICH VORWEG, damit die Zahlen niemanden in die Irre fuehren: Eine
+/// Deinstallation ist von hier aus NICHT direkt messbar. Weder Apple noch
+/// Google melden sie, und die App kann sich nicht abmelden, wenn sie geloescht
+/// wird. Der beste verfuegbare Anhaltspunkt ist ein Geraete-Token, das sich
+/// lange nicht mehr gemeldet hat: `user_device_tokens.last_seen_at`. Ein
+/// stilles Geraet kann eine Deinstallation sein, aber genauso ein
+/// ausgeschaltetes Handy oder jemand, der die App laenger nicht oeffnet.
+/// Deshalb heisst das Feld hier `geraete_still` und nicht `deinstalliert`.
+///
+/// Was dagegen HART gemessen ist: wer sich registriert und nie eine einzige
+/// Fahrt gemacht hat. Das ist die eigentliche Abwanderung.
+async function abwanderungLesen(): Promise<{
+  gesamt: number;
+  nie_gefahren: number;
+  eine_fahrt: number;
+  inaktiv_7d: number;
+  inaktiv_30d: number;
+  geraete_still_7d: number;
+  geraete_still_30d: number;
+  ohne_geraet: number;
+  wochen: Array<{
+    ab: string;
+    neu: number;
+    gefahren: number;
+    prozent: number;
+    noch_aktiv: number;
+  }>;
+} | null> {
+  try {
+    const { data, error } = await db.rpc('admin_monitor_abwanderung');
+    if (error || !data) return null;
+    return data as never;
+  } catch (_) {
     return null;
   }
 }

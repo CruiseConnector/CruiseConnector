@@ -1822,6 +1822,63 @@ document.addEventListener('click',function(e){
 
    Die Daten kommen aus demselben 6-Stunden-Schnappschuss wie alles andere und
    kosten keine einzige zusaetzliche Datenbankabfrage. */
+/* -- Wer kommt, wer bleibt, wer ist weg -----------------------------------
+   2026-08-19 (vucko): "wie viele schon abgesprungen sind von der app oder sie
+   deinstalliert haben?"
+
+   EHRLICH GEKENNZEICHNET: Eine Deinstallation ist nicht messbar. Weder Apple
+   noch Google melden sie, und eine geloeschte App kann sich nicht abmelden.
+   Der beste Anhaltspunkt ist ein Geraet, das sich lange nicht gemeldet hat -
+   das kann aber genauso ein ausgeschaltetes Handy sein. Deshalb steht dort
+   "Geraet still" und nicht "deinstalliert". Hart gemessen ist nur, wer sich
+   registriert und nie gefahren ist. */
+function abwanderungBlock(){
+  var a=DATEN.abwanderung;
+  if(!a||!a.gesamt) return '';
+  var nieProzent = Math.round(100*a.nie_gefahren/a.gesamt);
+  var o='<div class="raster">'+
+    karte('Registriert', z(a.gesamt))+
+    karte('Nie gefahren', z(a.nie_gefahren),
+      '<div class="fuss">'+nieProzent+'% aller Konten</div>')+
+    karte('Nur eine Fahrt', z(a.eine_fahrt))+
+    karte('7 Tage inaktiv', z(a.inaktiv_7d))+
+  '</div>';
+
+  o+='<div class="raster" style="margin-top:14px">'+
+    karte('Ger&auml;t 7 Tage still', z(a.geraete_still_7d),
+      '<div class="fuss">Hinweis, kein Beweis</div>')+
+    karte('Ger&auml;t 30 Tage still', z(a.geraete_still_30d),
+      '<div class="fuss">st&auml;rkster Deinstallations-Hinweis</div>')+
+    karte('Ohne Ger&auml;t', z(a.ohne_geraet),
+      '<div class="fuss">nie Push erlaubt</div>')+
+    karte('30 Tage inaktiv', z(a.inaktiv_30d))+
+  '</div>';
+
+  var kl = nieProzent>80?'schlimm':(nieProzent>50?'':'gut');
+  o+='<div class="hinweis '+kl+'"><b>'+z(a.nie_gefahren)+' von '+z(a.gesamt)+
+     '</b> Konten haben noch keine einzige Fahrt gemacht. Nicht die '+
+     'Deinstallationen sind das Thema, sondern der Weg bis zur ersten Fahrt. '+
+     'Deinstallationen selbst sind technisch nicht messbar; die stillen '+
+     'Ger&auml;te oben sind der beste verf&uuml;gbare Anhaltspunkt.</div>';
+
+  var w=a.wochen||[];
+  if(w.length){
+    var zeilen='<div class="personen">';
+    w.forEach(function(r){
+      var farbe = r.prozent>=20?'var(--gut)':(r.prozent>=8?'var(--text)':'var(--schlimm)');
+      zeilen+='<div class="person">'+
+        '<span class="pname">ab '+esc(tagKurz(r.ab))+' &middot; '+z(r.neu)+' neu</span>'+
+        '<span class="pwann"><b style="color:'+farbe+'">'+r.prozent+'%</b> gefahren'+
+          ' &middot; '+z(r.noch_aktiv)+' noch aktiv</span>'+
+      '</div>';
+    });
+    zeilen+='</div>';
+    o+=block('Wochen-Kohorten', zeilen,
+      'Von den in dieser Woche Dazugekommenen: wie viele sind je gefahren, wie viele in den letzten 14 Tagen');
+  }
+  return o;
+}
+
 function bereichLeute(){
   var L = DATEN.leute;
   if(!L || !L.neue_nutzer){
@@ -1845,6 +1902,8 @@ function bereichLeute(){
     karte('Gefahren, 30 Tage',    z(f.personen_d30),
           '<div class="fuss">'+z(f.fahrten_d30)+' Fahrten</div>')+
   '</div>';
+
+  o+=abwanderungBlock();
 
   o+=block('Zuletzt dazugekommen', personenTabelle(n.liste, 'seit', function(e){
       return vorWie(e.seit);
