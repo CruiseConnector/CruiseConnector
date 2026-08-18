@@ -859,6 +859,20 @@ class GamificationService {
     final newBadges = newlyQualifiedBadgeIds(previousBadges, qualifiedBadges);
 
     // 6. Fortschritt im Backend speichern
+    //
+    // 2026-08-18 (Aufgabe 4.1): Das Ergebnis wird ZURUECKGELESEN. Grund war
+    // der Dauer-Popup-Fehler: Die Datenbank hatte eine hartkodierte
+    // Badge-Whitelist, die alles ab badge_15 stillschweigend verwarf. Der
+    // Client hielt das Badge fuer vergeben, beim naechsten Sync fehlte es
+    // wieder im Profil, galt erneut als „neu" — und das Verleih-Popup ging
+    // wieder auf. Gemessen am 18.08.: 0 von 151 Profilen hatten badge_15,
+    // obwohl es bei jedem Sync bedingungslos vergeben wurde.
+    //
+    // Die Whitelist ist repariert (Migration 20260818230000). Diese Pruefung
+    // ist die zweite Sicherung: Kommt ein Badge NICHT in der Datenbank an,
+    // wird es auch nicht als neu gefeiert. Ein kuenftiger Schreibfehler kann
+    // dann still ausfallen, aber nie wieder spammen.
+    var bestaetigteBadges = unlockedBadges;
     try {
       await _db
           .from('profiles')
@@ -870,13 +884,35 @@ class GamificationService {
             'badges': unlockedBadges,
           })
           .eq('id', userId);
+
+      final nachher = await _db
+          .from('profiles')
+          .select('badges')
+          .eq('id', userId)
+          .maybeSingle();
+      final rohNachher = nachher?['badges'];
+      if (rohNachher is Iterable) {
+        bestaetigteBadges = normalizeBadgeIds(rohNachher);
+        final verschluckt = unlockedBadges
+            .where((b) => !bestaetigteBadges.contains(b))
+            .toList();
+        if (verschluckt.isNotEmpty) {
+          debugPrint(
+            '[Gamification] WARNUNG: Diese Badges kamen nicht in der Datenbank '
+            'an und werden NICHT als neu gemeldet: ${verschluckt.join(', ')}',
+          );
+        }
+      }
     } catch (e) {
       debugPrint('[Gamification] Profil-Update fehlgeschlagen: $e');
     }
 
+    // Nur feiern, was wirklich gespeichert wurde.
+    newBadges.removeWhere((b) => !bestaetigteBadges.contains(b));
+
     return GamificationResult(
       level: level,
-      earnedBadgeIds: unlockedBadges,
+      earnedBadgeIds: bestaetigteBadges,
       newBadgeIds: newBadges,
       totalRoutes: totalRoutes,
       totalDistanceKm: totalKm,
