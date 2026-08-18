@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/domain/fahrzeug_grenzen.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
@@ -169,6 +170,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   bool _loading = true;
   bool _saving = false;
+
+  /// 2026-08-18 (Defekt 4): Prüft die Fahrzeugfelder beim Speichern.
+  final GlobalKey<FormState> _garageFormKey = GlobalKey<FormState>();
   bool _uploadingAvatar = false;
   bool _uploadingBanner = false;
   bool _uploadingCarImage = false;
@@ -615,14 +619,45 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return confirmed == true;
   }
 
+  /// 2026-08-18 (Defekt 4): Einheitliche Rückmeldung, wenn das Speichern
+  /// wegen unplausibler Fahrzeugdaten abbricht.
+  void _zeigeHinweis(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: const Color(0xFF1C1F26),
+      ),
+    );
+  }
+
   Future<void> _save() async {
     if (_saving) return;
+    // 2026-08-18 (Defekt 4): Unplausible Fahrzeugdaten kommen gar nicht erst
+    // zum Server. Gemessen am 18.08.: ein Skoda Fabia mit 1.100 PS und
+    // 0-100 in 1,2 s, drei Fahrzeuge über 300 km/h.
+    if (!(_garageFormKey.currentState?.validate() ?? true)) {
+      _zeigeHinweis(
+        'Bitte die rot markierten Fahrzeugdaten korrigieren.',
+      );
+      return;
+    }
     final proceed = await _confirmUsernameChangeIfNeeded();
     if (!proceed) return;
 
     setState(() => _saving = true);
     try {
       _captureCurrentVehicleDraft();
+      // Auch Fahrzeuge prüfen, die gerade nicht im Formular sichtbar sind:
+      // die Garage hält mehrere Entwürfe, das Formular zeigt nur einen.
+      for (final entwurf in _vehicleDrafts) {
+        final fehler = FahrzeugGrenzen.ersterFehlerImEntwurf(entwurf);
+        if (fehler != null) {
+          if (mounted) setState(() => _saving = false);
+          _zeigeHinweis(fehler);
+          return;
+        }
+      }
       // 1) Username separat (Cooldown-Tracking)
       final newName = _usernameEditingLockedForTest
           ? _initialUsername
@@ -698,7 +733,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Map<String, dynamic> _currentVehicleDraft() {
     return {
       'vehicle_type': _vehicleType,
-      'brand': _carBrandController.text,
+      'brand': FahrzeugGrenzen.normalisiereMarke(_carBrandController.text),
       'model': _carNameController.text,
       'description': _vehicleDescriptionController.text,
       'tuning_details': _vehicleTuningController.text,
@@ -963,7 +998,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         ],
       ),
-      body: GestureDetector(
+      // 2026-08-18 (Defekt 4): Form um den ganzen Inhalt, damit die
+      // Fahrzeugfelder beim Speichern geprüft werden können. Felder ohne
+      // `validator` bleiben normale TextFields und sind davon unberührt.
+      body: Form(
+        key: _garageFormKey,
+        child: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
         child: _loading
@@ -1082,6 +1122,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   ),
                 ],
               ),
+        ),
       ),
     );
   }
@@ -1239,7 +1280,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Widget _buildCarEditor() {
     final liveProfile = <String, dynamic>{
       'vehicle_type': _vehicleType,
-      'brand': _carBrandController.text,
+      'brand': FahrzeugGrenzen.normalisiereMarke(_carBrandController.text),
       'model': _carNameController.text,
       'description': _vehicleDescriptionController.text,
       'tuning_details': _vehicleTuningController.text,
@@ -1553,9 +1594,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(4),
-                    _MaxIntFormatter(1999),
+                    _MaxIntFormatter(FahrzeugGrenzen.leistungMax),
                   ],
                   compact: true,
+                  validator: FahrzeugGrenzen.pruefeLeistung,
                 ),
               ),
               _buildGarageInputTile(
@@ -1568,9 +1610,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(3),
-                    _MaxIntFormatter(999),
+                    _MaxIntFormatter(FahrzeugGrenzen.topSpeedMax),
                   ],
                   compact: true,
+                  validator: FahrzeugGrenzen.pruefeTopSpeed,
                 ),
               ),
               _buildGarageInputTile(
@@ -1587,6 +1630,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     _DecimalSecondsFormatter(),
                   ],
                   compact: true,
+                  validator: FahrzeugGrenzen.pruefeNullAufHundert,
                 ),
               ),
               _buildGarageInputTile(
@@ -2077,7 +2121,36 @@ class _EditProfilePageState extends State<EditProfilePage> {
     ValueChanged<String>? onChanged,
     bool enabled = true,
     bool compact = false,
+    // 2026-08-18 (Defekt 4): Ohne Prüfung ließ sich jede Zahl speichern —
+    // in der Produktivdatenbank steht ein Skoda Fabia mit 1.100 PS und
+    // 0-100 in 1,2 s, dazu drei Fahrzeuge über 300 km/h. Felder mit
+    // `validator` werden zu einem TextFormField und zeigen den Grund direkt
+    // unter dem Feld. Felder ohne validator bleiben unverändert ein
+    // TextField — kein Verhaltenswechsel für Name, Bio und Link.
+    String? Function(String?)? validator,
   }) {
+    final dekoration = InputDecoration(
+      // Counter ausblenden, wenn maxLength gesetzt ist — sonst doppelte
+      // Stat-Anzeige unter dem Feld.
+      counterText: '',
+      hintText: hint,
+      hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
+      border: InputBorder.none,
+      errorStyle: const TextStyle(fontSize: 11, height: 1.1),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 12 : 14,
+        vertical: compact ? 8 : 12,
+      ),
+    );
+    final textStil = TextStyle(
+      color: enabled ? Colors.white : Colors.white54,
+      fontSize: compact ? 18 : null,
+    );
+    void beiAenderung(String value) {
+      onChanged?.call(value);
+      setState(() {});
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: enabled ? const Color(0xFF1C1F26) : const Color(0xFF171B23),
@@ -2086,34 +2159,31 @@ class _EditProfilePageState extends State<EditProfilePage> {
             ? null
             : Border.all(color: Colors.white.withValues(alpha: 0.04)),
       ),
-      child: TextField(
-        enabled: enabled,
-        controller: controller,
-        maxLines: maxLines,
-        keyboardType: keyboardType,
-        inputFormatters: inputFormatters,
-        maxLength: maxLength,
-        style: TextStyle(
-          color: enabled ? Colors.white : Colors.white54,
-          fontSize: compact ? 18 : null,
-        ),
-        onChanged: (value) {
-          onChanged?.call(value);
-          setState(() {});
-        }, // Live-Vorschau
-        decoration: InputDecoration(
-          // Counter ausblenden, wenn maxLength gesetzt ist — sonst doppelte
-          // Stat-Anzeige unter dem Feld.
-          counterText: '',
-          hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(
-            horizontal: compact ? 12 : 14,
-            vertical: compact ? 8 : 12,
-          ),
-        ),
-      ),
+      child: validator == null
+          ? TextField(
+              enabled: enabled,
+              controller: controller,
+              maxLines: maxLines,
+              keyboardType: keyboardType,
+              inputFormatters: inputFormatters,
+              maxLength: maxLength,
+              style: textStil,
+              onChanged: beiAenderung, // Live-Vorschau
+              decoration: dekoration,
+            )
+          : TextFormField(
+              enabled: enabled,
+              controller: controller,
+              maxLines: maxLines,
+              keyboardType: keyboardType,
+              inputFormatters: inputFormatters,
+              maxLength: maxLength,
+              style: textStil,
+              onChanged: beiAenderung,
+              validator: validator,
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              decoration: dekoration,
+            ),
     );
   }
 }

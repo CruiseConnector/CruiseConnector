@@ -63,8 +63,16 @@ void main() {
         isTrue,
         reason: 'Der Hinweis muss abgewartet werden (await).',
       );
+      // 2026-08-18 (Defekt 3): Der Abbruch war frueher ein nacktes
+      // `if (!acceptedSafety) return;` — fail-closed, aber stumm. Genau das
+      // war das Problem: Knopf gedrueckt, nichts passiert, keine Meldung.
+      // Jetzt steht eine Erklaerung davor. Beide Formen gelten als
+      // fail-closed, der Abbruch selbst ist weiterhin Pflicht.
       expect(
-        RegExp(r'if\s*\(\s*!\s*\w+\s*\)\s*return').hasMatch(createGroupRumpf),
+        RegExp(
+          r'if\s*\(\s*!\s*\w+\s*\)\s*(return|\{[^}]*return\s*;\s*\})',
+          multiLine: true,
+        ).hasMatch(createGroupRumpf),
         isTrue,
         reason:
             'Auf ein abgelehntes/weggewischtes Sheet muss ein Abbruch folgen '
