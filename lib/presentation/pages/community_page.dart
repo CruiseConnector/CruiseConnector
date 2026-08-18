@@ -469,8 +469,12 @@ class _CommunityPageState extends State<CommunityPage>
               'Feed',
               key: TutorialZielRegistry.key(TutorialZielRegistry.communityFeed),
             ),
+            // 2026-08-18 (Defekt 3.4, von Vucko entschieden): hieß „Fahrten".
+            // Hinter dem Reiter liegt der einzige Einstieg zum Anlegen einer
+            // Gruppe — der Name verriet das nicht. Gemessen am 18.08.:
+            // 0 Gruppen in fünf Monaten.
             _buildTabLabel(
-              'Fahrten',
+              'Gruppen &\nFahrten',
               key: TutorialZielRegistry.key(
                 TutorialZielRegistry.communityRides,
               ),
@@ -535,6 +539,12 @@ class _CommunityPageState extends State<CommunityPage>
     );
   }
 
+  /// 2026-08-18 (Defekt 3.4): Bis zu zwei Zeilen erlaubt. Vier Reiter teilen
+  /// sich die Breite zu gleichen Teilen (isScrollable: false), auf einem
+  /// 360-dp-Gerät sind das 86 dp je Reiter. „Gruppen & Fahrten" einzeilig
+  /// hätte die FittedBox auf rund 10 px heruntergerechnet — neben 13,5 px
+  /// bei den Nachbarn sichtbar zu klein. Mit Umbruch bleibt die Schriftgröße
+  /// erhalten; gemessen: Textblock 32 px hoch in einem 46 px hohen Reiter.
   Widget _buildTabLabel(String label, {Key? key}) {
     return Tab(
       key: key,
@@ -542,7 +552,12 @@ class _CommunityPageState extends State<CommunityPage>
         padding: const EdgeInsets.symmetric(horizontal: 2),
         child: FittedBox(
           fit: BoxFit.scaleDown,
-          child: Text(label, maxLines: 1, softWrap: false),
+          child: Text(
+            label,
+            maxLines: 2,
+            softWrap: true,
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
     );

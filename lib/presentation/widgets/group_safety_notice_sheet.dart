@@ -1,18 +1,26 @@
 import 'dart:ui' as ui;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
-import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/safety_notice_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+/// Zeigt den Gruppen-Sicherheitshinweis und meldet, ob er akzeptiert wurde.
+///
+/// 2026-08-18 (Defekt 3): Hier stand eine Kopplung ans Tutorial —
+/// `if (!force && !await AppTutorialService.hasCompleted()) return false;`.
+/// Sie stammt aus dem Tutorial-Umbau vom 14.08., der den Merkschlüssel auf
+/// `app_tutorial_v2_completed` umgestellt hat. Für JEDEN Bestandsnutzer war
+/// der neue Schlüssel leer, also lieferte die Funktion `false` — ohne das
+/// Sheet zu zeigen. `_createGroup` brach daraufhin stumm ab: Knopf gedrückt,
+/// nichts passiert, keine Meldung. Gemessen am 18.08.: 0 Gruppen, 0
+/// Mitglieder, 0 Nachrichten in der gesamten Datenbank.
+///
+/// Der Hinweis darf nie davon abhängen, ob jemand ein Tutorial gesehen hat.
 Future<bool> showGroupSafetyNoticeSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (!force && !await AppTutorialService.hasCompleted()) {
-    return false;
-  }
   if (!force && await SafetyNoticeService.hasAcceptedGroupSafety()) {
     return true;
   }

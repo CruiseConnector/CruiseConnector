@@ -808,8 +808,18 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   Future<void> _createGroup() async {
     if (_isCreating) return;
+    // 2026-08-18 (Defekt 3): Hier stand ein stummes `return`. Wenn das Sheet
+    // false lieferte — und das tat es seit dem 14.08. für jeden
+    // Bestandsnutzer —, passierte auf Knopfdruck gar nichts: keine Meldung,
+    // kein Sheet, kein Fehler. Jeder Ausstieg sagt jetzt, warum.
     final acceptedSafety = await showGroupSafetyNoticeSheet(context);
-    if (!acceptedSafety) return;
+    if (!acceptedSafety) {
+      _showError(
+        'Ohne Bestätigung der Gruppenfahrt-Hinweise können wir keine Gruppe '
+        'anlegen. Du findest sie jederzeit unter Einstellungen.',
+      );
+      return;
+    }
     if (_lastRoute == null || _startPoint == null) {
       _showError('Bitte zuerst eine Route generieren.');
       return;
