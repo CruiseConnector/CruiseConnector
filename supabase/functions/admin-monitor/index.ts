@@ -328,12 +328,19 @@ Deno.serve(async (req) => {
   if (aktion !== 'daten') return json({ error: 'Unbekannte Aktion.' }, 400);
 
   // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
-  const [schnappschuesse, infra] = await Promise.all([
+  const [schnappschuesse, infra, wuensche] = await Promise.all([
     db.from('admin_metric_snapshots')
       .select('taken_at, slot_key, metrics, history, today, compare, analytics, leute')
       .order('taken_at', { ascending: false })
       .limit(VERLAUF_MAX),
     infraLesen(),
+    // 2026-08-18 (vucko): „sammel die Meldungen im Monitoring-Tool."
+    // Gemeint sind die Nutzer, die eine Route in einer Gegend wollten, die
+    // wir noch nicht abdecken. Bewusst LIVE gelesen und nicht aus dem
+    // Schnappschuss: der entsteht nur zweimal am Tag, und genau hier will
+    // man sofort sehen, wo jemand angeklopft hat. Ein indizierter SELECT
+    // (coverage_requests_created_at_idx), gedeckelt auf 500 Zeilen.
+    abdeckungswuenscheLesen(),
   ]);
 
   const { data: reihen, error } = schnappschuesse;
@@ -370,6 +377,82 @@ Deno.serve(async (req) => {
       punkte: reihen.length,
       aeltester: reihen[reihen.length - 1]?.taken_at ?? null,
     },
+    abdeckungswuensche: wuensche,
     infra,
   });
 });
+
+/// Wo wollten Nutzer fahren, wo wir noch nicht abdecken?
+///
+/// 2026-08-18: Bis heute wusste niemand das, weil in
+/// `route_generation_events` keine Koordinaten stehen. Die Edge schreibt
+/// jetzt bei jeder abgewiesenen Anfrage eine Zeile nach `coverage_requests`
+/// (auf 3 Nachkommastellen gerundet, also rund 110 m — genug fuer die Frage
+/// „welche Region freischalten", zu grob fuer eine Wohnadresse).
+///
+/// Hier wird auf ein halbes Grad zusammengefasst, damit aus 40 Einzelpunkten
+/// in Koeln EINE Zeile „Koeln, 40 Anfragen" wird und nicht 40 Zeilen.
+async function abdeckungswuenscheLesen(): Promise<{
+  gesamt: number;
+  woche: number;
+  personen: number;
+  regionen: Array<{
+    lat: number;
+    lng: number;
+    land: string | null;
+    anzahl: number;
+    zuletzt: string;
+  }>;
+} | null> {
+  try {
+    const { data, error } = await db
+      .from('coverage_requests')
+      .select('lat, lng, country_code, created_at, user_id')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error || !data) return null;
+
+    const grenze = Date.now() - 7 * 86400000;
+    const konten = new Set<string>();
+    let woche = 0;
+    const eimer = new Map<string, {
+      lat: number; lng: number; land: string | null; anzahl: number; zuletzt: string;
+    }>();
+
+    for (const z of data) {
+      const lat = Number(z.lat);
+      const lng = Number(z.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      if (z.user_id) konten.add(String(z.user_id));
+      if (new Date(z.created_at as string).getTime() >= grenze) woche++;
+      // Halbes Grad: rund 55 km in Nord-Sued-Richtung.
+      const rl = Math.round(lat * 2) / 2;
+      const rg = Math.round(lng * 2) / 2;
+      const schluessel = `${rl}|${rg}`;
+      const vorhanden = eimer.get(schluessel);
+      if (vorhanden) {
+        vorhanden.anzahl++;
+        if ((z.created_at as string) > vorhanden.zuletzt) {
+          vorhanden.zuletzt = z.created_at as string;
+        }
+      } else {
+        eimer.set(schluessel, {
+          lat: rl,
+          lng: rg,
+          land: (z.country_code as string | null) ?? null,
+          anzahl: 1,
+          zuletzt: z.created_at as string,
+        });
+      }
+    }
+
+    const regionen = [...eimer.values()]
+      .sort((a, b) => b.anzahl - a.anzahl || (a.zuletzt < b.zuletzt ? 1 : -1))
+      .slice(0, 25);
+
+    return { gesamt: data.length, woche, personen: konten.size, regionen };
+  } catch (_) {
+    // Das Monitoring darf an dieser Zusatzinfo niemals scheitern.
+    return null;
+  }
+}

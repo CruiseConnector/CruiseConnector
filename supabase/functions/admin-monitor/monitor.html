@@ -2151,6 +2151,78 @@ function bereichCommunity(m){
 }
 
 /* ── Routing ─────────────────────────────────────────────────────────── */
+/* -- Wo Nutzer hinwollten, wo wir noch nicht abdecken ----------------------
+   2026-08-18 (vucko): "sammel die meldungen im monitoring tool dann bitte."
+   Quelle ist coverage_requests: jede Anfrage, die die Edge mit einer
+   ehrlichen Meldung abgewiesen hat, statt den Nutzer zum Wiederholen
+   aufzufordern. Vorher war das unsichtbar - in route_generation_events
+   stehen keine Koordinaten, man wusste also nie, WO jemand angeklopft hat. */
+function abdeckungswuenscheBlock(){
+  var w=DATEN.abdeckungswuensche;
+  if(!w) return '';
+  if(!w.gesamt){
+    return block('Wo Nutzer hinwollen',
+      '<div class="hinweis gut">Niemand hat eine Route in einer Gegend angefragt, die wir nicht abdecken.</div>',
+      'Anfragen ausserhalb des Liefergebiets');
+  }
+
+  var kopf='<div class="raster">'+
+    karte('Anfragen gesamt', z(w.gesamt))+
+    karte('Davon 7 Tage', z(w.woche))+
+    karte('Betroffene Konten', z(w.personen),
+      '<div class="fuss">ohne Anmeldung nicht zuordenbar</div>')+
+    karte('Regionen', z(w.regionen.length))+
+  '</div>';
+
+  var zeilen='<div class="personen">';
+  w.regionen.forEach(function(r){
+    var kartenLink='https://www.openstreetmap.org/?mlat='+r.lat+'&mlon='+r.lng+'#map=9/'+r.lat+'/'+r.lng;
+    var ort=naechsteStadt(r.lat,r.lng);
+    var wo = ort
+      ? esc(ort)+' <span style="opacity:.55">'+r.lat.toFixed(1)+'&deg;N '+r.lng.toFixed(1)+'&deg;O</span>'
+      : r.lat.toFixed(1)+'&deg;N '+r.lng.toFixed(1)+'&deg;O'+(r.land?' ('+esc(r.land)+')':'');
+    zeilen+='<div class="person">'+
+      '<span class="pname"><a href="'+esc(kartenLink)+'" target="_blank" rel="noopener" '+
+        'style="color:inherit;text-decoration:none">'+wo+'</a></span>'+
+      '<span class="pwann"><b>'+z(r.anzahl)+'&times;</b> &middot; '+esc(tagKurz(r.zuletzt))+'</span>'+
+    '</div>';
+  });
+  zeilen+='</div>';
+
+  return kopf+block('Wo Nutzer hinwollen', zeilen,
+    'Auf ein halbes Grad zusammengefasst, haeufigste zuerst. Klick oeffnet die Karte.');
+}
+
+/* Grobe Ortsangabe statt nackter Koordinaten. Bewusst eine kleine feste
+   Liste: das Dashboard laedt nichts nach, auch keinen Geocoder. Trifft
+   nichts zu, stehen die Koordinaten da - das ist ehrlicher als ein
+   falscher Name. */
+var STAEDTE=[
+  ['Koeln',50.94,6.96],['Duesseldorf',51.23,6.78],['Dortmund',51.51,7.47],
+  ['Essen',51.46,7.01],['Hannover',52.37,9.73],['Bremen',53.08,8.81],
+  ['Hamburg',53.55,9.99],['Berlin',52.52,13.40],['Leipzig',51.34,12.37],
+  ['Dresden',51.05,13.74],['Kassel',51.31,9.50],['Erfurt',50.98,11.03],
+  ['Frankfurt',50.11,8.68],['Muenchen',48.14,11.58],['Stuttgart',48.78,9.18],
+  ['Nuernberg',49.45,11.08],['Wien',48.21,16.37],['Graz',47.07,15.44],
+  ['Salzburg',47.81,13.06],['Innsbruck',47.27,11.40],['Bregenz',47.50,9.75],
+  ['Zuerich',47.38,8.54],['Bern',46.95,7.45],['Mailand',45.46,9.19],
+  ['Amsterdam',52.37,4.90],['Bruessel',50.85,4.35],['Paris',48.86,2.35],
+  ['Warschau',52.23,21.01],['Krakau',50.06,19.94],['Prag',50.08,14.44],
+  ['Kopenhagen',55.68,12.57],['Madrid',40.42,-3.70],['Barcelona',41.39,2.17],
+  ['Rom',41.90,12.50],['Lyon',45.76,4.84],['Athen',37.98,23.73],
+  ['Istanbul',41.01,28.98],['Bukarest',44.43,26.10],['Budapest',47.50,19.04]
+];
+function naechsteStadt(lat,lng){
+  var best=null, bestKm=1e9;
+  for(var i=0;i<STAEDTE.length;i++){
+    var dlat=(STAEDTE[i][1]-lat)*111;
+    var dlng=(STAEDTE[i][2]-lng)*111*Math.cos(lat*Math.PI/180);
+    var km=Math.sqrt(dlat*dlat+dlng*dlng);
+    if(km<bestKm){ bestKm=km; best=STAEDTE[i][0]; }
+  }
+  return bestKm<=60 ? 'bei '+best : null;
+}
+
 function bereichRouting(m){
   var tage = ZEITRAUM==='woche' ? (WOCHE_OFFSET+1)*7 : ZEITRAUM;
   var ro=m.routing||{};
@@ -2178,6 +2250,8 @@ function bereichRouting(m){
        (rp.err_rate_7d!==undefined?', <b>'+z1(rp.err_rate_7d)+'%</b> über 7 Tage':'')+
        (rp.total_7d!==undefined?' bei '+z(rp.total_7d)+' Anfragen':'')+'.</div>';
   }
+
+  o+=abdeckungswuenscheBlock();
 
   var rpool=reiheNachWahl('routing','routing.pool_size',tage);
   var fR=formNachWahl('routing');
