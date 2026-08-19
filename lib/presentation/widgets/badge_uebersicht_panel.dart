@@ -97,13 +97,55 @@ List<BadgeNaechstesZiel> badgeNaechsteZiele({
 }
 
 /// „noch 226 km" statt „274 von 500 km" — beim Restweg zaehlt, was fehlt.
+///
+/// 2026-08-19 (nach dem Blick auf den Simulator): Bei genau einem fehlenden
+/// Schritt stand hier „noch 1 Fahrten". Die Einheiten in badge.dart sind alle
+/// im Plural gefuehrt, weil sie sonst meistens falsch waeren — fuer den
+/// Sonderfall 1 braucht es die Einzahl.
 String badgeRestweg(app.BadgeFortschritt fortschritt) {
   final rest = (fortschritt.ziel - fortschritt.aktuell).clamp(
     0.0,
     double.infinity,
   );
   final gerundet = rest.ceil();
-  return 'noch $gerundet ${fortschritt.einheit}';
+  return 'noch $gerundet ${badgeEinheit(fortschritt.einheit, gerundet)}';
+}
+
+/// Kurzer Name fuer die enge Kachel im Raster.
+///
+/// 2026-08-19 (nach dem Blick auf den Simulator): Bei drei Spalten ist eine
+/// Kachel rund 90 Punkte breit. Laengere Woerter brechen dort MITTEN im Wort
+/// um, im Simulator stand "Abgeschlosse ne Fahrten" und "Gruppenfahrte n".
+/// Die vollen Namen bleiben ueberall sonst erhalten, nur hier wird gekuerzt.
+String badgeKurzTitel(String titel) {
+  const kurz = <String, String>{
+    'Abgeschlossene Fahrten': 'Fahrten',
+    'Gruppenfahrten': 'Gruppe fahren',
+    'Gegründete Gruppen': 'Gruppe gründen',
+    'Gespeicherte Routen': 'Gespeichert',
+    'Geteilte Routen': 'Geteilt',
+    'Stunden am Steuer': 'Stunden',
+    'Nachts unterwegs': 'Nachts',
+    'Früh unterwegs': 'Früh',
+    'Von A nach B': 'A nach B',
+  };
+  return kurz[titel] ?? titel;
+}
+
+/// Einzahl oder Mehrzahl der Einheit. Unveraenderliche Einheiten (km, Std,
+/// Level) stehen bewusst nicht in der Tabelle.
+String badgeEinheit(String einheit, int anzahl) {
+  if (anzahl != 1) return einheit;
+  const einzahl = <String, String>{
+    'Fahrten': 'Fahrt',
+    'Gruppen': 'Gruppe',
+    'Gruppenfahrten': 'Gruppenfahrt',
+    'Routen': 'Route',
+    'Rundkurse': 'Rundkurs',
+    'Stile': 'Stil',
+    'Tage': 'Tag',
+  };
+  return einzahl[einheit] ?? einheit;
 }
 
 class BadgeUebersichtPanel extends StatelessWidget {
@@ -349,9 +391,9 @@ class _FamilienZelle extends StatelessWidget {
             BadgeStufenPunkt(stufe: 0, erreicht: fertig, groesse: 13),
           const SizedBox(height: 6),
           SizedBox(
-            height: 24,
+            height: 26,
             child: Text(
-              familie.titel,
+              badgeKurzTitel(familie.titel),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

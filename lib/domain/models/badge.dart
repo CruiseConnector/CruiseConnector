@@ -903,7 +903,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_18',
         schwelle: 50,
-        anleitung: 'Bringe fuenfzig Fahrten bis zum Ende.',
+        anleitung: 'Bringe fünfzig Fahrten bis zum Ende.',
       ),
     ],
   ),
@@ -971,17 +971,17 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_20',
         schwelle: 100,
-        anleitung: 'Fahre einmal ueber 100 Kilometer am Stueck.',
+        anleitung: 'Fahre einmal über 100 Kilometer am Stück.',
       ),
       BadgeStufe(
         id: 'badge_43',
         schwelle: 200,
-        anleitung: 'Fahre einmal ueber 200 Kilometer am Stueck.',
+        anleitung: 'Fahre einmal über 200 Kilometer am Stück.',
       ),
       BadgeStufe(
         id: 'badge_44',
         schwelle: 300,
-        anleitung: 'Fahre einmal ueber 300 Kilometer am Stueck.',
+        anleitung: 'Fahre einmal über 300 Kilometer am Stück.',
       ),
     ],
   ),
@@ -1006,7 +1006,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_42',
         schwelle: 25,
-        anleitung: 'Bringe fuenfundzwanzig Fahrten im Stil Kurvenjagd zu Ende.',
+        anleitung: 'Bringe fünfundzwanzig Fahrten im Stil Kurvenjagd zu Ende.',
       ),
     ],
   ),
@@ -1019,17 +1019,17 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_49',
         schwelle: 5,
-        anleitung: 'Bringe fuenf Rundkurse zu Ende.',
+        anleitung: 'Bringe fünf Rundkurse zu Ende.',
       ),
       BadgeStufe(
         id: 'badge_29',
         schwelle: 15,
-        anleitung: 'Bringe fuenfzehn Rundkurse zu Ende.',
+        anleitung: 'Bringe fünfzehn Rundkurse zu Ende.',
       ),
       BadgeStufe(
         id: 'badge_50',
         schwelle: 50,
-        anleitung: 'Bringe fuenfzig Rundkurse zu Ende.',
+        anleitung: 'Bringe fünfzig Rundkurse zu Ende.',
       ),
     ],
   ),
@@ -1042,17 +1042,17 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_51',
         schwelle: 5,
-        anleitung: 'Bringe fuenf Fahrten von A nach B zu Ende.',
+        anleitung: 'Bringe fünf Fahrten von A nach B zu Ende.',
       ),
       BadgeStufe(
         id: 'badge_30',
         schwelle: 15,
-        anleitung: 'Bringe fuenfzehn Fahrten von A nach B zu Ende.',
+        anleitung: 'Bringe fünfzehn Fahrten von A nach B zu Ende.',
       ),
       BadgeStufe(
         id: 'badge_52',
         schwelle: 50,
-        anleitung: 'Bringe fuenfzig Fahrten von A nach B zu Ende.',
+        anleitung: 'Bringe fünfzig Fahrten von A nach B zu Ende.',
       ),
     ],
   ),
@@ -1075,7 +1075,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_48',
         schwelle: 30,
-        anleitung: 'Fahre an dreissig Tagen hintereinander.',
+        anleitung: 'Fahre an dreißig Tagen hintereinander.',
       ),
     ],
   ),
@@ -1088,7 +1088,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_25',
         schwelle: 5,
-        anleitung: 'Bringe fuenf Fahrten am Samstag oder Sonntag zu Ende.',
+        anleitung: 'Bringe fünf Fahrten am Samstag oder Sonntag zu Ende.',
       ),
       BadgeStufe(
         id: 'badge_45',
@@ -1098,13 +1098,13 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_46',
         schwelle: 50,
-        anleitung: 'Bringe fuenfzig Fahrten am Samstag oder Sonntag zu Ende.',
+        anleitung: 'Bringe fünfzig Fahrten am Samstag oder Sonntag zu Ende.',
       ),
     ],
   ),
   BadgeFamilie(
     schluessel: 'frueh',
-    titel: 'Frueh unterwegs',
+    titel: 'Früh unterwegs',
     metrik: BadgeMetrik.fruehFahrten,
     einheit: 'Fahrten',
     stufen: [
@@ -1121,7 +1121,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_54',
         schwelle: 30,
-        anleitung: 'Starte dreissig Fahrten vor acht Uhr morgens.',
+        anleitung: 'Starte dreißig Fahrten vor acht Uhr morgens.',
       ),
     ],
   ),
@@ -1144,7 +1144,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_56',
         schwelle: 30,
-        anleitung: 'Sei bei dreissig Fahrten nach 22 Uhr unterwegs.',
+        anleitung: 'Sei bei dreißig Fahrten nach 22 Uhr unterwegs.',
       ),
     ],
   ),
@@ -1162,7 +1162,7 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_19',
         schwelle: 5,
-        anleitung: 'Beende fuenf Gruppenfahrten gemeinsam.',
+        anleitung: 'Beende fünf Gruppenfahrten gemeinsam.',
       ),
       BadgeStufe(
         id: 'badge_37',
@@ -1173,7 +1173,7 @@ const List<BadgeFamilie> badgeFamilien = [
   ),
   BadgeFamilie(
     schluessel: 'gegruendet',
-    titel: 'Gegruendete Gruppen',
+    titel: 'Gegründete Gruppen',
     metrik: BadgeMetrik.gegruendeteGruppen,
     einheit: 'Gruppen',
     stufen: [
@@ -1208,12 +1208,12 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_21',
         schwelle: 5,
-        anleitung: 'Teile fuenf Routen mit der Community.',
+        anleitung: 'Teile fünf Routen mit der Community.',
       ),
       BadgeStufe(
         id: 'badge_36',
         schwelle: 15,
-        anleitung: 'Teile fuenfzehn Routen mit der Community.',
+        anleitung: 'Teile fünfzehn Routen mit der Community.',
       ),
     ],
   ),
@@ -1226,12 +1226,12 @@ const List<BadgeFamilie> badgeFamilien = [
       BadgeStufe(
         id: 'badge_09',
         schwelle: 5,
-        anleitung: 'Speichere fuenf verschiedene Routen.',
+        anleitung: 'Speichere fünf verschiedene Routen.',
       ),
       BadgeStufe(
         id: 'badge_34',
         schwelle: 15,
-        anleitung: 'Speichere fuenfzehn verschiedene Routen.',
+        anleitung: 'Speichere fünfzehn verschiedene Routen.',
       ),
       BadgeStufe(
         id: 'badge_39',
