@@ -676,6 +676,16 @@ class Badge {
   // ---------------------------------------------------------------------
 
   /// Roemische Ziffer zur Stufe. Leer bei stufenlosen Badges.
+  ///
+  /// 2026-08-19 (vucko woertlich): „schau das sie andere Farben andere Formen
+  /// andere Symbole haben ... das die niedrigste Stufe Bronze / Rot ist, die
+  /// beste lila oder blau ist"
+  ///
+  /// Farbe, Form und Symbol einer Stufe stehen NICHT hier, sondern in
+  /// `lib/presentation/widgets/badge_stufen_stil.dart` — das Modell darf kein
+  /// Flutter kennen. Diese Liste bleibt die Rangfolge-Wahrheit; der Test
+  /// `test/presentation/badge_stufen_darstellung_test.dart` vergleicht beide
+  /// Dateien und schlaegt fehl, wenn sie auseinanderlaufen.
   static const List<String> stufenZeichen = ['', 'I', 'II', 'III'];
 
   /// Alle Badges einer Familie, nach Stufe sortiert. Stufenlose Meilensteine

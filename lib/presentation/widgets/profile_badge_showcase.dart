@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/membership_since_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
+import 'package:cruise_connect/presentation/widgets/badge_stufen_stil.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 class BadgeSpotPlacement {
@@ -295,12 +296,16 @@ class ProfileBadgeShowcase extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 22),
-                  Opacity(
-                    opacity: freigeschaltet ? 1 : 0.38,
-                    child: _BadgeStickerShell(
-                      size: 104,
-                      selected: freigeschaltet,
-                      child: _BadgeImage(badge: badge, size: 82),
+                  // 2026-08-19 (vucko): „andere Farben andere Formen andere
+                  // Symbole". Das Detail-Blatt zeigt das Emblem in der Form
+                  // seiner Stufe, nicht mehr im immer gleichen Kreis.
+                  BadgeStufenEmblem(
+                    stufe: badge.stufe,
+                    groesse: 118,
+                    freigeschaltet: freigeschaltet,
+                    child: Opacity(
+                      opacity: freigeschaltet ? 1 : 0.38,
+                      child: _BadgeImage(badge: badge, size: 76),
                     ),
                   ),
                   const SizedBox(height: 18),
@@ -1615,20 +1620,17 @@ class _BadgeImage extends StatelessWidget {
   }
 }
 
-/// 2026-08-18 (Aufgabe 4.2, vucko Sprachnachricht 09 vom 16.08.):
-/// „Mehrstufige Badges, das heisst, Kurvenkoenig gibt es drei Stufen."
-/// Die Leiste zeigt I, II, III und hebt die Stufe hervor, die man gerade
-/// betrachtet. Farben: Bronze, Silber, Gold.
+/// 2026-08-19 (vucko woertlich): „schau das sie andere Farben andere Formen
+/// andere Symbole haben ... das die niedrigste Stufe Bronze / Rot ist, die
+/// beste lila oder blau ist"
+///
+/// Die Leiste zeigt den ganzen Stufenpfad einer Familie und hebt die Stufe
+/// hervor, die man gerade betrachtet. Jede Stufe traegt ihre eigene Form und
+/// ihr eigenes Symbol; die Ziffer bleibt als vierte Lesehilfe stehen.
 class _StufenLeiste extends StatelessWidget {
   const _StufenLeiste({required this.badge});
 
   final app.Badge badge;
-
-  static Color _farbe(int stufe) => switch (stufe) {
-    1 => const Color(0xFFCD7F32),
-    2 => const Color(0xFFC7CEDB),
-    _ => const Color(0xFFFFD166),
-  };
 
   @override
   Widget build(BuildContext context) {
@@ -1639,6 +1641,7 @@ class _StufenLeiste extends StatelessWidget {
     ).where((b) => b.stufe > 0).toList();
     if (stufen.length < 2) return const SizedBox.shrink();
     final titel = app.badgeFamilieVon(familie)?.titel;
+    final eigen = badgeStufenStil(badge.stufe);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1646,45 +1649,38 @@ class _StufenLeiste extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            for (final stufe in stufen) ...[
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                width: 30,
-                height: 22,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: stufe.id == badge.id
-                      ? _farbe(stufe.stufe).withValues(alpha: 0.18)
-                      : Colors.white.withValues(alpha: 0.04),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: stufe.id == badge.id
-                        ? _farbe(stufe.stufe).withValues(alpha: 0.7)
-                        : Colors.white.withValues(alpha: 0.08),
+            for (final stufe in stufen)
+              () {
+                final stil = badgeStufenStil(stufe.stufe);
+                final hier = stufe.id == badge.id;
+                return Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  padding: const EdgeInsets.fromLTRB(7, 5, 9, 5),
+                  decoration: BoxDecoration(
+                    color: stil.farbe.withValues(alpha: hier ? 0.18 : 0.05),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: stil.farbe.withValues(alpha: hier ? 0.75 : 0.18),
+                    ),
                   ),
-                ),
-                child: Text(
-                  app.Badge.stufenZeichen[stufe.stufe],
-                  style: TextStyle(
-                    color: stufe.id == badge.id
-                        ? _farbe(stufe.stufe)
-                        : Colors.white.withValues(alpha: 0.3),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
+                  child: BadgeStufenMarke(
+                    stufe: stufe.stufe,
+                    freigeschaltet: hier,
+                    groesse: 18,
                   ),
-                ),
-              ),
-            ],
+                );
+              }(),
           ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Text(
           titel == null
-              ? 'Stufe ${badge.stufe} von ${stufen.length}'
-              : 'Stufe ${badge.stufe} von ${stufen.length} \u00b7 $titel',
+              ? 'Stufe ${badge.stufe} von ${stufen.length} \u00b7 ${eigen.name}'
+              : 'Stufe ${badge.stufe} von ${stufen.length} '
+                    '\u00b7 ${eigen.name} \u00b7 $titel',
+          textAlign: TextAlign.center,
           style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.45),
+            color: eigen.farbeHell.withValues(alpha: 0.85),
             fontSize: 11.5,
             fontWeight: FontWeight.w800,
           ),

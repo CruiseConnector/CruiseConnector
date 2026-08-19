@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:cruise_connect/presentation/widgets/badge_stufen_stil.dart';
+import 'package:cruise_connect/presentation/widgets/badge_uebersicht_panel.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -2690,6 +2692,16 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildBadgeProgressPanel(progress),
+          const SizedBox(height: 12),
+          // 2026-08-19 (vucko woertlich): „und das man wirklich einen
+          // ueberblick hat". Vorher musste man siebzehn Bloecke durchscrollen,
+          // um zu sehen, wo man ueberall steht. Jetzt steht das oben: Legende
+          // der Stufen, Raster aller Familien, die drei naechsten Ziele.
+          BadgeUebersichtPanel(
+            erreichteIds: _earnedBadges.map((b) => b.id).toSet(),
+            metriken: _badgeMetriken(),
+            onBadgeTippen: _oeffneBadge,
+          ),
           const SizedBox(height: 16),
           // 2026-08-18 (Aufgabe 4.2): Die Sammlung ist nach FAMILIEN
           // gegliedert, nicht mehr eine lange Reihe gleichwertiger Kacheln.
@@ -2748,6 +2760,18 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         ? 'Weitere'
         : (app.badgeFamilieVon(schluessel)?.titel ?? schluessel);
     final erreicht = badges.where((b) => erreichteIds.contains(b.id)).length;
+    // 2026-08-19 (vucko): Der Block zeigt seinen Stufenpfad jetzt schon in
+    // der Ueberschrift, und der Balken traegt die Farbe der Stufe, auf die
+    // er zeigt — nicht mehr das Akzent-Orange fuer alles.
+    final familie = schluessel == null
+        ? null
+        : app.badgeFamilieVon(schluessel);
+    final hoechsteStufe = schluessel == null
+        ? 0
+        : app.Badge.hoechsteErreichteStufe(schluessel, erreichteIds);
+    final zielStil = badgeStufenStil(
+      familie == null ? 0 : (badgeZielBadge(familie, erreichteIds)?.stufe ?? 0),
+    );
     final fortschritt = (schluessel == null || metriken == null)
         ? null
         : app.badgeFamilienFortschritt(
@@ -2763,6 +2787,13 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         children: [
           Row(
             children: [
+              if (familie?.istGestuft ?? false) ...[
+                BadgeStufenPfadLeiste(
+                  erreichteStufen: hoechsteStufe,
+                  punktGroesse: 13,
+                ),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: Text(
                   titel,
@@ -2796,7 +2827,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                       value: fortschritt.anteil,
                       minHeight: 4,
                       backgroundColor: Colors.white.withValues(alpha: 0.07),
-                      color: AppAccentColors.accent,
+                      color: zielStil.farbe,
                     ),
                   ),
                 ),
@@ -2804,7 +2835,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 Text(
                   fortschritt.zahlen,
                   style: TextStyle(
-                    color: AppAccentColors.accent.withValues(alpha: 0.85),
+                    color: zielStil.farbeHell.withValues(alpha: 0.9),
                     fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -3111,7 +3142,13 @@ class _AnalyticsPageState extends State<AnalyticsPage>
 
   Widget _buildBadgeTile(app.Badge badge) {
     final earned = _earnedBadges.any((b) => b.id == badge.id);
-    final accent = _badgeAccentColor(badge);
+    // 2026-08-19 (vucko woertlich): „schau das sie andere Farben andere Formen
+    // andere Symbole haben ... das die niedrigste Stufe Bronze / Rot ist, die
+    // beste lila oder blau ist". Die Kachel folgt jetzt der Stufen-Skala.
+    // Stufenlose Meilensteine (Gruendungszeit, 1.000 km) behalten ihre
+    // Kategorie-Farbe, sonst haetten sie faelschlich einen Rang.
+    final stil = badgeStufenStil(badge.stufe);
+    final accent = badge.stufe > 0 ? stil.farbe : _badgeAccentColor(badge);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
@@ -3148,26 +3185,14 @@ class _AnalyticsPageState extends State<AnalyticsPage>
               size: 16,
             ),
           ),
-          // 2026-08-18 (Aufgabe 4.2): Roemische Ziffer in der freien Ecke —
-          // die rechte ist seit jeher Schloss bzw. Haken. Farbe abgestuft:
-          // Bronze, Silber, Gold.
-          if (badge.stufe > 0)
-            Positioned(
-              top: 7,
-              left: 9,
-              child: Text(
-                app.Badge.stufenZeichen[badge.stufe],
-                style: TextStyle(
-                  color: _stufenFarbe(
-                    badge.stufe,
-                  ).withValues(alpha: earned ? 1 : 0.3),
-                  fontSize: 11,
-                  height: 1.2,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.6,
-                ),
-              ),
-            ),
+          // 2026-08-19 (vucko): Die linke Ecke traegt jetzt alle drei
+          // Merkmale zugleich — Form, Symbol und Ziffer. Farbe allein waere
+          // fuer jemanden mit Rot-Gruen-Schwaeche zu wenig gewesen.
+          Positioned(
+            top: 8,
+            left: 9,
+            child: BadgeStufenMarke(stufe: badge.stufe, freigeschaltet: earned),
+          ),
           Center(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
@@ -3176,36 +3201,34 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 50,
-                    height: 50,
-                    decoration: BoxDecoration(
-                      color: earned
-                          ? accent.withValues(alpha: 0.12)
-                          : Colors.white.withValues(alpha: 0.035),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: badge.assetPath != null
-                          ? Opacity(
-                              opacity: earned ? 1 : 0.24,
-                              child: Image.asset(
-                                badge.assetPath!,
-                                width: 38,
-                                height: 38,
-                                fit: BoxFit.contain,
-                              ),
-                            )
-                          : Text(
-                              badge.emoji,
-                              style: TextStyle(
-                                fontSize: 24,
-                                color: earned
-                                    ? null
-                                    : Colors.white.withValues(alpha: 0.18),
-                              ),
+                  // 2026-08-19 (vucko): „andere Formen" — Kreis fuer Stufe I,
+                  // Sechseck fuer II, Zackenkranz fuer III. Gezeichnet, nicht
+                  // als Bild: zwanzig weitere PNG waeren nach den gemessenen
+                  // 31 MB der bestehenden Serie rund 20 MB obendrauf gewesen.
+                  // Das vorhandene Familien-Emblem bleibt als Bild im Inneren.
+                  BadgeStufenEmblem(
+                    stufe: badge.stufe,
+                    groesse: 52,
+                    freigeschaltet: earned,
+                    child: badge.assetPath != null
+                        ? Opacity(
+                            opacity: earned ? 1 : 0.26,
+                            child: Image.asset(
+                              badge.assetPath!,
+                              width: 34,
+                              height: 34,
+                              fit: BoxFit.contain,
                             ),
-                    ),
+                          )
+                        : Text(
+                            badge.emoji,
+                            style: TextStyle(
+                              fontSize: 22,
+                              color: earned
+                                  ? null
+                                  : Colors.white.withValues(alpha: 0.18),
+                            ),
+                          ),
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
@@ -3233,7 +3256,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                     child: Center(
                       child: Text(
                         earned
-                            ? 'Freigeschaltet'
+                            ? (badge.stufe > 0
+                                  ? 'Stufe ${stil.ziffer} \u00b7 ${stil.name}'
+                                  : 'Freigeschaltet')
                             : (badge.familie == null
                                   ? badge.category
                                   : app
@@ -3261,13 +3286,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       ),
     );
   }
-
-  /// Bronze, Silber, Gold — die Stufe soll auf einen Blick lesbar sein.
-  Color _stufenFarbe(int stufe) => switch (stufe) {
-    1 => const Color(0xFFCD7F32),
-    2 => const Color(0xFFC7CEDB),
-    _ => const Color(0xFFFFD166),
-  };
 
   Color _badgeAccentColor(app.Badge badge) {
     return switch (badge.category) {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
+import 'package:cruise_connect/presentation/widgets/badge_stufen_stil.dart';
 
 Future<void> showBadgeUnlockPopup({
   required BuildContext context,
@@ -131,6 +132,9 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
                         child: IgnorePointer(
                           child: CustomPaint(
                             painter: _StrahlenPainter(
+                              farbe: badge.stufe > 0
+                                  ? badgeStufenStil(badge.stufe).farbe
+                                  : AppAccentColors.accent,
                               zentrum: start,
                               fortschritt: value,
                               staerke: (reveal * (1 - drop))
@@ -165,9 +169,14 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
                               // 2026-08-18 (Aufgabe 4.2): Bei mehrstufigen
                               // Badges soll sofort klar sein, welche Stufe
                               // gerade dazugekommen ist.
+                              // 2026-08-19 (vucko): Die Stufe wird beim
+                              // Namen genannt, nicht nur als Ziffer.
                               badge.stufe > 0
-                                  ? 'Stufe ${app.Badge.stufenZeichen[badge.stufe]} '
-                                        'freigeschaltet'
+                                  ? 'Stufe '
+                                        '${badgeStufenStil(badge.stufe).ziffer}'
+                                        ' \u00b7 '
+                                        '${badgeStufenStil(badge.stufe).name}'
+                                        ' freigeschaltet'
                                   : 'Badge freigeschaltet',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
@@ -260,6 +269,14 @@ class _GlowingBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final glow = 18 + 20 * math.sin(reveal * math.pi).abs();
+    // 2026-08-19 (vucko): Auch im Popup steht das Emblem in der Form seiner
+    // Stufe und leuchtet in deren Farbe.
+    final stil = badgeStufenStil(badge.stufe);
+    final schein = badge.stufe > 0 ? stil.farbe : AppAccentColors.accent;
+    final inhalt = badge.assetPath != null
+        ? Image.asset(badge.assetPath!, fit: BoxFit.contain)
+        : Center(child: Text(badge.emoji, style: TextStyle(fontSize: size / 2)));
+
     return Transform.scale(
       scale: (0.72 + reveal * 0.28) * (1 - drop * 0.04),
       child: Container(
@@ -269,22 +286,25 @@ class _GlowingBadge extends StatelessWidget {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: AppAccentColors.accent.withValues(alpha: 0.54),
+              color: schein.withValues(alpha: 0.54),
               blurRadius: glow,
               spreadRadius: 3,
             ),
-            const BoxShadow(
-              color: Color(0x55FFD76A),
+            BoxShadow(
+              color: stil.farbeHell.withValues(alpha: 0.34),
               blurRadius: 26,
               spreadRadius: 2,
             ),
           ],
         ),
-        child: badge.assetPath != null
-            ? Image.asset(badge.assetPath!, fit: BoxFit.contain)
-            : Center(
-                child: Text(badge.emoji, style: TextStyle(fontSize: size / 2)),
-              ),
+        child: badge.stufe > 0
+            ? BadgeStufenEmblem(
+                stufe: badge.stufe,
+                groesse: size,
+                freigeschaltet: true,
+                child: inhalt,
+              )
+            : inhalt,
       ),
     );
   }
@@ -327,10 +347,15 @@ class _ActivityTarget extends StatelessWidget {
 /// einem zweiten Glanz-Puls in der Halte-Phase.
 class _StrahlenPainter extends CustomPainter {
   const _StrahlenPainter({
+    required this.farbe,
     required this.zentrum,
     required this.fortschritt,
     required this.staerke,
   });
+
+  /// 2026-08-19 (vucko): Die Strahlen tragen die Farbe der Stufe, damit schon
+  /// der erste Lichtschein verraet, welche Stufe gerade dazugekommen ist.
+  final Color farbe;
 
   final Offset zentrum;
   final double fortschritt;
@@ -343,7 +368,6 @@ class _StrahlenPainter extends CustomPainter {
     final puls = 0.75 + 0.25 * math.sin(fortschritt * math.pi * 4).abs();
     final radius = 190.0 * staerke * puls;
     final drehung = fortschritt * math.pi * 0.7;
-    final farbe = AppAccentColors.accent;
 
     for (var i = 0; i < 12; i++) {
       final winkel = drehung + i * (math.pi * 2 / 12);
@@ -371,7 +395,9 @@ class _StrahlenPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_StrahlenPainter old) =>
-      old.fortschritt != fortschritt || old.staerke != staerke;
+      old.fortschritt != fortschritt ||
+      old.staerke != staerke ||
+      old.farbe != farbe;
 }
 
 /// Konfetti-Regen waehrend der Halte-Phase.

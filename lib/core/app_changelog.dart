@@ -42,6 +42,32 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.17',
+      titel: 'Streak verzeiht einen Tag, XP-Rechnung sichtbar, Abzeichen in Farbe',
+      punkte: <String>[
+        'Vergisst du einen Tag zu fahren, ist deine Serie nicht sofort weg. '
+            'Erst zwei Tage Pause setzen sie zurück.',
+        'Während der Woche mit doppelten XP baust du auf dem doppelten Wert '
+            'auf: nach einem Tag 2,1 fach, nach zwei Tagen 2,2 fach und so '
+            'weiter. Vergisst du in dieser Woche einen Tag, landest du wieder '
+            'bei 2,0 statt ganz unten.',
+        'Nach der Fahrt siehst du jetzt, wie deine XP zustande kommen: die '
+            'Punkte für die Strecke, dann dein Multiplikator, dann das '
+            'Ergebnis. Vorher stand dort eine andere Zahl als die, die '
+            'gutgeschrieben wurde.',
+        'Abzeichen haben Farben, Formen und Symbole je Stufe: Bronze mit '
+            'Flamme, Türkis mit Blitz, Violett mit Funken. Über der Sammlung '
+            'siehst du auf einen Blick, wo du überall stehst und was als '
+            'nächstes dran ist.',
+        'Das Tutorial erklärt jetzt die ganze App, auch Chats, Auswertung, '
+            'Profil und Garage sowie das, was nach der Fahrt passiert.',
+        'Das Startklar-Abzeichen kommt nachträglich an, wenn du die '
+            'Starter-Aufgaben erledigt hast. Dazu drei neue Aufgaben: dein '
+            'erster Beitrag, deine erste abgeschlossene Gruppenfahrt und '
+            'deine erste gefahrene Runde.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.16',
       titel: 'Saubere Umwege, Abzeichen mit Stufen, Fahrt läuft weiter',
       punkte: <String>[
