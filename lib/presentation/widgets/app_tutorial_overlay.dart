@@ -16,6 +16,28 @@ import 'package:flutter/material.dart';
 /// „die person muss das interaktiv machen damit sie weiterkommt" — Weiter ist
 /// bei den Pflicht-Schritten gesperrt, bis die Aktion in der Attrappe passiert
 /// ist. Überspringen bleibt IMMER möglich (bricht ohne Belohnung ab).
+///
+/// 2026-08-19 (vucko): „schau das das tutorial wirklich die ganze app
+/// erklaert". GEMESSEN am 19.08. im 7-Schritt-Fluss: erklärt wurden der
+/// Cruise-Knopf und drei der vier Community-Reiter. NICHT erklärt, obwohl
+/// vorhanden: der Reiter „Chats" (Communities), Analytics (Reiter 3), Profil
+/// (Reiter 4) samt Garage, die Startseite selbst (Schritt 1 und 7 liefen
+/// dort, zeigten aber auf nichts) und alles, was NACH der Fahrt passiert
+/// (Fahrt beenden, Foto, Speichern, XP). Die Einstellungen versprachen im
+/// Untertitel „Home, Community, Cruise, Analytics und Profil" — zwei davon
+/// kamen gar nicht vor.
+///
+/// JETZT: 12 Schritte, jeder Reiter der App kommt vor (0 Home, 1 Community
+/// mit allen vier Unterreitern, 2 Cruise, 3 Analytics, 4 Profil). Die
+/// Reihenfolge folgt den Reitern (0, 2, 1, 3, 4, 0), damit nicht bei jedem
+/// Schritt hin- und hergesprungen wird.
+///
+/// EHRLICHKEIT der beiden Pflicht-Schritte: Sie sind Attrappen IM Overlay und
+/// lösen KEINE echte Aktion aus (das Overlay liegt modal über der Seite).
+/// Gemessen: nach dem Tutorial ist genau 1 von 5 Starter-Aufgaben erledigt,
+/// obwohl der Nutzer glaubte, gerade zwei davon gemacht zu haben. Die Texte
+/// sagen deshalb ausdrücklich, dass es Übungen sind und die Aufgabe erst in
+/// der echten App abgehakt wird. Die Attrappen bleiben Attrappen.
 Future<void> showAppTutorialOverlay(
   BuildContext context, {
   required ValueChanged<int> onTabChange,
@@ -78,6 +100,9 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
   DateTime? _memberSince;
   bool _rewardTriggered = false;
 
+  /// Der Fluss durch die ganze App. Reihenfolge nach Reitern:
+  /// Home (0) → Cruise (2) → Community (1, alle vier Unterreiter) →
+  /// Analytics (3) → Profil (4) → Home (0).
   static const List<_TutorialStep> _steps = [
     _TutorialStep(
       tab: 0,
@@ -85,10 +110,24 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       title: 'Willkommen bei CruiseConnect',
       body:
           'Routen entdecken, mit Freunden synchron cruisen, Momente teilen. '
-          'In einer Minute kennst du alles Wichtige.',
+          'Wir gehen jetzt einmal durch die ganze App.',
       cta: 'Los geht’s',
       target: _TutorialTarget.none,
       kind: _StepKind.welcome,
+    ),
+    _TutorialStep(
+      tab: 0,
+      icon: CupertinoIcons.house_fill,
+      title: 'Deine Startseite',
+      body:
+          'Hier landest du bei jedem Start. Oben wartet dein Starter-Paket '
+          'mit fünf kleinen Aufgaben, die dir eine Woche doppelte XP '
+          'freischalten. Darunter zeigen die Kacheln Level, XP, Kilometer, '
+          'Streak und deine Woche. Welche Kacheln du siehst, bestimmst du '
+          'selbst über „Home bearbeiten".',
+      cta: 'Home',
+      target: _TutorialTarget.homeStarter,
+      kind: _StepKind.homeStart,
     ),
     _TutorialStep(
       tab: 2,
@@ -97,20 +136,45 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       body:
           'Hier startet jede Fahrt: Stil wählen, Route suchen, losfahren. '
           'Tipp: Halte einen Punkt auf der Karte lange gedrückt, um direkt '
-          'dorthin zu cruisen. Starte jetzt eine Routensuche:',
+          'dorthin zu cruisen. Probier die Suche hier am Beispiel aus:',
       cta: 'Cruise',
       target: _TutorialTarget.cruise,
       kind: _StepKind.routeSearch,
     ),
     _TutorialStep(
+      tab: 2,
+      icon: CupertinoIcons.star_fill,
+      title: 'Favoriten',
+      body:
+          'Lieblingsorte merkst du dir mit dem Stern, dann warten sie in der '
+          'Zielsuche auf dich. So sieht das aus:',
+      cta: 'Merken',
+      target: _TutorialTarget.none,
+      kind: _StepKind.favorite,
+    ),
+    _TutorialStep(
+      tab: 2,
+      icon: CupertinoIcons.flag_fill,
+      title: 'Nach der Fahrt',
+      body:
+          'Unterwegs sagt dir das Banner oben jede Abbiegung an. Am Ende '
+          'tippst du auf „Fahrt beenden": Du siehst Distanz, Dauer, Kurven '
+          'und Top-Speed, kannst ein Foto anhängen und die Fahrt benennen. '
+          'Erst mit „Speichern" wandern Kilometer, XP und Streak in dein '
+          'Profil.',
+      cta: 'Vorschau',
+      target: _TutorialTarget.none,
+      kind: _StepKind.afterRide,
+    ),
+    _TutorialStep(
       tab: 1,
       icon: CupertinoIcons.person_3_fill,
-      title: 'Gruppen: synchron fahren',
+      title: 'Gruppen & Fahrten',
       body:
-          'Erstell eine Gruppe und lade deine Freunde ein — ihr fahrt '
-          'dieselbe Route und seht euch dabei live auf der Karte, wie ein '
-          'Konvoi.',
-      cta: 'Fahrten',
+          'Hinter diesem Reiter erstellst du eine Gruppe und lädst deine '
+          'Freunde ein. Ihr fahrt dieselbe Route und seht euch dabei live '
+          'auf der Karte wie ein Konvoi.',
+      cta: 'Gruppen & Fahrten',
       target: _TutorialTarget.communityRides,
       communitySection: 1,
       kind: _StepKind.groups,
@@ -120,8 +184,8 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       icon: CupertinoIcons.news_solid,
       title: 'Feed',
       body:
-          'Fahrten, Fotos und Routen von Leuten, denen du folgst — teile '
-          'deine besten Cruises direkt nach der Fahrt.',
+          'Fahrten, Fotos und Routen von Leuten, denen du folgst. Deine '
+          'besten Cruises teilst du direkt nach der Fahrt.',
       cta: 'Feed',
       target: _TutorialTarget.communityFeed,
       communitySection: 0,
@@ -129,27 +193,52 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
     ),
     _TutorialStep(
       tab: 1,
+      icon: CupertinoIcons.chat_bubble_2_fill,
+      title: 'Chats',
+      body:
+          'Hier liegen deine Communities: eine eigene gründen, mit einem '
+          'Code beitreten oder einer öffentlichen folgen. Jede Community hat '
+          'ihren eigenen Chat für die Absprache vor der Ausfahrt.',
+      cta: 'Chats',
+      target: _TutorialTarget.communityChats,
+      communitySection: 2,
+      kind: _StepKind.chats,
+    ),
+    _TutorialStep(
+      tab: 1,
       icon: CupertinoIcons.search,
       title: 'Entdecken',
       body:
-          'Neue Fahrer, Gruppen und Communities außerhalb deiner Kontakte — '
-          'hier wächst dein Netzwerk.',
+          'Neue Fahrer, Gruppen und Communities außerhalb deiner Kontakte. '
+          'Hier wächst dein Netzwerk.',
       cta: 'Entdecken',
       target: _TutorialTarget.communityDiscover,
       communitySection: 3,
       kind: _StepKind.discover,
     ),
     _TutorialStep(
-      tab: 2,
-      icon: CupertinoIcons.star_fill,
-      title: 'Favoriten',
+      tab: 3,
+      icon: CupertinoIcons.chart_bar_alt_fill,
+      title: 'Analytics',
       body:
-          'Lieblingsorte merkst du dir mit dem Stern — sie warten dann in '
-          'der Suche auf dich. Tippe die Adresse an und merke sie mit dem '
-          'Stern:',
-      cta: 'Merken',
-      target: _TutorialTarget.none,
-      kind: _StepKind.favorite,
+          'Dein Fortschritt in Zahlen: Level und XP, Fahrten, Distanz und '
+          'Fahrzeit, deine Streak, die Badge-Meilensteine und die Rangliste '
+          'für Woche und Monat.',
+      cta: 'Analytics',
+      target: _TutorialTarget.analytics,
+      kind: _StepKind.analytics,
+    ),
+    _TutorialStep(
+      tab: 4,
+      icon: CupertinoIcons.person_crop_circle_fill,
+      title: 'Profil & Garage',
+      body:
+          'Dein Profil sammelt Posts, Reposts, gespeicherte Routen und '
+          'Gruppen. Über „Profil bearbeiten" öffnest du „Meine Garage" und '
+          'stellst dort deine Autos mit Bild, PS und Baujahr vor.',
+      cta: 'Profil',
+      target: _TutorialTarget.profilGarage,
+      kind: _StepKind.profile,
     ),
     _TutorialStep(
       tab: 0,
@@ -260,18 +349,28 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
     switch (step.kind) {
       case _StepKind.welcome:
         return _WelcomeAnimation(accent: accent);
+      case _StepKind.homeStart:
+        return _HomeStartAnimation(accent: accent);
       case _StepKind.routeSearch:
         return _RouteSearchActionCard(
           accent: accent,
           completed: _completedActions.contains(_index),
           onCompleted: _markActionDone,
         );
+      case _StepKind.afterRide:
+        return _AfterRidePreview(accent: accent);
       case _StepKind.groups:
         return _GroupConvoyAnimation(accent: accent);
       case _StepKind.feed:
         return _FeedCardAnimation(accent: accent);
+      case _StepKind.chats:
+        return _ChatsAnimation(accent: accent);
       case _StepKind.discover:
         return _DiscoverAnimation(accent: accent);
+      case _StepKind.analytics:
+        return _AnalyticsAnimation(accent: accent);
+      case _StepKind.profile:
+        return _GarageAnimation(accent: accent);
       case _StepKind.favorite:
         return _FavoriteActionCard(
           accent: accent,
@@ -712,9 +811,409 @@ class _DiscoverAnimation extends StatelessWidget {
   }
 }
 
+/// 2026-08-19 (vucko: „schau das das tutorial wirklich die ganze app
+/// erklaert"): Die Startseite hatte keinen eigenen Schritt. Schritt 1 und 7
+/// liefen dort, zeigten aber auf nichts. Diese Skizze zeigt die zwei Dinge,
+/// die dort wirklich stehen: das Starter-Paket und die Fortschritts-Kacheln.
+/// Der Zähler steht bewusst auf „0 von 5" — im Overlay ist noch nichts
+/// erledigt, und genau das soll die Skizze auch sagen.
+class _HomeStartAnimation extends StatelessWidget {
+  const _HomeStartAnimation({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 850),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, child) {
+        return Transform.translate(
+          offset: Offset(0, 22 * (1 - t)),
+          child: Opacity(opacity: t.clamp(0.0, 1.0), child: child),
+        );
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: accent.withValues(alpha: 0.30)),
+            ),
+            child: Row(
+              children: [
+                Icon(CupertinoIcons.gift_fill, color: accent, size: 18),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Dein Starter-Paket',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Text(
+                  '0 von 5',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.70),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _MiniKachel(
+                accent: accent,
+                icon: CupertinoIcons.bolt_fill,
+                titel: 'XP & Level',
+              ),
+              const SizedBox(width: 8),
+              _MiniKachel(
+                accent: accent,
+                icon: CupertinoIcons.flame_fill,
+                titel: 'Streak',
+              ),
+              const SizedBox(width: 8),
+              _MiniKachel(
+                accent: accent,
+                icon: CupertinoIcons.speedometer,
+                titel: 'Woche',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniKachel extends StatelessWidget {
+  const _MiniKachel({
+    required this.accent,
+    required this.icon,
+    required this.titel,
+  });
+
+  final Color accent;
+  final IconData icon;
+  final String titel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: accent, size: 18),
+            const SizedBox(height: 5),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                titel,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 2026-08-19 (vucko): Was NACH der Fahrt passiert, kam im Tutorial nicht vor.
+/// Bewusst eine Vorschau ohne Knöpfe: Das Overlay kann keine Fahrt starten,
+/// und eine Attrappe, die so tut, wäre gelogen. Die drei Karten zeigen nur
+/// die Reihenfolge, die der Nutzer später wirklich sieht.
+class _AfterRidePreview extends StatelessWidget {
+  const _AfterRidePreview({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    const schritte = [
+      (CupertinoIcons.stop_circle_fill, 'Fahrt\nbeenden'),
+      (CupertinoIcons.camera_fill, 'Foto &\nTitel'),
+      (CupertinoIcons.tray_arrow_down_fill, 'Speichern\n+ XP'),
+    ];
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 1000),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                for (var i = 0; i < schritte.length; i++) ...[
+                  if (i > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Opacity(
+                        opacity: ((t - i * 0.22) / 0.4).clamp(0.0, 1.0),
+                        child: Icon(
+                          CupertinoIcons.chevron_right,
+                          color: Colors.white.withValues(alpha: 0.40),
+                          size: 14,
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: Opacity(
+                      opacity: ((t - i * 0.22) / 0.5).clamp(0.0, 1.0),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.10),
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(schritte[i].$1, color: accent, size: 18),
+                            const SizedBox(height: 5),
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                schritte[i].$2,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.80),
+                                  fontSize: 11,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Nur eine Vorschau. Deine erste echte Fahrt startest du gleich '
+              'selbst im Cruise Mode.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 2026-08-19 (vucko): Der Reiter „Chats" war der einzige Community-Reiter
+/// ohne Schritt, obwohl sein Registry-Schlüssel längst gemeldet war
+/// (community_page.dart:485).
+class _ChatsAnimation extends StatelessWidget {
+  const _ChatsAnimation({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 900),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) {
+        Widget blase({
+          required bool links,
+          required double breite,
+          required double verzoegerung,
+        }) {
+          final local = ((t - verzoegerung) / 0.5).clamp(0.0, 1.0);
+          return Opacity(
+            opacity: local,
+            child: Transform.translate(
+              offset: Offset((links ? -24 : 24) * (1 - local), 0),
+              child: Align(
+                alignment: links ? Alignment.centerLeft : Alignment.centerRight,
+                child: Container(
+                  width: breite,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: links
+                        ? Colors.white.withValues(alpha: 0.09)
+                        : accent.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            blase(links: true, breite: 150, verzoegerung: 0),
+            const SizedBox(height: 6),
+            blase(links: false, breite: 110, verzoegerung: 0.25),
+            const SizedBox(height: 6),
+            blase(links: true, breite: 90, verzoegerung: 0.5),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 2026-08-19 (vucko): Analytics (Reiter 3) kam im Tutorial überhaupt nicht
+/// vor, obwohl die Einstellungen es im Untertitel versprachen.
+class _AnalyticsAnimation extends StatelessWidget {
+  const _AnalyticsAnimation({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    const hoehen = [0.35, 0.55, 0.45, 0.80, 0.62, 0.95, 0.72];
+    return SizedBox(
+      height: 56,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: const Duration(milliseconds: 950),
+        curve: Curves.easeOutCubic,
+        builder: (context, t, _) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 0; i < hoehen.length; i++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Container(
+                    width: 14,
+                    height:
+                        56 * hoehen[i] * ((t - i * 0.08) / 0.6).clamp(0.0, 1.0),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.35 + 0.07 * i),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 2026-08-19 (vucko): Profil (Reiter 4) und „Meine Garage" fehlten komplett.
+class _GarageAnimation extends StatelessWidget {
+  const _GarageAnimation({required this.accent});
+
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 900),
+      curve: Curves.easeOutBack,
+      builder: (context, t, child) {
+        final clamped = t.clamp(0.0, 1.0);
+        return Opacity(
+          opacity: clamped,
+          child: Transform.scale(scale: 0.7 + 0.3 * clamped, child: child),
+        );
+      },
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: accent.withValues(alpha: 0.16),
+              border: Border.all(color: accent.withValues(alpha: 0.45)),
+            ),
+            child: Icon(CupertinoIcons.person_fill, color: accent, size: 22),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+              ),
+              child: Row(
+                children: [
+                  Icon(CupertinoIcons.car_detailed, color: accent, size: 20),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Text(
+                      'Meine Garage',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    CupertinoIcons.plus_circle_fill,
+                    color: Colors.white.withValues(alpha: 0.45),
+                    size: 18,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Interaktiver Pflicht-Schritt (a): Adresse antippen + mit Stern merken.
-// Reine Overlay-Attrappe — steuert KEINE echten Seiten.
+// Reine Overlay-Attrappe, steuert KEINE echten Seiten.
+//
+// 2026-08-19 (vucko: „schau das das tutorial wirklich die ganze app
+// erklaert"): Der Erfolgstext hiess „Gemerkt! Findest du ab jetzt in deinen
+// Favoriten." Das war schlicht falsch: Es wird nichts gespeichert, und die
+// Starter-Aufgabe „Eine Adresse merken" bleibt offen. Gemessen: nach dem
+// Tutorial ist 1 von 5 Starter-Aufgaben erledigt (nur „tutorial"), obwohl der
+// Nutzer glaubte, zwei gemacht zu haben. Die Attrappe bleibt, der Text sagt
+// jetzt die Wahrheit.
 // ---------------------------------------------------------------------------
 
 class _FavoriteActionCard extends StatefulWidget {
@@ -871,8 +1370,10 @@ class _FavoriteActionCardState extends State<_FavoriteActionCard> {
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
-                      'Gemerkt! Findest du ab jetzt in deinen Favoriten.',
-                      maxLines: 2,
+                      'So sieht ein gemerkter Ort aus. Das war eine Übung: '
+                      'Deinen ersten echten Favoriten setzt du in der '
+                      'Zielsuche, dann hakt sich auch die Starter-Aufgabe ab.',
+                      maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.80),
@@ -893,7 +1394,14 @@ class _FavoriteActionCardState extends State<_FavoriteActionCard> {
 
 // ---------------------------------------------------------------------------
 // Interaktiver Pflicht-Schritt (b): Routensuche starten (Attrappe mit
-// Stil-Chip, kurzer Lade-Animation und „Route gefunden").
+// Stil-Chip, kurzer Lade-Animation und Beispielroute).
+//
+// 2026-08-19 (vucko: „schau das das tutorial wirklich die ganze app
+// erklaert"): Stand vorher „Route gefunden, 42 km, 87 Kurven!" da, als wäre
+// wirklich gesucht worden. Es wird nichts gesucht und nichts gespeichert; die
+// Starter-Aufgabe „Eine Route suchen" bleibt offen. Text entsprechend
+// entschärft, Attrappe bleibt Attrappe (das Overlay liegt modal über der
+// Seite und kann die echte Suche nicht auslösen).
 // ---------------------------------------------------------------------------
 
 enum _RouteSearchPhase { idle, loading, found }
@@ -1066,8 +1574,10 @@ class _RouteSearchActionCardState extends State<_RouteSearchActionCard> {
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
-                      'Route gefunden — 42 km, 87 Kurven!',
-                      maxLines: 2,
+                      'Beispielroute: 42 km, 87 Kurven. Deine echte Suche '
+                      'startest du gleich selbst im Cruise Mode, dann zählt '
+                      'auch die Starter-Aufgabe.',
+                      maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.80),
@@ -1381,9 +1891,31 @@ class _TutorialSpotlightPainter extends CustomPainter {
       _TutorialTarget.communityRides =>
         gemessen(TutorialZielRegistry.communityRides) ??
             communityTabTarget(0.365, 104),
+      // 2026-08-19 (vucko): Der Reiter „Chats" war in der Registry gemeldet,
+      // aber kein Schritt zeigte je darauf. Schätzwert: dritter von vier
+      // gleich breiten Reitern.
+      _TutorialTarget.communityChats =>
+        gemessen(TutorialZielRegistry.communityChats) ??
+            communityTabTarget(0.615, 96),
       _TutorialTarget.communityDiscover =>
         gemessen(TutorialZielRegistry.communityDiscover) ??
             communityTabTarget(0.84, 108),
+      // Diese drei Ziele hängen noch an KEINEM Widget (Startseite, Analytics
+      // und Profil sind fremde Dateien). Ohne Meldung bleibt der Ring aus und
+      // die Seite liegt einfach abgedunkelt hinter der Karte. Sobald der Key
+      // dort gesetzt wird, leuchtet der Ring ohne Änderung an dieser Stelle.
+      _TutorialTarget.homeStarter => gemessen(
+        TutorialZielRegistry.starterKarte,
+        aufblasen: 10,
+      ),
+      _TutorialTarget.analytics => gemessen(
+        TutorialZielRegistry.analyticsUebersicht,
+        aufblasen: 10,
+      ),
+      _TutorialTarget.profilGarage => gemessen(
+        TutorialZielRegistry.profilGarage,
+        aufblasen: 10,
+      ),
       _TutorialTarget.cruise =>
         gemessen(TutorialZielRegistry.cruiseKnopf, aufblasen: 12) ??
             Rect.fromCenter(
@@ -1403,11 +1935,16 @@ class _TutorialSpotlightPainter extends CustomPainter {
 
 enum _StepKind {
   welcome,
+  homeStart,
   routeSearch,
+  favorite,
+  afterRide,
   groups,
   feed,
+  chats,
   discover,
-  favorite,
+  analytics,
+  profile,
   completion;
 
   bool get requiresAction =>
@@ -1439,7 +1976,11 @@ class _TutorialStep {
 enum _TutorialTarget {
   communityFeed,
   communityRides,
+  communityChats,
   communityDiscover,
   cruise,
+  homeStarter,
+  analytics,
+  profilGarage,
   none,
 }

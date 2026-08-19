@@ -39,6 +39,13 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
   void initState() {
     super.initState();
     unawaited(StarterAufgabenService.instance.load());
+    // 2026-08-19 (vucko): Der Starter-Zustand lag ausschliesslich im
+    // Geraetespeicher. Gemessen: ein Geraetewechsel loeschte die laufende
+    // Bonuswoche, und derselbe Account konnte auf einem zweiten Geraet eine
+    // ZWEITE Woche bekommen. Der Abgleich holt den Stand vom Profil, sobald
+    // die Startseite steht — das ist der frueheste Zeitpunkt, an dem die
+    // Karte ihn braucht. Ohne Anmeldung oder ohne Netz faellt er still aus.
+    unawaited(StarterAufgabenService.instance.synchronisiereMitProfil());
     StarterAufgabenService.instance.paketFrischVerdient.addListener(
       _beiPaketVerdient,
     );
@@ -173,7 +180,9 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
               ),
               const SizedBox(height: 3),
               Text(
-                'Jede Fahrt zählt doppelt — noch '
+                // 2026-08-19: Hier stand ein Gedankenstrich im sichtbaren
+                // Text. Die Repo-Regel verbietet ihn in Nutzertexten.
+                'Jede Fahrt zählt doppelt, noch '
                 '${_countdownText(dienst.bonusVerbleibend)}.',
                 style: const TextStyle(
                   color: Colors.white70,
@@ -344,6 +353,51 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
             ),
           ],
           letzterKnopf: 'Los geht\'s',
+        );
+      // 2026-08-19 (vucko): „auch noch weitere sachen wie der erste post, die
+      // erste Gruppenfahrt umfasst wo man abschliessen muss und die erste
+      // runde gefahren". Auch die neuen drei Zeilen muessen hinfuehren, sonst
+      // waere „Zeigen" bei drei von acht Aufgaben eine tote Schaltflaeche.
+      case 'runde':
+        // Fahren-Reiter: dort wird die Route gesucht und die Fahrt gestartet.
+        CruiseModePage.hinweisWunsch.value = 'route';
+        widget.onTabChange?.call(2);
+      case 'post':
+        widget.onTabChange?.call(1);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.communityFeed,
+              titel: 'Dein erster Post',
+              text:
+                  'Im Feed teilst du deine Fahrt. Nach jeder Fahrt kannst du '
+                  'Foto und Strecke direkt posten.',
+              symbol: Icons.add_photo_alternate_rounded,
+            ),
+          ],
+          letzterKnopf: 'Verstanden',
+        );
+      case 'gruppenfahrt':
+        widget.onTabChange?.call(1);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.communityRides,
+              titel: 'Gruppenfahrt',
+              text:
+                  'Hier gründest du eine Gruppe oder trittst einer bei. '
+                  'Die Aufgabe zählt erst, wenn ihr die Fahrt gemeinsam bis '
+                  'zum Ziel durchzieht.',
+              symbol: Icons.groups_rounded,
+            ),
+          ],
+          letzterKnopf: 'Verstanden',
         );
       default:
         break;

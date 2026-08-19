@@ -272,9 +272,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       int weekRouteCount = 0;
       final lastWeekStart = weekStart.subtract(const Duration(days: 7));
 
-      // Streak-Berechnung
-      final driveDays = <DateTime>{};
-
       for (final session in driveSessions) {
         final createdAt = session.createdAt.toLocal();
         final routeDay = DateTime(
@@ -322,22 +319,21 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             );
           }
         }
-
-        // Streaktage
-        driveDays.add(routeDay);
       }
 
-      // Streak zählen
-      int streak = 0;
-      final today = DateTime(now.year, now.month, now.day);
-      var checkDay = today;
-      if (!driveDays.contains(checkDay)) {
-        checkDay = checkDay.subtract(const Duration(days: 1));
-      }
-      while (driveDays.contains(checkDay)) {
-        streak++;
-        checkDay = checkDay.subtract(const Duration(days: 1));
-      }
+      // 2026-08-19 (vucko): „wenn man eine Streak hat und einen Tag vergisst,
+      // das man die moeglichkeit hat die streak wieder zu entfachen"
+      //
+      // Hier stand eine ZWEITE, abgeschriebene Streak-Schleife. Sie hatte den
+      // Filter `distance_km > 0` nicht, den der Dienst hat: eine 0-km-Zeile
+      // (abgebrochene Fahrt) hielt die Serie in der Auswertung am Leben,
+      // waehrend Startseite und Gutschrift sie schon gerissen sahen. Zwei
+      // Wahrheiten fuer dieselbe Zahl. Jetzt rechnet nur noch der Dienst —
+      // inklusive der neuen Schonfrist.
+      final streak = GamificationService.calculateDrivingStreakDays(
+        driveSessions,
+        now: now,
+      );
 
       if (mounted) {
         setState(() {
@@ -3369,11 +3365,19 @@ class _AnalyticsSkeleton extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Row(
-                    children: [_statTile(), const SizedBox(width: 10), _statTile()],
+                    children: [
+                      _statTile(),
+                      const SizedBox(width: 10),
+                      _statTile(),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   Row(
-                    children: [_statTile(), const SizedBox(width: 10), _statTile()],
+                    children: [
+                      _statTile(),
+                      const SizedBox(width: 10),
+                      _statTile(),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   const SkeletonBox(

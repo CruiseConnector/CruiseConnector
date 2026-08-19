@@ -130,8 +130,13 @@ class UnterbrocheneFahrtVerbuchung {
           .eq('route_fingerprint', fp)
           .limit(1);
       if ((schonDa as List).isEmpty) {
+        // 2026-08-19: Der Zustand wird geladen, weil die XP-Rechnung in
+        // `posten` die Doppel-XP-Woche selbst abfragt (sie steckt seitdem in
+        // der BASIS des Streak-Multiplikators, nicht mehr in einem Faktor am
+        // Ende). Frueher stand hier zusaetzlich
+        // `StarterAufgabenService.wendeBonusAn(p.xp)` - das wuerde die Woche
+        // ein zweites Mal zaehlen und ist deshalb weg.
         await StarterAufgabenService.instance.load();
-        final xpMitBonus = StarterAufgabenService.instance.wendeBonusAn(p.xp);
         final session = await GamificationService.recordDriveSession(
           distanceKm: p.km,
           durationSeconds: p.sekunden,
@@ -140,7 +145,7 @@ class UnterbrocheneFahrtVerbuchung {
           routeType: s.isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT',
           routeFingerprint: fp,
           source: 'navigation_unterbrochen',
-          xpAwarded: xpMitBonus,
+          xpAwarded: p.xp,
           createdAt: s.savedAt,
         );
         if (session == null) {
@@ -149,7 +154,7 @@ class UnterbrocheneFahrtVerbuchung {
         }
         debugPrint(
           '[Verbuchung] Unterbrochene Fahrt gebucht: '
-          '${p.km.toStringAsFixed(1)} km, ${p.sekunden} s, $xpMitBonus XP',
+          '${p.km.toStringAsFixed(1)} km, ${p.sekunden} s, ${p.xp} XP',
         );
       } else {
         debugPrint('[Verbuchung] schon gebucht ($fp) — nur aufraeumen');

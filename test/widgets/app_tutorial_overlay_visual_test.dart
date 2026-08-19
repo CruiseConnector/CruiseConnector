@@ -31,9 +31,11 @@ void main() {
   }
 
   // 2026-08-14 (vucko Tutorial-Umbau): Fluss von 10 auf 7 Schritte gekürzt,
-  // zwei interaktive Pflicht-Schritte dazu. Die Tap-Sequenz unten folgt dem
-  // NEUEN Fluss; die Golden-Bilder wurden bewusst NICHT neu generiert
-  // (bekannt-rot akzeptiert) — sie zeigen noch den alten Stand.
+  // zwei interaktive Pflicht-Schritte dazu.
+  //
+  // 2026-08-19 (vucko: „schau das das tutorial wirklich die ganze app
+  // erklaert"): Fluss von 7 auf 12 Schritte erweitert. Die Tap-Sequenz unten
+  // folgt dem NEUEN Fluss, die Golden-Bilder wurden dabei neu erzeugt.
   testWidgets(
     'Tutorial-Highlights sitzen zentriert auf Bottom-Nav und Community-Tabs',
     (tester) async {
@@ -44,26 +46,54 @@ void main() {
         matchesGoldenFile('goldens/app_tutorial_home_nav_centered.png'),
       );
 
+      // 2/12 Startseite: Starter-Paket und Fortschritts-Kacheln.
+      await tester.tap(find.text('Weiter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Deine Startseite'), findsWidgets);
+      expect(find.text('Dein Starter-Paket'), findsOneWidget);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/app_tutorial_home_start_centered.png'),
+      );
+
+      // 3/12 Cruise Mode, Pflicht-Aktion: Routensuche in der Attrappe.
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
       expect(find.text('Cruise Mode'), findsWidgets);
-      // Pflicht-Aktion: Routensuche in der Attrappe starten
       await tester.tap(find.text('Route suchen'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Route gefunden'), findsOneWidget);
+      expect(find.textContaining('Beispielroute'), findsOneWidget);
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/app_tutorial_cruise_nav_only.png'),
       );
 
+      // 4/12 Favoriten, Pflicht-Aktion: Adresse antippen, dann Stern.
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Gruppen: synchron fahren'), findsWidgets);
+      expect(find.text('Favoriten'), findsWidgets);
+      await tester.tap(find.text('Feldkirch, Vorarlberg'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(CupertinoIcons.star));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Übung'), findsOneWidget);
+
+      // 5/12 Nach der Fahrt: ehrliche Vorschau ohne Knöpfe.
+      await tester.tap(find.text('Weiter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nach der Fahrt'), findsWidgets);
+      expect(find.textContaining('Nur eine Vorschau'), findsOneWidget);
+
+      // 6/12 Gruppen & Fahrten
+      await tester.tap(find.text('Weiter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Gruppen & Fahrten'), findsWidgets);
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/app_tutorial_rides_tab_centered.png'),
       );
 
+      // 7/12 Feed
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
       expect(find.text('Feed'), findsWidgets);
@@ -72,6 +102,16 @@ void main() {
         matchesGoldenFile('goldens/app_tutorial_feed_tab_centered.png'),
       );
 
+      // 8/12 Chats: der Reiter, der bis 19.08. keinen Schritt hatte.
+      await tester.tap(find.text('Weiter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Chats'), findsWidgets);
+      await expectLater(
+        find.byType(MaterialApp),
+        matchesGoldenFile('goldens/app_tutorial_chats_tab_centered.png'),
+      );
+
+      // 9/12 Entdecken
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
       expect(find.text('Entdecken'), findsWidgets);
@@ -80,16 +120,16 @@ void main() {
         matchesGoldenFile('goldens/app_tutorial_discover_tab_centered.png'),
       );
 
+      // 10/12 Analytics (Reiter 3) und 11/12 Profil & Garage (Reiter 4).
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      expect(find.text('Favoriten'), findsWidgets);
-      // Pflicht-Aktion: Adresse antippen, dann mit dem Stern merken
-      await tester.tap(find.text('Feldkirch, Vorarlberg'));
+      expect(find.text('Analytics'), findsWidgets);
+      await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(CupertinoIcons.star));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Gemerkt!'), findsOneWidget);
+      expect(find.text('Profil & Garage'), findsWidgets);
+      expect(find.text('Meine Garage'), findsOneWidget);
 
+      // 12/12 Abschluss
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
       expect(find.text('Du bist startklar!'), findsWidgets);

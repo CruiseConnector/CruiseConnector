@@ -12644,6 +12644,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         baseXp: snapshot.xpBreakdown.baseXp,
         streakDays: snapshot.xpBreakdown.streakDays,
         xpMultiplier: snapshot.xpBreakdown.multiplier,
+        // 2026-08-19 (vucko): Nur fuer den Begruendungstext der Rechnung —
+        // im Multiplikator steckt die Bonuswoche schon drin. Derselbe
+        // eingefrorene Wert, mit dem gebucht wird.
+        doppelXpAktiv: _abschlussDoppelXpAktiv,
         routeCoordinates: snapshot.coordinates,
         routeSegments: snapshot.segments,
         drivenSegments: drivenSnap.segments.isEmpty
@@ -19566,6 +19570,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       autobahnGemieden:
           _activeAvoidHighways || _avoidHighways || _wiederaufnahmeAutobahnGemieden,
       streakTage: _xpStreakDays,
+      // 2026-08-19 (vucko „gebucht 204, angezeigt +102"): Auch die Bonuswoche
+      // einfrieren. Sie entscheidet seit dem Umbau ueber die BASIS des
+      // Multiplikators (2,0 statt 1,0). Laeuft sie zwischen dem Anzeigen des
+      // Abschluss-Sheets und dem Speichern ab, rechnete die Anzeige mit 2,0
+      // und die Buchung mit 1,0 — dieselbe Fahrt, zwei Zahlen.
+      doppelXpAktiv: StarterAufgabenService.instance.doppelXpAktiv,
       topSpeedKmh: _maxSpeedMps * 3.6,
       geplanteKm: _istWiederaufnahme ? _geplanteFahrtKm : null,
     );
@@ -19591,6 +19601,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       (_activeAvoidHighways || _avoidHighways || _wiederaufnahmeAutobahnGemieden);
   int get _abschlussStreakTage =>
       _eingefrorenerAbschluss?.streakTage ?? _xpStreakDays;
+  bool get _abschlussDoppelXpAktiv =>
+      _eingefrorenerAbschluss?.doppelXpAktiv ??
+      StarterAufgabenService.instance.doppelXpAktiv;
   double get _abschlussTopSpeedKmh =>
       _eingefrorenerAbschluss?.topSpeedKmh ?? (_maxSpeedMps * 3.6);
   List<List<double>> get _abschlussTrackGeometrie =>
@@ -19747,6 +19760,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     return GamificationService.countCurves(coordinates);
   }
 
+  /// DIE eine Abschluss-Rechnung. Anzeige (Abschluss-Sheet, XP-Popup),
+  /// gespeicherte Route und Fahrt-Session lesen ausschliesslich hier.
+  ///
+  /// 2026-08-19 (vucko, gemessen: „gebucht 204, angezeigt +102"): Vorher
+  /// rechnete diese Stelle mit dem LIVE-Zustand (`_xpStreakDays`,
+  /// `_selectedStyle`), die Buchung dagegen mit dem eingefrorenen
+  /// (`_abschlussStreakTage`, `_abschlussStil`). Nach dem Reset am Fahrtende
+  /// sind das zwei verschiedene Werte — Zahl und Fortschrittsbalken im selben
+  /// Fenster widersprachen sich. Jetzt kommt alles aus dem eingefrorenen
+  /// Abschluss-Stand, inklusive der Bonuswoche.
   RouteXpBreakdown _calculateCompletionXpBreakdown({
     required double creditedDistanceKm,
     required int curves,
@@ -19754,8 +19777,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     return GamificationService.calculateRouteXpBreakdown(
       distanceKm: creditedDistanceKm,
       curves: curves,
-      style: _selectedStyle,
-      streakDays: _xpStreakDays,
+      style: _abschlussStil,
+      streakDays: _abschlussStreakTage,
+      doppelXpAktiv: _abschlussDoppelXpAktiv,
     );
   }
 
@@ -19885,6 +19909,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         baseXp: snapshot.xpBreakdown.baseXp,
         streakDays: snapshot.xpBreakdown.streakDays,
         xpMultiplier: snapshot.xpBreakdown.multiplier,
+        // 2026-08-19 (vucko): Nur fuer den Begruendungstext der Rechnung —
+        // im Multiplikator steckt die Bonuswoche schon drin. Derselbe
+        // eingefrorene Wert, mit dem gebucht wird.
+        doppelXpAktiv: _abschlussDoppelXpAktiv,
         routeCoordinates: snapshot.coordinates,
         routeSegments: snapshot.segments,
         drivenSegments: drivenSnap.segments.isEmpty
@@ -19957,6 +19985,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         baseXp: snapshot.xpBreakdown.baseXp,
         streakDays: snapshot.xpBreakdown.streakDays,
         xpMultiplier: snapshot.xpBreakdown.multiplier,
+        // 2026-08-19 (vucko): Nur fuer den Begruendungstext der Rechnung —
+        // im Multiplikator steckt die Bonuswoche schon drin. Derselbe
+        // eingefrorene Wert, mit dem gebucht wird.
+        doppelXpAktiv: _abschlussDoppelXpAktiv,
         routeCoordinates: snapshot.coordinates,
         routeSegments: snapshot.segments,
         drivenSegments: drivenSnap.segments.isEmpty
@@ -20295,10 +20327,14 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpBase: xpBreakdown.baseXp,
           xpMultiplier: xpBreakdown.multiplier,
           xpStreakDays: xpBreakdown.streakDays,
-          // Doppel-XP-Woche des Starter-Pakets (2026-08-14): genau EINE Regelstelle.
-      xpAwarded: StarterAufgabenService.instance.wendeBonusAn(
-        xpBreakdown.totalXp,
-      ),
+          // 2026-08-19 (vucko, gemessen: „gebucht 204, angezeigt +102"): Hier
+          // stand `StarterAufgabenService.wendeBonusAn(xpBreakdown.totalXp)`,
+          // waehrend `xpAwardedForResult` (= das, was Sheet und XP-Popup
+          // zeigen) die unverdoppelte Zahl bekam. Die Bonuswoche steckt jetzt
+          // in der Basis des Multiplikators; gebucht wird woertlich dieselbe
+          // Variable, die nach aussen geht — auseinanderlaufen kann sie nicht
+          // mehr.
+          xpAwarded: xpAwardedForResult,
           completedAtEnd: completed,
           groupId: widget.groupId,
           // Foto direkt an die gespeicherte Route hängen → es überlebt die
@@ -20564,11 +20600,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // → profiles.total_xp via calculateAndSync), nicht nur im Abschluss-Sheet
     // angezeigt. _xpStreakDays = Streak für DIESE Fahrt (inkl. heute, via
     // _prepareXpStreakContext) und ist exakt die Zahl, die das Sheet anzeigt.
-    final xpBreakdown = GamificationService.calculateRouteXpBreakdown(
-      distanceKm: drivenKm,
-      curves: 0,
-      style: _abschlussStil,
-      streakDays: _abschlussStreakTage,
+    // 2026-08-19: Eigene Rechnung raus, gemeinsamer Helfer rein — das ist die
+    // Stelle, die `user_drive_sessions.xp_awarded` schreibt und damit ueber
+    // Level, Rangliste und Badges entscheidet. Sie MUSS zeichengleich mit der
+    // Anzeige sein.
+    final xpBreakdown = _calculateCompletionXpBreakdown(
+      creditedDistanceKm: drivenKm,
+      curves: _abschlussXpKurven,
     );
     final recordedSession = await GamificationService.recordDriveSession(
       distanceKm: drivenKm,
@@ -20578,10 +20616,10 @@ class _CruiseModePageState extends State<CruiseModePage>
       routeType: _abschlussIstRundkurs ? 'ROUND_TRIP' : 'POINT_TO_POINT',
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
-      // Doppel-XP-Woche des Starter-Pakets (2026-08-14): genau EINE Regelstelle.
-      xpAwarded: StarterAufgabenService.instance.wendeBonusAn(
-        xpBreakdown.totalXp,
-      ),
+      // 2026-08-19: Keine nachtraegliche Verdopplung mehr — die Bonuswoche
+      // sitzt in der Basis des Multiplikators (2,0 statt 1,0). Beides zusammen
+      // hiesse doppelt rechnen.
+      xpAwarded: xpBreakdown.totalXp,
       // 2026-06-23 (vucko X3): Gruppen-Fahrt taggen + Top-Speed mitschreiben
       // -> speist die deterministische Gruppen-Rangliste in der Lobby.
       groupId: widget.groupId,
@@ -21228,6 +21266,7 @@ class _AbschlussStand {
     required this.istAufzeichnung,
     required this.autobahnGemieden,
     required this.streakTage,
+    required this.doppelXpAktiv,
     required this.topSpeedKmh,
     this.geplanteKm,
   });
@@ -21247,6 +21286,11 @@ class _AbschlussStand {
   final bool istAufzeichnung;
   final bool autobahnGemieden;
   final int streakTage;
+
+  /// 2026-08-19: Lief die Doppel-XP-Woche zum Zeitpunkt des Abschlusses? Sie
+  /// bestimmt die Basis des Multiplikators (2,0 gegen 1,0) und muss deshalb
+  /// fuer Anzeige UND Buchung derselbe Wert sein.
+  final bool doppelXpAktiv;
   final double topSpeedKmh;
 
   /// 2026-08-16 (T2): geplante Gesamtlaenge einer WIEDERAUFGENOMMENEN Fahrt

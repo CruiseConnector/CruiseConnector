@@ -11,6 +11,7 @@ import 'package:cruise_connect/data/services/completion_title_generator.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/xp_rechnung_animation.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
   required BuildContext context,
@@ -108,6 +109,7 @@ class CruiseCompletionDialog extends StatefulWidget {
     this.baseXp,
     this.streakDays = 1,
     this.xpMultiplier = 1.0,
+    this.doppelXpAktiv = false,
     this.isEarlyStop = false,
     this.belowMinimum = false,
     this.routeStyle = '',
@@ -140,6 +142,11 @@ class CruiseCompletionDialog extends StatefulWidget {
   final int? baseXp;
   final int streakDays;
   final double xpMultiplier;
+
+  /// 2026-08-19: Laeuft die Doppel-XP-Woche des Starter-Pakets? Sie steckt
+  /// bereits in [xpMultiplier] (Basis 2,0 statt 1,0) und dient hier NUR dem
+  /// Begruendungstext der Rechnung. Nichts wird davon neu berechnet.
+  final bool doppelXpAktiv;
   /// 2026-08-04 (vucko „wenn man Speichern oder Verwerfen klickt, dauert es
   /// 15-20 Sekunden, bis reagiert wird"): Der Rückruf gibt NICHTS mehr zurück
   /// und wird NICHT mehr abgewartet. Das Sheet schließt sofort; die Seite
@@ -225,7 +232,23 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     _xpAnimation = IntTween(begin: 0, end: widget.xpEarned).animate(
       CurvedAnimation(parent: _xpController, curve: Curves.easeOutCubic),
     );
-    _xpController.forward();
+  }
+
+  /// 2026-08-19 (Bewegungs-Einstellung des Systems): „Bewegung reduzieren"
+  /// heisst Endwert sofort statt Hochzaehlen. Erst hier moeglich — in
+  /// `initState` gibt es noch kein MediaQuery.
+  bool _zaehlerGestartet = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_zaehlerGestartet) return;
+    _zaehlerGestartet = true;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _xpController.value = 1.0;
+    } else {
+      _xpController.forward();
+    }
   }
 
   @override
@@ -506,9 +529,17 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               mainAxisSize: MainAxisSize.min,
               children: [
                 _buildStatsGrid(),
-                if (_showStreakBonus) ...[
+                if (_zeigtXpRechnung) ...[
                   const SizedBox(height: 8),
-                  _buildStreakBonusNote(),
+                  XpRechnungAnimation(
+                    // Alle vier Zahlen kommen unveraendert aus derselben
+                    // Aufschluesselung, die auch gebucht wird.
+                    basisXp: widget.baseXp ?? widget.xpEarned,
+                    multiplikator: widget.xpMultiplier,
+                    gesamtXp: widget.xpEarned,
+                    streakTage: widget.streakDays,
+                    doppelXpAktiv: widget.doppelXpAktiv,
+                  ),
                 ],
                 const SizedBox(height: 10),
                 _RoutePreviewCard(
@@ -708,7 +739,8 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     final xpLabel = widget.belowMinimum
         ? 'XP nicht aktiv'
         : widget.xpMultiplier > 1
-        ? 'XP x${widget.xpMultiplier.toStringAsFixed(2)}'
+        // 2026-08-19: deutsch mit Komma, wie ueberall sonst in der App.
+        ? 'XP ×${multiplikatorText(widget.xpMultiplier)}'
         : 'XP';
     return Column(
       children: [
@@ -781,46 +813,15 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
     );
   }
 
-  bool get _showStreakBonus =>
-      !widget.belowMinimum && widget.xpMultiplier > 1 && widget.baseXp != null;
-
-  Widget _buildStreakBonusNote() {
-    // 2026-06-15 (vucko): den ECHT verdienten Streak-Bonus zeigen (klarer +
-    // belohnender als die nackte Rechnung), im selben Accent-Pill — kein
-    // Layout-Eingriff. Multiplikator deutsch mit Komma.
-    final base = widget.baseXp ?? 0;
-    final bonusXp = (base * (widget.xpMultiplier - 1)).round();
-    final mulText = widget.xpMultiplier.toStringAsFixed(1).replaceAll('.', ',');
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: AppAccentColors.accent.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AppAccentColors.accent.withValues(alpha: 0.25),
-        ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text('🔥', style: TextStyle(fontSize: 13)),
-          const SizedBox(width: 7),
-          Flexible(
-            child: Text(
-              '${widget.streakDays} ${widget.streakDays == 1 ? 'Tag' : 'Tage'} Streak · +$bonusXp XP Bonus (×$mulText)',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  /// 2026-08-19 (vucko): „ich moechte das es bei der post route page eine gute
+  /// animation gibt wenn man den multiplikator bekommt oder eine streak hat".
+  ///
+  /// Frueher haderte diese Bedingung zusaetzlich mit `xpMultiplier > 1` — ohne
+  /// Serie und ohne Bonuswoche stand ueberhaupt nichts da, und der Fahrer sah
+  /// nur eine nackte Zahl in der Kachel. Die Rechnung erscheint jetzt immer,
+  /// wenn es XP gab; ohne Multiplikator zeigt sie eben nur die eine Zeile.
+  bool get _zeigtXpRechnung =>
+      !widget.belowMinimum && widget.xpEarned > 0 && widget.baseXp != null;
 
   Widget _buildActionRow() {
     // 2026-08-03 (vucko Route-Aufzeichnen): Eigene Zeile statt vierter Button in

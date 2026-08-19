@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
@@ -162,28 +163,49 @@ class GamificationService {
     required double distanceKm,
     required int curves,
     required String style,
-    int streakDays = 1,
+    int streakDays = 0,
+    bool? doppelXpAktiv,
   }) {
     return calculateRouteXpBreakdown(
       distanceKm: distanceKm,
       curves: curves,
       style: style,
       streakDays: streakDays,
+      doppelXpAktiv: doppelXpAktiv,
     ).totalXp;
   }
 
+  /// 2026-08-19 (vucko): „wenn man es dann vergisst kommt man ganz normal auf
+  /// 1,00xp nach dem boost."
+  ///
+  /// Frueher hob diese Stelle jede Fahrt auf mindestens einen Streak-Tag an
+  /// (`math.max(1, streakDays)`), zusaetzlich zur gleichen Anhebung in
+  /// [calculateStreakDaysForRide]. Eine Fahrt konnte deshalb NIE die reine
+  /// Basis bekommen: 1,10x war das Minimum, 1,00x unerreichbar. Das
+  /// widerspricht der neuen Regel, in der die Basis der Ruecksetzwert ist.
+  /// Die Anhebung ist deshalb weg — der Wert wird nur noch bei Null
+  /// abgeschnitten.
+  ///
+  /// Praktisch verliert dadurch niemand XP: die Fahrt selbst faellt auf einen
+  /// Fahrtag, also liefert [calculateStreakDaysForRide] von sich aus
+  /// mindestens 1. Die 1,00x taucht nur dort auf, wo bewusst ohne Serie
+  /// gerechnet wird (Vorschau auf der Startseite, Anzeige nach dem Verfall).
   static RouteXpBreakdown calculateRouteXpBreakdown({
     required double distanceKm,
     required int curves,
     required String style,
-    int streakDays = 1,
+    int streakDays = 0,
+    bool? doppelXpAktiv,
   }) {
     final distanceXp = calculateDriveXp(distanceKm);
-    final safeStreakDays = math.max(1, streakDays);
+    final safeStreakDays = math.max(0, streakDays);
     // 2026-06-15 (vucko): Streak-Multiplikator JETZT echt auf die Distanz-XP
     // anwenden (vorher hart 1.0 = wirkungslos). Aufgerundet, damit der Bonus
     // nie verschluckt wird.
-    final multiplier = streakMultiplierForDays(safeStreakDays);
+    final multiplier = streakMultiplierForDays(
+      safeStreakDays,
+      doppelXpAktiv: doppelXpAktiv,
+    );
     final totalXp = (distanceXp * multiplier).round();
     return RouteXpBreakdown(
       distanceXp: distanceXp,
@@ -237,7 +259,8 @@ class GamificationService {
     required int curves,
     required String style,
     bool completed = false,
-    int streakDays = 1,
+    int streakDays = 0,
+    bool? doppelXpAktiv,
   }) {
     final creditedDistanceKm = creditedDistanceKmForProgress(
       plannedDistanceKm: plannedDistanceKm,
@@ -249,56 +272,139 @@ class GamificationService {
       curves: creditedDistanceKm > 0 ? curves : 0,
       style: style,
       streakDays: streakDays,
+      doppelXpAktiv: doppelXpAktiv,
     );
   }
 
-  /// 2026-06-15 (vucko): XP-Streak-Multiplikator. Pro aktivem Tag +0,1, KEIN Cap:
-  /// 1 Tag→1,1 · 2→1,2 · 3→1,3 · … · 10→2,0 · 11→2,1 … Wird auf die Distanz-XP
-  /// jeder Fahrt angewandt UND fix in user_drive_sessions.xp_awarded geschrieben
-  /// (konto-relevant, siehe [calculateRouteXpBreakdown] + recordDriveSession),
-  /// nicht nur im Frontend.
-  static double streakMultiplierForDays(int streakDays) {
-    return 1.0 + math.max(0, streakDays) * 0.1;
+  /// Basis des Multiplikators OHNE laufende Doppel-XP-Woche.
+  static const double basisOhneBonus = 1.0;
+
+  /// Basis des Multiplikators WAEHREND der Doppel-XP-Woche (Starter-Paket).
+  static const double basisMitDoppelXp = 2.0;
+
+  /// Zuwachs je Tag der laufenden Serie.
+  static const double proStreakTag = 0.1;
+
+  /// 2026-08-19 (vucko): „man soll auf den 2 fachen multiplikator der eine
+  /// woche geht aufbauen bspw nach einem tg 2,1 nach dem zweiten tag 2,2 usw.
+  /// aber wenn man bei 2,8 oder 3,2x mulitplikator einen tag vergisst, kommt
+  /// man bei der anfangswoche zurueck auf 2 solang der double xp multiplikator
+  /// laeuft und wenn die 7 tage vorbei sind und man keine double xp mehr hat,
+  /// ist die basis 1,00 xp also wenn man es dann vergisst kommt man ganz
+  /// normal auf 1,00xp nach dem boost."
+  ///
+  /// Multiplikator = BASIS + Streak-Tage * 0,1, weiterhin ohne Deckel.
+  /// BASIS ist 2,0, solange die Doppel-XP-Woche laeuft, danach 1,0.
+  ///
+  /// WICHTIG — die Verdopplung steckt jetzt HIER und nirgends sonst. Bis zum
+  /// 19.08. verdoppelte `StarterAufgabenService.wendeBonusAn` zusaetzlich die
+  /// fertigen XP. Beides zusammen wuerde doppelt rechnen. Nachgerechnet an
+  /// Streak 3 in der Bonuswoche, 1000 XP Distanz-Basis:
+  ///   alt: 1000 * 1,3 * 2 = 2600 XP
+  ///   neu: 1000 * (2,0 + 0,3) = 2300 XP
+  /// Der Rueckgang ist beabsichtigt; `wendeBonusAn` reicht seitdem nur noch
+  /// durch.
+  ///
+  /// [doppelXpAktiv] ist bewusst optional: bleibt es offen, fragt die Rechnung
+  /// den Starter-Dienst selbst. So bekommen auch die Aufrufer die richtige
+  /// Basis, die von der Bonuswoche gar nichts wissen (Abschluss-Sheet,
+  /// Startseite, Nachbuchung).
+  static double streakMultiplierForDays(int streakDays, {bool? doppelXpAktiv}) {
+    final bonusLaeuft =
+        doppelXpAktiv ?? StarterAufgabenService.instance.doppelXpAktiv;
+    final basis = bonusLaeuft ? basisMitDoppelXp : basisOhneBonus;
+    return basis + math.max(0, streakDays) * proStreakTag;
   }
 
+  /// 2026-08-19 (vucko): „wenn man eine Streak hat und einen Tag vergisst, das
+  /// man die moeglichkeit hat die streak wieder zu entfachen aber wenn man die
+  /// app zwei tage nicht verwendet und davor eine streak hatte, kommt man
+  /// wieder auf die basisstreak ausser in der double xp woche."
+  ///
+  /// Schonfrist: EIN Fehltag reisst die Serie nicht. Ab diesem Fehltag laeuft
+  /// sie sieben Tage; ein ZWEITER Fehltag darin beendet sie. Zwei Fehltage am
+  /// Stueck sind der haeufigste Fall davon und setzen die Serie damit auf 0
+  /// zurueck — der Multiplikator faellt dann auf die reine Basis (2,00x in der
+  /// Bonuswoche, sonst 1,00x).
+  static const int schonfristTage = 7;
+
+  /// Zaehlt die Serie rueckwaerts ab [ab] und beruecksichtigt die Schonfrist.
+  /// Fehltage zaehlen NICHT mit, sie unterbrechen nur (oder eben nicht).
+  static int _serieRueckwaerts(Set<DateTime> fahrTage, DateTime ab) {
+    var tag = ab;
+    var serie = 0;
+    DateTime? offenerFehltag;
+    // Die Schleife bricht spaetestens beim zweiten Fehltag ab; die Obergrenze
+    // ist reine Absicherung gegen kaputte Datumswerte.
+    for (var schritt = 0; schritt < 4000; schritt++) {
+      if (fahrTage.contains(tag)) {
+        serie++;
+      } else if (offenerFehltag != null &&
+          _tageDazwischen(offenerFehltag, tag) <= schonfristTage) {
+        break;
+      } else {
+        offenerFehltag = tag;
+      }
+      tag = _vortag(tag);
+    }
+    return serie;
+  }
+
+  /// Ganze Kalendertage zwischen zwei Tagesstempeln. Ueber die UTC-Kopie
+  /// gerechnet, damit eine Zeitumstellung (23- oder 25-Stunden-Tag) die
+  /// Differenz nicht um einen Tag verschiebt.
+  static int _tageDazwischen(DateTime spaeter, DateTime frueher) {
+    return DateTime.utc(
+      spaeter.year,
+      spaeter.month,
+      spaeter.day,
+    ).difference(DateTime.utc(frueher.year, frueher.month, frueher.day)).inDays;
+  }
+
+  /// Der Vortag als Tagesstempel. Ueber den Konstruktor (Tag 0 = letzter Tag
+  /// des Vormonats) statt ueber `subtract(Duration(days: 1))`, weil das an
+  /// Zeitumstellungen auf 23:00 des Vortags landen wuerde.
+  static DateTime _vortag(DateTime tag) {
+    return DateTime(tag.year, tag.month, tag.day - 1);
+  }
+
+  /// Serie fuer die ANZEIGE (Startseite, Auswertung).
+  ///
+  /// Der heutige Tag ist noch nicht vorbei: ist heute noch nicht gefahren,
+  /// gilt das NICHT als Fehltag, sondern die Zaehlung setzt bei gestern an.
+  /// Genau das ist die „Moeglichkeit, die Streak wieder zu entfachen" — die
+  /// Zahl bleibt sichtbar, bis der zweite Fehltag sie reisst.
   static int calculateDrivingStreakDays(
     Iterable<UserDriveSession> sessions, {
     DateTime? now,
   }) {
-    final today = _dateOnly((now ?? DateTime.now()).toLocal());
-    final driveDays = _driveDays(sessions);
-    if (driveDays.isEmpty) return 0;
-
-    var checkDay = today;
-    if (!driveDays.contains(checkDay)) {
-      checkDay = checkDay.subtract(const Duration(days: 1));
-    }
-
-    var streak = 0;
-    while (driveDays.contains(checkDay)) {
-      streak++;
-      checkDay = checkDay.subtract(const Duration(days: 1));
-    }
-    return streak;
+    final heute = _dateOnly((now ?? DateTime.now()).toLocal());
+    final fahrTage = _driveDays(sessions);
+    if (fahrTage.isEmpty) return 0;
+    final start = fahrTage.contains(heute) ? heute : _vortag(heute);
+    return _serieRueckwaerts(fahrTage, start);
   }
 
+  /// Serie fuer die GUTSCHRIFT einer konkreten Fahrt. Der Fahrttag selbst
+  /// zaehlt mit, das Ergebnis ist deshalb immer mindestens 1.
   static int calculateStreakDaysForRide(
     Iterable<UserDriveSession> existingSessions, {
     DateTime? rideDate,
   }) {
-    final rideDay = _dateOnly((rideDate ?? DateTime.now()).toLocal());
-    final driveDays = _driveDays(existingSessions)..add(rideDay);
-
-    var streak = 0;
-    var checkDay = rideDay;
-    while (driveDays.contains(checkDay)) {
-      streak++;
-      checkDay = checkDay.subtract(const Duration(days: 1));
-    }
-    return math.max(1, streak);
+    final fahrtTag = _dateOnly((rideDate ?? DateTime.now()).toLocal());
+    final fahrTage = _driveDays(existingSessions)..add(fahrtTag);
+    return _serieRueckwaerts(fahrTage, fahrtTag);
   }
 
   static Future<int> getStreakDaysForNextRide({DateTime? rideDate}) async {
+    // 2026-08-19: Die Basis des Multiplikators haengt an der Doppel-XP-Woche,
+    // und die liegt im Geraetespeicher. `doppelXpAktiv` meldet vor dem Laden
+    // immer false — eine Fahrt kurz nach dem Start haette dann mit Basis 1,0
+    // statt 2,0 gerechnet. Der Fahrt-Ablauf ruft diese Methode vor jeder
+    // Fahrt auf (cruise_mode_page: _prepareXpStreakContext), also wird hier
+    // sichergestellt, dass der Bonus-Zustand bekannt ist. `load()` ist
+    // idempotent und kehrt nach dem ersten Mal sofort zurueck.
+    await StarterAufgabenService.instance.load();
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return 1;
 
@@ -337,7 +443,9 @@ class GamificationService {
   /// minus Fahrdauer geschaetzt (lokale Zeit). „Vor 8 Uhr gestartet" und
   /// „nach 22 Uhr unterwegs" verlangen mindestens 5 km, damit ein 200-m-Test
   /// vor der Haustuer nicht zaehlt.
-  static SessionKennzahlen sessionKennzahlen(Iterable<UserDriveSession> sessions) {
+  static SessionKennzahlen sessionKennzahlen(
+    Iterable<UserDriveSession> sessions,
+  ) {
     var frueh = 0;
     var nacht = 0;
     var wochenende = 0;
@@ -355,7 +463,8 @@ class GamificationService {
         if (ende.hour >= 22 || start.hour >= 22 || ende.hour < 4) nacht++;
       }
       if (!s.completedAtEnd) continue;
-      if (ende.weekday == DateTime.saturday || ende.weekday == DateTime.sunday) {
+      if (ende.weekday == DateTime.saturday ||
+          ende.weekday == DateTime.sunday) {
         wochenende++;
       }
       final stil = s.routeStyle?.trim();
@@ -766,14 +875,18 @@ class GamificationService {
     // 3. Level aus XP berechnen
     final level = UserLevel.fromXp(totalXp.toDouble());
 
-    final extraCounts = await Future.wait<int>([
-      _countCreatedGroups(userId),
-      _countRoutePosts(userId),
-      _countSavedRouteReferences(userId),
-    ]);
-    final createdGroupCount = extraCounts[0];
-    final routePostCount = extraCounts[1];
-    final savedRouteReferenceCount = extraCounts[2];
+    // 2026-08-19 (vucko, Starter-Aufgabe „der erste post"): Der Zaehler lief
+    // hier bisher nur ueber Posts MIT geteilter Route (badge_09). Fuer die
+    // Aufgabe zaehlt jeder Post, auch der reine Foto-Post. Beide Zahlen
+    // kommen jetzt aus derselben, unveraenderten Abfrage — kein zweiter
+    // Netzweg.
+    final gruppenZaehler = _countCreatedGroups(userId);
+    final postZaehler = _countPosts(userId);
+    final gespeicherteZaehler = _countSavedRouteReferences(userId);
+    final createdGroupCount = await gruppenZaehler;
+    final postZahlen = await postZaehler;
+    final savedRouteReferenceCount = await gespeicherteZaehler;
+    final routePostCount = postZahlen.mitRoute;
 
     // 4. Badges prüfen
     //
@@ -814,6 +927,34 @@ class GamificationService {
     // erhalten es dadurch beim ersten Sync nach dem Update automatisch als
     // newBadgeId → das Unlock-Popup (Verleih-Animation) feuert von selbst.
     currentlyQualifiedBadges.add(Badge.membershipBadgeId);
+
+    // 2026-08-19 (vucko): „das startklar abzeichen hat keiner."
+    //
+    // GEMESSEN am 19.08.: badge_16 hatte 0 von 152 Profilen — auch die beiden
+    // Nutzer nicht, deren Doppel-XP-Woche nachweislich lief, die also alle
+    // Starter-Aufgaben erledigt hatten. Ursache: Die Vergabe haing allein am
+    // einmaligen Ereignis `paketFrischVerdient` in starter_paket_karte.dart,
+    // und genau in diesem Moment verwarf die Datenbank-Whitelist noch alles ab
+    // badge_15 (repariert erst am 18.08. mit 20260818230000). Ein Ereignis,
+    // das nur einmal feuert, kann man nicht nachholen — hier stand nichts, was
+    // badge_16 nachtraegt.
+    //
+    // JETZT aus dem ZUSTAND: Der Abgleich zieht den Stand vom Profil (falls
+    // das Geraet gewechselt hat), leitet die drei Fahr- und Social-Aufgaben
+    // aus denselben Kennzahlen ab, die oben schon fuer die Badges berechnet
+    // wurden, und `paketVerdient` sagt danach, ob das Abzeichen zusteht. Diese
+    // Pruefung laeuft bei JEDEM Sync, also kommt das Abzeichen auch Wochen
+    // spaeter noch an.
+    final starter = StarterAufgabenService.instance;
+    await starter.synchronisiereMitProfil();
+    await starter.synchronisiereAusKennzahlen(
+      posts: postZahlen.gesamt,
+      abgeschlosseneFahrten: completedSessions.length,
+      abgeschlosseneGruppenfahrten: completedGroupRides,
+    );
+    if (starter.paketVerdient) {
+      currentlyQualifiedBadges.add(Badge.starterBadgeId);
+    }
 
     // 5. Bisherige Badges laden und neue bestimmen
     List<String> previousBadges = [];
@@ -933,19 +1074,25 @@ class GamificationService {
     }
   }
 
-  static Future<int> _countRoutePosts(String userId) async {
+  /// Posts des Nutzers: [gesamt] fuer die Starter-Aufgabe „der erste post",
+  /// [mitRoute] fuer die Routen-Badges. 2026-08-19 aus `_countRoutePosts`
+  /// hervorgegangen; die Abfrage ist dieselbe geblieben.
+  static Future<({int gesamt, int mitRoute})> _countPosts(
+    String userId,
+  ) async {
     try {
       final rows = await _db
           .from('posts')
           .select('shared_route_id')
           .eq('user_id', userId);
-      return (rows as List)
-          .whereType<Map>()
-          .where((row) => row['shared_route_id'] != null)
-          .length;
+      final liste = (rows as List).whereType<Map>().toList();
+      return (
+        gesamt: liste.length,
+        mitRoute: liste.where((row) => row['shared_route_id'] != null).length,
+      );
     } catch (e) {
-      debugPrint('[Gamification] Routenpost-Zähler fehlgeschlagen: $e');
-      return 0;
+      debugPrint('[Gamification] Post-Zähler fehlgeschlagen: $e');
+      return (gesamt: 0, mitRoute: 0);
     }
   }
 

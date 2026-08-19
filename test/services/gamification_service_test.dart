@@ -53,28 +53,36 @@ void main() {
       expect(breakdown.baseXp, 230);
     });
 
-    test('applies the streak multiplier (1.0 + days*0.1, uncapped) to XP', () {
+    test('applies the streak multiplier (Basis + days*0.1, uncapped) to XP', () {
       // 2026-06-15 (vucko): pro aktivem Tag +0,1, KEIN Cap. Wird auch echt aufs
       // Konto angerechnet (xp_awarded), nicht nur angezeigt.
-      expect(GamificationService.streakMultiplierForDays(0), 1.0);
+      //
+      // 2026-08-19 (vucko): „wenn die 7 tage vorbei sind und man keine double
+      // xp mehr hat, ist die basis 1,00 xp." Die Basis ist seitdem ein
+      // Parameter — ausserhalb der Doppel-XP-Woche 1,0 wie bisher. Die Woche
+      // selbst hat einen eigenen Test (streak_multiplikator_test.dart).
       expect(
-        GamificationService.streakMultiplierForDays(1),
+        GamificationService.streakMultiplierForDays(0, doppelXpAktiv: false),
+        1.0,
+      );
+      expect(
+        GamificationService.streakMultiplierForDays(1, doppelXpAktiv: false),
         closeTo(1.1, 1e-9),
       );
       expect(
-        GamificationService.streakMultiplierForDays(2),
+        GamificationService.streakMultiplierForDays(2, doppelXpAktiv: false),
         closeTo(1.2, 1e-9),
       );
       expect(
-        GamificationService.streakMultiplierForDays(4),
+        GamificationService.streakMultiplierForDays(4, doppelXpAktiv: false),
         closeTo(1.4, 1e-9),
       );
       expect(
-        GamificationService.streakMultiplierForDays(10),
+        GamificationService.streakMultiplierForDays(10, doppelXpAktiv: false),
         closeTo(2.0, 1e-9),
       );
       expect(
-        GamificationService.streakMultiplierForDays(20),
+        GamificationService.streakMultiplierForDays(20, doppelXpAktiv: false),
         closeTo(3.0, 1e-9),
       );
 
@@ -85,6 +93,7 @@ void main() {
           curves: 0,
           style: 'Sport Mode',
           streakDays: 4,
+          doppelXpAktiv: false,
         ),
         140,
       );
@@ -95,6 +104,7 @@ void main() {
           curves: 0,
           style: 'Sport Mode',
           streakDays: 2,
+          doppelXpAktiv: false,
         ),
         276,
       );
@@ -312,25 +322,27 @@ void main() {
     // ~47°N: Meter → Grad ([lng, lat]).
     const mLat = 111000.0;
     const mLng = 111000.0 * 0.6820; // × cos(47°)
-    List<double> at(double eastM, double northM) =>
-        [eastM / mLng, 47.0 + northM / mLat];
+    List<double> at(double eastM, double northM) => [
+      eastM / mLng,
+      47.0 + northM / mLat,
+    ];
 
-    List<List<double>> straight(int n) =>
-        [for (var i = 0; i <= n; i++) at(600.0 * i / n, 0)];
+    List<List<double>> straight(int n) => [
+      for (var i = 0; i <= n; i++) at(600.0 * i / n, 0),
+    ];
 
     // L-Form: 400 m Ost, dann 400 m Nord → genau EINE 90°-Kurve.
     List<List<double>> lBend(int perLeg) => [
-          for (var i = 0; i <= perLeg; i++) at(400.0 * i / perLeg, 0),
-          for (var i = 1; i <= perLeg; i++) at(400.0, 400.0 * i / perLeg),
-        ];
+      for (var i = 0; i <= perLeg; i++) at(400.0 * i / perLeg, 0),
+      for (var i = 1; i <= perLeg; i++) at(400.0, 400.0 * i / perLeg),
+    ];
 
     // Z-/S-Form: Ost, Nord (links), Ost (rechts) → ZWEI Kurven.
     List<List<double>> zBend(int perLeg) => [
-          for (var i = 0; i <= perLeg; i++) at(300.0 * i / perLeg, 0),
-          for (var i = 1; i <= perLeg; i++) at(300.0, 300.0 * i / perLeg),
-          for (var i = 1; i <= perLeg; i++)
-            at(300.0 + 300.0 * i / perLeg, 300.0),
-        ];
+      for (var i = 0; i <= perLeg; i++) at(300.0 * i / perLeg, 0),
+      for (var i = 1; i <= perLeg; i++) at(300.0, 300.0 * i / perLeg),
+      for (var i = 1; i <= perLeg; i++) at(300.0 + 300.0 * i / perLeg, 300.0),
+    ];
 
     test('Gerade Strecke hat 0 Kurven', () {
       expect(GamificationService.countCurves(straight(30)), 0);

@@ -8,10 +8,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// und den Abschluss-Schritt ab. Beitrittsdatum und Belohnungspfad werden
 /// injiziert — kein Supabase im Widget-Test, keine echte XP-Vergabe.
 void main() {
-  // Schritt-Indizes im 7er-Fluss (Willkommen=0 … Abschluss=6).
-  const routeSearchStep = 1;
-  const favoriteStep = 5;
-  const completionStep = 6;
+  // 2026-08-19 (vucko: „schau das das tutorial wirklich die ganze app
+  // erklaert"): Der Fluss ist von 7 auf 12 Schritte gewachsen (Startseite,
+  // Nach der Fahrt, Chats, Analytics, Profil & Garage kamen dazu). Die
+  // Indizes wandern dadurch.
+  // Willkommen=0, Startseite=1, Cruise=2, Favoriten=3, Nach der Fahrt=4,
+  // Gruppen=5, Feed=6, Chats=7, Entdecken=8, Analytics=9, Profil=10,
+  // Abschluss=11.
+  const routeSearchStep = 2;
+  const favoriteStep = 3;
+  const completionStep = 11;
 
   Future<void> pumpOverlay(WidgetTester tester, {required int step}) async {
     SharedPreferences.setMockInitialValues({});
@@ -60,8 +66,12 @@ void main() {
       await tester.tap(find.text('Route suchen'));
       await tester.pumpAndSettle();
 
-      // Lade-Animation durchgelaufen → Route gefunden → Weiter frei.
-      expect(find.textContaining('Route gefunden'), findsOneWidget);
+      // Lade-Animation durchgelaufen → Beispielroute steht → Weiter frei.
+      // 2026-08-19: Der Text sagt jetzt ausdruecklich „Beispielroute" und
+      // nennt die Starter-Aufgabe als NOCH offen — die Attrappe loest keine
+      // echte Suche aus.
+      expect(find.textContaining('Beispielroute'), findsOneWidget);
+      expect(find.textContaining('Starter-Aufgabe'), findsOneWidget);
       expect(weiterButton(tester).onPressed, isNotNull);
     });
   });
@@ -85,7 +95,10 @@ void main() {
       await tester.tap(find.byIcon(CupertinoIcons.star));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Gemerkt!'), findsOneWidget);
+      // 2026-08-19: hiess frueher „Gemerkt! Findest du ab jetzt in deinen
+      // Favoriten." — es wird aber nichts gespeichert.
+      expect(find.textContaining('Übung'), findsOneWidget);
+      expect(find.textContaining('Starter-Aufgabe'), findsOneWidget);
       expect(find.byIcon(CupertinoIcons.star_fill), findsWidgets);
       expect(weiterButton(tester).onPressed, isNotNull);
     });

@@ -757,10 +757,18 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 _buildSectionHeader('GEFAHRENZONE'),
                 _buildSectionContainer([
+                  // 2026-08-19 (vucko): „schau das das tutorial wirklich die
+                  // ganze app erklaert". Der Untertitel versprach schon immer
+                  // fünf Bereiche, das Tutorial hatte aber nur 7 Schritte und
+                  // zeigte Analytics und Profil NIE (kein Schritt mit tab: 3
+                  // oder tab: 4). Jetzt stimmt das Versprechen: 12 Schritte,
+                  // jeder Reiter kommt vor. Der Untertitel nennt die Bereiche
+                  // in der Reihenfolge, in der das Tutorial sie durchgeht.
                   _buildNavTile(
                     'Tutorial nochmal anschauen',
                     Icons.school_outlined,
-                    subtitle: 'Home, Community, Cruise, Analytics und Profil',
+                    subtitle:
+                        'Startseite, Cruise, Community, Analytics, Profil',
                     onTap: _replayAppTutorial,
                   ),
                   const Divider(color: Colors.white10, height: 1),

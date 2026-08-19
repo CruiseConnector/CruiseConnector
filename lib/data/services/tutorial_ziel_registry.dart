@@ -40,6 +40,21 @@ class TutorialZielRegistry {
   static const cruiseSetupHilfe = 'cruise_setup_hilfe';
   static const homeRouteSpeichern = 'home_route_speichern';
 
+  // 2026-08-19 (vucko): „schau das das tutorial wirklich die ganze app
+  // erklaert". Gemessen am 19.08.: das Tutorial hatte 7 Schritte und zeigte
+  // NUR auf den Cruise-Knopf und drei Community-Reiter. Startseite,
+  // Chats-Reiter, Analytics (Reiter 3), Profil (Reiter 4) und die Garage
+  // kamen nicht vor. Diese Schluessel gehoeren zu den neuen Schritten.
+  //
+  // Angehaengt ist bisher nur `communityChats` (community_page.dart). Die
+  // uebrigen Schluessel fragt der Spotlight bereits ab; sobald sie in den
+  // fremden Seiten am Widget haengen, leuchtet der Ring ohne weitere
+  // Aenderung am Overlay. Bis dahin bleibt der Schritt ohne Ring (die Seite
+  // ist trotzdem sichtbar, weil das Overlay auf den Reiter wechselt).
+  static const homeFortschritt = 'home_fortschritt';
+  static const analyticsUebersicht = 'analytics_uebersicht';
+  static const profilGarage = 'profil_garage';
+
   /// Liefert den Key für ein Ziel — legt ihn beim ersten Zugriff an.
   static GlobalKey key(String ziel) =>
       _keys.putIfAbsent(ziel, () => GlobalKey(debugLabel: 'tut_$ziel'));
