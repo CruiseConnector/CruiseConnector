@@ -109,6 +109,22 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
     );
   }
 
+  /// 2026-08-20 (Vucko: „Ich habe es gemeldet, und dann bin ich spaeter wieder
+  /// diese Strasse gefahren, wo eine Baustelle ist"): Seit dem 20.08. lebt eine
+  /// Baustelle bis zu 90 Tage statt zwoelf Stunden. Damit ist das Alter zur
+  /// Entscheidungsgrundlage geworden: „Von der Community gemeldet" sagt bei
+  /// einer zwoelf Tage alten Meldung nichts, „Gemeldet vor 12 Tagen" schon.
+  /// Ohne Gedankenstriche und mit ausgeschriebenen Umlauten.
+  static String _alterText(DateTime createdAt) {
+    final alter = DateTime.now().toUtc().difference(createdAt.toUtc());
+    if (alter.inMinutes < 2) return 'Gerade eben gemeldet';
+    if (alter.inMinutes < 60) return 'Gemeldet vor ${alter.inMinutes} Minuten';
+    if (alter.inHours < 2) return 'Gemeldet vor einer Stunde';
+    if (alter.inHours < 24) return 'Gemeldet vor ${alter.inHours} Stunden';
+    if (alter.inDays < 2) return 'Gemeldet vor einem Tag';
+    return 'Gemeldet vor ${alter.inDays} Tagen';
+  }
+
   Future<void> _vote(bool stillThere) async {
     if (_voting) return;
     setState(() => _voting = true);
@@ -235,7 +251,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Von der Community gemeldet, ist das noch da?',
+                            '${_alterText(incident.createdAt)}, ist das noch da?',
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.65),
                               fontSize: 13,

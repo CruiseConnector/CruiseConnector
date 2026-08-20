@@ -38,6 +38,55 @@ class RoadIncidentReportResult {
   bool get ok => incident != null;
 }
 
+/// 2026-08-20 (Vucko: „Ich habe es gemeldet … und mir wurde nichts angezeigt
+/// von meiner vorherigen Meldung."): Fuehrt [aufruf] mit einem Zeitdeckel aus.
+///
+/// Der Ortsnachweis geht unmittelbar VOR der Meldung raus. Ohne Deckel wuerde
+/// ein haengender Server oder ein Funkloch damit das Melden selbst blockieren,
+/// und die Funktion waere schlechter als vorher. Kommt der Nachweis nicht
+/// durch, ist das Ergebnis false und der Aufrufer meldet trotzdem — die
+/// Meldung lebt dann nur kuerzer.
+///
+/// Eigene Funktion, damit dieses Zeitverhalten ohne Datenbank pruefbar ist.
+Future<bool> ortsnachweisMitDeckel(
+  Future<void> Function() aufruf,
+  Duration? timeout,
+) async {
+  try {
+    final future = aufruf();
+    if (timeout == null) {
+      await future;
+    } else {
+      await future.timeout(timeout);
+    }
+    return true;
+  } catch (e) {
+    debugPrint('[RoadIncident] Position senden fehlgeschlagen: $e');
+    return false;
+  }
+}
+
+/// 2026-08-20 (Vucko: „bin ich spaeter wieder diese Strasse gefahren"): Nur
+/// die Meldungen, die JETZT noch gelten.
+///
+/// Diese Pruefung stand bisher nur im Ladeweg. Die geladene Liste wurde
+/// waehrend der Fahrt NIE erneut gegen die Uhr gehalten: eine Meldung, die um
+/// 14:00 ablief, stand bei einer Fahrt von 13:30 bis 16:00 zweieinhalb Stunden
+/// zu lang auf der Karte, und der Geofence haette danach noch nach ihr
+/// gefragt. Jetzt benutzen Ladeweg und Auffrisch-Takt dieselbe Funktion.
+///
+/// [jetzt] ist nur fuer Tests da; im Betrieb gilt die Uhr.
+List<RoadIncident> nurGueltigeMeldungen(
+  Iterable<RoadIncident> incidents, {
+  DateTime? jetzt,
+}) {
+  final zeitpunkt = (jetzt ?? DateTime.now()).toUtc();
+  return [
+    for (final i in incidents)
+      if (i.active && i.expiresAt.toUtc().isAfter(zeitpunkt)) i,
+  ];
+}
+
 class RoadIncidentService {
   RoadIncidentService._();
   static final RoadIncidentService instance = RoadIncidentService._();
@@ -116,14 +165,31 @@ class RoadIncidentService {
     }
   }
 
-  /// Letzte bekannte Position — NUR waehrend laufender Navigation setzen.
-  /// Sie ist der Beleg dafuer, dass eine Meldung wirklich von vor Ort kommt.
-  Future<void> pushLivePosition(double lat, double lng) async {
-    try {
-      await _db.rpc('set_live_position', params: {'p_lat': lat, 'p_lng': lng});
-    } catch (e) {
-      debugPrint('[RoadIncident] Position senden fehlgeschlagen: $e');
-    }
+  /// Letzte bekannte Position. Sie ist der Beleg dafuer, dass eine Meldung
+  /// wirklich von vor Ort kommt, und entscheidet serverseitig ueber die
+  /// Lebensdauer: mit Beleg lebt eine Baustelle 14 Tage, ohne Beleg 24 Stunden.
+  ///
+  /// 2026-08-20 (Vucko: „Ich habe es gemeldet, und dann bin ich spaeter wieder
+  /// diese Strasse gefahren, wo eine Baustelle ist, und mir wurde nichts
+  /// angezeigt von meiner vorherigen Meldung."): Gemessen wurde diese Position
+  /// bisher NUR aus dem Fahrt-Tracking gesendet, hoechstens einmal pro Minute.
+  /// Der Melde-Knopf ist aber schon sichtbar, sobald die Route bestaetigt ist,
+  /// also vor dem Losfahren. Alle drei ungeprueften Meldungen in der Datenbank
+  /// lebten deshalb genau 15 Minuten. Der Aufrufer sendet die Position jetzt
+  /// zusaetzlich unmittelbar vor jeder Meldung.
+  ///
+  /// [timeout] deckelt die Wartezeit: ohne Deckel wuerde ein haengender Server
+  /// oder ein Funkloch das Melden blockieren, und dann waere die Funktion
+  /// schlechter als vorher. Rueckgabe sagt, ob der Beleg wirklich ankam.
+  Future<bool> pushLivePosition(
+    double lat,
+    double lng, {
+    Duration? timeout,
+  }) async {
+    return ortsnachweisMitDeckel(
+      () => _db.rpc('set_live_position', params: {'p_lat': lat, 'p_lng': lng}),
+      timeout,
+    );
   }
 
   /// Beim Fahrtende wieder loeschen (vuckos Vorgabe: keine Standortdaten
@@ -157,15 +223,14 @@ class RoadIncidentService {
       final out = <RoadIncident>[];
       for (final row in rows) {
         try {
-          final incident = RoadIncident.fromJson(
-            Map<String, dynamic>.from(row),
-          );
-          if (incident.active && !incident.isExpired) out.add(incident);
+          out.add(RoadIncident.fromJson(Map<String, dynamic>.from(row)));
         } catch (e) {
           debugPrint('[RoadIncident] parse failed: $e');
         }
       }
-      return out;
+      // Dieselbe Pruefung wie im Auffrisch-Takt der Fahransicht — eine Quelle,
+      // damit beide nicht auseinanderlaufen.
+      return nurGueltigeMeldungen(out);
     } catch (e) {
       debugPrint('[RoadIncident] fetch failed: $e');
       return const [];

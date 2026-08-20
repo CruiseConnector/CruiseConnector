@@ -112,6 +112,8 @@ import 'package:cruise_connect/data/services/construction_report_service.dart';
 import 'package:cruise_connect/data/services/navigation_pip_service.dart';
 import 'package:cruise_connect/data/services/road_incident_geofence.dart';
 import 'package:cruise_connect/data/services/road_incident_service.dart';
+import 'package:cruise_connect/data/services/stau_erkennung.dart';
+import 'package:cruise_connect/data/services/erwartetes_tempo.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
@@ -839,6 +841,50 @@ class _CruiseModePageState extends State<CruiseModePage>
   RealtimeChannel? _incidentChannel;
   Timer? _incidentRefetchDebounce;
   DateTime? _lastLivePositionPushAt;
+
+  // ── 2026-08-20, Vucko: „Die Meldung ist auch nicht synchron. Ich habe es
+  // gemeldet, und dann bin ich spaeter wieder diese Strasse gefahren, wo eine
+  // Baustelle ist, und mir wurde nichts angezeigt von meiner vorherigen
+  // Meldung." Gemessen war das KEIN Synchronisationsfehler: die Meldungen
+  // standen in der Datenbank, sie waren nur abgelaufen. Der zweite Teil der
+  // Ursache liegt hier: geladen wurde EINMAL nach der Routenberechnung, und
+  // die geladene Liste wurde waehrend der Fahrt nie wieder auf Ablauf
+  // geprueft. Nach einem App-Neustart blieb sie sogar ganz leer.
+  /// Haelt die geladenen Meldungen frisch: raeumt Abgelaufenes lokal weg und
+  /// laedt in grossem Abstand nach. Siehe [_meldungenAufraeumenUndNachladen].
+  Timer? _incidentRefreshTimer;
+  DateTime? _letzterMeldungsNachladeVersuch;
+
+  /// Lokales Aufraeumen kostet nichts und laeuft deshalb oft.
+  static const Duration _meldungsAufraeumTakt = Duration(seconds: 30);
+
+  /// Nachladen kostet Daten und Akku und laeuft deshalb selten. Der
+  /// Realtime-Kanal liefert neue Meldungen ohnehin sofort; dieser Takt ist nur
+  /// das Netz fuer Funkloecher und fuer Meldungen, die abgelaufen sind, ohne
+  /// dass jemand die Zeile angefasst hat (dabei feuert kein Realtime-Ereignis).
+  static const Duration _meldungsNachladeTakt = Duration(minutes: 5);
+
+  /// 2026-08-20 (Vucko zu den Abfragen: „jetzt nicht, wenn es ja ein [unklar]
+  /// oder so"): Obergrenze fuer Bestaetigungsfragen je Fahrt. Gewarnt wird
+  /// weiterhin vor JEDER Meldung, gefragt wird hoechstens dreimal.
+  static const int _meldungsFragenProFahrt = 3;
+  int _meldungsFragenGestellt = 0;
+
+  /// Abstand des letzten Fixes zur Routenlinie, aus dem Routen-Match des
+  /// vorigen Ticks. Trennt in der Stau-Erkennung den Halt AUF der Fahrbahn von
+  /// der Pause daneben. NaN heisst „unbekannt".
+  double _letzterRoutenAbstandMeter = double.nan;
+
+  /// 2026-08-20 (Vucko, Aufgabe 4: Stau soll „halt irgendwie automatisch
+  /// erfasst" werden): Erkennt Stau aus dem Fahrprofil eines einzelnen
+  /// Fahrers. Ein Schwarmverfahren scheidet aus, gemessen gab es in 104 Tagen
+  /// genau EINE Ueberlappung zweier Fahrer am selben Ort.
+  final StauErkennung _stauErkennung = StauErkennung();
+
+  /// Wurde in dieser Fahrt schon nach einem Stau gefragt? Genau einmal, damit
+  /// eine zaehe Stunde nicht in eine Fragerunde ausartet.
+  bool _stauFrageGestellt = false;
+  bool _stauFrageOffen = false;
 
   /// Wurde die aktuelle Solo-Fahrt tatsaechlich gestartet? Bleibt auch waehrend
   /// Pause und Simulation true und wird erst beim Abschluss oder beim
@@ -2624,6 +2670,16 @@ class _CruiseModePageState extends State<CruiseModePage>
     CruiseModePage.isFullscreen.value = true;
     await _drawRoute(route.geometry, animateCamera: false);
     unawaited(OfflineMapService.instance.cacheRouteRegion(route.coordinates));
+    // 2026-08-20 (Vucko: „bin ich spaeter wieder diese Strasse gefahren, wo
+    // eine Baustelle ist, und mir wurde nichts angezeigt von meiner vorherigen
+    // Meldung."): Hier wurde bisher NUR die Route zurückgeholt. Die
+    // Verkehrsmeldungen kamen ausschließlich aus dem Hazard-Check nach einer
+    // frischen Routenberechnung, und der läuft auf diesem Weg nicht. Nach
+    // einem App-Neustart blieb `_routeIncidents` deshalb die ganze Fahrt leer:
+    // keine Marker, keine Vorwarnung, keine Bestätigungsfrage. Genau der Fall,
+    // den Vucko beschrieben hat.
+    unawaited(_loadRoadIncidents(route.coordinates));
+    _startIncidentLiveSync();
     debugPrint('[CruiseMode] Offline bestätigte Route wiederhergestellt.');
   }
 
@@ -4864,6 +4920,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     PoiSettingsService.instance.removeListener(_onPoiSettingsChanged);
     CameraSettingsService.instance.removeListener(_onCameraSettingsChanged);
     _incidentRefetchDebounce?.cancel();
+    // 2026-08-20: Der Auffrisch-Takt der Verkehrsmeldungen gehört ebenfalls in
+    // dieses Sicherheitsnetz, sonst tickt er nach dem Verlassen per OS-Geste
+    // weiter.
+    _incidentRefreshTimer?.cancel();
     _incidentChannel?.unsubscribe();
     _positionSubscription?.cancel();
     _socketPositionSubscription?.cancel();
@@ -11043,6 +11103,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     _routeIncidents = const [];
     _incidentGeofence.clear();
     _activeIncidentAlertId = null;
+    // 2026-08-20: Eine neue Route ist eine neue Fahrt. Frage-Budget und
+    // Stau-Erkennung fangen deshalb hier von vorn an.
+    _meldungsFragenGestellt = 0;
+    _stauFrageGestellt = false;
+    _stauFrageOffen = false;
+    _stauErkennung.zuruecksetzen();
+    _letzterRoutenAbstandMeter = double.nan;
+    _letzterMeldungsNachladeVersuch = null;
     unawaited(_checkHazardsInBackground(result.coordinates));
     // 2026-05-24 (vucko Task #49): POIs auto-laden wenn Settings aktiv
     // (Google-Maps-Style: Tankstellen erscheinen automatisch auf der Map).
@@ -14127,6 +14195,13 @@ class _CruiseModePageState extends State<CruiseModePage>
 
     // Route wird erst nach Fahrtende gespeichert (mit Bewertung + XP-Sync)
 
+    // 2026-08-20 (Vucko: „Die Meldung ist auch nicht synchron."): Der Live-Sync
+    // für Verkehrsmeldungen beginnt jetzt mit der Routen-Bestätigung, nicht
+    // erst mit dem Fahrtstart. Ab hier sind der Melde-Knopf und die
+    // Meldungs-Marker sichtbar, also muss die Liste ab hier stimmen. Vorher
+    // klaffte genau dazwischen ein Loch: melden ging, sehen nicht.
+    _startIncidentLiveSync();
+
     // _startNavigationTracking(); // Tracking startet erst bei Klick auf "Fahrt starten"
     // if (total >= 2) {
     //   await _drawRoute(
@@ -14370,16 +14445,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // App, schrumpft die Navigation automatisch in ein kleines Fenster.
     // Auf iOS ein No-Op (dort deckt die Live Activity den Fall ab).
     unawaited(NavigationPipService.instance.arm());
-    // 2026-07-24 (vucko "+-Button"): Live-Sync für Verkehrsmeldungen NUR
-    // während aktiver Navigation (kein Dauer-Kanal außerhalb der Fahrt).
-    // Änderung → debounced Refetch der Route-BBox.
-    _incidentChannel ??= RoadIncidentService.instance.subscribeIncidents(() {
-      _incidentRefetchDebounce?.cancel();
-      _incidentRefetchDebounce = Timer(const Duration(seconds: 1), () {
-        if (!mounted || _fullRouteCoordinates.length < 2) return;
-        unawaited(_loadRoadIncidents(_fullRouteCoordinates));
-      });
-    });
+    _startIncidentLiveSync();
     // 2026-06-23 (vucko GPS-Stall-Watchdog): unabhängig vom Standort-Stream.
     _lastLocationFixAt = DateTime.now();
     _gpsStallWatchdog?.cancel();
@@ -14514,6 +14580,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungs-Geofence + Stau-
     // Ausdehnungs-Tracking — gleiche O(n)-Kostenordnung wie die Baustellen.
     _processIncidentGeofence(position.latitude, position.longitude);
+    // 2026-08-20 (vucko, Aufgabe 4): Stau aus dem eigenen Fahrprofil erkennen.
+    _stauErkennungTick(position);
     _tickJamTracking(position);
     _pushLivePositionThrottled(position);
   }
@@ -14551,8 +14619,18 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-07-24 (vucko "+-Button"): Incident-Realtime-Kanal schließen.
     _incidentRefetchDebounce?.cancel();
     _incidentRefetchDebounce = null;
+    _incidentRefreshTimer?.cancel();
+    _incidentRefreshTimer = null;
     _incidentChannel?.unsubscribe();
     _incidentChannel = null;
+    // 2026-08-20: Die Stau-Erkennung rechnet aus einer LÜCKENLOSEN Fixfolge.
+    // Dieser Funnel deckt auch die Pause ab, und über eine Pause hinweg weiß
+    // niemand, ob gefahren oder geparkt wurde. Also verwerfen statt weiter
+    // raten. Das Frage-Budget bleibt absichtlich stehen: es gehört zur Fahrt,
+    // und wer pausiert, soll sich damit keine neuen Abfragen erkaufen.
+    _stauFrageOffen = false;
+    _stauErkennung.zuruecksetzen();
+    _letzterRoutenAbstandMeter = double.nan;
     // 2026-07-25 (Review-Fund): Stau-Tracking hier VERWERFEN, nicht
     // abschließen. Wer mitten im Stau die Fahrt beendet, weiß nicht wo der
     // Stau endet — ein Ende zu schreiben wäre gelogen. Ohne diesen Reset
@@ -14931,6 +15009,12 @@ class _CruiseModePageState extends State<CruiseModePage>
       maxJumpMeters: math.max(offRouteCorridor + 15, 60.0),
     );
     final match = _guardRoundTripFinishMatch(rawMatch);
+    // 2026-08-20 (vucko, Aufgabe 4): Der Abstand zur Routenlinie ist das
+    // Merkmal, an dem die Stau-Erkennung den Halt AUF der Fahrbahn von der
+    // Pause auf dem Tankstellenvorplatz trennt. Er wird hier gemerkt und im
+    // nächsten Durchlauf verwendet — `_recordDrivenTrackSample` läuft weiter
+    // oben, also bevor dieses Match überhaupt existiert.
+    _letzterRoutenAbstandMeter = match.distanceMeters;
     var routeProgressMatch = match;
     var offRouteDecisionMatch = match;
     _updateDistanceToFinalTarget(position);
@@ -16279,6 +16363,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// Realtime-Kanal (debounced) erneut angestoßen, wenn andere Fahrer melden.
   Future<void> _loadRoadIncidents(List<List<double>> coords) async {
     if (coords.length < 2) return;
+    // 2026-08-20: Der Nachlade-Takt zählt ab dem VERSUCH, nicht ab dem Erfolg.
+    // Sonst würde eine Fahrt ohne Empfang bei jedem 30-Sekunden-Aufräumen eine
+    // neue Abfrage anstoßen — genau dann, wenn Funk und Akku knapp sind.
+    _letzterMeldungsNachladeVersuch = DateTime.now();
     try {
       double minLat = coords.first[1], maxLat = coords.first[1];
       double minLng = coords.first[0], maxLng = coords.first[0];
@@ -16316,6 +16404,82 @@ class _CruiseModePageState extends State<CruiseModePage>
     } catch (e) {
       debugPrint('[CruiseMode] Incident-Load fehlgeschlagen: $e');
     }
+  }
+
+  /// 2026-08-20 (Vucko: „Die Meldung ist auch nicht synchron … mir wurde
+  /// nichts angezeigt von meiner vorherigen Meldung."): Live-Sync für
+  /// Verkehrsmeldungen.
+  ///
+  /// GEÄNDERT gegenüber dem 24.07.: Der Kanal ging erst mit dem FAHRTSTART
+  /// auf. Der Melde-Knopf und die Karte mit den Meldungs-Markern sind aber
+  /// schon da, sobald die Route bestätigt ist. Wer vor dem Losfahren meldete
+  /// oder nach einem App-Neustart wieder auf den bestätigten Bildschirm kam,
+  /// sah bis zum Fahrtstart nichts. Der Kanal geht deshalb jetzt mit der
+  /// Routen-Bestätigung auf. Kosten: eine Websocket-Verbindung, solange eine
+  /// bestätigte Route offen ist. [_stopNavigationTracking] schließt sie
+  /// wieder, das ist unverändert.
+  ///
+  /// Dazu kommt ein Takt, den es vorher gar nicht gab, siehe
+  /// [_meldungenAufraeumenUndNachladen].
+  void _startIncidentLiveSync() {
+    _incidentChannel ??= RoadIncidentService.instance.subscribeIncidents(() {
+      _incidentRefetchDebounce?.cancel();
+      _incidentRefetchDebounce = Timer(const Duration(seconds: 1), () {
+        if (!mounted || _fullRouteCoordinates.length < 2) return;
+        unawaited(_loadRoadIncidents(_fullRouteCoordinates));
+      });
+    });
+    _incidentRefreshTimer ??= Timer.periodic(
+      _meldungsAufraeumTakt,
+      (_) => _meldungenAufraeumenUndNachladen(),
+    );
+  }
+
+  /// 2026-08-20: Hält die Meldungsliste während der Fahrt am Leben.
+  ///
+  /// Zwei getrennte Aufgaben mit bewusst verschiedenen Takten:
+  ///
+  ///  a) ABGELAUFENES WEGRÄUMEN, alle 30 Sekunden. Das kostet weder Daten noch
+  ///     nennenswert Rechenzeit, es ist ein Vergleich gegen die Uhr. Vorher
+  ///     wurde die geladene Liste nach dem Laden NIE wieder auf Ablauf
+  ///     geprüft: eine Meldung, die um 14:00 ablief, stand bei einer Fahrt von
+  ///     13:30 bis 16:00 zweieinhalb Stunden zu lang auf der Karte, und der
+  ///     Geofence hätte danach noch nach ihr gefragt.
+  ///
+  ///  b) NACHLADEN, höchstens alle fünf Minuten. Das kostet eine Abfrage und
+  ///     damit Daten und Akku. Neue Meldungen anderer Fahrer kommen ohnehin
+  ///     über den Realtime-Kanal; dieser Takt fängt nur zwei Fälle, die der
+  ///     Kanal nicht liefern kann: die Zeit, in der die Verbindung weg war,
+  ///     und Meldungen, die still durch Zeitablauf ungültig wurden, ohne dass
+  ///     jemand die Zeile angefasst hat. Fünf Minuten bei einer schlanken
+  ///     Abfrage auf eine Bounding-Box sind zwölf Abfragen pro Stunde.
+  void _meldungenAufraeumenUndNachladen() {
+    if (!mounted || _disposed) return;
+    if (!_isRouteConfirmed) return;
+
+    if (_routeIncidents.isNotEmpty) {
+      final lebendig = nurGueltigeMeldungen(_routeIncidents);
+      if (lebendig.length != _routeIncidents.length) {
+        _safeSetState(() => _routeIncidents = lebendig);
+        final uid = Supabase.instance.client.auth.currentUser?.id;
+        _incidentGeofence.setIncidents(
+          lebendig.where((i) => i.reportedBy != uid).toList(),
+        );
+        debugPrint(
+          '[CruiseMode] Abgelaufene Verkehrsmeldungen entfernt: '
+          '${_routeIncidents.length} → ${lebendig.length}.',
+        );
+      }
+    }
+
+    if (_fullRouteCoordinates.length < 2) return;
+    final jetzt = DateTime.now();
+    final letzter = _letzterMeldungsNachladeVersuch;
+    if (letzter != null && jetzt.difference(letzter) < _meldungsNachladeTakt) {
+      return;
+    }
+    _letzterMeldungsNachladeVersuch = jetzt;
+    unawaited(_loadRoadIncidents(_fullRouteCoordinates));
   }
 
   /// 2026-05-28 (vucko Task #66): Construction-Reports für die Route laden.
@@ -16434,23 +16598,105 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// zeigen (Hysterese im Geofence; besser als Google Maps, wo der Prompt
   /// bei jeder Vorbeifahrt erneut nervt). Nur ein Sheet gleichzeitig, und
   /// nie parallel zum Baustellen-Sheet.
+  /// 2026-08-20 (Vucko: „ist leider noch nicht so funktional", und zu den
+  /// Abfragen: „jetzt nicht, wenn es ja ein [unklar] oder so"): Der Geofence
+  /// hat seit dem 24.07. KEIN EINZIGES MAL ausgelöst — in `road_incident_votes`
+  /// stehen seit dem 24.07. null Zeilen. Die Ursache lag nicht hier: die
+  /// Meldungen waren beim Vorbeifahren längst abgelaufen. Damit die Oberfläche
+  /// jetzt, wo sie überhaupt erreichbar wird, nicht sofort zur Plage wird,
+  /// sind WARNEN und FRAGEN getrennt:
+  ///
+  ///  * GEWARNT wird bei jeder Meldung. Das ist die eigentliche Information,
+  ///    und der Fahrer soll dafür nicht auf den Bildschirm schauen müssen —
+  ///    deshalb zusätzlich eine kurze Ansage. Der Auslöseabstand hängt jetzt am
+  ///    Tempo (siehe [meldungsVorwarnungMeter]); die alten 200 m waren bei
+  ///    100 km/h sieben Sekunden.
+  ///  * GEFRAGT wird höchstens [_meldungsFragenProFahrt] mal je Fahrt, nie
+  ///    zweimal zur selben Meldung, und nie während eines Manövers.
+  ///
+  /// Passt der Moment für die Frage nicht, bleibt es bei der Warnung. Später
+  /// nachzufragen wäre sinnlos, weil die Meldung dann schon hinter dem Fahrer
+  /// liegt.
   void _processIncidentGeofence(double lat, double lng) {
     if (!_isRouteConfirmed) return;
     if (_routeIncidents.isEmpty) return;
-    if (_activeIncidentAlertId != null) return;
-    if (_activeConstructionAlertId != null) return;
     final entered = _incidentGeofence.processPosition(
       latitude: lat,
       longitude: lng,
+      speedMetersPerSecond: _nativeSmoother.speed,
     );
     if (entered.isEmpty || !mounted) return;
     final incident = entered.first;
+
+    // Abstand zum nächsten Manöver — die gemeinsame Sicherheitsbremse für
+    // Ansage und Blatt.
+    final distanzZumManoever = _displayManeuverDistanceMeters(
+      _activeVisibleManeuver(),
+    );
+    final manoeverFenster = maneuverPreAnnounceDistanceMeters(
+      _nativeSmoother.speed,
+    );
+
+    // 1. WARNEN. Haptik immer. Die Ansage entfällt nur, wenn gleich abgebogen
+    // wird: dort läuft die Manöver-Ansage, und zwei Stimmen übereinander sind
+    // gefährlicher als eine fehlende Meldungswarnung. Der Marker auf der Karte
+    // bleibt in jedem Fall.
+    HapticFeedback.mediumImpact();
+    final manoeverGleichDa =
+        distanzZumManoever != null && distanzZumManoever <= 150;
+    if (!manoeverGleichDa) {
+      unawaited(
+        TtsService.instance.speakImportant('${incident.type.label} voraus'),
+      );
+    }
+
+    // 2. FRAGEN, aber nur wenn es wirklich passt.
+    if (!_darfNachMeldungFragen(distanzZumManoever, manoeverFenster)) {
+      debugPrint(
+        '[CruiseMode] Verkehrsmeldung ${incident.type.name}: gewarnt, '
+        'nicht gefragt (Budget $_meldungsFragenGestellt/'
+        '$_meldungsFragenProFahrt, Manöver in ${distanzZumManoever?.round()} m).',
+      );
+      return;
+    }
+    _meldungsFragenGestellt++;
     _activeIncidentAlertId = incident.id;
     unawaited(
       IncidentAlertSheet.show(context, incident).then((_) {
         _activeIncidentAlertId = null;
       }),
     );
+  }
+
+  /// Darf gerade ein Bestätigungs-Blatt aufgehen? Reine Entscheidung, damit
+  /// jede Bedingung einzeln erkennbar bleibt.
+  bool _darfNachMeldungFragen(
+    double? distanzZumManoever,
+    double manoeverFenster,
+  ) {
+    // Nie zwei Blätter übereinander.
+    if (_activeIncidentAlertId != null) return false;
+    if (_activeConstructionAlertId != null) return false;
+    if (_stauFrageOffen) return false;
+    // Obergrenze je Fahrt. Vuckos ausdrücklicher Wunsch, nicht mit Abfragen
+    // überschüttet zu werden.
+    if (_meldungsFragenGestellt >= _meldungsFragenProFahrt) return false;
+    // SICHERHEIT GEHT VOR: kein Blatt, solange ein Manöver ansteht. Das
+    // Fenster ist dasselbe, ab dem die Sprachansage das Manöver ankündigt —
+    // ab da gehört die Aufmerksamkeit dem Abbiegen.
+    if (distanzZumManoever != null && distanzZumManoever <= manoeverFenster) {
+      return false;
+    }
+    // Beim Rerouten steht die Route selbst nicht fest; dann ist eine Frage
+    // nach einer Meldung „voraus" nicht einmal inhaltlich richtig.
+    if (_isRerouting) return false;
+    // ZUR KURVENWARNUNG, die der Auftrag ausdrücklich nennt: Sie ist hier
+    // nicht abgefragt, weil es sie im laufenden Betrieb gar nicht gibt.
+    // `CruiseCurveWarning` existiert als Widget, wird aber nirgends in der App
+    // eingebaut — geprüft am 20.08. mit einer Suche über das ganze lib/. Sobald
+    // sie eingehängt wird, gehört ihr aktiver Zustand genau hierher. Steht
+    // unter „offen".
+    return true;
   }
 
   /// 2026-07-24 (vucko "+-Button"): "+"-FAB → Typ wählen → an aktueller
@@ -16472,6 +16718,50 @@ class _CruiseModePageState extends State<CruiseModePage>
       );
       return;
     }
+    // 2026-08-20 (Vucko: „Ich habe es gemeldet, und dann bin ich spaeter
+    // wieder diese Strasse gefahren, wo eine Baustelle ist, und mir wurde
+    // nichts angezeigt von meiner vorherigen Meldung."): DAS IST DER KERN.
+    //
+    // Der Server stuft eine Meldung nur dann als „vor Ort abgegeben" ein, wenn
+    // er eine frische Position des Melders kennt, und nur dann bekommt sie die
+    // volle Lebensdauer (Baustelle 14 Tage statt 24 Stunden). Diese Position
+    // wurde bisher ausschliesslich aus dem Fahrt-Tracking gesendet, hoechstens
+    // einmal pro 60 Sekunden. Zwei Loecher folgten daraus:
+    //   * Der Melde-Knopf ist schon sichtbar, sobald die Route bestaetigt ist,
+    //     also VOR dem Losfahren. Wer dort meldet, hat noch nie eine Position
+    //     gesendet und ist damit immer ungeprueft.
+    //   * Ab 30 km/h ist eine 60 Sekunden alte Position weiter als die
+    //     erlaubten 500 m entfernt.
+    // Gemessen passt das exakt: alle drei ungeprueften Meldungen in der
+    // Datenbank lebten genau 15 Minuten.
+    //
+    // Jetzt geht die aktuelle Position unmittelbar vor der Meldung raus.
+    // Zwei Dinge sind dabei bewusst so gebaut:
+    //   * ZWEI SEKUNDEN DECKEL. Ohne ihn wuerde ein haengender Server oder ein
+    //     Funkloch das Melden blockieren, und die Funktion waere schlechter
+    //     als vorher. Kommt der Beleg nicht durch, wird trotzdem gemeldet, die
+    //     Meldung lebt dann nur kuerzer.
+    //   * KEIN eigener GPS-Abruf. `lat`/`lng` sind der Fix, den die Ansicht
+    //     ohnehin gerade anzeigt und an dem gemeldet wird. Ein zusaetzlicher
+    //     Abruf haette nur eine zweite Wartezeit gebracht.
+    //
+    // EHRLICH GESAGT: Damit ist der Ortsnachweis keine unabhaengige Pruefung
+    // mehr, denn Position und Meldeort kommen jetzt aus derselben Quelle. Was
+    // gegen Missbrauch uebrig bleibt, sind die serverseitigen Bremsen vom
+    // 26.07.: Melde-Intervall, Tageslimit, Plausibilitaetspruefung zwischen
+    // zwei eigenen Meldungen, Vertrauensstufen und stille Sperre. Der
+    // wasserdichte Weg waere ein serverseitig signierter Positionsbeleg; das
+    // steht unter „offen".
+    final belegAngekommen = await RoadIncidentService.instance.pushLivePosition(
+      lat,
+      lng,
+      timeout: const Duration(seconds: 2),
+    );
+    if (!mounted) return;
+    // Der Fahrt-Tracker braucht die Position in der naechsten Minute nicht
+    // noch einmal zu senden.
+    if (belegAngekommen) _lastLivePositionPushAt = DateTime.now();
+
     final result = await RoadIncidentService.instance.report(
       type: type,
       latitude: lat,
@@ -16509,6 +16799,143 @@ class _CruiseModePageState extends State<CruiseModePage>
       _jamTrackingStartedAt = DateTime.now();
       _jamRecoverySince = null;
     }
+  }
+
+  /// 2026-08-20 (Vucko, Aufgabe 4; zum Stau ausdrücklich: er soll „halt
+  /// irgendwie automatisch erfasst" werden): Füttert [StauErkennung] mit
+  /// Position, Tempo und Lage zur Route und fragt bei einem belegten Stau
+  /// EINMAL nach.
+  ///
+  /// Drei Zulieferungen entscheiden über die Qualität:
+  ///  * TEMPO direkt vom Gerät, nicht geglättet — die Erkennung braucht das
+  ///    Anfahren und Stehen im Rohbild, der Glätter würde genau das verwischen.
+  ///  * ERWARTETES TEMPO aus den Tempolimits der Route, aber nur wo das Limit
+  ///    ein brauchbarer Maßstab ist (siehe [erwartetesTempoMsAnRoutenIndex]).
+  ///    Sonst misst die Erkennung gegen ihre absolute Schwelle von 15 km/h.
+  ///  * ABSTAND ZUR ROUTE aus dem Routen-Match. Er ist einen Tick alt, weil
+  ///    das Match erst weiter unten im selben Durchlauf entsteht. Für die
+  ///    Frage „steht der Wagen auf der Fahrbahn oder auf dem
+  ///    Tankstellenvorplatz" sind ein paar hundert Millisekunden ohne Belang.
+  void _stauErkennungTick(geo.Position position) {
+    if (!_isRouteConfirmed) return;
+    final tempo = position.speed;
+    final genauigkeit = position.accuracy;
+    final befund = _stauErkennung.verarbeite(
+      latitude: position.latitude,
+      longitude: position.longitude,
+      zeitpunkt: position.timestamp,
+      tempoMetersPerSecond: (tempo.isFinite && tempo >= 0) ? tempo : null,
+      erwartetesTempoMetersPerSecond: erwartetesTempoMsAnRoutenIndex(
+        _activeSpeedLimits,
+        _currentRouteIndex,
+      ),
+      genauigkeitMeter: genauigkeit.isFinite ? genauigkeit : null,
+      abstandZurRouteMeter: _letzterRoutenAbstandMeter.isFinite
+          ? _letzterRoutenAbstandMeter
+          : null,
+    );
+    if (!befund.darfGemeldetWerden) return;
+    _frageNachStauWennPassend(befund, tempo);
+  }
+
+  /// Entscheidet, ob jetzt nach dem Stau gefragt wird.
+  ///
+  /// WARUM GEFRAGT UND NICHT AUTOMATISCH GEMELDET. Gemessen gab es in 104
+  /// Tagen sieben zeitliche Überlappungen zweier Fahrer und genau EINE davon
+  /// am selben Ort. Eine falsche automatische Meldung würde also von niemandem
+  /// korrigiert, sie stünde einfach da und kostet den Melder serverseitig
+  /// Vertrauen. Der Fahrer dagegen steht in genau diesem Moment und entscheidet
+  /// in einer Sekunde. Ein Tippen ist trotzdem viel weniger Aufwand als der Weg
+  /// über den Melde-Knopf mit Typauswahl, damit ist der Wunsch nach dem
+  /// automatischen Erfassen erfüllt, ohne die Karte zu vermüllen.
+  void _frageNachStauWennPassend(StauBefund befund, double tempoMs) {
+    if (_stauFrageGestellt || _stauFrageOffen) return;
+    if (!mounted || _disposed) return;
+    // Die Stau-Frage zählt gegen dasselbe Budget wie die
+    // Bestätigungs-Abfragen. Vucko will EINE Obergrenze, nicht zwei Töpfe.
+    final distanzZumManoever = _displayManeuverDistanceMeters(
+      _activeVisibleManeuver(),
+    );
+    if (!_darfNachMeldungFragen(
+      distanzZumManoever,
+      maneuverPreAnnounceDistanceMeters(_nativeSmoother.speed),
+    )) {
+      return;
+    }
+    // Zusätzliche Bremse, die es bei den Meldungs-Abfragen nicht braucht: Nur
+    // fragen, wenn der Wagen in diesem Moment wirklich langsam ist (unter
+    // 30 km/h). Der einzige Weg der Erkennung, der ohne Stillstand auskommt,
+    // ist der gleichmäßige Zähfluss — und genau der kann auf einer
+    // Passstraße mit Kehren auch einmal danebenliegen. Wer dort gerade 60
+    // fährt, bekommt die Frage nicht.
+    if (!tempoMs.isFinite || tempoMs > 8.3) return;
+
+    _stauFrageGestellt = true;
+    _stauFrageOffen = true;
+    _meldungsFragenGestellt++;
+    debugPrint(
+      '[CruiseMode] Stau erkannt (${befund.grund}), frage nach. '
+      'Dauer ${befund.dauer.inSeconds} s, ${befund.streckeMeter.round()} m, '
+      '${befund.stillstaende} Stillstände.',
+    );
+    unawaited(_stauFrageStellen(befund));
+  }
+
+  Future<void> _stauFrageStellen(StauBefund befund) async {
+    // Ansage, damit der Fahrer nicht erst auf den Bildschirm schauen muss.
+    unawaited(TtsService.instance.speakImportant('Steht der Verkehr?'));
+    bool? antwort;
+    try {
+      antwort = await StauFrageSheet.show(context, grund: befund.grund);
+    } finally {
+      _stauFrageOffen = false;
+    }
+    if (antwort != true || !mounted || _disposed) return;
+
+    final lat = befund.startLatitude ?? _userPosition?.latitude;
+    final lng = befund.startLongitude ?? _userPosition?.longitude;
+    if (lat == null || lng == null) return;
+
+    // Derselbe Ortsnachweis wie beim Melden von Hand, aus demselben Grund.
+    final belegAngekommen = await RoadIncidentService.instance.pushLivePosition(
+      lat,
+      lng,
+      timeout: const Duration(seconds: 2),
+    );
+    if (!mounted || _disposed) return;
+    if (belegAngekommen) _lastLivePositionPushAt = DateTime.now();
+
+    final result = await RoadIncidentService.instance.report(
+      type: RoadIncidentType.stau,
+      latitude: lat,
+      longitude: lng,
+    );
+    if (!mounted || _disposed) return;
+    if (!result.ok) {
+      TopToast.show(
+        context,
+        message: result.message ?? 'Melden gerade nicht möglich.',
+        isError: true,
+      );
+      return;
+    }
+    final incident = result.incident!;
+    _safeSetState(() {
+      _routeIncidents = [
+        ..._routeIncidents.where((i) => i.id != incident.id),
+        incident,
+      ];
+    });
+    TopToast.show(
+      context,
+      message: result.merged ? 'Stau bestätigt, danke!' : 'Stau gemeldet, danke!',
+      icon: RoadIncidentType.stau.icon,
+    );
+    // Ab hier verfolgt dieselbe Mechanik wie bei der Meldung von Hand, wie
+    // weit der Stau reicht.
+    _jamTrackingIncidentId = incident.id;
+    _jamTrackingStartedAt = DateTime.now();
+    _jamRecoverySince = null;
   }
 
   /// Stau-Ausdehnung: nach einem Stau-Report weiterverfolgen, bis wieder
