@@ -42,6 +42,29 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.18',
+      titel: 'Gemeldete Baustellen bleiben stehen, Stau erkennt sich selbst',
+      punkte: <String>[
+        'Meldest du eine Baustelle, bleibt sie jetzt zwei Wochen sichtbar '
+            'statt zwölf Stunden. Vorher war deine eigene Meldung schon weg, '
+            'wenn du am nächsten Tag wieder dort vorbeigefahren bist.',
+        'Eine Meldung ohne festen Standort lebte bisher nur eine Viertelstunde. '
+            'Der Standort wird jetzt direkt beim Melden mitgeschickt, damit '
+            'deine Meldung von Anfang an voll zählt.',
+        'Bestätigt jemand deine Meldung, bleibt sie länger stehen. Melden '
+            'mehrere, dass die Stelle frei ist, verschwindet sie früher.',
+        'Die Warnung kommt jetzt früh genug: auf der Autobahn rund einen halben '
+            'Kilometer vorher statt zweihundert Meter, dazu eine kurze Ansage, '
+            'damit du nicht auf den Bildschirm schauen musst.',
+        'Gefragt wirst du höchstens dreimal pro Fahrt und nie zweimal zur '
+            'gleichen Stelle. Während eines Abbiegemanövers kommt nie eine '
+            'Abfrage.',
+        'Steht der Verkehr, merkt die App das von selbst und fragt einmal nach. '
+            'Eine rote Ampel, eine Ortsdurchfahrt oder eine Pause an der '
+            'Tankstelle lösen bewusst nichts aus.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.17',
       titel: 'Streak verzeiht einen Tag, XP-Rechnung sichtbar, Abzeichen in Farbe',
       punkte: <String>[
