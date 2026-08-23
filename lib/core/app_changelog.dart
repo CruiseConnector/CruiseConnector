@@ -42,6 +42,45 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.20',
+      titel: 'Doppel-XP-Woche für alle, Marken sortiert sich, Punkte zeigen was neu ist',
+      punkte: <String>[
+        'Die Doppel-XP-Woche war bisher für niemanden erreichbar: sie '
+            'verlangte eine abgeschlossene Gruppenfahrt, und die hatte in der '
+            'ganzen Geschichte der App noch nie jemand geschafft. Jetzt '
+            'genügt es, eine Gruppenfahrt zu erstellen.',
+        'Die Startklar-Liste hat drei neue Aufgaben: ein Auto in die Garage '
+            'stellen, drei Abzeichen sammeln und die ersten fünfzig Kilometer '
+            'fahren. Acht von elf reichen für die Bonuswoche.',
+        'Nach der Fahrt zeigt die XP-Rechnung jetzt auch, wie lange deine '
+            'Bonuswoche noch läuft und auf welchen Multiplikator du morgen '
+            'kommst.',
+        'Fahrzeugmarken werden zusammengefasst: BMW, Bmw und bmw sind jetzt '
+            'dieselbe Marke. Auch Vw und Volkswagen gehören zusammen.',
+        'Neu in der Auswertung: eine Übersicht aller Marken in der '
+            'Community. Tippst du eine an, siehst du, wer welches Fahrzeug '
+            'fährt. Umschaltbar zwischen Autos, Motorrädern und allen.',
+        'Kleine Punkte zeigen dir jetzt, wo etwas Neues passiert ist: am '
+            'Community-Symbol, an den einzelnen Reitern und an der jeweiligen '
+            'Community. Der Punkt verschwindet erst, wenn du wirklich dort '
+            'warst, und er merkt sich das über Geräte hinweg.',
+        'Communities, die jünger als eine Woche sind, tragen jetzt den '
+            'Hinweis "Vor kurzem erstellt". In der Community selbst siehst '
+            'du das Gründungsdatum.',
+        'Hashtags: Schreibst du ein Wort mit Raute in einen Beitrag, kannst '
+            'du danach suchen und findest alles dazu.',
+        'Der Umkreis-Filter bei den Gruppenfahrten merkt sich deine '
+            'Einstellung und filtert jetzt schon auf dem Server. Vorher '
+            'konnten nahe Gruppen herausfallen, bevor der Filter überhaupt '
+            'griff.',
+        'Neues Abzeichen für alle, die eine Community gegründet haben.',
+        'Wer die Startseite umgebaut und dabei die Kachel "Heute für dich" '
+            'entfernt hatte, konnte die Aufgabe "Eine Route speichern" nicht '
+            'mehr abschließen. Das ist behoben, und deine eigene Anordnung '
+            'bleibt beim Onboarding erhalten.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.19',
       titel: 'Einladungen funktionieren wieder, Communities bekommen ein Gesicht',
       punkte: <String>[
