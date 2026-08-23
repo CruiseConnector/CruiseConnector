@@ -42,6 +42,31 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.19',
+      titel: 'Einladungen funktionieren wieder, Communities bekommen ein Gesicht',
+      punkte: <String>[
+        'Wer zu einer Gruppenfahrt eingeladen wird, kommt jetzt auch hinein. '
+            'Bisher zeigte die App "Diese Gruppe ist nicht mehr verfügbar", '
+            'obwohl es die Gruppe gab. Das galt für die Glocke, den geteilten '
+            'Link und die Meldung am Sperrbildschirm.',
+        'Ein Einladungslink geht nicht mehr verloren, wenn du noch kein Konto '
+            'hast. Nach dem Anmelden landest du direkt bei der Einladung.',
+        'In der Glocke steht jetzt, zu welcher Fahrt du eingeladen wirst, '
+            'statt nur "zu einer Gruppe".',
+        'Communities haben jetzt ein Bild. Jeder Admin kann es setzen, '
+            'ändern und wieder entfernen.',
+        'Neue Community-Einstellungen an einer Stelle: Bild, Name, '
+            'Beschreibung, wer schreiben darf, öffentlich oder privat, '
+            'Einladungscode und Mitglieder. Erreichbar über das Menü in der '
+            'Übersicht und im Chat.',
+        'Stellst du eine Community auf privat, führt ein alter geteilter Link '
+            'nicht mehr direkt hinein, sondern schickt dir eine Anfrage, die '
+            'du annehmen oder ablehnen kannst.',
+        'Vor dem Umschalten zwischen öffentlich und privat fragt die App '
+            'jetzt nach. Vorher reichte ein Fehltipp im Menü.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.18',
       titel: 'Gemeldete Baustellen bleiben stehen, Stau erkennt sich selbst',
       punkte: <String>[
