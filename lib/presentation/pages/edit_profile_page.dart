@@ -12,7 +12,6 @@ import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/vehicle_api_service.dart';
-import 'package:cruise_connect/presentation/widgets/car_card.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
@@ -624,10 +623,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   void _zeigeHinweis(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(text),
-        backgroundColor: const Color(0xFF1C1F26),
-      ),
+      SnackBar(content: Text(text), backgroundColor: const Color(0xFF1C1F26)),
     );
   }
 
@@ -637,9 +633,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     // zum Server. Gemessen am 18.08.: ein Skoda Fabia mit 1.100 PS und
     // 0-100 in 1,2 s, drei Fahrzeuge über 300 km/h.
     if (!(_garageFormKey.currentState?.validate() ?? true)) {
-      _zeigeHinweis(
-        'Bitte die rot markierten Fahrzeugdaten korrigieren.',
-      );
+      _zeigeHinweis('Bitte die rot markierten Fahrzeugdaten korrigieren.');
       return;
     }
     final proceed = await _confirmUsernameChangeIfNeeded();
@@ -1004,124 +998,126 @@ class _EditProfilePageState extends State<EditProfilePage> {
       body: Form(
         key: _garageFormKey,
         child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-        child: _loading
-            ? Center(
-                child: CircularProgressIndicator(color: AppAccentColors.accent),
-              )
-            : ListView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.only(bottom: 32),
-                children: [
-                  _buildBannerWithAvatar(),
-                  const SizedBox(height: 56),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildLabel('Username'),
-                        _buildTextField(
-                          _usernameController,
-                          '@username',
-                          maxLength: AppInputLimits.usernameMaxLength,
-                          inputFormatters: AppInputLimits.usernameFormatters,
-                          enabled: !_usernameEditingLockedForTest,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _usernameEditingLockedForTest
-                              ? 'Username ist für die heutige Testversion gesperrt.'
-                              : _nextUsernameChange != null
-                              ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
-                                    '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
-                                    '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
-                                    '${_nextUsernameChange!.year} ändern.'
-                              : 'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
-                          style: const TextStyle(
-                            color: Colors.grey,
-                            fontSize: 12,
+          behavior: HitTestBehavior.translucent,
+          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          child: _loading
+              ? Center(
+                  child: CircularProgressIndicator(
+                    color: AppAccentColors.accent,
+                  ),
+                )
+              : ListView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.only(bottom: 32),
+                  children: [
+                    _buildBannerWithAvatar(),
+                    const SizedBox(height: 56),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildLabel('Username'),
+                          _buildTextField(
+                            _usernameController,
+                            '@username',
+                            maxLength: AppInputLimits.usernameMaxLength,
+                            inputFormatters: AppInputLimits.usernameFormatters,
+                            enabled: !_usernameEditingLockedForTest,
                           ),
-                        ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _usernameEditingLockedForTest
+                                ? 'Username ist für die heutige Testversion gesperrt.'
+                                : _nextUsernameChange != null
+                                ? 'Du kannst deinen Benutzernamen erst wieder ab dem '
+                                      '${_nextUsernameChange!.day.toString().padLeft(2, '0')}.'
+                                      '${_nextUsernameChange!.month.toString().padLeft(2, '0')}.'
+                                      '${_nextUsernameChange!.year} ändern.'
+                                : 'Du kannst deinen Benutzernamen nur einmal pro Monat ändern.',
+                            style: const TextStyle(
+                              color: Colors.grey,
+                              fontSize: 12,
+                            ),
+                          ),
 
-                        const SizedBox(height: 20),
+                          const SizedBox(height: 20),
 
-                        _buildSectionHeader(
-                          'Badge-Sticker',
-                          Icons.workspace_premium_rounded,
-                        ),
-                        const SizedBox(height: 16),
-                        ProfileBadgeStickerEditor(
-                          profile: _badgeEditorProfile(),
-                          displayName: _usernameController.text.trim().isEmpty
-                              ? _initialUsername
-                              : _usernameController.text.trim(),
-                          avatarUrl: _avatarUrl,
-                          bannerUrl: _bannerUrl,
-                          onChanged: _handleBadgeShowcaseChanged,
-                        ),
+                          _buildSectionHeader(
+                            'Badge-Sticker',
+                            Icons.workspace_premium_rounded,
+                          ),
+                          const SizedBox(height: 16),
+                          ProfileBadgeStickerEditor(
+                            profile: _badgeEditorProfile(),
+                            displayName: _usernameController.text.trim().isEmpty
+                                ? _initialUsername
+                                : _usernameController.text.trim(),
+                            avatarUrl: _avatarUrl,
+                            bannerUrl: _bannerUrl,
+                            onChanged: _handleBadgeShowcaseChanged,
+                          ),
 
-                        const SizedBox(height: 28),
+                          const SizedBox(height: 28),
 
-                        _buildLabel('Bio-Überschrift'),
-                        _buildTextField(
-                          _bioTitleController,
-                          'z.B. Über mich',
-                          maxLength: AppInputLimits.bioTitleMaxLength,
-                        ),
-                        const SizedBox(height: 20),
+                          _buildLabel('Bio-Überschrift'),
+                          _buildTextField(
+                            _bioTitleController,
+                            'z.B. Über mich',
+                            maxLength: AppInputLimits.bioTitleMaxLength,
+                          ),
+                          const SizedBox(height: 20),
 
-                        _buildLabel('Steckbrief / Bio'),
-                        _buildTextField(
-                          _bioController,
-                          'Erzähl etwas über dich…',
-                          maxLines: 4,
-                          maxLength: AppInputLimits.bioMaxLength,
-                        ),
-                        // Live-Counter, weil counterText im TextField selbst
-                        // ausgeblendet ist (sonst doppelt mit anderen Feldern).
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4, right: 4),
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: Text(
-                              '${_bioController.text.length}/${AppInputLimits.bioMaxLength}',
-                              style: TextStyle(
-                                color:
-                                    _bioController.text.length >=
-                                        AppInputLimits.bioMaxLength
-                                    ? AppAccentColors.accent
-                                    : Colors.grey,
-                                fontSize: 11,
+                          _buildLabel('Steckbrief / Bio'),
+                          _buildTextField(
+                            _bioController,
+                            'Erzähl etwas über dich…',
+                            maxLines: 4,
+                            maxLength: AppInputLimits.bioMaxLength,
+                          ),
+                          // Live-Counter, weil counterText im TextField selbst
+                          // ausgeblendet ist (sonst doppelt mit anderen Feldern).
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4, right: 4),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                '${_bioController.text.length}/${AppInputLimits.bioMaxLength}',
+                                style: TextStyle(
+                                  color:
+                                      _bioController.text.length >=
+                                          AppInputLimits.bioMaxLength
+                                      ? AppAccentColors.accent
+                                      : Colors.grey,
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                           ),
-                        ),
 
-                        const SizedBox(height: 20),
+                          const SizedBox(height: 20),
 
-                        _buildLabel('Link / Webseite'),
-                        _buildTextField(
-                          _linkController,
-                          'https://…',
-                          maxLength: AppInputLimits.linkMaxLength,
-                        ),
+                          _buildLabel('Link / Webseite'),
+                          _buildTextField(
+                            _linkController,
+                            'https://…',
+                            maxLength: AppInputLimits.linkMaxLength,
+                          ),
 
-                        const SizedBox(height: 32),
+                          const SizedBox(height: 32),
 
-                        _buildSectionHeader(
-                          'Meine Garage',
-                          Icons.garage_rounded,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildCarEditor(),
-                      ],
+                          _buildSectionHeader(
+                            'Meine Garage',
+                            Icons.garage_rounded,
+                          ),
+                          const SizedBox(height: 16),
+                          _buildCarEditor(),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
         ),
       ),
     );
@@ -1305,6 +1301,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
               i == _selectedVehicleIndex ? liveProfile : _vehicleDrafts[i],
           ];
 
+    // 2026-08-19 (Garage-Scrollen): Das Karussell zeigt nur noch die
+    // VORSCHAU-Karten (horizontal, feste Höhe). Das Formular der gewählten
+    // Karte steht darunter direkt in der ListView der Seite, statt als
+    // scrollbarer Inhalt IM PageView zu liegen. Ein horizontaler PageView
+    // konkurriert nicht mit dem vertikalen Seiten-Scroll — der alte innere
+    // Vertikal-Scroller tat es und blockierte die Bildschirmmitte.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1314,22 +1316,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
           vehicles: previewVehicles,
           selectedIndex: _selectedVehicleIndex,
           viewportFraction: 1,
-          height: _editableGarageCardHeight(context),
           onVehicleTap: _selectVehicleDraft,
           onVehicleChanged: _selectVehicleDraft,
-          vehicleBuilder: (context, index) {
-            if (index == _selectedVehicleIndex) {
-              return _buildVehicleEditorCard(
-                title: _vehicleTitleForDraft(liveProfile),
-                position: _selectedVehicleIndex + 1,
-                total: previewVehicles.length,
-              );
-            }
-            return CarCard(
-              profile: previewVehicles[index],
-              onTap: () => _selectVehicleDraft(index),
-            );
-          },
+        ),
+        const SizedBox(height: 16),
+        _buildVehicleEditorCard(
+          title: _vehicleTitleForDraft(liveProfile),
+          position: _selectedVehicleIndex + 1,
+          total: previewVehicles.length,
         ),
       ],
     );
@@ -1361,17 +1355,21 @@ class _EditProfilePageState extends State<EditProfilePage> {
     );
   }
 
-  double _editableGarageCardHeight(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    if (width < 370) return 760;
-    return 720;
-  }
-
   Widget _buildVehicleEditorCard({
     required String title,
     required int position,
     required int total,
   }) {
+    // 2026-08-19 (Garage-Scrollen): Bewusst KEIN eigener ScrollView mehr.
+    // Die Karte lag früher als 720px hohe Box mit innerem
+    // SingleChildScrollView im PageView der Garage — also ein vertikaler
+    // Scroller im vertikalen Scroller der Seite. Der innere gewinnt die
+    // Gesten-Arena über die gesamte Bildschirmmitte und gibt die Geste am
+    // eigenen Rand NICHT an den Eltern-Scroller weiter; scrollbar blieb nur
+    // der schmale Streifen neben der Karte. Die Karte wächst jetzt mit ihrem
+    // Inhalt in der ListView der Seite — ein einziger Scroller für alles.
+    // Nebeneffekt: Flutter scrollt das fokussierte Feld wieder selbst über
+    // der Tastatur frei, weil der nächste Scrollable die Seite ist.
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -1389,283 +1387,280 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         ],
       ),
-      child: SingleChildScrollView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppAccentColors.accent.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Icon(
-                    _vehicleType == 'motorcycle'
-                        ? Icons.two_wheeler_rounded
-                        : Icons.directions_car_filled_rounded,
-                    color: AppAccentColors.accent,
-                  ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 19,
-                          height: 1.05,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Karte $position von $total',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.5),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
+                child: Icon(
+                  _vehicleType == 'motorcycle'
+                      ? Icons.two_wheeler_rounded
+                      : Icons.directions_car_filled_rounded,
+                  color: AppAccentColors.accent,
                 ),
-                Tooltip(
-                  message: 'Nur diese Fahrzeugkarte löschen',
-                  child: TextButton.icon(
-                    onPressed: _saving ? null : _deleteSelectedVehicleDraft,
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.redAccent,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(0, 40),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        height: 1.05,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                    label: const Text(
-                      'Löschen',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Karte $position von $total',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Tooltip(
+                message: 'Nur diese Fahrzeugkarte löschen',
+                child: TextButton.icon(
+                  onPressed: _saving ? null : _deleteSelectedVehicleDraft,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.redAccent,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    minimumSize: const Size(0, 40),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text(
+                    'Löschen',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildVehiclePhotoEditor(),
+          const SizedBox(height: 10),
+          _buildVehicleTypeToggle(),
+          const SizedBox(height: 10),
+          _buildGarageGrid([
+            _buildGarageInputTile(
+              label: 'Marke',
+              icon: Icons.factory_outlined,
+              child: _buildMakeField(),
+            ),
+            _buildGarageInputTile(
+              label: 'Modell',
+              icon: Icons.badge_outlined,
+              child: _buildModelField(),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          _buildGarageInputTile(
+            label: 'Beschreibung',
+            icon: Icons.notes_rounded,
+            child: Column(
+              children: [
+                _buildTextField(
+                  _vehicleDescriptionController,
+                  'z.B. Tracktool, Daily, Umbau...',
+                  maxLines: 3,
+                  maxLength: _vehicleDescriptionMaxLength,
+                  compact: true,
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
+                    style: TextStyle(
+                      color:
+                          _vehicleDescriptionController.text.length >=
+                              _vehicleDescriptionMaxLength
+                          ? AppAccentColors.accent
+                          : Colors.white.withValues(alpha: 0.42),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            _buildVehiclePhotoEditor(),
-            const SizedBox(height: 10),
-            _buildVehicleTypeToggle(),
-            const SizedBox(height: 10),
-            _buildGarageGrid([
-              _buildGarageInputTile(
-                label: 'Marke',
-                icon: Icons.factory_outlined,
-                child: _buildMakeField(),
-              ),
-              _buildGarageInputTile(
-                label: 'Modell',
-                icon: Icons.badge_outlined,
-                child: _buildModelField(),
-              ),
-            ]),
-            const SizedBox(height: 10),
-            _buildGarageInputTile(
-              label: 'Beschreibung',
-              icon: Icons.notes_rounded,
-              child: Column(
-                children: [
-                  _buildTextField(
-                    _vehicleDescriptionController,
-                    'z.B. Tracktool, Daily, Umbau...',
-                    maxLines: 3,
-                    maxLength: _vehicleDescriptionMaxLength,
-                    compact: true,
-                  ),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '${_vehicleDescriptionController.text.length}/$_vehicleDescriptionMaxLength',
-                      style: TextStyle(
-                        color:
-                            _vehicleDescriptionController.text.length >=
-                                _vehicleDescriptionMaxLength
-                            ? AppAccentColors.accent
-                            : Colors.white.withValues(alpha: 0.42),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
+          ),
+          const SizedBox(height: 10),
+          _buildGarageInputTile(
+            label: 'Tuning / Umbauten',
+            icon: Icons.tune_rounded,
+            child: Column(
+              children: [
+                _buildTextField(
+                  _vehicleTuningController,
+                  'z.B. Software, Fahrwerk, Felgen, Auspuff...',
+                  maxLines: 3,
+                  maxLength: _vehicleTuningMaxLength,
+                  compact: true,
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${_vehicleTuningController.text.length}/$_vehicleTuningMaxLength',
+                    style: TextStyle(
+                      color:
+                          _vehicleTuningController.text.length >=
+                              _vehicleTuningMaxLength
+                          ? AppAccentColors.accent
+                          : Colors.white.withValues(alpha: 0.42),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
+          ),
+          const SizedBox(height: 10),
+          _buildGarageGrid([
             _buildGarageInputTile(
-              label: 'Tuning / Umbauten',
-              icon: Icons.tune_rounded,
-              child: Column(
-                children: [
-                  _buildTextField(
-                    _vehicleTuningController,
-                    'z.B. Software, Fahrwerk, Felgen, Auspuff...',
-                    maxLines: 3,
-                    maxLength: _vehicleTuningMaxLength,
-                    compact: true,
-                  ),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '${_vehicleTuningController.text.length}/$_vehicleTuningMaxLength',
-                      style: TextStyle(
-                        color:
-                            _vehicleTuningController.text.length >=
-                                _vehicleTuningMaxLength
-                            ? AppAccentColors.accent
-                            : Colors.white.withValues(alpha: 0.42),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
+              label: 'Herkunft',
+              icon: Icons.flag_outlined,
+              child: _buildCountryDropdown(),
+            ),
+            _buildGarageInputTile(
+              label: 'Baujahr',
+              icon: Icons.calendar_today_outlined,
+              child: _buildTextField(
+                _carYearController,
+                '2021',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
                 ],
+                compact: true,
               ),
             ),
-            const SizedBox(height: 10),
-            _buildGarageGrid([
-              _buildGarageInputTile(
-                label: 'Herkunft',
-                icon: Icons.flag_outlined,
-                child: _buildCountryDropdown(),
+            _buildGarageInputTile(
+              label: 'Antrieb',
+              icon: Icons.settings_suggest_outlined,
+              child: _buildTextField(
+                _carDrivetrainController,
+                'Heck / Allrad / Front',
+                maxLength: 12,
+                compact: true,
               ),
-              _buildGarageInputTile(
-                label: 'Baujahr',
-                icon: Icons.calendar_today_outlined,
-                child: _buildTextField(
-                  _carYearController,
-                  '2021',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(4),
-                  ],
-                  compact: true,
+            ),
+            _buildGarageInputTile(
+              label: 'Kilometer',
+              icon: Icons.speed_outlined,
+              child: _buildTextField(
+                _carMileageController,
+                '27870',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                  _MaxIntFormatter(999999),
+                ],
+                compact: true,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Leistung',
+              icon: Icons.bolt_rounded,
+              child: _buildTextField(
+                _carHorsepowerController,
+                '720',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                  _MaxIntFormatter(FahrzeugGrenzen.leistungMax),
+                ],
+                compact: true,
+                validator: FahrzeugGrenzen.pruefeLeistung,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: 'Top Speed',
+              icon: Icons.keyboard_double_arrow_up_rounded,
+              child: _buildTextField(
+                _carTopSpeedController,
+                '340',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(3),
+                  _MaxIntFormatter(FahrzeugGrenzen.topSpeedMax),
+                ],
+                compact: true,
+                validator: FahrzeugGrenzen.pruefeTopSpeed,
+              ),
+            ),
+            _buildGarageInputTile(
+              label: '0-100',
+              icon: Icons.timer_outlined,
+              child: _buildTextField(
+                _carZeroToHundredController,
+                '7,3',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
                 ),
+                inputFormatters: [
+                  LengthLimitingTextInputFormatter(4),
+                  _DecimalSecondsFormatter(),
+                ],
+                compact: true,
+                validator: FahrzeugGrenzen.pruefeNullAufHundert,
               ),
-              _buildGarageInputTile(
-                label: 'Antrieb',
-                icon: Icons.settings_suggest_outlined,
-                child: _buildTextField(
-                  _carDrivetrainController,
-                  'Heck / Allrad / Front',
-                  maxLength: 12,
-                  compact: true,
-                ),
+            ),
+            _buildGarageInputTile(
+              label: 'Zylinder',
+              icon: Icons.adjust_rounded,
+              child: _buildTextField(
+                _carCylindersController,
+                '8',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(2),
+                  _MaxIntFormatter(24),
+                ],
+                compact: true,
               ),
-              _buildGarageInputTile(
-                label: 'Kilometer',
-                icon: Icons.speed_outlined,
-                child: _buildTextField(
-                  _carMileageController,
-                  '27870',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(6),
-                    _MaxIntFormatter(999999),
-                  ],
-                  compact: true,
-                ),
+            ),
+            _buildGarageInputTile(
+              label: 'Hubraum',
+              icon: Icons.blur_circular_rounded,
+              child: _buildTextField(
+                _carDisplacementController,
+                '3902',
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(5),
+                  _MaxIntFormatter(99999),
+                ],
+                compact: true,
               ),
-              _buildGarageInputTile(
-                label: 'Leistung',
-                icon: Icons.bolt_rounded,
-                child: _buildTextField(
-                  _carHorsepowerController,
-                  '720',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(4),
-                    _MaxIntFormatter(FahrzeugGrenzen.leistungMax),
-                  ],
-                  compact: true,
-                  validator: FahrzeugGrenzen.pruefeLeistung,
-                ),
-              ),
-              _buildGarageInputTile(
-                label: 'Top Speed',
-                icon: Icons.keyboard_double_arrow_up_rounded,
-                child: _buildTextField(
-                  _carTopSpeedController,
-                  '340',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(3),
-                    _MaxIntFormatter(FahrzeugGrenzen.topSpeedMax),
-                  ],
-                  compact: true,
-                  validator: FahrzeugGrenzen.pruefeTopSpeed,
-                ),
-              ),
-              _buildGarageInputTile(
-                label: '0-100',
-                icon: Icons.timer_outlined,
-                child: _buildTextField(
-                  _carZeroToHundredController,
-                  '7,3',
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  inputFormatters: [
-                    LengthLimitingTextInputFormatter(4),
-                    _DecimalSecondsFormatter(),
-                  ],
-                  compact: true,
-                  validator: FahrzeugGrenzen.pruefeNullAufHundert,
-                ),
-              ),
-              _buildGarageInputTile(
-                label: 'Zylinder',
-                icon: Icons.adjust_rounded,
-                child: _buildTextField(
-                  _carCylindersController,
-                  '8',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                    _MaxIntFormatter(24),
-                  ],
-                  compact: true,
-                ),
-              ),
-              _buildGarageInputTile(
-                label: 'Hubraum',
-                icon: Icons.blur_circular_rounded,
-                child: _buildTextField(
-                  _carDisplacementController,
-                  '3902',
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(5),
-                    _MaxIntFormatter(99999),
-                  ],
-                  compact: true,
-                ),
-              ),
-            ]),
-          ],
-        ),
+            ),
+          ]),
+        ],
       ),
     );
   }
