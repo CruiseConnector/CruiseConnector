@@ -684,9 +684,17 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+            // 2026-08-23 (vucko, Sprachnachricht: „wenn er eine Gruppe
+            // erstellt hat und er einen anderen einlaedt"): Der Knopf bleibt
+            // fuer JEDES Mitglied. Der umgebende Block prueft bereits
+            // `_amMember && !g.isActive`, und die neue RPC `invite_to_group`
+            // verlangt genau dasselbe („Nur wer selbst in der Gruppe ist,
+            // darf einladen."). Zugemacht ist damit nur, was wirklich offen
+            // war: Fremde koennen keine Einladung mehr in eine private Gruppe
+            // schreiben und sich so Lesezugang verschaffen.
             IconButton(
               icon: Icon(Icons.person_add, color: AppAccentColors.accent),
-              onPressed: () => _showInviteDialog(), // Phase 3b — Friend-Picker
+              onPressed: () => _showInviteDialog(),
             ),
           ],
         ),
@@ -1614,8 +1622,16 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
             try {
               await SocialService.inviteToGroup(widget.groupId, userId);
               setSheet(() => invited.add(userId));
-            } catch (_) {
-              _showLobbySnack('Einladung fehlgeschlagen.', error: true);
+            } catch (e) {
+              // 2026-08-23: Die RPC bringt einen fertigen deutschen Satz mit
+              // („Die Fahrt läuft bereits ..."). Das pauschale
+              // „Einladung fehlgeschlagen." hat den Grund verschluckt.
+              _showLobbySnack(
+                e is SocialServiceException
+                    ? e.message
+                    : 'Einladung fehlgeschlagen.',
+                error: true,
+              );
             }
           }
 

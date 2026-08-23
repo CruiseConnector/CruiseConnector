@@ -11,7 +11,9 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
+import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
+import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
@@ -51,6 +53,9 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   final Map<String, GlobalKey> _messageKeys = {};
   RealtimeChannel? _messagesChannel;
   RealtimeChannel? _membersChannel;
+  RealtimeChannel? _communityChannel;
+  String? _inviteCode;
+  int _openJoinRequests = 0;
   bool _loading = true;
   bool _sending = false;
   int _localMessageSeq = 0;
@@ -65,6 +70,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _load();
     _subscribeMessages();
     _subscribeMembers();
+    _subscribeCommunity();
   }
 
   @override
@@ -72,6 +78,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _reloadDebounce?.cancel();
     _messagesChannel?.unsubscribe();
     _membersChannel?.unsubscribe();
+    _communityChannel?.unsubscribe();
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -96,11 +103,48 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         _loading = false;
       });
       if (scrollToBottom) _scrollToBottom();
+      unawaited(_loadInviteCode());
+      unawaited(_loadOpenJoinRequests());
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
       _showError(e, fallback: 'Community konnte nicht geladen werden.');
     }
+  }
+
+  /// 2026-08-23 (Auftrag Vucko): Der Code stand bis heute in der
+  /// Community-Zeile und war damit für JEDEN angemeldeten Nutzer JEDER
+  /// öffentlichen Community lesbar. Die Migration 20260823123000 hat das
+  /// Leserecht auf die Spalte entzogen; er kommt jetzt über eine RPC, die nur
+  /// Mitgliedern antwortet.
+  Future<void> _loadInviteCode() async {
+    final code = await CommunityChatService.inviteCodeFor(widget.communityId);
+    if (!mounted) return;
+    setState(() => _inviteCode = code);
+  }
+
+  /// 2026-08-23 (Auftrag Vucko): „sonst versanden die Anfragen."
+  ///
+  /// Seit heute loest ein alter, schon geteilter Link in eine inzwischen
+  /// private Community eine Beitrittsanfrage aus statt eines Beitritts. Eine
+  /// Anfrage schreibt aber KEINE Benachrichtigung (nachgesehen in
+  /// join_community_with_code_v2, sie legt nur die Zeile an). Ohne diesen
+  /// Hinweis muesste der Admin von sich aus die Einstellungen oeffnen und
+  /// nachschauen. Deshalb steht die Zahl dort, wo er ohnehin ist: im Kopf des
+  /// Chats. Nur fuer Admins, also genau eine zusaetzliche Abfrage fuer die
+  /// wenigen, die sie beantworten koennen.
+  Future<void> _loadOpenJoinRequests() async {
+    if (!_amAdmin) {
+      if (mounted && _openJoinRequests != 0) {
+        setState(() => _openJoinRequests = 0);
+      }
+      return;
+    }
+    final requests = await CommunityChatService.fetchJoinRequests(
+      widget.communityId,
+    );
+    if (!mounted) return;
+    setState(() => _openJoinRequests = requests.length);
   }
 
   void _subscribeMessages() {
@@ -111,6 +155,21 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         _reloadDebounce = Timer(const Duration(milliseconds: 160), () {
           if (mounted) _load();
         });
+      },
+    );
+  }
+
+  /// 2026-08-23 (Auftrag Vucko): „Wer den Chat offen hat, merkt vom
+  /// Umschalten nichts." Gemessen: es gab nur Kanäle auf `community_messages`
+  /// und `community_members`. Schaltete der Admin den Schreibmodus um, tippte
+  /// ein Mitglied noch minutenlang weiter und lief erst beim Senden auf einen
+  /// Fehler. Jetzt kommt die Änderung sofort an, das Eingabefeld sperrt sich
+  /// von selbst und der Hinweis darüber wechselt.
+  void _subscribeCommunity() {
+    _communityChannel = CommunityChatService.subscribeCommunity(
+      widget.communityId,
+      () {
+        if (mounted) _load(scrollToBottom: false);
       },
     );
   }
@@ -252,6 +311,15 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   }
 
   String _friendlyError(Object error, String fallback) {
+    // 2026-08-23 (Auftrag Vucko): Der echte Grund wurde bisher verschluckt.
+    // Diese Funktion filtert „policy" und „row-level" bewusst als Rauschen
+    // weg, weil das für JEDE Regelverletzung auf JEDER Tabelle steht. Genau
+    // diesen Text schickt Postgres aber auch, wenn der Admin das Schreiben
+    // gesperrt hat. Ein BENANNTER Fehler aus dem Dienst (Code gesetzt, wie
+    // CC001 beim Premium-Gate) geht deshalb ungefiltert durch.
+    if (error is CommunityChatServiceException && error.code != null) {
+      return error.message;
+    }
     final raw = error.toString();
     final lower = raw.toLowerCase();
     final isBackendNoise =
@@ -861,63 +929,36 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     }
   }
 
-  Future<void> _toggleOwnerOnlyMessages() async {
+  /// 2026-08-23 (Auftrag Vucko, Sprachnachricht): Schreibmodus und
+  /// Sichtbarkeit lagen als zwei Eintraege in DIESEM Drei-Punkte-Menue und
+  /// wurden nicht gefunden. Sie stehen jetzt zusammen mit Bild, Name,
+  /// Beschreibung, Einladungscode, Mitgliedern und Loeschen auf einer eigenen
+  /// Einstellungs-Seite, die es auch aus dem Karten-Menue der Uebersicht gibt.
+  /// Das Umschalten der Sichtbarkeit hat dort ausserdem eine Rueckfrage; hier
+  /// lief es ohne, ein Fehltipp machte eine private Community sofort
+  /// oeffentlich.
+  Future<void> _openSettings() async {
     final community = _community;
-    if (community == null) return;
-    final current = community['owner_only_messages'] == true;
-    final next = !current;
-    setState(() {
-      _community = {...community, 'owner_only_messages': next};
-    });
-    try {
-      await CommunityChatService.setOwnerOnlyMessages(
-        communityId: widget.communityId,
-        enabled: next,
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _community = {...community, 'owner_only_messages': current};
-        });
-      }
-      _showError(e, fallback: 'Einstellung konnte nicht gespeichert werden.');
+    final result = await Navigator.push<CommunitySettingsResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CommunitySettingsPage(
+          communityId: widget.communityId,
+          initialCommunity: community,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result == CommunitySettingsResult.deleted) {
+      Navigator.pop(context);
+      return;
     }
-  }
-
-  /// 2026-07-13 (vucko): Owner schaltet die Community nachträglich zwischen
-  /// privat und öffentlich um — optimistisch mit Revert bei Fehler (gleiches
-  /// Muster wie _toggleOwnerOnlyMessages).
-  Future<void> _toggleVisibility() async {
-    final community = _community;
-    if (community == null) return;
-    final current = community['is_public'] == true;
-    final next = !current;
-    setState(() {
-      _community = {...community, 'is_public': next};
-    });
-    try {
-      await CommunityChatService.setCommunityVisibility(
-        communityId: widget.communityId,
-        isPublic: next,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              next
-                  ? 'Community ist jetzt öffentlich. Jeder kann beitreten.'
-                  : 'Community ist jetzt privat. Beitritt nur per Invite-Code.',
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _community = {...community, 'is_public': current};
-        });
-      }
-      _showError(e, fallback: 'Sichtbarkeit konnte nicht geändert werden.');
+    if (result == CommunitySettingsResult.changed) {
+      await _load(scrollToBottom: false);
+    } else {
+      // Auch ohne gemeldete Aenderung koennen Anfragen beantwortet worden
+      // sein, wenn der Admin die Seite nur angeschaut hat.
+      unawaited(_loadOpenJoinRequests());
     }
   }
 
@@ -925,19 +966,33 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Widget build(BuildContext context) {
     final community = _community;
     final title = community?['name']?.toString() ?? 'Community';
-    final ownerOnlyMessages = community?['owner_only_messages'] == true;
-    final isPublicCommunity = community?['is_public'] == true;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B0E14),
         foregroundColor: Colors.white,
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.bold),
+        titleSpacing: 0,
+        // 2026-08-23 (Auftrag Vucko „Profilbilder fuer Communities"): erste
+        // von genau drei Anzeigestellen. Die anderen beiden sind die Kopfzeile
+        // unter der Leiste und die Kachel in der Uebersicht.
+        title: Row(
+          children: [
+            CommunityAvatar.fromCommunity(
+              community,
+              size: 30,
+              borderRadius: 9,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(
@@ -953,56 +1008,26 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                 _confirmLeaveCommunity();
               } else if (value == 'delete') {
                 _confirmDeleteCommunity();
-              } else if (value == 'owner_only') {
-                _toggleOwnerOnlyMessages();
-              } else if (value == 'visibility') {
-                _toggleVisibility();
+              } else if (value == 'settings') {
+                _openSettings();
               }
             },
             itemBuilder: (_) => [
               if (_amAdmin)
-                PopupMenuItem(
-                  value: 'visibility',
+                const PopupMenuItem(
+                  value: 'settings',
                   child: Row(
                     children: [
                       Icon(
-                        isPublicCommunity
-                            ? Icons.lock_outline
-                            : Icons.public,
+                        Icons.settings_outlined,
                         color: Colors.white70,
                         size: 18,
                       ),
-                      const SizedBox(width: 10),
+                      SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          isPublicCommunity
-                              ? 'Auf privat stellen'
-                              : 'Öffentlich machen',
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (_amAdmin)
-                PopupMenuItem(
-                  value: 'owner_only',
-                  child: Row(
-                    children: [
-                      Icon(
-                        ownerOnlyMessages
-                            ? Icons.chat_bubble_outline
-                            : Icons.admin_panel_settings_outlined,
-                        color: Colors.white70,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          ownerOnlyMessages
-                              ? 'Alle schreiben lassen'
-                              : 'Nur Owner schreibt',
-                          style: const TextStyle(color: Colors.white),
+                          'Community-Einstellungen',
+                          style: TextStyle(color: Colors.white),
                         ),
                       ),
                     ],
@@ -1066,7 +1091,9 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Widget _buildCommunityHeader(Map<String, dynamic> community) {
     final isPublic = community['is_public'] == true;
     final memberCount = CommunityChatService.memberCount(community);
-    final inviteCode = community['invite_code']?.toString();
+    // 2026-08-23: kommt nicht mehr aus der Zeile, sondern aus der RPC
+    // `get_community_invite_code`, die nur Mitgliedern antwortet.
+    final inviteCode = _inviteCode;
     final canInvite = CommunityChatService.canInvite(community);
     final ownerOnlyMessages = community['owner_only_messages'] == true;
 
@@ -1082,6 +1109,30 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              // 2026-08-23: zweite Anzeigestelle des Community-Bildes.
+              CommunityAvatar.fromCommunity(
+                community,
+                size: 44,
+                borderRadius: 13,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  community['name']?.toString() ?? 'Community',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
@@ -1103,6 +1154,17 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   trailingColor: ownerOnlyMessages ? Colors.orangeAccent : null,
                   onTap: _showMembersSheet,
                 ),
+                if (_amAdmin && _openJoinRequests > 0) ...[
+                  const SizedBox(width: 8),
+                  _buildMetaPill(
+                    icon: Icons.person_add_alt_1,
+                    label: _openJoinRequests == 1
+                        ? '1 Beitrittsanfrage'
+                        : '$_openJoinRequests Beitrittsanfragen',
+                    color: Colors.orangeAccent,
+                    onTap: _openSettings,
+                  ),
+                ],
               ],
             ),
           ),
@@ -1788,8 +1850,15 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                     ),
                     const SizedBox(width: 8),
                     const Expanded(
+                      // 2026-08-23 (Auftrag Vucko): Der alte Satz „Nur Admins
+                      // koennen hier posten." war ungenau. Gemessen an der
+                      // Regel `members_write_community_messages`: im
+                      // nur-Admin-Modus duerfen owner UND moderator schreiben.
+                      // Und nach Vuckos Entscheidung vom 23.08.2026 sind nur
+                      // BEITRAEGE gesperrt, das Reagieren bleibt allen offen
+                      // (Regel `cmr_insert` verlangt nur Mitgliedschaft).
                       child: Text(
-                        'Nur Admins können hier posten.',
+                        'Nur Admins und Moderatoren posten hier. Reagieren geht für alle.',
                         style: TextStyle(
                           color: Colors.white70,
                           fontWeight: FontWeight.w800,

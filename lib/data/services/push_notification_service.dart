@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/firebase_options.dart';
+import 'package:cruise_connect/presentation/pages/notification_router.dart';
 
 /// Top-Level Background-Handler (Pflicht: muss top-level + vm:entry-point sein).
 ///
@@ -243,12 +245,21 @@ class PushNotificationService {
 
   /// Deep-Link aus einer getippten Push.
   ///
-  /// TODO (vucko): Zentralen Notification-Router andocken (Post/Profil/Gruppe),
-  /// analog zum Deep-Link-Handling in main.dart / notifications_page.
+  /// 2026-08-23 (vucko, Sprachnachricht: „ueber die Glocke bzw. ueber den
+  /// Quicklink dann joinen will [...] dass ein Fehler kommt"): Hier stand ein
+  /// leerer Rumpf mit einem TODO. Wer auf die Handy-Meldung „X laedt dich zu
+  /// einer Gruppe ein" tippte, landete auf der Startseite und musste die
+  /// Gruppe selbst suchen. Private Gruppen erscheinen in der Entdecken-Liste
+  /// aber nie (`getDiscoverGroups` filtert `is_public = true`), der Weg war
+  /// also eine Sackgasse. Jetzt derselbe Router wie bei der Glocke.
+  ///
+  /// Gilt fuer beide Wege: `getInitialMessage` (App war tot, Kaltstart) und
+  /// `onMessageOpenedApp` (App lief im Hintergrund, Warmstart).
   void _handleTapData(Map<String, dynamic> data) {
     if (kDebugMode) {
       debugPrint('[Push] opened from notification: $data');
     }
+    unawaited(NotificationRouter.ausPushDaten(data));
   }
 
   /// Bei Logout aufrufen: Token aus Supabase entfernen + FCM-Token löschen,

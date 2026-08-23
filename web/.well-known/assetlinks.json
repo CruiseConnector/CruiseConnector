@@ -5,8 +5,9 @@
     ],
     "target": {
       "namespace": "android_app",
-      "package_name": "com.example.cruise_connect",
+      "package_name": "com.vucko.cruiserconnect",
       "sha256_cert_fingerprints": [
+        "40:13:41:F5:EA:6F:1F:29:8B:16:C2:97:8A:72:F3:D0:49:0B:41:74:44:7E:02:B0:E3:B6:0A:3F:7A:C5:03:CD",
         "81:7B:AD:FB:D8:97:2D:9F:B0:60:3D:CC:42:F0:44:67:82:E6:26:67:F7:09:85:01:92:F5:90:1B:51:B2:D3:24"
       ]
     }

@@ -39,7 +39,7 @@ import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/widgets/force_update_gate.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
-import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
+import 'package:cruise_connect/presentation/pages/group_join_gate.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
 
@@ -141,6 +141,14 @@ void main() {
         };
       }
 
+      // 2026-08-23 (vucko, Sprachnachricht: „ueber die Glocke bzw. ueber den
+      // Quicklink dann joinen will [...] dass ein Fehler kommt"): Der
+      // Gruppen-Einstieg und der Benachrichtigungs-Router brauchen einen
+      // Navigator, auch wenn sie aus einer getippten Push kommen, wo es keinen
+      // BuildContext gibt. Muss VOR runApp gesetzt sein, weil eine Push die App
+      // aus dem kalten Zustand starten kann.
+      GruppenEinstieg.rootNavigatorSchluessel = rootNavigatorKey;
+
       runApp(const MyApp());
     },
     (error, stack) {
@@ -193,12 +201,55 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   late final AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSub;
+  StreamSubscription<AuthState>? _authSub;
 
   @override
   void initState() {
     super.initState();
     _appLinks = AppLinks();
     _initDeepLinks();
+    _horcheAufAnmeldung();
+  }
+
+  /// 2026-08-23 (vucko, Sprachnachricht: „wenn er eine Gruppe erstellt hat und
+  /// er einen anderen einlaedt [...] dass ein Fehler kommt"): Ein
+  /// Einladungslink ist dafuer da, NEUE Leute zu holen. Genau die sind beim
+  /// Antippen nicht angemeldet. Bisher war der Link damit verbrannt: main.dart
+  /// merkte sich nichts, in ganz `lib/` gab es keinen gespeicherten Deep-Link.
+  /// Jetzt wird er gemerkt und nach der Anmeldung genau einmal eingeloest.
+  void _horcheAufAnmeldung() {
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+      (zustand) {
+        final ereignis = zustand.event;
+        final relevant = ereignis == AuthChangeEvent.signedIn ||
+            ereignis == AuthChangeEvent.initialSession;
+        if (!relevant || zustand.session == null) return;
+        unawaited(_holeEinladungNach());
+      },
+      onError: (e) => debugPrint('[DeepLink] auth stream Fehler: $e'),
+    );
+  }
+
+  Future<void> _holeEinladungNach() async {
+    await _wartAufNavigator();
+    await GruppenEinstieg.holeGemerktenLinkNach();
+  }
+
+  /// Kaltstart: `getInitialLink` liefert den Link, bevor der Navigator
+  /// existiert. Die alten festen 400 ms waren geraten; auf einem langsamen
+  /// Geraet mit Update-Tor und Rechts-Tor davor reichen sie nicht, und der
+  /// Link ging still verloren. Jetzt wird gewartet, bis wirklich ein Navigator
+  /// da ist.
+  Future<void> _wartAufNavigator({
+    Duration hoechstens = const Duration(seconds: 15),
+  }) async {
+    final ende = DateTime.now().add(hoechstens);
+    while (rootNavigatorKey.currentState == null &&
+        DateTime.now().isBefore(ende)) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    // Kurz Luft lassen, damit Update-Tor und Rechts-Tor zuerst aufbauen.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
   }
 
   Future<void> _initDeepLinks() async {
@@ -227,20 +278,19 @@ class _MyAppState extends State<MyApp> {
       unawaited(launchLegalDocument(legalDocument));
       return;
     }
-    // 2026-07-03 (vucko Gruppen-Share): Gruppen-Deeplink (?group=<id>) öffnet die
-    // Lobby (Beitreten respektiert dort can_join_group). Vor der Post-Prüfung,
-    // da spezifischer Query.
-    final groupId = _groupIdFromDeepLink(uri);
+    // 2026-07-03 (vucko Gruppen-Share): Gruppen-Deeplink (?group=<id>).
+    // 2026-08-23 (vucko, Sprachnachricht: „ueber den Quicklink dann joinen
+    // will [...] dass ein Fehler kommt"): Hier stand ein stummes `return;`.
+    // Lieferte `groupExists` false — was bei einer privaten Gruppe IMMER der
+    // Fall war, weil die Lesepolitik keinen Zweig fuer Eingeladene kennt —,
+    // passierte gar nichts: kein Bildschirm, keine Meldung, kein Hinweis. Der
+    // Quicklink war fuer genau den Zweck, fuer den er gebaut wurde (jemanden
+    // einladen), unbrauchbar. Jetzt derselbe Weg wie die Glocke, inklusive
+    // ehrlicher Meldung in jedem Fehlerfall.
+    final groupId = CruiseDeepLinks.gruppenIdAus(uri);
     if (groupId != null) {
-      await Future.delayed(const Duration(milliseconds: 400));
-      final exists = await SocialService.groupExists(groupId);
-      final nav = rootNavigatorKey.currentState;
-      if (!exists || nav == null) return;
-      nav.push(
-        MaterialPageRoute(
-          builder: (_) => GroupLobbyPage(groupId: groupId),
-        ),
-      );
+      await _wartAufNavigator();
+      await GruppenEinstieg.oeffnen(groupId);
       return;
     }
     final postId = _postIdFromDeepLink(uri);
@@ -362,39 +412,10 @@ class _MyAppState extends State<MyApp> {
     return null;
   }
 
-  // 2026-07-03 (vucko Gruppen-Share): Gruppen-ID aus Deeplink, gespiegelt von
-  // _postIdFromDeepLink. Akzeptiert ?group=<id>, /group/<id> und
-  // cruiseconnect://group/<id>.
-  String? _groupIdFromDeepLink(Uri uri) {
-    final queryGroupId =
-        uri.queryParameters['group'] ?? uri.queryParameters['g'];
-    if (queryGroupId != null && queryGroupId.trim().isNotEmpty) {
-      return queryGroupId.trim();
-    }
-
-    final segments = uri.pathSegments;
-    if (segments.length >= 2 && segments[0] == 'group') {
-      return segments[1];
-    }
-
-    if (uri.scheme == 'cruiseconnect' &&
-        uri.host == 'group' &&
-        segments.isNotEmpty) {
-      return segments.first;
-    }
-
-    if (uri.host == CruiseDeepLinks.host &&
-        segments.length >= 2 &&
-        segments[0] == 'group') {
-      return segments[1];
-    }
-
-    return null;
-  }
-
   @override
   void dispose() {
     _linkSub?.cancel();
+    _authSub?.cancel();
     super.dispose();
   }
 

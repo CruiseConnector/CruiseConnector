@@ -5,6 +5,8 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
+import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 
 class CommunityChatsTab extends StatefulWidget {
   const CommunityChatsTab({super.key});
@@ -91,15 +93,49 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     });
   }
 
+  /// 2026-08-23 (Entscheidung Vucko, bindend): Ein alter, schon geteilter
+  /// Link fuehrt in eine inzwischen private Community NICHT mehr direkt
+  /// hinein, sondern loest eine Beitrittsanfrage beim Admin aus.
+  ///
+  /// Vorher stand hier ein blindes „Code rein, Chat auf". Wuerde das so
+  /// bleiben, liefe der Nutzer bei einer privaten Community in eine leere,
+  /// nicht lesbare Seite, weil er gar kein Mitglied ist. Deshalb entscheidet
+  /// jetzt der Status aus [CommunityJoinResult], ob geoeffnet oder nur
+  /// gemeldet wird.
   Future<void> _joinCommunityWithCode(String rawCode) async {
     try {
-      final id = await CommunityChatService.joinCommunityWithCode(rawCode);
+      final result = await CommunityChatService.joinCommunityByCode(rawCode);
       if (!mounted) return;
       _codeSearchController.clear();
       setState(() => _codeSearchResult = null);
-      await _openCommunity(id);
+      _showMessage(result.userMessage);
+      if (result.opensCommunity && result.communityId.isNotEmpty) {
+        await _openCommunity(result.communityId);
+      }
     } catch (e) {
       _showError(e);
+    }
+  }
+
+  /// Oeffnet die Einstellungs-Seite aus der Uebersicht heraus. Nach einer
+  /// Aenderung wird die Liste neu geladen, damit Bild, Name und die
+  /// Sichtbarkeits-Plakette sofort stimmen.
+  Future<void> _openSettings(Map<String, dynamic> community) async {
+    final communityId = community['id']?.toString();
+    if (communityId == null) return;
+    final result = await Navigator.push<CommunitySettingsResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CommunitySettingsPage(
+          communityId: communityId,
+          initialCommunity: community,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result == CommunitySettingsResult.changed ||
+        result == CommunitySettingsResult.deleted) {
+      await _load();
     }
   }
 
@@ -224,6 +260,29 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       return 'Aktion gerade nicht möglich.';
     }
     return raw;
+  }
+
+  /// 2026-08-23: neutrale Rueckmeldung (nicht rot). Der Beitritt per Code
+  /// kann seit heute fuenf verschiedene Ausgaenge haben, drei davon sind kein
+  /// Fehler, sondern eine Beitrittsanfrage.
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        backgroundColor: const Color(0xFF1C1F26),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(milliseconds: 2400),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
   }
 
   void _showError(Object message) {
@@ -506,19 +565,12 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           children: [
             Row(
               children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: AppAccentColors.accent.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    isPublic ? Icons.forum_outlined : Icons.lock_outline,
-                    color: AppAccentColors.accent,
-                    size: 22,
-                  ),
-                ),
+                // 2026-08-23 (Auftrag Vucko „Profilbilder fuer Communities"):
+                // dritte Anzeigestelle. Diese Kachel wird an drei Orten
+                // gerendert (Meine Communities, Entdecken, Treffer der
+                // Code-Suche), deshalb reicht hier eine Aenderung fuer alle
+                // drei. Ohne Bild bleibt genau der bisherige Platzhalter.
+                CommunityAvatar.fromCommunity(community, size: 42),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -620,9 +672,29 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           _confirmLeaveCommunity(community);
         } else if (value == 'delete') {
           _confirmDeleteCommunity(community);
+        } else if (value == 'settings') {
+          _openSettings(community);
         }
       },
       itemBuilder: (_) => [
+        // 2026-08-23 (Auftrag Vucko): zweiter Zugang zu den Einstellungen.
+        // Vorher gab es hier nur Mitglieder, Verlassen und Loeschen, und
+        // Schreibmodus und Sichtbarkeit lagen versteckt im Menue INNERHALB
+        // des Chats. Genau deshalb hat Vucko sie nicht gefunden.
+        if (isAdmin)
+          const PopupMenuItem(
+            value: 'settings',
+            child: Row(
+              children: [
+                Icon(Icons.settings_outlined, color: Colors.white70, size: 18),
+                SizedBox(width: 10),
+                Text(
+                  'Einstellungen',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ],
+            ),
+          ),
         const PopupMenuItem(
           value: 'members',
           child: Row(
@@ -887,13 +959,17 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               if (saving) return;
               setSheetState(() => saving = true);
               try {
-                final id = await CommunityChatService.joinCommunityWithCode(
-                  codeCtrl.text,
-                );
+                final result =
+                    await CommunityChatService.joinCommunityByCode(
+                      codeCtrl.text,
+                    );
                 if (!sheetContext.mounted) return;
                 Navigator.pop(sheetContext);
                 if (!mounted) return;
-                await _openCommunity(id);
+                _showMessage(result.userMessage);
+                if (result.opensCommunity && result.communityId.isNotEmpty) {
+                  await _openCommunity(result.communityId);
+                }
               } catch (e) {
                 _showError(e);
               } finally {

@@ -13,6 +13,54 @@ class SocialServiceException implements Exception {
   String toString() => message;
 }
 
+/// 2026-08-23 (vucko): Wie steht es um meinen Zugang zu einer Gruppe?
+///
+/// Vier Ausgaenge statt des alten ja/nein, weil „ich sehe die Gruppe nicht"
+/// und „die Gruppe gibt es nicht mehr" zwei verschiedene Dinge sind. Genau
+/// diese Verwechslung hat den eingeladenen Fahrer am 21.08. dreimal in die
+/// Meldung „Diese Gruppe ist nicht mehr verfuegbar." laufen lassen.
+enum GruppenZugang {
+  /// Ich bin Gastgeber oder schon Mitglied. Direkt in die Lobby.
+  mitglied,
+
+  /// Ich darf beitreten, bin aber noch nicht drin. Einladung zeigen.
+  einladung,
+
+  /// Geloescht, beendet, oder die Fahrt laeuft bereits ohne mich.
+  nichtVerfuegbar,
+
+  /// Wir wissen es nicht (Netz/Server). Ehrlich sagen und Wiederholen anbieten.
+  netzfehler,
+
+  /// Kein Konto angemeldet. Link merken, nach der Anmeldung nachholen.
+  nichtAngemeldet,
+}
+
+/// Ergebnis von [SocialService.pruefeGruppenZugang] samt dem, was wir von der
+/// Gruppe lesen durften (kann leer sein, wenn die Lesepolitik sie versteckt).
+class GruppenZugangsBescheid {
+  const GruppenZugangsBescheid(
+    this.zugang, {
+    this.gruppe,
+    this.gruppenName,
+  });
+
+  final GruppenZugang zugang;
+  final Map<String, dynamic>? gruppe;
+  final String? gruppenName;
+
+  String? get gastgeberName {
+    final profil = gruppe?['profiles'] as Map<String, dynamic>?;
+    final name = (profil?['username'] as String?)?.trim();
+    return (name == null || name.isEmpty) ? null : name;
+  }
+
+  int get mitgliederAnzahl =>
+      ((gruppe?['group_members'] as List?) ?? const []).length;
+
+  bool get istOeffentlich => gruppe?['is_public'] == true;
+}
+
 /// Strukturiertes Ergebnis des server-seitigen `set_username`-RPC.
 class UsernameSetResult {
   const UsernameSetResult({
@@ -88,6 +136,11 @@ class DuplicateSharedGroupPostException implements Exception {
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+
+  /// 2026-08-23 (Auftrag Vucko): Bucket für Community-Bilder. Angelegt in
+  /// der Migration 20260823123000, öffentlich lesbar, 5 MiB, jpeg/png/webp.
+  /// Der Ordner darin ist die Community-Kennung, nicht die Nutzer-Kennung.
+  static const String communityImagesBucket = 'community_images';
 
   static const String duplicateSharedRoutePostMessage =
       'Du hast diese Strecke bereits gepostet. Lösche zuerst den alten Post, '
@@ -629,20 +682,110 @@ class SocialService {
     }
   }
 
-  /// 2026-06-25 (vucko): existiert die Gruppe (noch)? Für Notification-Deeplinks
-  /// — gelöschte/abgelaufene Gruppen → „nicht mehr verfügbar"-Popup statt
-  /// Navigation ins Leere. Liefert false auch bei fehlender Leseberechtigung.
-  static Future<bool> groupExists(String groupId) async {
+  /// 2026-08-23 (vucko, Sprachnachricht: „dass wenn er eine Gruppe erstellt hat
+  /// und er einen anderen einlaedt und er ueber die Glocke bzw. ueber den
+  /// Quicklink dann joinen will, dass ein Fehler kommt"):
+  ///
+  /// Hier stand bis heute `groupExists`. Die Funktion hat eine LEERE Antwort
+  /// von PostgREST als „Gruppe geloescht" gedeutet. Das ist falsch: Bei einem
+  /// RLS-Ausschluss liefert PostgREST HTTP 200 mit leerer Liste, es gibt keinen
+  /// Fehlercode. Leer heisst also „du darfst nicht lesen", nicht „gibt es
+  /// nicht". Gemessen am echten Vorfall: Gruppe ac29cf1f-e50f-4b2e-81d3-
+  /// d99885e7e084 („latenight session", privat, 21.08. 21:38). Der Eingeladene
+  /// 645065af-3999-4e66-90cd-c4718c0b8ddf tippte um 21:42:49, 21:42:57 und
+  /// 21:44:13 auf die Glocke, jedes Mal
+  /// `GET /rest/v1/groups?select=id&id=eq.ac29cf1f...` mit HTTP 200 und
+  /// content_length 2 (leere Liste), danach nie ein Lobby-Aufruf. Er ist bis
+  /// heute nicht in `group_members`. Einladungen 2, eingeloest 0.
+  /// Zusaetzlich verschluckte das `catch (_) { return false; }` jeden
+  /// Netzfehler und machte daraus ebenfalls „nicht mehr verfuegbar".
+  ///
+  /// Ersatz ist diese Pruefung mit vier ehrlichen Ausgaengen. Der zweite
+  /// Zeuge ist die Datenbankfunktion `can_join_group` (SECURITY DEFINER, an
+  /// `authenticated` freigegeben): sie kennt die Einladung ausdruecklich und
+  /// sieht die Gruppe auch dann, wenn die Lesepolitik sie versteckt.
+  static Future<GruppenZugangsBescheid> pruefeGruppenZugang(
+    String groupId,
+  ) async {
+    final uid = _userId;
+    if (uid == null) {
+      return const GruppenZugangsBescheid(GruppenZugang.nichtAngemeldet);
+    }
+
+    Map<String, dynamic>? zeile;
     try {
       final row = await _db
           .from('groups')
-          .select('id')
+          .select(
+            'id, name, created_by, is_public, is_active, closed_at, '
+            'start_time, max_people, group_members(user_id), '
+            'profiles:created_by(id, username, avatar_url)',
+          )
           .eq('id', groupId)
           .maybeSingle();
-      return row != null;
-    } catch (_) {
-      return false;
+      if (row != null) zeile = Map<String, dynamic>.from(row);
+    } catch (e) {
+      // Netz-/Serverfehler: Wir wissen es NICHT. Frueher wurde daraus
+      // „Diese Gruppe ist nicht mehr verfuegbar." — eine Luege.
+      debugPrint('[SocialService] pruefeGruppenZugang Lesefehler: $e');
+      return const GruppenZugangsBescheid(GruppenZugang.netzfehler);
     }
+
+    final mitgliederIds = ((zeile?['group_members'] as List?) ?? const [])
+        .map((m) => (m as Map)['user_id']?.toString())
+        .whereType<String>()
+        .toList();
+
+    // Bin ich schon drin? Dann brauchen wir den zweiten Zeugen nicht.
+    if (zeile != null &&
+        (zeile['created_by'] == uid || mitgliederIds.contains(uid))) {
+      return GruppenZugangsBescheid(
+        GruppenZugang.mitglied,
+        gruppe: zeile,
+        gruppenName: (zeile['name'] as String?)?.trim(),
+      );
+    }
+
+    bool darfBeitreten;
+    try {
+      final antwort = await _db.rpc(
+        'can_join_group',
+        params: {'p_group_id': groupId, 'p_user_id': uid},
+      );
+      darfBeitreten = antwort == true;
+    } catch (e) {
+      debugPrint('[SocialService] can_join_group Fehler: $e');
+      return const GruppenZugangsBescheid(GruppenZugang.netzfehler);
+    }
+
+    return GruppenZugangsBescheid(
+      entscheideGruppenZugang(
+        angemeldet: true,
+        zeileLesbar: zeile != null,
+        binMitglied: false,
+        darfBeitreten: darfBeitreten,
+      ),
+      gruppe: zeile,
+      gruppenName: (zeile?['name'] as String?)?.trim(),
+    );
+  }
+
+  /// Die Entscheidungsregel ohne Datenbank, damit sie pruefbar ist.
+  ///
+  /// Wichtig: `zeileLesbar == false` ist KEIN Beweis fuer „geloescht".
+  /// Erst wenn auch `can_join_group` nein sagt, ist die Gruppe fuer diesen
+  /// Nutzer wirklich zu Ende (geloescht, beendet, oder die Fahrt laeuft schon).
+  @visibleForTesting
+  static GruppenZugang entscheideGruppenZugang({
+    required bool angemeldet,
+    required bool zeileLesbar,
+    required bool binMitglied,
+    required bool darfBeitreten,
+  }) {
+    if (!angemeldet) return GruppenZugang.nichtAngemeldet;
+    if (binMitglied) return GruppenZugang.mitglied;
+    if (darfBeitreten) return GruppenZugang.einladung;
+    return GruppenZugang.nichtVerfuegbar;
   }
 
   // ── Likes ─────────────────────────────────────────────────────────────
@@ -2828,6 +2971,82 @@ class SocialService {
     return null;
   }
 
+  /// 2026-08-23 (Auftrag Vucko, Sprachnachricht): „...dass man für Communities
+  /// wirklich auch Profilbilder reintun kann..."
+  ///
+  /// Zwillingsfunktion zu [uploadUserAsset], bewusst DANEBEN statt darin:
+  /// [uploadUserAsset] wird an fünf Stellen benutzt (Avatar, Banner,
+  /// Fahrzeug-Foto, Fahrt-Foto, Feedback-Bild) und legt den Pfad hart auf
+  /// `<uid>/...`, weil alle bestehenden Storage-Regeln
+  /// `auth.uid()::text = (storage.foldername(name))[1]` verlangen.
+  ///
+  /// Für Communities geht das nicht: `is_community_admin` prüft die ROLLE in
+  /// `community_members`, nicht `communities.owner_id`. Gemessen am
+  /// 23.08.2026 hat „Has.Crew" ZWEI Zeilen mit `role = 'owner'`. Läge das Bild
+  /// unter `<uid>/`, könnte Admin B das Bild von Admin A nie ersetzen. Der
+  /// Ordner ist deshalb die COMMUNITY-Kennung, passend zu den Regeln
+  /// `community_images_hochladen_admin` und `..._ersetzen_admin`.
+  ///
+  /// Härtung identisch zum Vorbild: bis zu 3 Versuche, 25 s Timeout,
+  /// wachsender Backoff, Cache-Buster an der Public-URL. Gibt bei
+  /// endgültigem Scheitern null zurück, damit der Aufrufer eine ehrliche
+  /// deutsche Meldung zeigen kann statt einer rohen Ausnahme.
+  static Future<String?> uploadCommunityAsset({
+    required String communityId,
+    required Uint8List bytes,
+    required String fileName,
+    String? contentType,
+  }) async {
+    final cleanId = communityId.trim();
+    if (cleanId.isEmpty) return null;
+    final path = '$cleanId/$fileName';
+
+    Object? lastError;
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await _db.storage
+            .from(communityImagesBucket)
+            .uploadBinary(
+              path,
+              bytes,
+              fileOptions: FileOptions(upsert: true, contentType: contentType),
+            )
+            .timeout(const Duration(seconds: 25));
+        final publicUrl = _db.storage
+            .from(communityImagesBucket)
+            .getPublicUrl(path);
+        return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
+      } catch (e) {
+        lastError = e;
+        debugPrint(
+          '[Social] Community-Upload-Versuch $attempt/3 fehlgeschlagen ($path): $e',
+        );
+        if (attempt < 3) {
+          await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+        }
+      }
+    }
+    debugPrint(
+      '[Social] Community-Upload endgültig fehlgeschlagen ($path): $lastError',
+    );
+    return null;
+  }
+
+  /// Entfernt ein Community-Bild wieder aus dem Bucket. Best-effort wie
+  /// [deleteUserAsset]: wirft nie, damit ein Storage-Fehler das Speichern der
+  /// Zeile nicht blockiert.
+  static Future<bool> deleteCommunityAsset({required String publicUrl}) async {
+    final path = storagePathFromPublicUrl(communityImagesBucket, publicUrl);
+    if (path == null) return false;
+    try {
+      await _db.storage.from(communityImagesBucket).remove([path]);
+      return true;
+    } catch (e) {
+      debugPrint('[Social] Community-Storage-Cleanup fehlgeschlagen ($path): $e');
+      return false;
+    }
+  }
+
   /// Extrahiert den Storage-Pfad (`<uid>/<datei>`) aus einer Public-URL eines
   /// Buckets (Cache-Buster `?t=` wird abgeschnitten). Für Vergleich + Löschen.
   static String? storagePathFromPublicUrl(String bucket, String publicUrl) {
@@ -2912,16 +3131,40 @@ class SocialService {
 
   // ── Group Invites ───────────────────────────────────────────────────
 
+  /// 2026-08-23 (vucko, Sprachnachricht: „wenn er eine Gruppe erstellt hat und
+  /// er einen anderen einlaedt"): Die Einladung laeuft jetzt ueber die RPC
+  /// `invite_to_group` statt ueber einen direkten Insert in `notifications`.
+  ///
+  /// Zwei Gruende, beide gemessen:
+  /// 1. Der Gruppenname fehlte. Gelesen wird `payload['group_name']`
+  ///    (notification_service.dart:327-329 und
+  ///    supabase/functions/send-push/index.ts:178-184), geschrieben hat ihn
+  ///    nie jemand. Beide Einladungen aus dem Vorfall vom 21.08. haben
+  ///    payload = {}. In der Glocke stand deshalb immer „laedt dich zu einer
+  ///    Gruppe ein". Die RPC traegt den Namen ein.
+  /// 2. Niemand hat geprueft, WER einlaedt. Die INSERT-Policy auf
+  ///    `notifications` verlangt nur `from_user_id = auth.uid()`. Seit die
+  ///    Lese-Policy auf `groups` einen Zweig fuer Eingeladene hat, haette sich
+  ///    damit jeder selbst Lesezugang zu einer fremden privaten Gruppe
+  ///    verschaffen koennen. Die RPC verlangt jetzt, dass der Einladende
+  ///    selbst Gastgeber oder Mitglied ist.
+  ///
+  /// Fuer die Bedienung aendert sich nichts: Der Einladen-Knopf in der Lobby
+  /// steht ohnehin nur Mitgliedern offen (`_amMember && !g.isActive`).
   static Future<void> inviteToGroup(String groupId, String targetUserId) async {
     final uid = _userId;
     if (uid == null) return;
 
-    await _db.from('notifications').insert({
-      'user_id': targetUserId,
-      'from_user_id': uid,
-      'type': 'group_invite',
-      'reference_id': groupId,
-    });
+    try {
+      await _db.rpc(
+        'invite_to_group',
+        params: {'p_group_id': groupId, 'p_user_id': targetUserId},
+      );
+    } on PostgrestException catch (e) {
+      // Die RPC bringt fertige deutsche Saetze mit („Nur der Gastgeber darf
+      // zu dieser Gruppe einladen.", „Die Fahrt läuft bereits ...").
+      throw SocialServiceException(e.message);
+    }
   }
 
   static Future<Map<String, dynamic>?> getProfilePreview(String userId) async {
