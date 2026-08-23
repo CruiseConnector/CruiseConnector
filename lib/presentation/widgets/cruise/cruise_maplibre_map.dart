@@ -276,6 +276,7 @@ class CruiseMapLibreMap extends StatefulWidget {
     this.styleAsset = 'assets/map/cruise_dark.json',
     this.activeRoutePoints = const [],
     this.drivenTrailPoints = const [],
+    this.recordedTrackSegments = const [],
     this.routeProgress = 0.0,
     this.routeTotalMeters = 0.0,
     this.routeColor = const Color(0xFFFF4438),
@@ -306,6 +307,7 @@ class CruiseMapLibreMap extends StatefulWidget {
   final List<CruiseMapLine> lines;
   final List<CruiseMapMarker> markers;
   final void Function(ll.LatLng point)? onMapClick;
+
   /// 2026-08-04 (vucko „langer Druck auf die Karte soll nach A nach B
   /// wechseln"): Langer Druck auf einen Kartenpunkt. Das Plugin liefert das
   /// Ereignis nativ, es wurde bisher nur nicht durchgereicht.
@@ -334,6 +336,20 @@ class CruiseMapLibreMap extends StatefulWidget {
   // (kein 3km-Abschnitt mehr, der wie „kaputt/abgeschnitten" aussieht), während
   // der scharfe Schnitt am Puck erhalten bleibt (Apple/Google-Look).
   final List<ll.LatLng> drivenTrailPoints;
+
+  /// 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): der aufgezeichnete
+  /// GPS-Pfad als „Brotkrumen-Spur" HINTER dem Fahrzeug — je Eintrag ein
+  /// zusammenhaengendes Segment des `DrivenTrackRecorder`.
+  ///
+  /// Bewusst getrennt von [drivenTrailPoints]: jener uebermalt den bereits
+  /// abgefahrenen Teil einer GEPLANTEN Route in Hintergrundfarbe (Radiergummi),
+  /// dieser zeichnet die tatsaechlich gefahrene Strecke. Beide koennen
+  /// gleichzeitig aktiv sein — bei einer geplanten Fahrt frisst der eine die
+  /// Vorgabe auf, waehrend der andere den echten Weg nachzieht.
+  ///
+  /// Leere Liste = Spur aus (Voreinstellung, alle bisherigen Aufrufstellen
+  /// bleiben unveraendert).
+  final List<List<ll.LatLng>> recordedTrackSegments;
   final double routeProgress;
 
   /// Gesamtlänge der aktiven Route in Metern — nötig, um „die nächsten 3 km"
@@ -423,6 +439,17 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   static const String _drivenSrcId = 'cruise-route-driven';
   static const String _drivenCasingLayerId = 'cruise-route-driven-casing';
   static const String _drivenFillLayerId = 'cruise-route-driven-fill';
+  // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): der TATSAECHLICH gefahrene
+  // GPS-Pfad. Nicht mit [_drivenSrcId] zu verwechseln — jener uebermalt den
+  // abgefahrenen Teil einer GEPLANTEN Route in Hintergrundfarbe, ist also ein
+  // Radiergummi. Dieser Layer ist das Gegenteil: er ZEICHNET, wo man war, und
+  // braucht darum eine eigene Quelle. MultiLineString, weil der
+  // DrivenTrackRecorder bei GPS-Luecken (Tunnel, App im Hintergrund) ein neues
+  // Segment beginnt — durchverbunden entstuende eine Luftlinie quer ueber die
+  // Karte, die nie jemand gefahren ist.
+  static const String _recordedSrcId = 'cruise-recorded-track';
+  static const String _recordedCasingLayerId = 'cruise-recorded-track-casing';
+  static const String _recordedFillLayerId = 'cruise-recorded-track-fill';
   // 2026-06-25 (vucko Marker-Swim, native): POI/Baustellen-Symbol-Layer. Eigene
   // Quelle (FeatureCollection — NICHT bare Feature: iOS setGeoJsonSource erwartet
   // eine Collection, sonst stille No-Op). Bilder via addImage registriert,
@@ -442,6 +469,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   // Rot-Braun) → liest sich als Schatten-Rand, hebt die rote Linie klar vom
   // dunklen Map-Hintergrund ab (Apple/Google-Maps-Look).
   static const Color _routeCasingColor = Color(0xFF230806);
+  // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): Kontur der aufgezeichneten
+  // Spur. Neutrales Fast-Schwarz statt des rot-braunen Routen-Casings — die
+  // Spur traegt die Akzentfarbe des Nutzers, und ein rotstichiger Rand wuerde
+  // bei blauem oder gruenem Akzent schmutzig aussehen.
+  static const Color _recordedCasingColor = Color(0xFF07090D);
   // Zoom-abhängige Breiten: sichtbar, aber schlank. Casing ~1,5× = dunkler Rand.
   // 2026-06-09 (vucko): nochmal 20% dünner (×0.8) — war „sehr dick".
   static const List<dynamic> _casingWidth = <dynamic>[
@@ -476,6 +508,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
   ];
   String _lastActiveSig = '';
   String _lastDrivenSig = '';
+  String _lastRecordedSig = '';
   // View-/quellen-abhängige Calls (setGeoJsonSource, toScreenLocationBatch) erst
   // NACH dem ersten gerenderten Frame (onCameraIdle) feuern — nicht direkt im
   // onStyleLoaded, solange Renderer/Tiles noch nicht idle sind (sonst Throw).
@@ -585,6 +618,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       // Reststrecke; bei Geometrie-Wechsel neu pushen (kein Gradient mehr).
       _syncActiveRoute();
       _syncDrivenTrail();
+      _syncRecordedTrack();
       _applyRouteGradient();
       // 2026-06-25 (vucko native POIs): Layer sicherstellen (Icon-Bilder können
       // verzögert ankommen, da sie async gerastert werden) + bei Änderung pushen.
@@ -674,9 +708,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
         _lastLinesSig = '';
         _lastActiveSig = '';
         _lastDrivenSig = '';
+        _lastRecordedSig = '';
         _syncLines();
         _syncActiveRoute();
         _syncDrivenTrail();
+        _syncRecordedTrack();
         _applyRouteGradient();
       });
     }
@@ -875,6 +911,51 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
           mb.LineLayerProperties(
             lineColor:
                 '#${(_drivenFillColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
+            lineWidth: _fillWidth,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+        if (!mounted) return;
+      }
+      // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): die aufgezeichnete
+      // Spur ganz oben — sie ist beim Aufzeichnen die EINZIGE Linie und darf
+      // bei einer geplanten Fahrt nicht unter dem Radiergummi verschwinden.
+      // Aufbau exakt wie oben: Existenz geprueft (kein Redundant-Throw),
+      // Casing + Fuellung, damit die Spur auf hellen Kacheln lesbar bleibt.
+      if (!sourceIds.contains(_recordedSrcId)) {
+        await map.addSource(
+          _recordedSrcId,
+          const mb.GeojsonSourceProperties(
+            data: <String, dynamic>{
+              'type': 'FeatureCollection',
+              'features': <dynamic>[],
+            },
+          ),
+        );
+        if (!mounted) return;
+      }
+      if (!layerIds.contains(_recordedCasingLayerId)) {
+        await map.addLineLayer(
+          _recordedSrcId,
+          _recordedCasingLayerId,
+          mb.LineLayerProperties(
+            lineColor:
+                '#${(_recordedCasingColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
+            lineWidth: _casingWidth,
+            lineJoin: 'round',
+            lineCap: 'round',
+          ),
+        );
+        if (!mounted) return;
+      }
+      if (!layerIds.contains(_recordedFillLayerId)) {
+        await map.addLineLayer(
+          _recordedSrcId,
+          _recordedFillLayerId,
+          mb.LineLayerProperties(
+            lineColor:
+                '#${(widget.routeColor.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}',
             lineWidth: _fillWidth,
             lineJoin: 'round',
             lineCap: 'round',
@@ -1118,6 +1199,7 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
       _syncLines();
       _syncActiveRoute();
       _syncDrivenTrail();
+      _syncRecordedTrack();
       _applyRouteGradient();
       _syncPois();
       _projectMarkers();
@@ -1155,6 +1237,11 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
     // bewusst nichts an die native View geschickt).
     if (v && _styleLoaded) {
       _syncLines();
+      // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): Die Spur waechst
+      // waehrend der Unsichtbarkeit weiter (GPS laeuft), die Pushes werden
+      // aber oben verworfen. Ohne diesen Nachzieher bliebe der aufgeholte
+      // Abschnitt bis zum naechsten GPS-Fix unsichtbar.
+      _syncRecordedTrack();
       _projectMarkers();
     }
   }
@@ -1342,6 +1429,63 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                   },
                 },
               ],
+      });
+    } catch (_) {}
+  }
+
+  /// 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): schiebt die
+  /// aufgezeichnete GPS-Spur in ihre Quelle.
+  ///
+  /// Signatur-gegatet wie [_syncDrivenTrail] — waehrend der Fahrt rebuildet die
+  /// Seite bis zu ~11×/s, die Spur waechst aber nur alle paar Meter um einen
+  /// Punkt. Ohne dieses Gate ginge bei einer langen Fahrt zehnmal je Sekunde
+  /// eine mehrere tausend Punkte grosse Geometrie ueber den Platform-Channel.
+  /// Die Punktzahl im Kopf der Signatur genuegt: Segmente werden nur angehaengt,
+  /// nie umgeschrieben.
+  Future<void> _syncRecordedTrack() async {
+    final map = _map;
+    if (!_styleLoaded ||
+        !_visible ||
+        !_appResumed ||
+        !_firstFrameSynced ||
+        !_lineLayerReady ||
+        map == null) {
+      return;
+    }
+
+    final segments = widget.recordedTrackSegments
+        .where((segment) => segment.length >= 2)
+        .toList(growable: false);
+
+    var pointCount = 0;
+    for (final segment in segments) {
+      pointCount += segment.length;
+    }
+    final last = segments.isEmpty ? null : segments.last.last;
+    final sig = segments.isEmpty
+        ? 'empty'
+        : '${segments.length}:$pointCount:'
+              '${last!.latitude.toStringAsFixed(5)},'
+              '${last.longitude.toStringAsFixed(5)}';
+    if (sig == _lastRecordedSig) return;
+    _lastRecordedSig = sig;
+
+    try {
+      await map.setGeoJsonSource(_recordedSrcId, {
+        'type': 'FeatureCollection',
+        'features': [
+          for (final segment in segments)
+            {
+              'type': 'Feature',
+              'properties': <String, dynamic>{},
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': [
+                  for (final p in segment) [p.longitude, p.latitude],
+                ],
+              },
+            },
+        ],
       });
     } catch (_) {}
   }
@@ -1584,10 +1728,8 @@ class _CruiseMapLibreMapState extends State<CruiseMapLibreMap>
                   onMapClick: (point, latLng) => widget.onMapClick?.call(
                     ll.LatLng(latLng.latitude, latLng.longitude),
                   ),
-                  onMapLongClick: (point, latLng) =>
-                      widget.onMapLongClick?.call(
-                        ll.LatLng(latLng.latitude, latLng.longitude),
-                      ),
+                  onMapLongClick: (point, latLng) => widget.onMapLongClick
+                      ?.call(ll.LatLng(latLng.latitude, latLng.longitude)),
                   onCameraMove: _onCameraMove,
                   onCameraIdle: _onCameraIdle,
                   onMapIdle: _onMapIdle,

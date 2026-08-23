@@ -5,9 +5,13 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
+import 'package:cruise_connect/data/services/favorite_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
+import 'package:cruise_connect/presentation/widgets/profile/favorite_routes_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
@@ -42,6 +46,10 @@ class _UserProfilePageState extends State<UserProfilePage>
   List<Map<String, dynamic>> _posts = [];
   List<Map<String, dynamic>> _reposts = [];
   List<Map<String, dynamic>> _vehicles = [];
+
+  /// 2026-08-19 (Top-3-Lieblingsrouten): die angepinnten Highlights dieses
+  /// Profils in Anzeige-Reihenfolge.
+  List<SavedRoute> _favoriteRoutes = [];
   bool _isFollowing = false;
   bool _isOwnProfile = false;
   bool _isPrivate = false;
@@ -146,6 +154,7 @@ class _UserProfilePageState extends State<UserProfilePage>
           _posts = [];
           _reposts = [];
           _vehicles = [];
+          _favoriteRoutes = [];
           _followStatus = 'none';
           _isFollowing = false;
           _isPrivate = false;
@@ -175,6 +184,7 @@ class _UserProfilePageState extends State<UserProfilePage>
             _posts = [];
             _reposts = [];
             _vehicles = [];
+            _favoriteRoutes = [];
             _followStatus = status;
             _isFollowing = false;
             _isPrivate = true;
@@ -190,6 +200,9 @@ class _UserProfilePageState extends State<UserProfilePage>
         SocialService.getUserPosts(widget.userId),
         SocialService.getUserReposts(widget.userId),
         SocialService.getUserVehicles(widget.userId),
+        // Vor dem bedingten Follow-Status, damit dessen Index nicht davon
+        // abhaengt, ob gerade das eigene Profil geoeffnet ist.
+        FavoriteRoutesService.getFavorites(widget.userId),
         if (!_isOwnProfile) SocialService.getFollowStatus(widget.userId),
       ]);
       if (mounted) {
@@ -200,8 +213,9 @@ class _UserProfilePageState extends State<UserProfilePage>
           _posts = results[1] as List<Map<String, dynamic>>;
           _reposts = results[2] as List<Map<String, dynamic>>;
           _vehicles = results[3] as List<Map<String, dynamic>>;
+          _favoriteRoutes = results[4] as List<SavedRoute>;
           if (!_isOwnProfile) {
-            _followStatus = results[4] as String;
+            _followStatus = results[5] as String;
             _isFollowing = _followStatus == 'accepted';
           }
           _fullProfileLoaded = true;
@@ -215,6 +229,15 @@ class _UserProfilePageState extends State<UserProfilePage>
       debugPrint('[UserProfile] Daten laden fehlgeschlagen: $e');
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// 2026-08-19 (Top-3-Lieblingsrouten): Tap auf ein Highlight oeffnet
+  /// dieselbe Detailseite wie im eigenen Profil — dort haengen Karte,
+  /// Eckdaten und „Nochmal fahren" schon dran.
+  void _openRouteDetail(SavedRoute route) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RideDetailPage.fromSavedRoute(route)),
+    );
   }
 
   Future<void> _openExternalLink(String rawLink) async {
@@ -654,6 +677,20 @@ class _UserProfilePageState extends State<UserProfilePage>
               if (!privateLocked && _vehicles.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 _buildCarSection(),
+              ],
+              // 2026-08-19 (Top-3-Lieblingsrouten): prominent im Kopfbereich,
+              // noch ueber den Tabs — Besucher sollen die Highlights sehen,
+              // ohne erst irgendwo hinzuwechseln. Bei gesperrtem Privatprofil
+              // bleibt die Sektion weg wie alle anderen Inhalte auch.
+              if (!privateLocked && _favoriteRoutes.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                FavoriteRoutesShowcase(
+                  routes: _favoriteRoutes,
+                  accent: AppAccentColors.accent,
+                  isOwner: false,
+                  displayName: name,
+                  onOpenRoute: _openRouteDetail,
+                ),
               ],
             ],
           ),

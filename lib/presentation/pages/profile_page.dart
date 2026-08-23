@@ -12,6 +12,7 @@ import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
+import 'package:cruise_connect/data/services/favorite_routes_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -32,6 +33,8 @@ import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/accent_color_picker.dart';
 import 'package:cruise_connect/presentation/widgets/social/group_attachment_card.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
+import 'package:cruise_connect/presentation/widgets/profile/favorite_routes_picker_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/profile/favorite_routes_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/vehicle_garage_carousel.dart';
@@ -66,6 +69,10 @@ class _ProfilePageState extends State<ProfilePage>
   List<Map<String, dynamic>> _groups = [];
   List<Map<String, dynamic>> _vehicles = [];
   List<SavedRoute> _savedRoutes = [];
+
+  /// 2026-08-19 (Top-3-Lieblingsrouten): angepinnte Highlights in
+  /// Anzeige-Reihenfolge (Platz 1 zuerst).
+  List<SavedRoute> _favoriteRoutes = [];
   String? _avatarUrl;
   String? _bannerUrl;
 
@@ -116,6 +123,7 @@ class _ProfilePageState extends State<ProfilePage>
         SavedRoutesService.getSavedRouteLibrary(),
         SocialService.getUserProfile(uid),
         SocialService.getUserVehicles(uid),
+        FavoriteRoutesService.getOwnFavorites(),
       ]);
 
       if (mounted) {
@@ -135,6 +143,7 @@ class _ProfilePageState extends State<ProfilePage>
           _savedRoutes = results[5] as List<SavedRoute>;
           _profile = profileWithCounts;
           _vehicles = results[7] as List<Map<String, dynamic>>;
+          _favoriteRoutes = results[8] as List<SavedRoute>;
           _avatarUrl = profile?['avatar_url'] as String?;
           _bannerUrl = profile?['banner_url'] as String?;
           _loading = false;
@@ -730,6 +739,22 @@ class _ProfilePageState extends State<ProfilePage>
                   child: _buildCarSection(),
                 ),
               ),
+
+            // 2026-08-19 (Top-3-Lieblingsrouten): ueber den Tabs, damit die
+            // Highlights ohne Tab-Wechsel sichtbar sind. Im eigenen Profil
+            // steht hier auch der Einstieg in die Auswahl.
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: FavoriteRoutesShowcase(
+                  routes: _favoriteRoutes,
+                  accent: accent,
+                  isOwner: true,
+                  onEdit: _openFavoriteRoutesPicker,
+                  onOpenRoute: _openRouteDetail,
+                ),
+              ),
+            ),
 
             // Tabs (scrollt mit)
             SliverToBoxAdapter(
@@ -1677,6 +1702,27 @@ class _ProfilePageState extends State<ProfilePage>
           ),
         );
       },
+    );
+  }
+
+  /// 2026-08-19 (Top-3-Lieblingsrouten): Auswahl-Sheet oeffnen und das
+  /// Ergebnis direkt uebernehmen. Das Sheet hat bereits gespeichert, wenn es
+  /// eine Liste zurueckgibt — ein erneutes Laden waere nur ein Roundtrip fuer
+  /// Daten, die wir schon haben.
+  Future<void> _openFavoriteRoutesPicker() async {
+    final accent = context.read<AppAccentProvider>().color;
+    final result = await FavoriteRoutesPickerSheet.show(
+      context,
+      accent: accent,
+      initialSelection: _favoriteRoutes,
+    );
+    if (!mounted || result == null) return;
+    setState(() => _favoriteRoutes = result);
+  }
+
+  void _openRouteDetail(SavedRoute route) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RideDetailPage.fromSavedRoute(route)),
     );
   }
 
