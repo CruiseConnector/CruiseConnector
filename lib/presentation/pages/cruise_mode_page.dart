@@ -587,6 +587,26 @@ class _CruiseModePageState extends State<CruiseModePage>
   final _navigationSocketService = NavigationProgressSocketService();
   final _navigationController = CruiseNavigationController();
   final _drivenTrackRecorder = DrivenTrackRecorder();
+
+  /// 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): die bisher gefahrene
+  /// Strecke als Kartengeometrie — je Eintrag ein zusammenhaengendes Segment
+  /// des [_drivenTrackRecorder].
+  ///
+  /// Der Recorder lief schon immer mit, sein Ergebnis war aber erst nach der
+  /// Fahrt sichtbar (Abschluss-Sheet, Detailseite). Diese Spiegelung macht ihn
+  /// waehrend der Fahrt sichtbar: die Linie wird HINTER dem Fahrzeug
+  /// hergezogen, statt eine vorgegebene Route abzufahren.
+  ///
+  /// Getrennt vom Recorder gehalten, weil `snapshot()` bei jedem Aufruf alle
+  /// Segmente neu in Listen kopiert — im Build-Pfad einer Seite, die waehrend
+  /// der Fahrt ~11×/s rebuildet, waere das pro Frame eine Vollkopie des
+  /// gesamten Tracks.
+  List<List<LatLng>> _recordedTrackSegments = const [];
+
+  /// Punktzahl des zuletzt gespiegelten Snapshots — daran erkennt
+  /// [_refreshRecordedTrackSegments], ob ueberhaupt etwas dazugekommen ist.
+  int _recordedTrackPointCount = 0;
+
   // 2026-06-23 (vucko Post-Route Top-Speed): höchstes geglättetes Tempo der
   // aktuellen Fahrt (m/s). Smoother statt Roh-GPS → kein Multipath-Spike; <100
   // m/s-Guard filtert absurde Glitches. Reset bei jeder NEUEN Fahrt.
@@ -2587,7 +2607,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _sessionRouteResult = route;
     _activeSpeedLimits = route.speedLimits;
     _recentDestinationDistances = [];
-    _drivenTrackRecorder.reset();
+    _resetDrivenTrack();
     _clearAccessLegState();
     _safeSetState(() {
       _routeGeoJson = route.geoJson;
@@ -2950,7 +2970,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           _accessLegMainRouteResult = accessLegMainRoute;
           _sessionRouteStartIndexInActiveRoute = 0;
           _totalDistanceDriven = 0.0;
-          _drivenTrackRecorder.reset();
+          _resetDrivenTrack();
         }
       });
 
@@ -8253,6 +8273,21 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Grauer „abgefahren"-Trail nur im Folgemodus; in der Übersicht zeigt die
       // ganze rote Route ohne Grau (sauberer Gesamtüberblick).
       drivenTrailPoints: _isOverviewActive ? const [] : _drivenTrailLatLngs,
+      // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): die tatsächlich
+      // gefahrene Strecke als Spur hinter dem Fahrzeug.
+      //
+      // Nur beim Aufzeichnen — dieselbe Regel wie beim Rest des
+      // Aufzeichnen-Features (docs/ROUTE_AUFZEICHNEN.md): Ist
+      // `_isRecordingMode` false, sieht die Fahrt exakt aus wie vorher. Bei
+      // einer GEPLANTEN Fahrt läge die Spur sonst zusätzlich über der Route
+      // und ihrem „Radiergummi"-Trail — drei Linien für zwei Aussagen.
+      //
+      // Anders als der Radiergummi bleibt die Spur AUCH in der Übersicht
+      // stehen: dort ist gerade sie das Interessante, der ganze Weg auf
+      // einen Blick.
+      recordedTrackSegments: _isRecordingMode
+          ? _recordedTrackSegments
+          : const [],
       routeProgress: _routeProgress,
       // 2026-06-10 (vucko 3km-Sichtdesign): Gesamtlänge fürs GPU-Gradient
       // (transparent hinterm Puck / 3 km voll / Rest dezent). In der Übersicht
@@ -11025,7 +11060,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _sessionRouteResult = result;
     _activeSpeedLimits = result.speedLimits;
     _recentDestinationDistances = [];
-    _drivenTrackRecorder.reset();
+    _resetDrivenTrack();
     _clearAccessLegState();
     // 2026-05-24 (vucko Task #45): Hazard-Check im Hintergrund.
     _hazardCheckDone = false;
@@ -12004,7 +12039,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _activeSpeedLimits = [];
     _announcedManeuverIndices.clear();
     _driveSessionRecordedForCompletion = false;
-    _drivenTrackRecorder.reset();
+    _resetDrivenTrack();
     _safeSetState(() {
       _isLoading = false;
       _routeLoadingPhaseIndex = 0;
@@ -12065,7 +12100,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _originalRouteDistance = null;
       _originalRouteDuration = null;
       _totalDistanceDriven = 0.0;
-      _drivenTrackRecorder.reset();
+      _resetDrivenTrack();
       _isCameraLocked = false;
       _configCollapsed = false;
     });
@@ -12867,7 +12902,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           // P2: Vorleistung einer wiederhergestellten Fahrt behalten — ein
           // harter reset() wuerde die geretteten Kilometer beim allerersten
           // „Fahrt starten" mit Anfahrts-Etappe gleich wieder loeschen.
-          _drivenTrackRecorder.resetTrackKeepingSeed();
+          _resetDrivenTrack(keepSeed: true);
           _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
         });
       }
@@ -12896,7 +12931,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _sessionRouteStartIndexInActiveRoute = 0;
       _accessLegMainRouteResult = accessPlan.sessionRoute;
       // P2: siehe oben — Seed der Wiederaufnahme uebersteht die Anfahrt.
-      _drivenTrackRecorder.resetTrackKeepingSeed();
+      _resetDrivenTrack(keepSeed: true);
       _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
     });
 
@@ -14408,7 +14443,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           _entscheideUeberLiegengebliebeneFahrt,
         ),
       );
-      _drivenTrackRecorder.reset();
+      _resetDrivenTrack();
       _totalDistanceDriven = 0.0;
       _maxSpeedMps = 0.0; // 2026-06-23 (vucko Top-Speed): pro Fahrt frisch.
       // 2026-06-15 (vucko N1): Lock-On frisch — bis der Puck eingerastet ist, gilt
@@ -14495,6 +14530,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
 
     _totalDistanceDriven = _drivenTrackRecorder.distanceMeters;
+    // 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): Spur nachziehen. Hier
+    // und nicht im Build: an dieser Stelle steht fest, dass ein Sample
+    // ANGENOMMEN wurde (verworfene Fixes sind oben schon raus). Ein eigenes
+    // setState braucht es nicht — der Rebuild-Throttle in _onLocationUpdate
+    // (~11 Hz) zeigt das Ergebnis ohnehin im naechsten Frame.
+    _refreshRecordedTrackSegments();
     // 2026-07-06 (vucko Fahrt-Resume): Fortschritt gedrosselt (max. alle 20s)
     // mitschreiben — nach App-Kill kennt der Resume-Snapshot so die bereits
     // gefahrenen Kilometer und die letzte Position.
@@ -14516,6 +14557,52 @@ class _CruiseModePageState extends State<CruiseModePage>
     _processIncidentGeofence(position.latitude, position.longitude);
     _tickJamTracking(position);
     _pushLivePositionThrottled(position);
+  }
+
+  /// 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): spiegelt den Track des
+  /// [_drivenTrackRecorder] in [_recordedTrackSegments].
+  ///
+  /// Die Punktzahl als Wächter genügt: Der Recorder hängt ausschliesslich an
+  /// (er schreibt vorhandene Punkte nie um), ein unveränderter Zähler heisst
+  /// also zwingend „nichts Neues". Bleibt die Liste identisch, sieht der
+  /// Signatur-Check in der Karte gar keinen Änderungsbedarf.
+  void _refreshRecordedTrackSegments() {
+    final snapshot = _drivenTrackRecorder.snapshot();
+    final segments = snapshot.drawableSegments;
+
+    var pointCount = 0;
+    for (final segment in segments) {
+      pointCount += segment.length;
+    }
+    if (pointCount == _recordedTrackPointCount) return;
+    _recordedTrackPointCount = pointCount;
+
+    // Der Recorder liefert [lng, lat] (Mapbox-Format), die Karte will LatLng.
+    _recordedTrackSegments = [
+      for (final segment in segments)
+        [for (final point in segment) LatLng(point[1], point[0])],
+    ];
+  }
+
+  /// Leert Recorder UND sichtbare Spur in einem Zug.
+  ///
+  /// 2026-08-19 (Cruise Mode: Strecke statt Vorgabe): Bewusst der EINZIGE Weg,
+  /// den Recorder zu leeren — es gibt neun Stellen im Fahrt-Lebenszyklus, die
+  /// das tun (Fahrt starten, Reroute, Anfahrts-Etappe, Abschluss, Abbruch …).
+  /// Bliebe eine davon beim direkten `reset()`, laege die Strecke der vorigen
+  /// Fahrt weiter auf der Karte.
+  ///
+  /// [keepSeed] entspricht `resetTrackKeepingSeed()`: Die Kilometer einer
+  /// wiederhergestellten Fahrt bleiben erhalten, nur der zeichenbare Track
+  /// beginnt neu.
+  void _resetDrivenTrack({bool keepSeed = false}) {
+    if (keepSeed) {
+      _drivenTrackRecorder.resetTrackKeepingSeed();
+    } else {
+      _drivenTrackRecorder.reset();
+    }
+    _recordedTrackSegments = const [];
+    _recordedTrackPointCount = 0;
   }
 
   /// 2026-07-26 (vucko "darf nicht ausgenutzt werden koennen"): Die letzte
@@ -20718,7 +20805,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     _xpStreakDays = 1;
     _recordingActive = false; // 2026-08-03 (vucko Route-Aufzeichnen)
     _stehtSeitAmZiel = null; // 2026-08-04: Steh-Uhr fuer die Ankunft
-    _drivenTrackRecorder.reset();
+    _resetDrivenTrack();
     _resetGeneratedRouteUiState();
     // 2026-05-24 (vucko Task #53): Trip in DB als completed markieren
     // (best-effort, fail silent).
