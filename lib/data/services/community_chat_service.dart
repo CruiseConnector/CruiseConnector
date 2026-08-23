@@ -247,6 +247,83 @@ class CommunityChatService {
     return raw;
   }
 
+  /// 2026-08-24 (Aufgabe 1.2, Aufnahme 1 [00:44]): „wenn eine Community
+  /// jünger als sieben Tage ist, dass da drunter dann ‚neu' steht oder halt
+  /// ‚vor kurzem erstellt'".
+  ///
+  /// Liest das Gründungsdatum aus einer Community-Zeile. `created_at` ist
+  /// bereits in allen drei Quellen enthalten (`_communitySelect`,
+  /// `_legacyCommunitySelect` und der RPC `find_community_by_code`, die es
+  /// in Migration 20260823123000 ausdrücklich mitgibt) — es braucht also
+  /// KEINE zusätzliche Abfrage.
+  ///
+  /// Der Wert kommt von PostgREST als ISO-Zeichenkette mit Zeitzone.
+  /// [DateTime.tryParse] ergibt daraus eine UTC-Zeit; verglichen wird
+  /// deshalb konsequent in UTC, sonst verschiebt die Gerätezeitzone die
+  /// 7-Tage-Grenze um bis zu einen halben Tag.
+  static DateTime? createdAt(Map<String, dynamic>? community) {
+    final raw = community?['created_at'];
+    if (raw is DateTime) return raw.toUtc();
+    final text = raw?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return DateTime.tryParse(text)?.toUtc();
+  }
+
+  /// Wie lange eine Community als „vor kurzem erstellt" gilt.
+  static const Duration neuFenster = Duration(days: 7);
+
+  /// 2026-08-24 (Aufgabe 1.2): true, solange die Community jünger als
+  /// [neuFenster] ist.
+  ///
+  /// Die Grenze liegt EXAKT bei 7 Tagen (Akzeptanzkriterium 3: „nicht bei 6
+  /// oder 8"): bei genau 7 Tagen Alter ist das Label WEG. Gemessen am
+  /// 24.08.2026 trügen 4 von 6 Communities das Label, eine fällt in rund
+  /// 18 Stunden heraus.
+  ///
+  /// Ohne verwertbares Datum wird bewusst `false` geliefert: lieber kein
+  /// Label als ein falsches. [jetzt] ist nur für den Test da.
+  static bool istVorKurzemErstellt(
+    Map<String, dynamic>? community, {
+    DateTime? jetzt,
+  }) {
+    final erstellt = createdAt(community);
+    if (erstellt == null) return false;
+    final referenz = (jetzt ?? DateTime.now()).toUtc();
+    final alter = referenz.difference(erstellt);
+    // Ein Datum in der Zukunft (Uhr des Geräts geht nach) zählt als neu,
+    // nicht als uralt. isNegative faengt genau diesen Fall ab.
+    if (alter.isNegative) return true;
+    return alter < neuFenster;
+  }
+
+  /// 2026-08-24 — Aufgabe 10b aus dem Nachtrag vom 24.08.
+  ///
+  /// Vucko: „und wie gesagt ein badge in der community wo man sieht wann es
+  /// gegruendet wurde."
+  ///
+  /// Nicht zu verwechseln mit dem Etikett „Vor kurzem erstellt" aus Aufgabe
+  /// 1.2: Das eine sagt „jünger als 7 Tage" und steht in der LISTE, das hier
+  /// zeigt IMMER das Datum und steht IN der Community. Und es ist auch nicht
+  /// das Erfolgs-Abzeichen für das Gründen einer Community — das liegt in
+  /// `badge.dart` und wird woanders gebaut.
+  ///
+  /// Das Gründungsdatum ist `communities.created_at`. Die Spalte
+  /// `founder_id` aus Migration 20260824103000 wird hier bewusst NICHT
+  /// gelesen: Sie steht nicht in [_communitySelect], und das Leserecht auf
+  /// `communities` ist seit dem 23.08. spaltenweise vergeben — jede neue
+  /// Spalte bräuchte ihr eigenes `grant select`. Vucko hat nach dem WANN
+  /// gefragt, nicht nach dem WER.
+  ///
+  /// Angezeigt wird in Ortszeit. Ein Gründungsdatum ist ein Kalendertag, kein
+  /// Zeitpunkt; in UTC stünde bei einer Gründung um 01:00 Uhr der Vortag da.
+  static String? gruendungsdatumText(Map<String, dynamic>? community) {
+    final erstellt = createdAt(community)?.toLocal();
+    if (erstellt == null) return null;
+    final tt = erstellt.day.toString().padLeft(2, '0');
+    final mm = erstellt.month.toString().padLeft(2, '0');
+    return 'Gegründet am $tt.$mm.${erstellt.year}';
+  }
+
   static bool isCurrentUserMember(Map<String, dynamic> community) {
     final uid = _userId;
     if (uid == null) return false;

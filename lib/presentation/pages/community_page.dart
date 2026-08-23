@@ -13,12 +13,15 @@ import 'package:cruise_connect/application/providers/saved_routes_provider.dart'
 import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/gruppen_umkreis_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/create_group_page.dart';
 import 'package:cruise_connect/presentation/pages/community_chats_tab.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
+import 'package:cruise_connect/presentation/pages/hashtag_beitraege_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
@@ -86,12 +89,26 @@ class _CommunityPageState extends State<CommunityPage>
   List<Map<String, dynamic>> _suggestedUsers = [];
   List<Map<String, dynamic>> _searchResults = [];
   Map<String, dynamic>? _searchedGroup;
+
+  /// 2026-08-24 (Aufgabe 1.3): Hashtag-Treffer der Suche.
+  /// Je Eintrag: `tag` (Anzeige), `tag_schluessel` (Vergleichsform),
+  /// `anzahl` (wie viele öffentliche Beiträge).
+  List<Map<String, dynamic>> _hashtagTreffer = const [];
   final _searchController = TextEditingController();
   // Group-Discover-Filter
   final _groupSearchController = TextEditingController();
   String _groupSearchQuery = '';
-  double _groupRadiusKm = 100; // 0 = aus
-  bool _groupRadiusEnabled = false;
+
+  /// 2026-08-24 (Aufgabe 3.1, Akzeptanzkriterium 3: „Die Einstellung
+  /// überlebt einen App-Neustart"): Umkreis und Ein/Aus liegen NICHT mehr als
+  /// Felder dieses States. Hier standen bis heute
+  ///     double _groupRadiusKm = 100;
+  ///     bool _groupRadiusEnabled = false;
+  /// und damit war die Einstellung nach jedem Neuaufbau der Seite weg. Jetzt
+  /// liegt sie in [GruppenUmkreisService] (SharedPreferences, versionierte
+  /// Schlüssel), Vorbild ist PoiSettingsService.
+  GruppenUmkreisService get _umkreis => GruppenUmkreisService.instance;
+
   Position? _userPosition;
   RealtimeChannel? _postsChannel;
   RealtimeChannel? _groupsChannel;
@@ -110,7 +127,10 @@ class _CommunityPageState extends State<CommunityPage>
       _tabController.index = tutorialIndex;
     }
     _tabController.addListener(() {
-      if (!_tabController.indexIsChanging) setState(() {});
+      if (!_tabController.indexIsChanging) {
+        setState(() {});
+        _markiereReiterGesehen(_tabController.index);
+      }
     });
     CommunityPage.pendingGroupFocus.addListener(_onPendingGroupFocus);
     CommunityPage.pendingTabFocus.addListener(_onPendingTabFocus);
@@ -119,7 +139,29 @@ class _CommunityPageState extends State<CommunityPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _onPendingGroupFocus();
       _onPendingTabFocus();
+      // 2026-08-24 (Aufgabe 1.1): Frische Punkte holen und den Reiter, auf
+      // dem man gerade steht, als gelesen melden. Ohne den zweiten Teil
+      // bliebe der Punkt des SICHTBAREN Reiters stehen — man schaut ihn ja
+      // gerade an.
+      unawaited(
+        CommunityNeuigkeitService.instance
+            .aktualisieren(erzwingen: true)
+            .then((_) => _markiereReiterGesehen(_tabController.index)),
+      );
     });
+  }
+
+  /// 2026-08-24 (Aufgabe 1.1, Akzeptanzkriterium 2): „Nutzer öffnet den Feed
+  /// → nur der Feed-Punkt verschwindet, die anderen bleiben."
+  ///
+  /// Deshalb wird GENAU der geöffnete Reiter gemeldet. Kein Durchreichen nach
+  /// oben (Ebene 1 rechnet sich aus den vier Reitern) und keines nach unten
+  /// (die einzelnen Communities gehen erst aus, wenn man sie wirklich
+  /// öffnet — WhatsApp-Verhalten, so steht es auch in der Migration).
+  void _markiereReiterGesehen(int index) {
+    final bereich = CommunityBereich.vonReiter(index);
+    if (bereich == null) return;
+    unawaited(CommunityNeuigkeitService.instance.alsGesehenMarkieren(bereich));
   }
 
   void _onPendingGroupFocus() {
@@ -210,13 +252,32 @@ class _CommunityPageState extends State<CommunityPage>
         final matches = name.contains(query) || ownerName.contains(query);
         if (!matches) return false;
       }
-      // Radius-Filter
-      if (_groupRadiusEnabled && _userPosition != null) {
+      // 2026-08-24 (Aufgabe 3.1): Der Umkreis wird NICHT mehr hier
+      // entschieden.
+      //
+      // Vorher stand genau an dieser Stelle der Filter — und das war der
+      // Fehler. Er lief NACH `.limit(80)`/`.take(40)` in
+      // social_service.dart, also auf einem Ausschnitt, der schon
+      // entfernungsblind zusammengestellt war. Gemessen (Migration
+      // 20260824103000, 100 fiktive Gruppen, 5 davon im 50-km-Umkreis):
+      //     erst abschneiden, dann filtern -> 0 Treffer
+      //     erst filtern                   -> 5 Treffer
+      //
+      // Jetzt filtert und sortiert die RPC `gruppen_in_der_naehe`, bevor
+      // abgeschnitten wird. Zeilen von dort tragen
+      // [SocialService.umkreisServerseitigKey].
+      //
+      // Der alte Weg bleibt nur als Rückfallebene, wenn die RPC auf einer
+      // Datenbank fehlt. Dann — und nur dann — filtert die Oberfläche wie
+      // früher selbst nach, damit ein alter Server nicht plötzlich
+      // ungefilterte Gruppen zeigt.
+      final serverHatGefiltert = g[SocialService.umkreisServerseitigKey] == true;
+      if (!serverHatGefiltert && _umkreis.aktiv && _userPosition != null) {
         final loc = g['start_location'] as Map<String, dynamic>?;
         final lat = (loc?['lat'] as num?)?.toDouble();
         final lng = (loc?['lng'] as num?)?.toDouble();
         if (lat == null || lng == null) return false;
-        if (_distanceKm(lat, lng) > _groupRadiusKm) return false;
+        if (_distanceKm(lat, lng) > _umkreis.radiusKm) return false;
       }
       return true;
     }).toList();
@@ -298,11 +359,26 @@ class _CommunityPageState extends State<CommunityPage>
 
   Future<void> _loadData() async {
     try {
+      // 2026-08-24 (Aufgabe 3.1): Erst die gespeicherte Einstellung, dann
+      // die Abfrage. Ohne das würde beim ersten Laden nach einem Neustart
+      // ungefiltert geholt und die Liste danach sichtbar umspringen.
+      await _umkreis.laden();
+      if (_umkreis.aktiv) await _ensureUserPosition();
+      // Die beiden Wartepunkte oben koennen die Seite ueberleben, wenn der
+      // Nutzer den Reiter waehrenddessen verlaesst. Danach darf der Context
+      // nicht mehr angefasst werden.
+      if (!mounted) return;
+
       final provider = context.read<CommunityProvider>();
+      final position = _userPosition;
       final results = await Future.wait([
         provider.loadAll(),
         SocialService.getMyGroups(),
-        SocialService.getDiscoverGroups(),
+        SocialService.getDiscoverGroups(
+          lat: position?.latitude,
+          lng: position?.longitude,
+          radiusMeter: _umkreis.radiusMeterFuerAbfrage,
+        ),
         SocialService.getSuggestedUsers(limit: 20),
       ]);
 
@@ -310,15 +386,20 @@ class _CommunityPageState extends State<CommunityPage>
         // 2026-07-10 (vucko IG-Entdecken): Empfehlungen + Gruppen bei jedem Laden
         // durchmischen, damit der Entdecken-Feed frisch wirkt (die Backend-Query
         // liefert sonst immer dieselbe Reihenfolge).
-        final shuffledGroups =
-            List<Map<String, dynamic>>.from(results[2] as List);
+        //
+        // 2026-08-24 (Aufgabe 3.1): Gruppen werden NICHT mehr gemischt,
+        // solange der Umkreisfilter aktiv ist. Der Server liefert sie dann
+        // nach Entfernung sortiert — die nächstgelegene zuerst. Ein Mischen
+        // würde genau die Ordnung zerstören, für die Vucko den Filter
+        // haben will.
+        final gruppen = List<Map<String, dynamic>>.from(results[2] as List);
         final shuffledUsers =
             List<Map<String, dynamic>>.from(results[3] as List);
-        shuffledGroups.shuffle();
+        if (!_umkreis.aktiv) gruppen.shuffle();
         shuffledUsers.shuffle();
         setState(() {
           _myGroups = results[1] as List<Map<String, dynamic>>;
-          _discoverGroups = shuffledGroups;
+          _discoverGroups = gruppen;
           _suggestedUsers = shuffledUsers;
           _loading = false;
         });
@@ -334,6 +415,7 @@ class _CommunityPageState extends State<CommunityPage>
       setState(() {
         _searchResults = [];
         _searchedGroup = null;
+        _hashtagTreffer = const [];
       });
       return;
     }
@@ -343,7 +425,28 @@ class _CommunityPageState extends State<CommunityPage>
       caseSensitive: false,
     ).hasMatch(query);
 
-    final futures = <Future<dynamic>>[SocialService.searchUsers(query)];
+    // 2026-08-24 (Aufgabe 1.3, Vucko: „dass man unter Hashtags Sachen suchen
+    // kann"): Die Suche konnte bisher NUR Benutzernamen und Gruppen-Codes.
+    //
+    // Gesucht wird immer, egal ob eine Raute davorsteht — wer „tourenfahrt"
+    // eintippt, meint denselben Hashtag wie jemand, der „#tourenfahrt"
+    // schreibt. Die Rauten-Eingabe schaltet lediglich die Benutzersuche ab,
+    // weil „#" in keinem Benutzernamen vorkommt.
+    final istRautenSuche = query.trimLeft().startsWith('#');
+    final hashtagEingabe = SocialService.normalisiereHashtagEingabe(query);
+
+    final futures = <Future<dynamic>>[
+      istRautenSuche
+          ? Future<List<Map<String, dynamic>>>.value(const [])
+          : SocialService.searchUsers(query),
+      hashtagEingabe.isEmpty
+          ? Future<List<Map<String, dynamic>>>.value(const [])
+          : SocialService.hashtagVorschlaege(
+              praefix: hashtagEingabe,
+              tage: 365,
+              limit: 12,
+            ),
+    ];
     if (looksLikeCode) {
       futures.add(SocialService.findGroupByCode(query));
     }
@@ -351,6 +454,7 @@ class _CommunityPageState extends State<CommunityPage>
 
     if (!mounted) return;
     final users = results[0] as List<Map<String, dynamic>>;
+    _hashtagTreffer = results[1] as List<Map<String, dynamic>>;
     final provider = context.read<CommunityProvider>();
     provider.seedProfiles(users);
     for (final user in users) {
@@ -361,8 +465,11 @@ class _CommunityPageState extends State<CommunityPage>
     }
     setState(() {
       _searchResults = users;
+      // ACHTUNG: Der Gruppen-Code liegt jetzt an Index 2, weil die
+      // Hashtag-Abfrage Index 1 belegt. Wer hier eine weitere Abfrage
+      // einhaengt, muss diesen Index mitziehen.
       _searchedGroup = looksLikeCode
-          ? results[1] as Map<String, dynamic>?
+          ? results[2] as Map<String, dynamic>?
           : null;
     });
   }
@@ -468,6 +575,7 @@ class _CommunityPageState extends State<CommunityPage>
             _buildTabLabel(
               'Feed',
               key: TutorialZielRegistry.key(TutorialZielRegistry.communityFeed),
+              bereich: CommunityBereich.feed,
             ),
             // 2026-08-18 (Defekt 3.4, von Vucko entschieden): hieß „Fahrten".
             // Hinter dem Reiter liegt der einzige Einstieg zum Anlegen einer
@@ -478,18 +586,21 @@ class _CommunityPageState extends State<CommunityPage>
               key: TutorialZielRegistry.key(
                 TutorialZielRegistry.communityRides,
               ),
+              bereich: CommunityBereich.gruppen,
             ),
             _buildTabLabel(
               'Chats',
               key: TutorialZielRegistry.key(
                 TutorialZielRegistry.communityChats,
               ),
+              bereich: CommunityBereich.chats,
             ),
             _buildTabLabel(
               'Entdecken',
               key: TutorialZielRegistry.key(
                 TutorialZielRegistry.communityDiscover,
               ),
+              bereich: CommunityBereich.entdecken,
             ),
           ],
         ),
@@ -545,20 +656,67 @@ class _CommunityPageState extends State<CommunityPage>
   /// hätte die FittedBox auf rund 10 px heruntergerechnet — neben 13,5 px
   /// bei den Nachbarn sichtbar zu klein. Mit Umbruch bleibt die Schriftgröße
   /// erhalten; gemessen: Textblock 32 px hoch in einem 46 px hohen Reiter.
-  Widget _buildTabLabel(String label, {Key? key}) {
+  Widget _buildTabLabel(
+    String label, {
+    Key? key,
+    CommunityBereich? bereich,
+  }) {
+    final beschriftung = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          label,
+          maxLines: 2,
+          softWrap: true,
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+
+    if (bereich == null) return Tab(key: key, child: beschriftung);
+
+    // 2026-08-24 (Aufgabe 1.1, Ebene 2). Vucko: „dass man dann oben entweder
+    // im Feed oder im Entdecker oder bei den Gruppenfahrten oder in der
+    // Community sieht: okay, ja, da sind neue Sachen passiert."
+    //
+    // DER PUNKT GEHÖRT ALS Positioned IN DEN REITER, NICHT NEBEN DEN TEXT.
+    // Vier Reiter teilen sich die Breite zu gleichen Teilen
+    // (isScrollable: false), auf 360 dp sind das 86 dp je Reiter. „Gruppen &
+    // Fahrten" braucht davon schon zwei Zeilen. Ein Punkt NEBEN dem Text
+    // ginge in dieselbe FittedBox und würde mit heruntergerechnet — bei
+    // dieser Breite auf wenige Pixel. Als Positioned liegt er ausserhalb der
+    // Skalierung und behält seine 8 dp.
     return Tab(
       key: key,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 2),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            label,
-            maxLines: 2,
-            softWrap: true,
-            textAlign: TextAlign.center,
-          ),
-        ),
+      child: ValueListenableBuilder<CommunityHinweisStand>(
+        valueListenable: CommunityNeuigkeitService.instance.stand,
+        builder: (context, stand, kind) {
+          if (!stand.fuerReiter(bereich).neu) return kind!;
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              kind!,
+              Positioned(
+                top: -1,
+                right: -1,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: AppAccentColors.accent,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color(0xFF0B0E14),
+                      width: 1.4,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+        child: beschriftung,
       ),
     );
   }
@@ -755,8 +913,17 @@ class _CommunityPageState extends State<CommunityPage>
                 );
               }
               if (filtered.isEmpty) {
+                // 2026-08-24 (Aufgabe 3.1): Sagen, WELCHER Filter zugeschlagen
+                // hat. „Keine Treffer, probier andere Filter" liess den Nutzer
+                // raten, ob es gerade wirklich keine Gruppen gibt oder ob sein
+                // eigener Umkreis sie ausblendet.
                 return _buildEmptyHint(
-                  'Keine Treffer, probier andere Filter.',
+                  _umkreis.aktiv
+                      ? 'Keine Gruppen im Umkreis von '
+                            '${_umkreis.radiusKm.toStringAsFixed(0)} km. '
+                            'Stell den Umkreis größer oder nimm den Haken '
+                            'raus, dann siehst du alle.'
+                      : 'Keine Treffer, probier andere Filter.',
                 );
               }
               return Column(
@@ -816,55 +983,99 @@ class _CommunityPageState extends State<CommunityPage>
           ),
         ),
         const SizedBox(height: 12),
-        // Radius-Filter
-        Row(
-          children: [
-            Checkbox(
-              value: _groupRadiusEnabled,
-              activeColor: AppAccentColors.accent,
-              onChanged: (v) async {
-                setState(() => _groupRadiusEnabled = v ?? false);
-                if (_groupRadiusEnabled) await _ensureUserPosition();
-                if (mounted) setState(() {});
-              },
-            ),
-            const Icon(Icons.my_location, color: Colors.white70, size: 16),
-            const SizedBox(width: 6),
-            Text(
-              _groupRadiusEnabled
-                  ? 'Umkreis: ${_groupRadiusKm.toStringAsFixed(0)} km'
-                  : 'Umkreis-Filter aus',
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
-            ),
-          ],
+        // 2026-08-24 (Aufgabe 3.1, Vucko: „dass man einstellen kann, in
+        // welchem Umkreis man Gruppen machen will […] oder alle"):
+        // Der Regler ist derselbe wie vorher, nur liest und schreibt er jetzt
+        // GruppenUmkreisService statt zweier Felder dieses States. Deshalb
+        // hier ein AnimatedBuilder: der Dienst ist ein ChangeNotifier, und
+        // die Zeile soll sich auch dann erneuern, wenn die Einstellung
+        // woanders geändert wurde.
+        AnimatedBuilder(
+          animation: _umkreis,
+          builder: (context, _) {
+            final aktiv = _umkreis.aktiv;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Checkbox(
+                      value: aktiv,
+                      activeColor: AppAccentColors.accent,
+                      onChanged: (v) => _setzeUmkreisAktiv(v ?? false),
+                    ),
+                    const Icon(
+                      Icons.my_location,
+                      color: Colors.white70,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        aktiv
+                            ? 'Umkreis: ${_umkreis.radiusKm.toStringAsFixed(0)} km'
+                            : 'Alle Gruppen, egal wie weit weg',
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (aktiv)
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: AppAccentColors.accent,
+                      inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
+                      thumbColor: AppAccentColors.accent,
+                      overlayColor: AppAccentColors.accent.withValues(
+                        alpha: 0.2,
+                      ),
+                    ),
+                    child: Slider(
+                      value: _umkreis.radiusKm,
+                      min: GruppenUmkreisService.minRadiusKm,
+                      max: GruppenUmkreisService.maxRadiusKm,
+                      divisions: 18,
+                      label: '${_umkreis.radiusKm.toStringAsFixed(0)} km',
+                      // Während des Ziehens nur anzeigen, erst beim Loslassen
+                      // speichern und neu laden. Sonst liefe pro Rastpunkt
+                      // eine Abfrage gegen den Server.
+                      onChanged: (v) => _umkreis.setzeRadiusKm(v),
+                      onChangeEnd: (_) => _loadData(),
+                    ),
+                  ),
+                if (aktiv && _userPosition == null)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 8, top: 2),
+                    child: Text(
+                      'Standort wird geladen. Ohne Freigabe zeigen wir alle '
+                      'Gruppen, statt welche auszublenden.',
+                      style: TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
-        if (_groupRadiusEnabled)
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              activeTrackColor: AppAccentColors.accent,
-              inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
-              thumbColor: AppAccentColors.accent,
-              overlayColor: AppAccentColors.accent.withValues(alpha: 0.2),
-            ),
-            child: Slider(
-              value: _groupRadiusKm,
-              min: 10,
-              max: 100,
-              divisions: 18,
-              label: '${_groupRadiusKm.toStringAsFixed(0)} km',
-              onChanged: (v) => setState(() => _groupRadiusKm = v),
-            ),
-          ),
-        if (_groupRadiusEnabled && _userPosition == null)
-          const Padding(
-            padding: EdgeInsets.only(left: 8, top: 2),
-            child: Text(
-              'Standort wird geladen... (Berechtigung erforderlich)',
-              style: TextStyle(color: Colors.orangeAccent, fontSize: 11),
-            ),
-          ),
       ],
     );
+  }
+
+  /// 2026-08-24 (Aufgabe 3.1): Haken umlegen, Einstellung merken, neu laden.
+  ///
+  /// Das Neuladen ist der Kern: seit dem 24.08. filtert der Server. Nur die
+  /// Oberfläche umzuschalten, ohne neu zu fragen, zeigte weiter den alten,
+  /// entfernungsblind zusammengestellten Ausschnitt.
+  Future<void> _setzeUmkreisAktiv(bool wert) async {
+    await _umkreis.setzeAktiv(wert);
+    if (wert) await _ensureUserPosition();
+    if (!mounted) return;
+    await _loadData();
   }
 
   Widget _buildSectionHeader(String title) {
@@ -2573,6 +2784,7 @@ class _CommunityPageState extends State<CommunityPage>
     final startDt = startTimeStr != null
         ? DateTime.tryParse(startTimeStr)
         : null;
+    final entfernung = SocialService.entfernungText(group);
 
     return Container(
       decoration: BoxDecoration(
@@ -2781,6 +2993,20 @@ class _CommunityPageState extends State<CommunityPage>
                     Colors.white70,
                     Icons.check_circle_outline,
                   ),
+                // 2026-08-24 (Aufgabe 3.1): Die Entfernung, die der Server
+                // gerechnet hat. Ohne sie kann Vucko im Auto gar nicht
+                // nachprüfen, ob der 50-km-Filter tut, was er verspricht.
+                //
+                // `entfernungText` liefert bewusst „Entfernung unbekannt",
+                // wenn die Gruppe keinen Startpunkt hat oder wir keine
+                // Position haben — NIEMALS „0 km". Eine Null wäre die
+                // Behauptung, die Gruppe starte genau hier.
+                if (entfernung != null)
+                  _buildGroupChip(
+                    entfernung,
+                    Colors.white70,
+                    Icons.near_me_outlined,
+                  ),
               ],
             ),
             if (startDt != null) ...[
@@ -2924,7 +3150,12 @@ class _CommunityPageState extends State<CommunityPage>
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
                           counterText: '',
-                          hintText: 'Benutzer oder Gruppen-Code (CC-XXXXXX)...',
+                          // 2026-08-24 (Aufgabe 1.3): Der Hinweistext nennt
+                          // den Hashtag jetzt mit. Ein Feature, von dem
+                          // niemand weiss, ist keins.
+                          hintText:
+                              'Benutzer, #Hashtag oder Gruppen-Code '
+                              '(CC-XXXXXX)',
                           hintStyle: const TextStyle(color: Colors.grey),
                           prefixIcon: const Icon(
                             Icons.search,
@@ -2945,13 +3176,23 @@ class _CommunityPageState extends State<CommunityPage>
                     ),
                     const SizedBox(height: 12),
                     Expanded(
-                      child: (_searchResults.isEmpty && _searchedGroup == null)
+                      child:
+                          (_searchResults.isEmpty &&
+                              _searchedGroup == null &&
+                              _hashtagTreffer.isEmpty)
                           ? Center(
-                              child: Text(
-                                _searchController.text.isEmpty
-                                    ? 'Suche nach Benutzernamen oder Gruppen-Code'
-                                    : 'Keine Ergebnisse',
-                                style: const TextStyle(color: Colors.grey),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 32,
+                                ),
+                                child: Text(
+                                  _searchController.text.isEmpty
+                                      ? 'Suche nach Benutzernamen, einem '
+                                            '#Hashtag oder einem Gruppen-Code'
+                                      : 'Keine Ergebnisse',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.grey),
+                                ),
                               ),
                             )
                           : ListView(
@@ -2959,6 +3200,12 @@ class _CommunityPageState extends State<CommunityPage>
                               children: [
                                 if (_searchedGroup != null)
                                   _buildSearchGroupResult(_searchedGroup!),
+                                // 2026-08-24 (Aufgabe 1.3): Hashtags zuerst.
+                                // Wer eine Raute tippt, sucht keinen
+                                // Benutzernamen.
+                                ..._hashtagTreffer.map(
+                                  (treffer) => _buildHashtagTreffer(treffer),
+                                ),
                                 ..._searchResults.map((user) {
                                   final username =
                                       SocialService.publicDisplayName(
@@ -3012,6 +3259,45 @@ class _CommunityPageState extends State<CommunityPage>
         );
       },
     ).then((_) => _searchController.clear());
+  }
+
+  /// 2026-08-24 (Aufgabe 1.3): eine Zeile der Hashtag-Trefferliste.
+  ///
+  /// Gezeigt wird die zuletzt getippte Schreibweise, gezählt wird über den
+  /// gefalteten Schlüssel. `#Tourenfahrt` und `#tourenfahrt` sind deshalb
+  /// EINE Zeile mit der Summe beider, nicht zwei Zeilen — genau das verlangt
+  /// Akzeptanzkriterium 2 („liefern dieselbe Ergebnisliste").
+  Widget _buildHashtagTreffer(Map<String, dynamic> treffer) {
+    final tag = treffer['tag']?.toString() ?? '';
+    final anzahl = (treffer['anzahl'] as num?)?.toInt() ?? 0;
+    if (tag.isEmpty) return const SizedBox.shrink();
+
+    return ListTile(
+      onTap: () {
+        Navigator.pop(context);
+        HashtagBeitraegePage.oeffnen(context, tag);
+      },
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppAccentColors.accent.withValues(alpha: 0.16),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(Icons.tag, color: AppAccentColors.accent, size: 21),
+      ),
+      title: Text(
+        '#$tag',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        anzahl == 1 ? '1 Beitrag' : '$anzahl Beiträge',
+        style: const TextStyle(color: Colors.grey, fontSize: 13),
+      ),
+    );
   }
 
   Widget _buildSearchGroupResult(Map<String, dynamic> group) {

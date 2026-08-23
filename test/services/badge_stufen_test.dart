@@ -126,12 +126,20 @@ void main() {
       }
     });
 
-    test('ohne Familie sind nur Gruendungszeit und Startklar', () {
+    // 2026-08-24 (Aufgabe 10a, vucko): „dass community ein enzelnes badge
+    // bekommen [...] aber nur eins". Das Community-Abzeichen ist bewusst der
+    // dritte stufenlose: Es gibt kein „zwei Communities" und kein „zehn
+    // Communities", also darf es auch in keine Stufenleiter geraten.
+    test('ohne Familie sind nur Gruendungszeit, Startklar und Community', () {
       final ohne = Badge.all
           .where((b) => b.familie == null)
           .map((b) => b.id)
           .toList();
-      expect(ohne, [Badge.membershipBadgeId, Badge.starterBadgeId]);
+      expect(ohne, [
+        Badge.membershipBadgeId,
+        Badge.starterBadgeId,
+        Badge.communityGruenderBadgeId,
+      ]);
     });
 
     test('alle Stufen einer Familie tragen dieselbe Akzent-Kategorie', () {

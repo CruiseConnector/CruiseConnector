@@ -27,34 +27,41 @@ class FahrzeugGrenzen {
   static const double nullAufHundertMin = 1.5;
   static const double nullAufHundertMax = 30.0;
 
-  /// Marken, die üblicherweise komplett groß geschrieben werden. Ohne diese
-  /// Liste würde die Vereinheitlichung aus „BMW" ein „Bmw" machen.
-  static const Set<String> _grossgeschrieben = {
-    'BMW', 'VW', 'KTM', 'SEAT', 'AMG', 'MINI', 'MG', 'DS', 'GMC', 'RAM',
-    'SRT', 'TVR', 'FSO', 'ZAZ', 'UAZ', 'BYD', 'NIO', 'RUF', 'ABT', 'MV',
-  };
-
-  /// Vereinheitlicht die Markenschreibweise, damit `audi`, `Audi` und
-  /// ` AUDI ` nicht als drei Marken gezählt werden.
+  /// Räumt eine getippte Markenschreibweise auf. Mehr nicht.
+  ///
+  /// 2026-08-24 (Aufgabe 2.1). Vucko wörtlich: „B-M-W ganz in Caps
+  /// geschrieben und groß geschrieben soll das Gleiche sein wie B groß,
+  /// M klein und W klein [...] Wichtig ist, dass das [wortident] ist,
+  /// nicht ob es jetzt groß oder klein geschrieben ist."
+  ///
+  /// Bis heute hat diese Methode die Schreibweise GERATEN: Title-Case,
+  /// plus eine Handvoll Marken aus einer Ausnahmeliste in Großbuchstaben.
+  /// Raten ist an drei Stellen nachweislich falsch gewesen:
+  ///   * „GasGas" wurde zu „Gasgas",
+  ///   * „McLaren" wurde zu „Mclaren",
+  ///   * „Mini" und „Seat" wurden zu „MINI" und „SEAT" — und damit gegen
+  ///     die eigene Vorschlagsliste in vehicle_api_service.dart gedreht,
+  ///     die „Mini" und „Seat" anbietet.
+  ///
+  /// Seit der Migration 20260824101000 entscheidet die DATENBANK, wie eine
+  /// Marke heißt: `public.vehicle_brand_canonical(text)`, aufgerufen von
+  /// einem Trigger auf `profile_vehicles.brand` und `profiles.car_brand`.
+  /// Gemessen am 24.08. gegen die Produktivdatenbank:
+  ///   bmw → BMW, gasgas → GasGas, mclaren → McLaren, mini → Mini,
+  ///   seat → Seat, Vw → Volkswagen, „Zonda Tuning GmbH" → unverändert.
+  /// Was die Funktion nicht kennt, lässt sie in Ruhe. Genau das kann ein
+  /// Algorithmus nicht, und „Vw" zu „Volkswagen" schon gar nicht — das ist
+  /// Wissen, kein Algorithmus.
+  ///
+  /// ENTSCHEIDUNG (Vucko schläft, keine Rückfrage möglich): der Client rät
+  /// nicht mehr mit. Zwei Stellen, die dieselbe Frage unterschiedlich
+  /// beantworten, laufen auseinander — dieselbe Lehre wie bei der
+  /// Länder-Klassifikation, wo der Client-Wert deshalb serverseitig
+  /// überschrieben wird (siehe CLAUDE.md). Hier bleibt nur das
+  /// Unstrittige: Leerraum aufräumen, damit „  BMW  " und „BMW" schon vor
+  /// dem Absenden gleich aussehen.
   static String normalisiereMarke(String roh) {
-    final geputzt = roh.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (geputzt.isEmpty) return '';
-    return geputzt
-        .split(' ')
-        .map((wort) {
-          final gross = wort.toUpperCase();
-          if (_grossgeschrieben.contains(gross)) return gross;
-          // Bindestrich-Namen: „mercedes-benz" → „Mercedes-Benz".
-          return wort
-              .split('-')
-              .map(
-                (teil) => teil.isEmpty
-                    ? teil
-                    : teil[0].toUpperCase() + teil.substring(1).toLowerCase(),
-              )
-              .join('-');
-        })
-        .join(' ');
+    return roh.trim().replaceAll(RegExp(r'\s+'), ' ');
   }
 
   /// Leere Eingabe ist erlaubt — das Feld ist freiwillig.

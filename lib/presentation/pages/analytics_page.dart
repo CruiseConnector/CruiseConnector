@@ -108,6 +108,79 @@ class _LeaderboardEntry {
   }
 }
 
+/// 2026-08-24 (Aufgabe 2.2). Vucko wörtlich: „dass man auch wirklich bei der
+/// Analytics-Page dann gruppieren kann: Autos, Motorräder oder alle."
+///
+/// Die drei Werte gehen zeichengleich als `p_vehicle_type` an die beiden
+/// RPCs `get_brand_overview` und `get_brand_members` (Migration
+/// 20260824101000). Die Datenbank kennt genau `car`, `motorcycle` und `all`;
+/// alles andere behandelt sie als `all`.
+enum _FahrzeugFilter {
+  autos('car', 'Autos'),
+  motorraeder('motorcycle', 'Motorräder'),
+  alle('all', 'Alle');
+
+  const _FahrzeugFilter(this.rpcWert, this.beschriftung);
+
+  final String rpcWert;
+  final String beschriftung;
+}
+
+/// Eine Zeile der Marken-Übersicht, so wie `get_brand_overview` sie liefert.
+class _MarkenEintrag {
+  const _MarkenEintrag({
+    required this.marke,
+    required this.personen,
+    required this.fahrzeuge,
+    required this.ausGarage,
+    required this.ausProfil,
+  });
+
+  final String marke;
+  final int personen;
+  final int fahrzeuge;
+
+  /// Woher die Zeilen kommen. `profiles.car_brand` ist Freitext und zählt
+  /// serverseitig nur für Personen ohne jede Garagen-Zeile; sichtbar ist
+  /// diese Ebene nur im Filter „Alle", weil ihr die Fahrzeugart fehlt.
+  final int ausGarage;
+  final int ausProfil;
+}
+
+/// Eine Person im Drilldown, so wie `get_brand_members` sie liefert.
+class _MarkenPerson {
+  const _MarkenPerson({
+    required this.userId,
+    required this.marke,
+    this.username,
+    this.avatarUrl,
+    this.modell,
+    this.fahrzeugArt,
+    this.quelle,
+  });
+
+  final String userId;
+  final String marke;
+  final String? username;
+  final String? avatarUrl;
+  final String? modell;
+  final String? fahrzeugArt;
+  final String? quelle;
+
+  String get anzeigeName {
+    final sauber = username?.trim();
+    return sauber == null || sauber.isEmpty ? 'Cruiser' : sauber;
+  }
+
+  /// Vuckos Bild vom Ergebnis: „die und die Person hat den BMW, die und die
+  /// Person hat jetzt einen Skoda". Also Marke UND Fahrzeug, nicht nur ein
+  /// Name. Ohne Modell bleibt die Marke allein stehen.
+  String get fahrzeugZeile {
+    final m = modell?.trim();
+    return m == null || m.isEmpty ? marke : '$marke $m';
+  }
+}
+
 class AnalyticsPage extends StatefulWidget {
   final int refreshKey;
   const AnalyticsPage({super.key, this.refreshKey = 0});
@@ -143,6 +216,20 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   List<_LeaderboardEntry> _leaderboardMonth = const [];
   _LeaderboardPeriod _leaderboardPeriod = _LeaderboardPeriod.allTime;
 
+  // ── Aufgabe 2.2: Marken-Übersicht mit Drilldown ────────────────────────
+  // Der Filter gilt für BEIDE Ansichten, auch nach dem Drilldown: er steht
+  // im State der Seite, nicht in der jeweiligen Ansicht. Start ist „Alle",
+  // damit die Seite beim ersten Öffnen nichts wegblendet.
+  _FahrzeugFilter _fahrzeugFilter = _FahrzeugFilter.alle;
+  final Map<_FahrzeugFilter, List<_MarkenEintrag>> _markenCache = {};
+  bool _markenLaedt = false;
+  String? _markenFehler;
+  /// Gesetzt = Drilldown offen. Der Wert ist die kanonische Marke aus der
+  /// Übersicht; die RPC nimmt aber jede Schreibweise entgegen.
+  String? _offeneMarke;
+  List<_MarkenPerson> _markenPersonen = const [];
+  bool _personenLaden = false;
+
   List<_AnalyticsBucket> _weeklyBuckets = List.generate(
     7,
     (i) => _AnalyticsBucket(
@@ -168,10 +255,16 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    // 2026-08-24 (Aufgabe 2.2): sechster Reiter „Marken".
+    _tabController = TabController(length: 6, vsync: this);
     _tabController.addListener(() {
       if (mounted && !_tabController.indexIsChanging) {
         setState(() {});
+        // 2026-08-24 (Aufgabe 2.2): Die Marken holen wir erst, wenn der
+        // Reiter wirklich aufgeht. Die Seite ist Reiter 3 der normalen
+        // Navigation und wird bei jedem Start gebaut; zwei zusätzliche RPCs
+        // im Startpfad wären für alle teuer und für die meisten unnötig.
+        if (_tabController.index == 5) unawaited(_ladeMarken());
       }
     });
     _loadData();
@@ -227,6 +320,18 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         at: DateTime.now(),
       );
       _applyResults(gamResult, driveSessions, leaderboards);
+      // 2026-08-24 (Aufgabe 2.2): Zieht jemand die Seite herunter, sollen
+      // auch die Marken frisch sein.
+      // Ist der Reiter gerade offen, bleibt die alte Liste stehen, während
+      // im Hintergrund neu geholt wird — sonst blitzt bei jedem stillen
+      // Auffrischen ein Skelett auf, obwohl schon Daten da sind. Ist er
+      // zu, reicht das Leeren; geholt wird beim nächsten Öffnen.
+      if (mounted && _tabController.index == 5) {
+        _markenCache.removeWhere((filter, _) => filter != _fahrzeugFilter);
+        unawaited(_ladeMarken(erzwingen: true));
+      } else {
+        _markenCache.clear();
+      }
     } catch (e) {
       debugPrint('[Analytics] Daten laden fehlgeschlagen: $e');
       if (mounted && !silent) setState(() => _loading = false);
@@ -1462,6 +1567,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 icon: Icon(Icons.emoji_events_rounded, size: 17),
                 text: 'Badges',
               ),
+              Tab(
+                icon: Icon(Icons.directions_car_filled_rounded, size: 17),
+                text: 'Marken',
+              ),
             ],
           ),
         ),
@@ -1482,8 +1591,10 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       case 3:
         return _buildRoutesTab();
       case 4:
-      default:
         return _buildBadgesTab();
+      case 5:
+      default:
+        return _buildMarkenTab();
     }
   }
 
@@ -2471,6 +2582,507 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     return '$prefix$h:${m.toString().padLeft(2, '0')}';
   }
 
+  // ── Aufgabe 2.2: Marken-Übersicht mit Drilldown ────────────────────────
+  //
+  // 2026-08-24. Vucko wörtlich: „dass man auch wirklich in der
+  // Analytics-Page die ganzen Marken sieht, wo vertreten sind. Und dann,
+  // wenn man draufklickt, die Leute sieht, wo unter diesen Marken sind.
+  // [...] die und die Person hat den BMW, die und die Person hat jetzt
+  // einen Skoda [...] Und dass man auch wirklich bei der Analytics-Page
+  // dann gruppieren kann: Autos, Motorräder oder alle."
+  //
+  // ENTSCHEIDUNG „eigener Reiter oder Abschnitt in einem bestehenden"
+  // (Vucko schläft, keine Rückfrage möglich): eigener sechster Reiter.
+  //   * Fünf Reiter sind eng, aber Flutters `Tab` rendert seinen Text mit
+  //     `softWrap: false, overflow: fade` — er wird also ausgeblendet, nicht
+  //     überlaufend. Auf 360 dp bleiben je Reiter rund 52 dp, „Marken" mit
+  //     sechs Zeichen passt.
+  //   * Der Alternativplatz wäre der Reiter „Rang" gewesen. Dort stehen bis
+  //     zu 25 Ranglistenzeilen; die Marken lägen darunter und wären nur
+  //     nach langem Scrollen zu finden. Vucko sagt „wirklich in der
+  //     Analytics-Page die ganzen Marken sieht" — das ist eine Forderung
+  //     nach Sichtbarkeit, nicht nach Unterbringung.
+  //
+  // ENTSCHEIDUNG „Drilldown als eigene Seite oder im Reiter": im Reiter.
+  // Eine eigene Seite wäre eine neue Datei; parallel arbeiten drei weitere
+  // Agenten im Projekt. Wichtiger: der Filter Autos/Motorräder/Alle muss
+  // laut Auftrag „auf beide Ansichten, auch nach dem Drilldown" wirken. Im
+  // selben Reiter ist er zwangsläufig derselbe Zustand und kann gar nicht
+  // auseinanderlaufen.
+
+  /// Holt die Marken-Übersicht für den aktuellen Filter.
+  ///
+  /// Die Gruppierung macht die Datenbank (`get_brand_overview`, Migration
+  /// 20260824101000), nicht der Client. Grund: der Client hat sie bis heute
+  /// selbst geraten, und genau daran sind „BMW" und „Bmw" zu zwei Marken
+  /// geworden. Gemessen am 24.08. über die RPC: BMW 30 Personen /
+  /// 31 Fahrzeuge, Volkswagen 16, Audi 14, Beta 8.
+  Future<void> _ladeMarken({bool erzwingen = false}) async {
+    final filter = _fahrzeugFilter;
+    if (!erzwingen && _markenCache.containsKey(filter)) return;
+    if (mounted) {
+      setState(() {
+        _markenLaedt = true;
+        _markenFehler = null;
+      });
+    }
+    try {
+      final daten = await Supabase.instance.client.rpc(
+        'get_brand_overview',
+        params: {'p_vehicle_type': filter.rpcWert},
+      );
+      final eintraege = <_MarkenEintrag>[
+        for (final zeile in (daten as List? ?? const []))
+          if (zeile is Map)
+            _MarkenEintrag(
+              marke: (zeile['brand'] ?? '').toString(),
+              personen: (zeile['people'] as num?)?.toInt() ?? 0,
+              fahrzeuge: (zeile['vehicles'] as num?)?.toInt() ?? 0,
+              ausGarage: (zeile['from_garage'] as num?)?.toInt() ?? 0,
+              ausProfil: (zeile['from_profile'] as num?)?.toInt() ?? 0,
+            ),
+      ].where((e) => e.marke.trim().isNotEmpty).toList();
+      _markenCache[filter] = eintraege;
+      if (mounted) setState(() => _markenLaedt = false);
+    } catch (e) {
+      debugPrint('[Analytics] Marken-Übersicht fehlgeschlagen: $e');
+      if (mounted) {
+        setState(() {
+          _markenLaedt = false;
+          _markenFehler = 'Die Marken konnten gerade nicht geladen werden.';
+        });
+      }
+    }
+  }
+
+  /// Holt die Personen einer Marke. `p_brand` darf beliebig geschrieben
+  /// sein, die RPC normalisiert selbst.
+  Future<void> _ladeMarkenPersonen(String marke) async {
+    if (mounted) {
+      setState(() {
+        _personenLaden = true;
+        _markenPersonen = const [];
+      });
+    }
+    try {
+      final daten = await Supabase.instance.client.rpc(
+        'get_brand_members',
+        params: {'p_brand': marke, 'p_vehicle_type': _fahrzeugFilter.rpcWert},
+      );
+      final personen = <_MarkenPerson>[
+        for (final zeile in (daten as List? ?? const []))
+          if (zeile is Map)
+            _MarkenPerson(
+              userId: (zeile['user_id'] ?? '').toString(),
+              marke: (zeile['brand'] ?? marke).toString(),
+              username: zeile['username'] as String?,
+              avatarUrl: zeile['avatar_url'] as String?,
+              modell: zeile['model'] as String?,
+              fahrzeugArt: zeile['vehicle_type'] as String?,
+              quelle: zeile['source'] as String?,
+            ),
+      ];
+      // Garage vor Profil, danach nach Name: die Garagen-Zeilen tragen ein
+      // Modell und sind damit die Zeilen, die Vucko sehen will.
+      personen.sort((a, b) {
+        final qa = a.quelle == 'garage' ? 0 : 1;
+        final qb = b.quelle == 'garage' ? 0 : 1;
+        if (qa != qb) return qa - qb;
+        return a.anzeigeName.toLowerCase().compareTo(
+          b.anzeigeName.toLowerCase(),
+        );
+      });
+      if (mounted) {
+        setState(() {
+          _markenPersonen = personen;
+          _personenLaden = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[Analytics] Personen zur Marke fehlgeschlagen: $e');
+      if (mounted) {
+        setState(() {
+          _personenLaden = false;
+          _markenPersonen = const [];
+        });
+      }
+    }
+  }
+
+  void _oeffneMarke(String marke) {
+    setState(() => _offeneMarke = marke);
+    unawaited(_ladeMarkenPersonen(marke));
+  }
+
+  void _schliesseMarke() {
+    setState(() {
+      _offeneMarke = null;
+      _markenPersonen = const [];
+    });
+  }
+
+  void _setzeFahrzeugFilter(_FahrzeugFilter filter) {
+    if (_fahrzeugFilter == filter) return;
+    setState(() => _fahrzeugFilter = filter);
+    unawaited(_ladeMarken());
+    // Der Filter wirkt auch im Drilldown. Steht die offene Marke im neuen
+    // Filter gar nicht mehr, bleibt die Personenliste leer und der Text
+    // darunter sagt genau das.
+    final offen = _offeneMarke;
+    if (offen != null) unawaited(_ladeMarkenPersonen(offen));
+  }
+
+  Widget _buildMarkenTab() {
+    final offen = _offeneMarke;
+    final eintraege = _markenCache[_fahrzeugFilter];
+    final untertitel = offen == null
+        ? switch (_fahrzeugFilter) {
+            _FahrzeugFilter.autos => 'Alle Automarken in der Community.',
+            _FahrzeugFilter.motorraeder =>
+              'Alle Motorradmarken in der Community.',
+            _FahrzeugFilter.alle => 'Alle Marken in der Community.',
+          }
+        : 'Wer fährt einen $offen?';
+
+    return _buildSectionCard(
+      title: offen ?? 'Marken',
+      subtitle: untertitel,
+      icon: offen == null
+          ? Icons.directions_car_filled_rounded
+          : Icons.group_rounded,
+      accentColor: AppAccentColors.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (offen != null) ...[
+            _buildMarkenZurueckZeile(),
+            const SizedBox(height: 12),
+          ],
+          _buildFahrzeugFilterPicker(),
+          const SizedBox(height: 14),
+          if (offen != null)
+            _buildMarkenPersonenListe()
+          else if (_markenFehler != null)
+            _buildMarkenHinweis(_markenFehler!)
+          else if (eintraege == null || (_markenLaedt && eintraege.isEmpty))
+            const _MarkenSkelett()
+          else if (eintraege.isEmpty)
+            _buildMarkenHinweis(
+              switch (_fahrzeugFilter) {
+                _FahrzeugFilter.autos => 'Noch kein Auto in der Garage.',
+                _FahrzeugFilter.motorraeder =>
+                  'Noch kein Motorrad in der Garage.',
+                _FahrzeugFilter.alle => 'Noch kein Fahrzeug eingetragen.',
+              },
+            )
+          else
+            for (var i = 0; i < eintraege.length; i++) ...[
+              _buildMarkenZeile(eintraege[i]),
+              if (i < eintraege.length - 1) const SizedBox(height: 9),
+            ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMarkenZurueckZeile() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: _schliesseMarke,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.arrow_back_rounded,
+                size: 16,
+                color: Color(0xFFA0AEC0),
+              ),
+              SizedBox(width: 6),
+              Text(
+                'Alle Marken',
+                style: TextStyle(
+                  color: Color(0xFFA0AEC0),
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Drei Zustände als Chip-Reihe, gebaut wie
+  /// `_buildLeaderboardPeriodPicker` weiter oben. Reihenfolge wie im
+  /// Auftrag: „Autos, Motorräder oder alle".
+  Widget _buildFahrzeugFilterPicker() {
+    return Row(
+      children: [
+        for (final filter in _FahrzeugFilter.values) ...[
+          if (filter != _FahrzeugFilter.values.first) const SizedBox(width: 8),
+          Expanded(child: _buildFahrzeugFilterChip(filter)),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildFahrzeugFilterChip(_FahrzeugFilter filter) {
+    final gewaehlt = _fahrzeugFilter == filter;
+    return GestureDetector(
+      onTap: () => _setzeFahrzeugFilter(filter),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        height: 40,
+        decoration: BoxDecoration(
+          color: gewaehlt
+              ? AppAccentColors.accent.withValues(alpha: 0.18)
+              : const Color(0xFF0B0E14).withValues(alpha: 0.42),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: gewaehlt
+                ? AppAccentColors.accent.withValues(alpha: 0.50)
+                : Colors.white.withValues(alpha: 0.07),
+          ),
+        ),
+        child: Center(
+          child: Text(
+            filter.beschriftung,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: gewaehlt ? Colors.white : const Color(0xFFA0AEC0),
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMarkenHinweis(String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B0E14).withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
+      ),
+    );
+  }
+
+  Widget _buildMarkenZeile(_MarkenEintrag eintrag) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => _oeffneMarke(eintrag.marke),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0B0E14).withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.055)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Text(
+                    '${eintrag.personen}',
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      eintrag.marke,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${eintrag.personen} '
+                      '${eintrag.personen == 1 ? 'Person' : 'Personen'} · '
+                      '${eintrag.fahrzeuge} '
+                      '${eintrag.fahrzeuge == 1 ? 'Fahrzeug' : 'Fahrzeuge'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFFA0AEC0),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: Color(0xFF8A94A6),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMarkenPersonenListe() {
+    if (_personenLaden) return const _MarkenSkelett();
+    if (_markenPersonen.isEmpty) {
+      return _buildMarkenHinweis(
+        switch (_fahrzeugFilter) {
+          _FahrzeugFilter.autos =>
+            'Diese Marke fährt hier niemand als Auto. Stell den Filter auf '
+                'Alle.',
+          _FahrzeugFilter.motorraeder =>
+            'Diese Marke fährt hier niemand als Motorrad. Stell den Filter '
+                'auf Alle.',
+          _FahrzeugFilter.alle => 'Zu dieser Marke ist niemand eingetragen.',
+        },
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < _markenPersonen.length; i++) ...[
+          _buildMarkenPersonZeile(_markenPersonen[i]),
+          if (i < _markenPersonen.length - 1) const SizedBox(height: 9),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMarkenPersonZeile(_MarkenPerson person) {
+    final meineId = Supabase.instance.client.auth.currentUser?.id;
+    final binIch = person.userId == meineId;
+    final istMotorrad = person.fahrzeugArt == 'motorcycle';
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UserProfilePage(
+              userId: person.userId,
+              initialUsername: person.anzeigeName,
+            ),
+          ),
+        ),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: binIch
+                ? AppAccentColors.accent.withValues(alpha: 0.11)
+                : const Color(0xFF0B0E14).withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: binIch
+                  ? AppAccentColors.accent.withValues(alpha: 0.32)
+                  : Colors.white.withValues(alpha: 0.055),
+            ),
+          ),
+          child: Row(
+            children: [
+              UserAvatar(
+                name: person.anzeigeName,
+                avatarUrl: person.avatarUrl,
+                radius: 18,
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      binIch
+                          ? '${person.anzeigeName} · du'
+                          : person.anzeigeName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(
+                          istMotorrad
+                              ? Icons.two_wheeler_rounded
+                              : Icons.directions_car_filled_rounded,
+                          size: 13,
+                          color: const Color(0xFF8A94A6),
+                        ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            person.fahrzeugZeile,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFA0AEC0),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: Color(0xFF8A94A6),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSectionCard({
     required String title,
     String subtitle = '',
@@ -3302,6 +3914,49 @@ class _AnalyticsPageState extends State<AnalyticsPage>
 
 /// 2026-06-24 (vucko Skeleton-Loading): Lade-Skelett der Analytics-Seite —
 /// spiegelt Header, Hero-Karte (Level-Ring + Stat-Grid + Streak) und die Tabs.
+/// 2026-08-24 (Aufgabe 2.2): Skelett für die Marken-Übersicht und den
+/// Drilldown. Regel aus dem Projekt: nie ein Kreis-Spinner, immer die
+/// Struktur der echten Liste.
+class _MarkenSkelett extends StatelessWidget {
+  const _MarkenSkelett();
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonShimmer(
+      child: Column(
+        children: [
+          for (var i = 0; i < 5; i++) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF14171E),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: const Row(
+                children: [
+                  SkeletonCircle(size: 34),
+                  SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SkeletonBox(width: 110, height: 13),
+                        SizedBox(height: 6),
+                        SkeletonBox(width: 150, height: 10),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (i < 4) const SizedBox(height: 9),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _AnalyticsSkeleton extends StatelessWidget {
   const _AnalyticsSkeleton();
 

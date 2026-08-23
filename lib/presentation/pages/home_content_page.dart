@@ -35,6 +35,99 @@ import 'package:cruise_connect/data/services/trip_service.dart';
 import 'package:cruise_connect/presentation/pages/saved_route_bookmarks_page.dart';
 import 'package:cruise_connect/presentation/widgets/notification_bell_button.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
+
+/// Haelt die eigene Kachel-Anordnung fest, solange die Standard-Ansicht
+/// gezeigt wird.
+///
+/// 2026-08-24 (Aufgabe 4.6). Vucko: „moechte ich wirklich, dass beim
+/// Onboarding kurz die Ansicht so wie das alte Homescreen ist, und dann,
+/// nachdem die Aufgabe abgeschlossen ist, es wieder zum vorherigen wird -
+/// also wie es der Nutzer selber eingestellt hat." Und: die eigene Anordnung
+/// darf dabei „nicht verloren gehen".
+///
+/// Genau dafuer ist das hier ein eigener kleiner Zustand statt ein `bool` im
+/// State: die Zusage „nichts wird gespeichert" ist eine Regel, die man
+/// pruefen koennen muss, ohne die halbe Startseite hochzufahren.
+///
+/// INVARIANTEN:
+///  * Waehrend die Standard-Ansicht laeuft, liegt die eigene Anordnung im
+///    Halter und wird nie ueberschrieben.
+///  * [darfSpeichern] ist waehrenddessen `false` - die gezeigte
+///    Standard-Anordnung darf NIEMALS in die Preferences zurueckfliessen.
+///  * Beim Zurueckschalten kommt exakt die Liste heraus, die hineinging.
+class OnboardingAnsichtSchalter<T> {
+  T? _eigene;
+
+  /// Wird gerade die Standard-Ansicht gezeigt?
+  bool get standardAktiv => _eigene != null;
+
+  /// Solange die Standard-Ansicht laeuft, wird nichts gespeichert.
+  bool get darfSpeichern => !standardAktiv;
+
+  /// Liefert die Anordnung, die JETZT angezeigt werden soll.
+  T anwenden({
+    required bool onboardingLaeuft,
+    required T aktuell,
+    required T Function() standard,
+  }) {
+    if (onboardingLaeuft) {
+      _eigene ??= aktuell;
+      return standard();
+    }
+    final zurueck = _eigene;
+    _eigene = null;
+    return zurueck ?? aktuell;
+  }
+
+  /// Ein frisch vom Geraet geladenes Layout einsortieren. Laeuft gerade die
+  /// Standard-Ansicht, wandert es in den Halter und wird NICHT angezeigt;
+  /// zurueck kommt dann `null` („nichts anzuzeigen aendern").
+  T? geladenesLayout(T geladen) {
+    if (standardAktiv) {
+      _eigene = geladen;
+      return null;
+    }
+    return geladen;
+  }
+}
+
+/// Reine Regeln der Startseite - pruefbar ohne Supabase und ohne Widgets.
+class HomeStartseiteRegeln {
+  const HomeStartseiteRegeln._();
+
+  /// Braucht die Startseite den Ersatzblock ueber dem Dashboard?
+  ///
+  /// 2026-08-24 (Aufgabe 4.6, gemessen). Die Kachel „Heute fuer dich"
+  /// (`todayRoute`) laesst sich in „Home anpassen" spurlos entfernen. Mit ihr
+  /// verschwinden aber drei Dinge, die keine Geschmackssache sind:
+  ///  1. der Speichern-Knopf, an dem der Tutorial-Zielschluessel
+  ///     `homeRouteSpeichern` haengt - der Spotlight der Starter-Aufgabe
+  ///     „Eine Route speichern" zeigt danach ins Leere (kein Absturz, kein
+  ///     Haenger: nach 2,5 s Suche liegt die Sprechblase mittig auf dem
+  ///     abgedunkelten Bildschirm und verweist auf eine Karte, die es nicht
+  ///     mehr gibt),
+  ///  2. die Karte „Fahrt fortsetzen" fuer eine unterbrochene Fahrt,
+  ///  3. die Karte des laufenden Trips.
+  ///
+  /// ENTSCHEIDUNG: Die Kachel bleibt entfernbar - Vucko will die
+  /// Anpassbarkeit ausdruecklich, eine festgenagelte Kachel waere die
+  /// falsche Antwort. Stattdessen ruecken genau diese drei Dinge ueber das
+  /// Dashboard nach, solange sie gebraucht werden. Der Speichern-Weg wird
+  /// also zusaetzlich woanders angeboten, statt die Anpassung zu beschneiden.
+  static bool ersatzNoetig({
+    required bool heuteKachelSichtbar,
+    required bool unterbrocheneFahrt,
+    required bool aktiverTrip,
+    required bool speichernAufgabeOffen,
+    required bool empfehlungVorhanden,
+  }) {
+    if (heuteKachelSichtbar) return false;
+    if (unterbrocheneFahrt || aktiverTrip) return true;
+    return speichernAufgabeOffen && empfehlungVorhanden;
+  }
+}
 
 enum _HomeWidgetId {
   xp,
@@ -281,8 +374,12 @@ class _HomeContentPageState extends State<HomeContentPage>
   final Map<String, _HeroRouteInsights> _heroInsightsByRouteId = {};
   final Set<String> _heroInsightsLoading = <String>{};
   late final AnimationController _shimmerController;
+  // 2026-08-24 (Aufgabe 4.6, Nebenfund 1): Diese drei Schluessel trugen keine
+  // Nutzerkennung. Sie laufen jetzt alle ueber NutzerPrefsSchluessel, das
+  // haengt `::<userId>` an und uebernimmt den alten Wert genau einmal.
   static const String _dashboardPrefsKey = 'home_dashboard_layout_v1';
   static const String _badgeHuntPrefsKey = 'home_badge_hunt_id_v1';
+  static const String _homeSnapshotPrefsKey = 'home_snapshot_v1';
   static const double _dashboardGap = 12;
   static const double _dashboardHalfTileHeight = 184;
   static const double _dashboardFolderFullHeight = 300;
@@ -290,6 +387,11 @@ class _HomeContentPageState extends State<HomeContentPage>
   final Map<String, int> _folderTargetPages = {};
   final Map<String, AnimationController> _folderSlideControllers = {};
   List<_HomeDashboardItem> _dashboardItems = _defaultDashboardItems();
+  // 2026-08-24 (Aufgabe 4.6): Waehrend des Onboardings zeigt die Startseite
+  // die Standard-Kacheln, danach wieder die eigenen. Der Schalter haelt die
+  // eigene Anordnung fest und sperrt das Speichern, solange getauscht ist.
+  final OnboardingAnsichtSchalter<List<_HomeDashboardItem>>
+  _onboardingAnsicht = OnboardingAnsichtSchalter<List<_HomeDashboardItem>>();
   bool _customizingDashboard = false;
   // ignore: prefer_final_fields
   bool _showLegacyHomeBodyForDebug = false;
@@ -452,6 +554,14 @@ class _HomeContentPageState extends State<HomeContentPage>
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat();
+    // 2026-08-24 (Aufgabe 4.6): zuerst den Onboarding-Schalter stellen, dann
+    // laden. Beide Reihenfolgen sind abgesichert (siehe
+    // OnboardingAnsichtSchalter.geladenesLayout), aber so ist die
+    // Standard-Ansicht schon da, bevor das eigene Layout eintrudelt.
+    AppTutorialService.onboardingAnsichtAktiv.addListener(
+      _onOnboardingAnsichtGeaendert,
+    );
+    unawaited(AppTutorialService.pruefeOnboardingAnsicht());
     unawaited(_loadDashboardLayout());
     unawaited(_loadBadgeHuntPreference());
     // 2026-05-28 (vucko Task #68): Cached Home-Snapshot ASYNC laden damit
@@ -554,7 +664,12 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<void> _hydrateFromHomeSnapshot() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('home_snapshot_v1');
+      // 2026-08-24 (Aufgabe 4.6, Nebenfund 1): kontogebunden. Vorher sah das
+      // zweite Konto auf demselben Handy beim ersten Start Name, Avatar, XP
+      // und Kilometer des ersten Kontos.
+      final raw = prefs.getString(
+        await NutzerPrefsSchluessel.vorbereitet(prefs, _homeSnapshotPrefsKey),
+      );
       if (raw == null || !mounted) return;
       final map = jsonDecode(raw);
       if (map is! Map) return;
@@ -628,7 +743,7 @@ class _HomeContentPageState extends State<HomeContentPage>
       final prefs = await SharedPreferences.getInstance();
       final reco = _todayRecommendation;
       await prefs.setString(
-        'home_snapshot_v1',
+        await NutzerPrefsSchluessel.vorbereitet(prefs, _homeSnapshotPrefsKey),
         jsonEncode(<String, dynamic>{
           'userLevel': userLevel,
           'levelProgress': levelProgress,
@@ -658,10 +773,38 @@ class _HomeContentPageState extends State<HomeContentPage>
     }
   }
 
+  /// 2026-08-24 (Aufgabe 4.6): Onboarding an oder aus - Ansicht tauschen.
+  ///
+  /// Es wird NUR die Darstellung getauscht. Die eigene Anordnung liegt
+  /// waehrenddessen im Schalter, in den Preferences bleibt sie unberuehrt,
+  /// und `_persistDashboardLayout` schreibt in dieser Zeit nichts.
+  void _onOnboardingAnsichtGeaendert() {
+    if (!mounted) return;
+    final laeuft = AppTutorialService.onboardingAnsichtAktiv.value;
+    if (laeuft == _onboardingAnsicht.standardAktiv) return;
+    final naechste = _onboardingAnsicht.anwenden(
+      onboardingLaeuft: laeuft,
+      aktuell: _dashboardItems,
+      standard: _defaultDashboardItems,
+    );
+    setState(() {
+      _dashboardItems = naechste;
+      // Waehrend der Standard-Ansicht ist „Home anpassen" zu (siehe
+      // _openDashboardEditor): sonst baute der Nutzer an einer Anordnung,
+      // die gleich wieder verschwindet, und nichts davon wuerde gespeichert.
+      if (laeuft) _customizingDashboard = false;
+    });
+  }
+
+  /// Der kontogebundene Layout-Schluessel (Nebenfund 1 der Aufgabe 4.6).
+  Future<String> _dashboardKeyFuerKonto(SharedPreferences prefs) =>
+      NutzerPrefsSchluessel.vorbereitet(prefs, _dashboardPrefsKey);
+
   Future<void> _loadDashboardLayout() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_dashboardPrefsKey);
+      final schluessel = await _dashboardKeyFuerKonto(prefs);
+      final raw = prefs.getString(schluessel);
       if (raw == null) return;
 
       final decoded = jsonDecode(raw);
@@ -700,13 +843,18 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
         await prefs.setBool(ranglisteEingefuegtKey, true);
         await prefs.setString(
-          _dashboardPrefsKey,
+          schluessel,
           jsonEncode(sanitized.map((item) => item.toJson()).toList()),
         );
       }
       if (!mounted) return;
+      // 2026-08-24 (Aufgabe 4.6): Laeuft gerade das Onboarding, wandert das
+      // eigene Layout in den Schalter statt auf den Bildschirm - angezeigt
+      // bleibt die Standard-Ansicht, gespeichert wird nichts.
+      final anzuzeigen = _onboardingAnsicht.geladenesLayout(sanitized);
+      if (anzuzeigen == null) return;
       setState(() {
-        _dashboardItems = sanitized;
+        _dashboardItems = anzuzeigen;
       });
     } catch (e) {
       debugPrint('[Home] Dashboard-Layout laden fehlgeschlagen: $e');
@@ -714,10 +862,16 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   Future<void> _persistDashboardLayout() async {
+    // 2026-08-24 (Aufgabe 4.6): Waehrend der Onboarding-Ansicht steht in
+    // `_dashboardItems` die STANDARD-Anordnung. Wuerde sie hier gespeichert,
+    // waere genau das eingetreten, was Vucko ausgeschlossen hat: „Die
+    // persoenliche Anpassung des Nutzers darf dabei nicht verloren gehen."
+    if (!_onboardingAnsicht.darfSpeichern) return;
     try {
       final prefs = await SharedPreferences.getInstance();
+      final schluessel = await _dashboardKeyFuerKonto(prefs);
       await prefs.setString(
-        _dashboardPrefsKey,
+        schluessel,
         jsonEncode(_dashboardItems.map((item) => item.toJson()).toList()),
       );
     } catch (e) {
@@ -728,7 +882,9 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<void> _loadBadgeHuntPreference() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final id = prefs.getString(_badgeHuntPrefsKey);
+      final id = prefs.getString(
+        await NutzerPrefsSchluessel.vorbereitet(prefs, _badgeHuntPrefsKey),
+      );
       if (!mounted || id == null || id.isEmpty) return;
       setState(() => _selectedBadgeHuntId = id);
     } catch (e) {
@@ -739,10 +895,14 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<void> _persistBadgeHuntPreference(String? badgeId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final schluessel = await NutzerPrefsSchluessel.vorbereitet(
+        prefs,
+        _badgeHuntPrefsKey,
+      );
       if (badgeId == null || badgeId.isEmpty) {
-        await prefs.remove(_badgeHuntPrefsKey);
+        await prefs.remove(schluessel);
       } else {
-        await prefs.setString(_badgeHuntPrefsKey, badgeId);
+        await prefs.setString(schluessel, badgeId);
       }
     } catch (e) {
       debugPrint('[Home] Badge-Ziel speichern fehlgeschlagen: $e');
@@ -790,6 +950,19 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   Set<_HomeWidgetId> get _visibleWidgetIds =>
       _dashboardItems.expand((item) => item.widgetIds).toSet();
+
+  /// Steht „Heute fuer dich" als EIGENE Kachel auf der Startseite?
+  ///
+  /// 2026-08-24 (Aufgabe 4.6, gemessen): Liegt die Kachel in einem Ordner,
+  /// zeichnet `_buildFolderCard` nur die aktuelle Seite (und beim Wischen
+  /// kurz die Nachbarseite). Der Speichern-Knopf ist dann je nach Seite im
+  /// Baum oder nicht - fuer einen GlobalKey und fuer einen Spotlight ist das
+  /// unbrauchbar. Deshalb gilt: nur die freistehende Kachel traegt den Anker,
+  /// im Ordner uebernimmt ihn der Ersatzblock. So gibt es den Schluessel nie
+  /// zweimal und nie null-mal.
+  bool get _heuteKachelTraegtAnker => _dashboardItems.any(
+    (item) => !item.isFolder && item.widgetIds.contains(_HomeWidgetId.todayRoute),
+  );
 
   _DashboardWidgetSize _validSizeFor(
     List<_HomeWidgetId> ids,
@@ -1326,6 +1499,9 @@ class _HomeContentPageState extends State<HomeContentPage>
 
   @override
   void dispose() {
+    AppTutorialService.onboardingAnsichtAktiv.removeListener(
+      _onOnboardingAnsichtGeaendert,
+    );
     _shimmerController.dispose();
     _carouselController.dispose();
     for (final controller in _folderSlideControllers.values) {
@@ -1745,7 +1921,8 @@ class _HomeContentPageState extends State<HomeContentPage>
                     const SizedBox(height: 10),
                     _buildDashboardEditHint(),
                     // 2026-08-14 (vucko): Starter-Paket-Aufgaben + Doppel-XP-Countdown.
-                    StarterPaketKarte(onTabChange: widget.onTabChange),
+                    _buildStarterPaketMitTutorialAnker(),
+                    _buildErsatzFuerHeuteKachel(),
                     _buildDashboard(),
                     if (_showLegacyHomeBodyForDebug) ...[
                       // 2026-05-24 (vucko Task #42): Hero-Streak-Banner (nur sichtbar
@@ -2134,6 +2311,19 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   void _openDashboardEditor() {
+    // 2026-08-24 (Aufgabe 4.6): Waehrend des Onboardings zeigt die Startseite
+    // die Standard-Ansicht. Wer hier baute, baute an einer Anordnung, die
+    // gleich wieder verschwindet - und gespeichert wuerde sie ohnehin nicht.
+    // Also ehrlich absagen statt still ins Leere laufen lassen.
+    if (_onboardingAnsicht.standardAktiv) {
+      TopToast.show(
+        context,
+        message: 'Erst das Onboarding abschließen, dann kannst du die '
+            'Startseite wieder anpassen.',
+        icon: Icons.school_rounded,
+      );
+      return;
+    }
     HapticFeedback.selectionClick();
     if (!_customizingDashboard) {
       setState(() => _customizingDashboard = true);
@@ -2589,6 +2779,151 @@ class _HomeContentPageState extends State<HomeContentPage>
       }
     }
     return entries;
+  }
+
+  /// 2026-08-24 (Aufgabe 4.6, Befund 4). Der Tutorial-Schritt „Deine
+  /// Startseite" zielt auf [TutorialZielRegistry.starterKarte] - dieser
+  /// Schluessel hing bis heute an KEINEM Widget (nachgeprueft mit grep ueber
+  /// lib/: nur die Definition in der Registry und die Abfrage im Overlay).
+  /// Der Schritt dunkelte den Bildschirm ab und zeigte auf nichts.
+  ///
+  /// Der Anker haengt nur dran, wenn die Karte auch wirklich etwas zeigt.
+  /// Sonst waere der Ring ein 20 px grosser Punkt am oberen Rand - schlimmer
+  /// als gar keiner. Die Bedingung spiegelt `StarterPaketKarte.build`
+  /// (`!isLoaded` und `paketVergeben && !doppelXpAktiv` liefern dort beide
+  /// `SizedBox.shrink()`); `test/widgets/home_anpassung_onboarding_test.dart`
+  /// schlaegt fehl, wenn die beiden auseinanderlaufen.
+  Widget _buildStarterPaketMitTutorialAnker() {
+    return ListenableBuilder(
+      listenable: StarterAufgabenService.instance,
+      builder: (context, _) {
+        final dienst = StarterAufgabenService.instance;
+        final sichtbar =
+            dienst.isLoaded && !(dienst.paketVergeben && !dienst.doppelXpAktiv);
+        final karte = StarterPaketKarte(onTabChange: widget.onTabChange);
+        // Die Huelle steht IMMER, nur der Schluessel wechselt. Sonst wanderte
+        // die Karte beim Umschalten im Baum und ihr State (Timer,
+        // Profil-Abgleich) wuerde neu aufgebaut.
+        return KeyedSubtree(
+          key: sichtbar
+              ? TutorialZielRegistry.key(TutorialZielRegistry.starterKarte)
+              : null,
+          child: karte,
+        );
+      },
+    );
+  }
+
+  /// Ersatz fuer die entfernte Kachel „Heute fuer dich".
+  ///
+  /// 2026-08-24 (Aufgabe 4.6). Vucko: „wenn man halt mehr Routen speichern
+  /// moechte, dass - wenn man die Homepage veraendert hat - dass es dann
+  /// irgendwie ein bisschen verbuggt ist."
+  ///
+  /// GEMESSEN: Der Speichern-Knopf mit dem Tutorial-Zielschluessel
+  /// `homeRouteSpeichern` sitzt ausschliesslich in dieser einen Kachel, und
+  /// die Kachel laesst sich in „Home anpassen" spurlos entfernen. Danach
+  /// zeigt die Fuehrung der Starter-Aufgabe „Eine Route speichern" ins Leere,
+  /// und mit derselben Kachel verschwinden auch „Fahrt fortsetzen" und die
+  /// Trip-Karte - also der einzige Weg zurueck in eine unterbrochene Fahrt.
+  ///
+  /// ENTSCHEIDUNG (Vucko schlaeft, keine Rueckfrage moeglich): Die Kachel
+  /// bleibt entfernbar. Sie festzunageln waere die falsche Antwort, weil die
+  /// Anpassbarkeit ausdruecklich gewollt ist. Stattdessen ruecken hier genau
+  /// die Teile nach, die keine Geschmackssache sind - und nur so lange, wie
+  /// sie gebraucht werden. Ist die Kachel da, ist dieser Block leer; der
+  /// Speichern-Knopf existiert also immer genau einmal (kein doppelter
+  /// GlobalKey).
+  Widget _buildErsatzFuerHeuteKachel() {
+    return ListenableBuilder(
+      listenable: StarterAufgabenService.instance,
+      builder: (context, _) {
+        final heuteSichtbar = _heuteKachelTraegtAnker;
+        final dienst = StarterAufgabenService.instance;
+        final speichernOffen = dienst.isLoaded && !dienst.erledigt('speichern');
+        final empfehlung = _todayRecommendation;
+        final noetig = HomeStartseiteRegeln.ersatzNoetig(
+          heuteKachelSichtbar: heuteSichtbar,
+          unterbrocheneFahrt: _resumableRide != null,
+          aktiverTrip: _activeTrip != null,
+          speichernAufgabeOffen: speichernOffen,
+          empfehlungVorhanden: empfehlung != null,
+        );
+        if (!noetig) return const SizedBox.shrink();
+
+        final ride = _resumableRide;
+        final trip = _activeTrip;
+        final teile = <Widget>[
+          if (ride != null) _buildRideResumeCarouselCard(ride),
+          if (trip != null) _buildTripResumeCarouselCard(trip),
+          if (speichernOffen && empfehlung != null)
+            _buildSpeichernNachruecker(empfehlung),
+        ];
+        if (teile.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Column(
+            children: [
+              for (var i = 0; i < teile.length; i++) ...[
+                if (i > 0) const SizedBox(height: 12),
+                teile[i],
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Die schlanke Speichern-Zeile, wenn die Kachel „Heute fuer dich" fehlt.
+  /// Traegt ueber [_buildSaveChip] denselben Tutorial-Zielschluessel wie die
+  /// Kachel - der Spotlight findet also wieder ein echtes Ziel.
+  Widget _buildSpeichernNachruecker(HomeRouteRecommendation empfehlung) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1F26),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppAccentColors.accent.withValues(alpha: 0.28),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.bookmark_add_rounded,
+            color: AppAccentColors.accent,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Route speichern',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  empfehlung.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          _buildSaveChip(empfehlung.route),
+        ],
+      ),
+    );
   }
 
   Widget _buildDashboard() {
@@ -3303,6 +3638,11 @@ class _HomeContentPageState extends State<HomeContentPage>
 
     return LongPressDraggable<_HomeWidgetDragPayload>(
       data: _HomeWidgetDragPayload.existing(item.key),
+      // 2026-08-24 (Aufgabe 4.6): Waehrend der Onboarding-Ansicht liegt hier
+      // die Standard-Anordnung. Ziehen wuerde nur eine Anordnung umbauen, die
+      // gleich wieder verschwindet und ohnehin nicht gespeichert wird - und
+      // es waere der zweite Weg in den Bearbeiten-Modus hinein.
+      maxSimultaneousDrags: _onboardingAnsicht.standardAktiv ? 0 : null,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       feedback: _buildDragFeedback(_dashboardItemTitle(item), Icons.widgets),
       childWhenDragging: Opacity(opacity: 0.38, child: target),
@@ -3857,6 +4197,8 @@ class _HomeContentPageState extends State<HomeContentPage>
       key: ValueKey('folder_content_${item.key}_${id.name}'),
       child: LongPressDraggable<_HomeWidgetDragPayload>(
         data: payload,
+        // Siehe oben (Aufgabe 4.6): waehrend der Onboarding-Ansicht gesperrt.
+        maxSimultaneousDrags: _onboardingAnsicht.standardAktiv ? 0 : null,
         dragAnchorStrategy: pointerDragAnchorStrategy,
         feedback: _buildDragFeedback(_metaFor(id).title, _metaFor(id).icon),
         childWhenDragging: Opacity(opacity: 0.36, child: content),
@@ -6100,7 +6442,10 @@ class _HomeContentPageState extends State<HomeContentPage>
                         ),
                       ),
                       const SizedBox(width: 8),
-                      _buildSaveChip(route),
+                      _buildSaveChip(
+                        route,
+                        tutorialAnker: _heuteKachelTraegtAnker,
+                      ),
                     ],
                   ),
                 ],
@@ -6384,7 +6729,11 @@ class _HomeContentPageState extends State<HomeContentPage>
     );
   }
 
-  Widget _buildSaveChip(SavedRoute route) {
+  /// 2026-08-24 (Aufgabe 4.6): [tutorialAnker] entscheidet, ob DIESER Knopf
+  /// den Tutorial-Zielschluessel traegt. Der Schluessel ist ein GlobalKey und
+  /// darf im Baum genau einmal vorkommen - deshalb wird er nie geraten,
+  /// sondern von [_heuteKachelTraegtAnker] an genau einer Stelle vergeben.
+  Widget _buildSaveChip(SavedRoute route, {bool tutorialAnker = true}) {
     return GestureDetector(
       onTap: () async {
         // 2026-06-09 (vucko Audit T3-B): Doppel-Tap-Schutz — verhindert nebenläufige
@@ -6448,7 +6797,9 @@ class _HomeContentPageState extends State<HomeContentPage>
         }
       },
       child: AnimatedContainer(
-        key: TutorialZielRegistry.key(TutorialZielRegistry.homeRouteSpeichern),
+        key: tutorialAnker
+            ? TutorialZielRegistry.key(TutorialZielRegistry.homeRouteSpeichern)
+            : null,
         duration: const Duration(milliseconds: 180),
         // 2026-06-08 (vucko Route-Widget): gleiche Höhe wie der Fahren-Button (44).
         width: 48,

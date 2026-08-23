@@ -1154,6 +1154,27 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   trailingColor: ownerOnlyMessages ? Colors.orangeAccent : null,
                   onTap: _showMembersSheet,
                 ),
+                // 2026-08-24 (Aufgabe 10b). Vucko: „ein badge in der community
+                // wo man sieht wann es gegruendet wurde."
+                //
+                // Es steht bewusst HIER, in der Kopfzeile der Community
+                // selbst, und nicht in der Liste — das Etikett „Vor kurzem
+                // erstellt" aus Aufgabe 1.2 sitzt in der Liste und sagt
+                // etwas anderes (jünger als 7 Tage). Dieses hier zeigt IMMER
+                // das Datum, egal wie alt die Community ist.
+                //
+                // Nicht anklickbar mit Absicht: Es ist eine Angabe, kein
+                // Einstieg. Alles, was hier tippbar ist (Mitglieder,
+                // Beitrittsanfragen), führt woandershin.
+                if (CommunityChatService.gruendungsdatumText(community)
+                    case final gruendung?) ...[
+                  const SizedBox(width: 8),
+                  _buildMetaPill(
+                    icon: Icons.workspace_premium_outlined,
+                    label: gruendung,
+                    color: Colors.amberAccent,
+                  ),
+                ],
                 if (_amAdmin && _openJoinRequests > 0) ...[
                   const SizedBox(width: 8),
                   _buildMetaPill(

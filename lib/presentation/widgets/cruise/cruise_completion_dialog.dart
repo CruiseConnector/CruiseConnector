@@ -12,6 +12,7 @@ import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:flutter/rendering.dart';
 import 'package:cruise_connect/presentation/utils/share_helper.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/xp_rechnung_animation.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 
 Future<T?> showCruiseCompletionSheet<T>({
   required BuildContext context,
@@ -539,6 +540,21 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                     gesamtXp: widget.xpEarned,
                     streakTage: widget.streakDays,
                     doppelXpAktiv: widget.doppelXpAktiv,
+                    // 2026-08-24 (Aufgabe 4.4, vucko 23.08.): „dass halt
+                    // irgendwie angezeigt werden kann, dass man durch den
+                    // Boost die sieben Tage einen doppelten Boost hat und
+                    // halt auf dem aufbauen kann."
+                    //
+                    // Die Animation sagte bisher nur, DASS verdoppelt wird.
+                    // Restlaufzeit und der Wert von morgen kommen aus dem
+                    // Starter-Dienst, der beides ohnehin fuehrt. Ohne diese
+                    // zwei Zeilen faellt die Animation auf ihre eigenen
+                    // Rueckfallwerte zurueck und zeigt die Bonus-Leiste
+                    // stumm - der Draht endete hier.
+                    bonusRestlaufzeit:
+                        StarterAufgabenService.instance.doppelXpAktiv
+                            ? StarterAufgabenService.instance.bonusVerbleibend
+                            : null,
                   ),
                 ],
                 const SizedBox(height: 10),

@@ -20,6 +20,7 @@ import 'package:cruise_connect/data/services/auth_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/data/services/vehicle_api_service.dart';
 import 'package:cruise_connect/presentation/pages/home_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
@@ -1534,6 +1535,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             style: const TextStyle(color: Colors.white, fontSize: 17),
             decoration: _fieldDeco(accent, hint: 'Marke (z.B. BMW)'),
           ),
+          _markenVorschlaege(accent),
           const SizedBox(height: 12),
           TextField(
             controller: _carNameCtrl,
@@ -1544,6 +1546,100 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 2026-08-24 (Aufgabe 2.1): Vorschläge unter dem Marken-Feld.
+  ///
+  /// Vucko wörtlich: „B-M-W ganz in Caps geschrieben und groß geschrieben
+  /// soll das Gleiche sein wie B groß, M klein und W klein [...] Wichtig
+  /// ist, dass das [wortident] ist."
+  ///
+  /// Warum das hier hingehört und nicht nur in die Garage: dieses Feld war
+  /// bis heute ein blankes Textfeld ohne jeden Vorschlag. In der
+  /// Bearbeiten-Seite gibt es seit jeher eine Vorschlagsliste, hier nicht.
+  /// Gemessen am 24.08. in der Produktivdatenbank: 128 Profile mit Marke,
+  /// 48 verschiedene Schreibweisen. Neue Schreibweisen entstehen hier
+  /// schneller, als eine Migration sie aufräumen kann. Der Trigger auf
+  /// `profiles.car_brand` fängt die bekannten Fälle ab, aber ein Tippfehler
+  /// bleibt ein Tippfehler.
+  ///
+  /// BEWUSST ohne Netz: die gepflegte Liste aus VehicleApiService liegt im
+  /// Code. Das Onboarding darf an keiner Stelle auf eine Antwort warten.
+  Widget _markenVorschlaege(Color accent) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _carBrandCtrl,
+      builder: (context, wert, _) {
+        final getippt = wert.text.trim().toLowerCase();
+        // Die sechs häufigsten Marken der Nutzerschaft, gemessen am
+        // 24.08. über get_brand_overview: BMW 30 Personen, Volkswagen 16,
+        // Audi 14, Beta 8, Mercedes-Benz 7, Skoda 6.
+        const haeufig = [
+          'BMW',
+          'Volkswagen',
+          'Audi',
+          'Beta',
+          'Mercedes-Benz',
+          'Skoda',
+        ];
+        final List<String> vorschlaege;
+        if (getippt.length < 2) {
+          vorschlaege = haeufig;
+        } else {
+          vorschlaege = [
+            for (final make in VehicleApiService.kuratierteMarken)
+              if (make.name.toLowerCase().startsWith(getippt)) make.name,
+          ].take(6).toList();
+        }
+        // Genau getroffen: dann ist der Vorschlag nur noch Lärm.
+        if (vorschlaege.length == 1 &&
+            vorschlaege.first.toLowerCase() == getippt) {
+          return const SizedBox(height: 8);
+        }
+        if (vorschlaege.isEmpty) return const SizedBox(height: 8);
+        return Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: SizedBox(
+            height: 34,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: vorschlaege.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (_, i) {
+                final marke = vorschlaege[i];
+                return GestureDetector(
+                  onTap: () {
+                    _carBrandCtrl.value = TextEditingValue(
+                      text: marke,
+                      selection: TextSelection.collapsed(offset: marke.length),
+                    );
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: _card,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: accent.withValues(alpha: 0.30),
+                      ),
+                    ),
+                    child: Text(
+                      marke,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 

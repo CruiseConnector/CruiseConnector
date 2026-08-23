@@ -328,6 +328,32 @@ class GamificationService {
   /// Bonuswoche, sonst 1,00x).
   static const int schonfristTage = 7;
 
+  /// 2026-08-24 (Aufgabe 4.2): DER SCHALTER FUER DIE SCHONFRIST.
+  ///
+  /// Hier widersprechen sich zwei Aussagen von Vucko, beide woertlich:
+  ///
+  ///  * 23.08., Aufnahme 5 [00:32]: „wenn man halt einen Tag vergisst, dass es
+  ///    dann wieder auf zwei zurueckfaellt und nicht auf eins."
+  ///  * 19.08., auf genau diese Frage geantwortet: „wenn man eine Streak hat
+  ///    und einen Tag vergisst, das man die moeglichkeit hat die streak wieder
+  ///    zu entfachen aber wenn man die app zwei tage nicht verwendet und davor
+  ///    eine streak hatte, kommt man wieder auf die basisstreak" — und auf
+  ///    Nachfrage: „7 Tage ab dem Fehltag, ein zweiter beendet sie."
+  ///
+  /// ENTSCHEIDUNG am 24.08. (Vucko schlaeft, keine Rueckfrage moeglich): DIE
+  /// SCHONFRIST BLEIBT, also `true`. Begruendung: Der Kern der Aussage vom
+  /// 23.08. ist „NICHT AUF EINS" — der BODEN bei 2,0 waehrend der Bonuswoche.
+  /// Der stimmt bereits und wird von
+  /// `test/services/streak_multiplikator_test.dart` festgehalten. Die Zahl der
+  /// erlaubten Fehltage hat er vier Tage vorher auf ausdrueckliche Nachfrage
+  /// anders beantwortet, und danach ist gebaut und getestet worden.
+  ///
+  /// AUF `false` STELLEN heisst: schon der ERSTE Fehltag reisst die Serie, so
+  /// wie es die Lesart vom 23.08. nahelegt. Es ist genau diese eine Zeile;
+  /// sieben Faelle in `streak_multiplikator_test.dart` werden dann rot, und
+  /// das ist richtig so — sie halten die heutige Regel fest.
+  static const bool schonfristAktiv = true;
+
   /// Zaehlt die Serie rueckwaerts ab [ab] und beruecksichtigt die Schonfrist.
   /// Fehltage zaehlen NICHT mit, sie unterbrechen nur (oder eben nicht).
   static int _serieRueckwaerts(Set<DateTime> fahrTage, DateTime ab) {
@@ -339,6 +365,9 @@ class GamificationService {
     for (var schritt = 0; schritt < 4000; schritt++) {
       if (fahrTage.contains(tag)) {
         serie++;
+      } else if (!schonfristAktiv) {
+        // Lesart vom 23.08.: schon der erste Fehltag beendet die Serie.
+        break;
       } else if (offenerFehltag != null &&
           _tageDazwischen(offenerFehltag, tag) <= schonfristTage) {
         break;
@@ -883,9 +912,15 @@ class GamificationService {
     final gruppenZaehler = _countCreatedGroups(userId);
     final postZaehler = _countPosts(userId);
     final gespeicherteZaehler = _countSavedRouteReferences(userId);
+    // 2026-08-24 (Aufgabe 4.5 und 10a): zwei weitere Zahlen, beide parallel
+    // zu den bestehenden — kein zusaetzlicher Wartetakt.
+    final fahrzeugZaehler = _countVehicles(userId);
+    final gruendungZaehler = _hatCommunityGegruendet();
     final createdGroupCount = await gruppenZaehler;
     final postZahlen = await postZaehler;
     final savedRouteReferenceCount = await gespeicherteZaehler;
+    final fahrzeugAnzahl = await fahrzeugZaehler;
+    final communityGegruendet = await gruendungZaehler;
     final routePostCount = postZahlen.mitRoute;
 
     // 4. Badges prüfen
@@ -945,12 +980,37 @@ class GamificationService {
     // wurden, und `paketVerdient` sagt danach, ob das Abzeichen zusteht. Diese
     // Pruefung laeuft bei JEDEM Sync, also kommt das Abzeichen auch Wochen
     // spaeter noch an.
+    // 2026-08-24 (Aufgabe 10a, vucko woertlich): „dass community ein enzelnes
+    // badge bekommen [...] aber nur eins das heisst Gruende eine Community".
+    //
+    // Die Bedingung kommt aus der Datenbank (RPC `meine_community_gruendung`,
+    // Migration 20260824103000), nicht aus einem Zaehler hier: Der GRUENDER
+    // ist dort eine eigene, schreib-einmalige Spalte `communities.founder_id`.
+    // Weder `communities.owner_id` (wird beim Verlassen umgesetzt) noch
+    // `community_members.role = 'owner'` (die Admin-Rolle, gemessen 7 Zeilen
+    // auf 6 Communities) taugen dafuer — ueber beide bekaemen mehrere Leute je
+    // Community dasselbe Abzeichen.
+    if (communityGegruendet) {
+      currentlyQualifiedBadges.add(Badge.communityGruenderBadgeId);
+    }
+
     final starter = StarterAufgabenService.instance;
     await starter.synchronisiereMitProfil();
+    // 2026-08-24: Die Anzahl der Abzeichen fuer die Aufgabe „die ersten drei
+    // Abzeichen sammeln" wird GENAU HIER genommen — vor der Vergabe von
+    // badge_16. Das Startklar-Abzeichen ist die Belohnung dieser Liste; zaehlte
+    // es mit, haenge die Aufgabe an ihrem eigenen Ergebnis.
+    final abzeichenOhneStartklar = normalizeBadgeIds(
+      currentlyQualifiedBadges,
+    ).length;
     await starter.synchronisiereAusKennzahlen(
       posts: postZahlen.gesamt,
       abgeschlosseneFahrten: completedSessions.length,
       abgeschlosseneGruppenfahrten: completedGroupRides,
+      erstellteGruppen: createdGroupCount,
+      fahrzeuge: fahrzeugAnzahl,
+      abzeichen: abzeichenOhneStartklar,
+      gesamtKm: totalKm,
     );
     if (starter.paketVerdient) {
       currentlyQualifiedBadges.add(Badge.starterBadgeId);
@@ -1071,6 +1131,49 @@ class GamificationService {
     } catch (e) {
       debugPrint('[Gamification] Gruppen-Zähler fehlgeschlagen: $e');
       return 0;
+    }
+  }
+
+  /// 2026-08-24 (Aufgabe 4.5, vucko): „Auto in die Garage hinzufuegen".
+  ///
+  /// GEMESSEN am 24.08.: 60 von 183 Profilen haben mindestens ein Fahrzeug in
+  /// `profile_vehicles`. Die Grenze liegt bei 8, weil die Aufgabe nur wissen
+  /// will, ob ueberhaupt eines da ist — die genaue Zahl braucht hier niemand.
+  static Future<int> _countVehicles(String userId) async {
+    try {
+      final rows = await _db
+          .from('profile_vehicles')
+          .select('id')
+          .eq('user_id', userId)
+          .limit(8);
+      return (rows as List).length;
+    } catch (e) {
+      // Faellt still aus, wenn die Tabelle fehlt (Altbestand ohne Migration).
+      debugPrint('[Gamification] Fahrzeug-Zähler fehlgeschlagen: $e');
+      return 0;
+    }
+  }
+
+  /// 2026-08-24 (Aufgabe 10a): Hat der Nutzer je eine Community GEGRUENDET?
+  ///
+  /// Bewusst die RPC und keine eigene Abfrage auf `communities`. Zwei Gruende,
+  /// beide stehen ausfuehrlich in Migration 20260824103000:
+  ///  * Der Gruender ist `founder_id`, nicht `owner_id` und nicht die Rolle
+  ///    `owner` in `community_members`.
+  ///  * Die Sichtbarkeitsregel `communities_visible_public_or_member` zeigt
+  ///    eine private Community nur Mitgliedern. Wer seine eigene private
+  ///    Community gegruendet und spaeter verlassen hat, saehe sie per SELECT
+  ///    nicht mehr und verloere das Abzeichen wieder. Die RPC laeuft deshalb
+  ///    als SECURITY DEFINER und liest ausschliesslich Zeilen mit
+  ///    `founder_id = auth.uid()`.
+  static Future<bool> _hatCommunityGegruendet() async {
+    try {
+      final antwort = await _db.rpc('meine_community_gruendung');
+      if (antwort is Map) return antwort['gegruendet'] == true;
+      return false;
+    } catch (e) {
+      debugPrint('[Gamification] Community-Gründung-Abfrage fehlgeschlagen: $e');
+      return false;
     }
   }
 

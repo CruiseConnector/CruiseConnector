@@ -127,7 +127,7 @@ void main() {
           '"post","gruppenfahrt"]',
     });
     await dienst.load();
-    expect(dienst.alleErledigt, isTrue);
+    expect(dienst.boostErreicht, isTrue);
     expect(dienst.bonusEnde, isNull);
 
     await dienst.synchronisiereMitProfil();
@@ -158,5 +158,131 @@ void main() {
     await dienst.load();
     await dienst.synchronisiereMitProfil();
     expect(dienst.erledigtAnzahl, 2);
+  });
+
+  // ------------------------------------------------------------------
+  // 2026-08-24 (Aufgabe 4.1): Der Boost ist verteilt, die App muss ihn zeigen.
+  // ------------------------------------------------------------------
+  //
+  // vucko am 23.08.: „ich moechte, dass jeder diesen bekommt ab dem naechsten
+  // Update, wirklich jede Person, mit mir eingeschlossen."
+  //
+  // Die Migration 20260824100000 hat allen 183 Profilen `starter_bonus_ende =
+  // jetzt + 7 Tage` gesetzt. GEMESSEN nachher am 24.08.: 183 von 183 haben
+  // eines, 183 von 183 haben badge_15 und badge_16. `starter_aufgaben` hat sie
+  // BEWUSST NICHT angefasst — die Checkliste bleibt ehrlich offen. Genau
+  // dieser Zustand wird hier nachgestellt.
+  group('Der Zustand nach der Migration vom 24.08.', () {
+    void setzeMigrationsZustand() {
+      serverProfil[StarterAufgabenService.spalteBonusEnde] = DateTime.now()
+          .add(const Duration(days: 7))
+          .toUtc()
+          .toIso8601String();
+      // Genau wie in der Produktivdatenbank: leer gelassen.
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>[];
+    }
+
+    test('leere Checkliste, laufende Woche: die App uebernimmt sie', () async {
+      setzeMigrationsZustand();
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+
+      expect(dienst.doppelXpAktiv, isTrue);
+      expect(dienst.paketVergeben, isTrue);
+      expect(dienst.erledigtAnzahl, 0);
+      // Die Karte auf der Startseite zeigt damit den Countdown und NICHT die
+      // Aufgabenliste (starter_paket_karte.dart, build).
+      expect(dienst.bonusVerbleibend.inDays, greaterThanOrEqualTo(6));
+      // Und sie schreibt nichts zurueck: der Trigger wuerde es ohnehin
+      // abweisen, wir fragen gar nicht erst.
+      for (final zugriff in schreibZugriffe) {
+        expect(
+          zugriff.containsKey(StarterAufgabenService.spalteBonusEnde),
+          isFalse,
+        );
+      }
+    });
+
+    test('das Abzeichen gilt als verdient, obwohl keine Aufgabe erledigt ist', () async {
+      setzeMigrationsZustand();
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+      // `paketVerdient` haengt der GamificationService badge_16 an. Ohne das
+      // haetten die 183 Profile den Boost, aber kein Startklar-Abzeichen.
+      expect(dienst.paketVerdient, isTrue);
+      expect(dienst.boostErreicht, isFalse);
+    });
+
+    // DAS IST DIE STELLE, an der der lokale Zustand bisher gewinnen konnte.
+    //
+    // `starter_paket_karte.dart` startet in initState BEIDE Aufrufe ohne
+    // `await`, direkt hintereinander:
+    //     unawaited(...load());
+    //     unawaited(...synchronisiereMitProfil());
+    // Vorher setzte `load()` sein `_loaded = true` SYNCHRON, noch bevor der
+    // Geraetespeicher gelesen war. Der zweite Aufruf lief deshalb sofort
+    // durch, holte das Server-Ende — und danach ueberschrieb der immer noch
+    // laufende erste Aufruf `_paketVergeben` mit `false` und `_erledigt` mit
+    // dem lokalen Stand. Ergebnis auf dem Geraet: weiter die Aufgabenliste
+    // statt der Bonuswoche.
+    test('Wettlauf auf der Startseite: der Server gewinnt', () async {
+      setzeMigrationsZustand();
+      SharedPreferences.setMockInitialValues({
+        'starter_aufgaben_erledigt_v1': '["tutorial"]',
+        'starter_paket_vergeben_v1': false,
+      });
+
+      // Der Wettlauf haengt davon ab, WER zuerst fertig ist. In der App ist
+      // das der Geraetespeicher oder das Netz, je nach Tag. Damit der Test
+      // nicht vom Zufall lebt, wird der Geraetespeicher hier ausgebremst:
+      // der Server-Abgleich ist dann garantiert zuerst fertig. Genau dieser
+      // Fall ging vorher verloren.
+      dienst.ladeBremseFuerTests = () =>
+          Future<void>.delayed(const Duration(milliseconds: 40));
+
+      // Exakt die Reihenfolge aus initState, beide ohne await.
+      final laden = dienst.load();
+      final abgleich = dienst.synchronisiereMitProfil();
+      await Future.wait([laden, abgleich]);
+
+      expect(
+        dienst.doppelXpAktiv,
+        isTrue,
+        reason:
+            'der spaeter fertige load() darf das Server-Ende nicht wieder '
+            'wegraeumen',
+      );
+      expect(dienst.paketVergeben, isTrue);
+      expect(
+        dienst.erledigt('tutorial'),
+        isTrue,
+        reason: 'der lokale Stand darf dabei auch nicht verloren gehen',
+      );
+    });
+
+    test('gleiches Ende auf beiden Seiten: das Paket gilt als vergeben', () async {
+      final ende = DateTime.now().add(const Duration(days: 5));
+      serverProfil[StarterAufgabenService.spalteBonusEnde] = ende
+          .toUtc()
+          .toIso8601String();
+      // Der Geraetespeicher kennt dasselbe Ende, hat aber das Flag verloren
+      // (App waehrend des Speicherns beendet).
+      SharedPreferences.setMockInitialValues({
+        'starter_bonus_ende_v1': ende.toIso8601String(),
+        'starter_paket_vergeben_v1': false,
+      });
+
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+
+      expect(
+        dienst.paketVergeben,
+        isTrue,
+        reason:
+            'der Server hat eine laufende Woche, also ist das Paket vergeben; '
+            'ohne das faellt spaeter das Startklar-Abzeichen weg',
+      );
+      expect(dienst.paketVerdient, isTrue);
+    });
   });
 }

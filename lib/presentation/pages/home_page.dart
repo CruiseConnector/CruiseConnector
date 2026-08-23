@@ -66,6 +66,12 @@ class _HomePageState extends State<HomePage> {
       // 2026-05-23 (vucko): Notification-Service starten + Toast bei
       // neuen Einträgen anzeigen.
       _setupNotificationService();
+      // 2026-08-24 (Aufgabe 1.1): Die Punkte einmal beim Start holen.
+      //
+      // Die Home-Kachel „Gruppen entdecken" meldete den Stand bisher selbst,
+      // aber sie liegt nur auf einer von mehreren Startvarianten. Wer direkt
+      // in einem anderen Reiter landet, sah den Punkt sonst gar nicht.
+      unawaited(CommunityNeuigkeitService.instance.aktualisieren());
       await _runFirstLoginGuidance();
 
       // 2026-08-12: Auch beim APP-START prüfen, nicht nur beim Antippen.
@@ -360,9 +366,22 @@ class _HomePageState extends State<HomePage> {
       _visitedTabs.add(index);
     });
     if (index == 0) unawaited(_pruefeBewertungsPopup());
-    // Community geoeffnet: Hinweispunkt aus und Stand merken.
     if (index == 1) {
-      unawaited(CommunityNeuigkeitService.instance.alsGesehenMarkieren());
+      // 2026-08-24 (Aufgabe 1.1): Der Punkt geht hier NICHT mehr aus.
+      //
+      // Bis heute stand hier `alsGesehenMarkieren()` — ein Tipp auf das
+      // Community-Symbol löschte den Punkt, ohne dass man irgendetwas
+      // gelesen hätte. Vucko will das Gegenteil: „wenn man auf das Community
+      // draufdrückt, dass man dann oben […] sieht: okay, ja, da sind neue
+      // Sachen passiert."
+      //
+      // Ebene 1 hat seit heute keinen eigenen Zustand mehr, sie ergibt sich
+      // aus den vier Reitern. Der Punkt geht genau dann aus, wenn wirklich
+      // alle vier gelesen sind. Hier wird deshalb nur noch der Stand frisch
+      // geholt.
+      unawaited(
+        CommunityNeuigkeitService.instance.aktualisieren(erzwingen: true),
+      );
       // Starter-Aufgabe „Die Community oeffnen" (2026-08-14).
       unawaited(StarterAufgabenService.instance.markiere('community'));
     }

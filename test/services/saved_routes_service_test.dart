@@ -272,6 +272,12 @@ void main() {
           // 2026-08-18 (Aufgabe 4.2): zwanzig neue Stufen, die die Familien
           // auf je drei auffuellen. Bestehende IDs blieben unveraendert.
           for (var i = 37; i <= 56; i++) 'badge_$i',
+          // 2026-08-24 (Aufgabe 10a, vucko): „dass community ein enzelnes
+          // badge bekommen [...] aber nur eins das heisst Gruende eine
+          // Community". Stufenlos und ohne Familie, wie badge_15 und
+          // badge_16. Steht am Ende, weil neue Abzeichen hier immer angehaengt
+          // werden — bestehende IDs und ihre Reihenfolge bleiben unberuehrt.
+          'badge_57',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);

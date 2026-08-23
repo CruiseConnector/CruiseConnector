@@ -1,105 +1,319 @@
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Entscheidet, ob am Community-Symbol ein Hinweispunkt leuchtet.
+/// Ein Bereich, für den es einen eigenen Lesestand gibt.
 ///
-/// 2026-08-11 (vucko): „vorallem moechte ich, dass die Leute eher sehen, dass
-/// es auch das Gruppenfeature oder das Community-Feature gibt."
+/// Die Namen sind zeichengleich mit dem, was die RPC
+/// `community_als_gesehen_markieren` erlaubt (Migration 20260824102000):
+/// feed, gruppen, chats, entdecken, community. Ein Tippfehler hier wäre in
+/// der Datenbank ein `raise exception`, kein stiller Fehlschlag.
+enum CommunityBereich {
+  feed('feed'),
+  gruppen('gruppen'),
+  chats('chats'),
+  entdecken('entdecken'),
+  community('community');
+
+  const CommunityBereich(this.schluessel);
+
+  final String schluessel;
+
+  /// Reiter-Index in [CommunityPage]: 0 Feed, 1 Gruppen & Fahrten,
+  /// 2 Chats, 3 Entdecken. `community` hat keinen eigenen Reiter, sie liegt
+  /// INNERHALB von Chats.
+  static CommunityBereich? vonReiter(int index) {
+    switch (index) {
+      case 0:
+        return CommunityBereich.feed;
+      case 1:
+        return CommunityBereich.gruppen;
+      case 2:
+        return CommunityBereich.chats;
+      case 3:
+        return CommunityBereich.entdecken;
+    }
+    return null;
+  }
+}
+
+/// Ein Punkt mit der Anzahl dahinter.
+@immutable
+class CommunityHinweis {
+  const CommunityHinweis({required this.neu, required this.anzahl});
+
+  const CommunityHinweis.leer() : neu = false, anzahl = 0;
+
+  factory CommunityHinweis.ausJson(Object? roh) {
+    if (roh is! Map) return const CommunityHinweis.leer();
+    return CommunityHinweis(
+      neu: roh['neu'] == true,
+      anzahl: (roh['anzahl'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final bool neu;
+  final int anzahl;
+}
+
+/// Der vollständige Stand aller drei Ebenen.
+@immutable
+class CommunityHinweisStand {
+  const CommunityHinweisStand({
+    required this.reiter,
+    required this.communities,
+  });
+
+  const CommunityHinweisStand.leer()
+    : reiter = const <CommunityBereich, CommunityHinweis>{},
+      communities = const <String, CommunityHinweis>{};
+
+  final Map<CommunityBereich, CommunityHinweis> reiter;
+  final Map<String, CommunityHinweis> communities;
+
+  CommunityHinweis fuerReiter(CommunityBereich bereich) =>
+      reiter[bereich] ?? const CommunityHinweis.leer();
+
+  CommunityHinweis fuerCommunity(String? communityId) {
+    if (communityId == null) return const CommunityHinweis.leer();
+    return communities[communityId] ?? const CommunityHinweis.leer();
+  }
+
+  /// Ebene 1. BERECHNET, nicht gespeichert.
+  ///
+  /// Damit erfüllt sich Akzeptanzkriterium 3 von selbst: „Sind alle
+  /// Unterbereiche gelesen, verschwindet auch der Punkt am Community-Tab."
+  bool get punkt => reiter.values.any((h) => h.neu);
+
+  /// Ohne diesen Bereich, sofort. Für die Anzeige, während der Server noch
+  /// antwortet.
+  CommunityHinweisStand ohneReiter(CommunityBereich bereich) {
+    final neueReiter = Map<CommunityBereich, CommunityHinweis>.from(reiter);
+    neueReiter[bereich] = const CommunityHinweis.leer();
+    // Der Chats-Punkt ist die Summe aus „neue öffentliche Community" und den
+    // einzelnen Community-Punkten. Ein Tipp auf den Reiter löscht nur den
+    // Entdecken-Teil; die einzelnen Communities bleiben stehen, bis man sie
+    // wirklich öffnet (WhatsApp-Verhalten). Deshalb wird beim Chats-Reiter
+    // der Punkt nur dann gelöscht, wenn keine einzelne Community mehr
+    // leuchtet — sonst würde die Oberfläche etwas versprechen, das der
+    // nächste Serverabgleich sofort zurücknimmt.
+    if (bereich == CommunityBereich.chats &&
+        communities.values.any((h) => h.neu)) {
+      neueReiter[bereich] = reiter[bereich] ?? const CommunityHinweis.leer();
+    }
+    return CommunityHinweisStand(
+      reiter: neueReiter,
+      communities: communities,
+    );
+  }
+
+  CommunityHinweisStand ohneCommunity(String communityId) {
+    final neueCommunities = Map<String, CommunityHinweis>.from(communities);
+    neueCommunities[communityId] = const CommunityHinweis.leer();
+    final neueReiter = Map<CommunityBereich, CommunityHinweis>.from(reiter);
+    if (!neueCommunities.values.any((h) => h.neu)) {
+      // War das die letzte ungelesene Community, kann auch der Chats-Punkt
+      // ausgehen — es sei denn, es gibt noch neue öffentliche Communities.
+      // Das weiß nur der Server; er korrigiert beim nächsten Abgleich.
+      neueReiter[CommunityBereich.chats] = const CommunityHinweis.leer();
+    }
+    return CommunityHinweisStand(
+      reiter: neueReiter,
+      communities: neueCommunities,
+    );
+  }
+}
+
+/// Entscheidet, wo im Community-Bereich ein Hinweispunkt leuchtet.
 ///
-/// KOSTET KEINE EINZIGE ZUSAETZLICHE ABFRAGE. Die Home-Kacheln laden Gruppen
-/// und Vorschlaege ohnehin — sie melden ihre Anzahl hierher. Verglichen wird
-/// mit dem Stand vom letzten Community-Besuch.
+/// 2026-08-24 — Aufgabe 1.1 aus dem Auftrag vom 23.08.
 ///
-/// Die Regel, damit der Punkt nicht nervt:
-///   * Er erscheint, wenn es MEHR Gruppen oder Vorschlaege gibt als beim
-///     letzten Besuch — beim allerersten Mal also auch, und das ist gewollt:
-///     genau dann soll jemand die Community ueberhaupt entdecken.
-///   * Er verschwindet, sobald der Community-Tab geoeffnet wird.
-///   * Er blinkt NICHT bei jedem App-Start: Der gesehene Stand liegt auf dem
-///     Geraet und ueberlebt Neustarts.
-///   * Er leuchtet nicht dauerhaft: Weniger oder gleich viel wie beim letzten
-///     Besuch heisst „nichts Neues".
+/// Vucko, Aufnahme 1: „dass da halt einfach so ein kleiner Punkt ist, im Sinne
+/// von, wie in den ganzen Apps halt eine Benachrichtigung aussieht" … „wenn
+/// man auf das Community draufdrückt, dass man dann oben entweder im Feed oder
+/// im Entdecker oder bei den Gruppenfahrten oder in der Community sieht: okay,
+/// ja, da sind neue Sachen passiert" … „Wenn man in der Community draufdrückt,
+/// dann halt das nochmal benachrichtigungsmäßig — wie, in welcher Community
+/// das jetzt genau war."
+///
+/// WAS SICH GEGENÜBER DEM 11.08. GEÄNDERT HAT, und warum:
+///
+///   * Vorher lag der Stand als ZWEI ZÄHLER in SharedPreferences
+///     (`community_gesehen_gruppen_v1`, `community_gesehen_vorschlaege_v1`)
+///     und wurde mit den Anzahlen verglichen, die die Home-Kacheln meldeten.
+///     Drei Fehler steckten darin, alle nicht reparierbar:
+///       1. Ein Gerätewechsel setzte alles zurück — der Punkt leuchtete auf
+///          dem neuen Handy für Dinge, die man längst gelesen hatte.
+///       2. Wer eine Gruppe LÖSCHT, senkt den Zähler. Danach war die neue
+///          Zahl kleiner als der gespeicherte Stand, und der Punkt blieb
+///          dauerhaft aus, egal wie viel Neues dazukam.
+///       3. Eine Anzahl kann grundsätzlich nicht sagen, WO etwas neu ist.
+///          Vuckos Ebenen 2 und 3 waren damit unmöglich.
+///
+///   * Jetzt liefert die RPC `community_hinweispunkte()` alle drei Ebenen in
+///     EINER Abfrage, verglichen werden ZEITSTEMPEL, und der Lesestand liegt
+///     serverseitig in `community_lesestand`. Akzeptanzkriterium 4 („Nach
+///     App-Neustart ist der Gelesen-Status noch korrekt, serverseitig, nicht
+///     nur lokal") ist damit erfüllt.
+///
+/// Ebene 1 hat KEINEN eigenen Zustand mehr. Sie ist die Oder-Verknüpfung der
+/// vier Reiter, siehe [CommunityHinweisStand.punkt]. Deshalb gibt es auch
+/// kein „Community geöffnet, alles gelesen" mehr: Wer nur hineinschaut und
+/// wieder geht, hat nichts gelesen, und der Punkt bleibt zu Recht stehen.
 class CommunityNeuigkeitService {
   CommunityNeuigkeitService._();
 
   static final CommunityNeuigkeitService instance =
       CommunityNeuigkeitService._();
 
-  static const _kGesehenGruppen = 'community_gesehen_gruppen_v1';
-  static const _kGesehenVorschlaege = 'community_gesehen_vorschlaege_v1';
+  static SupabaseClient get _db => Supabase.instance.client;
 
-  /// Die Oberflaeche haengt sich hier dran — kein Polling.
+  /// Ebene 1 für die Navigationsleiste. Bleibt ein `ValueNotifier<bool>`,
+  /// weil `home_page.dart` seit dem 11.08. genau daran hängt.
   final ValueNotifier<bool> hatNeues = ValueNotifier<bool>(false);
 
-  int? _letzteGruppen;
-  int? _letzteVorschlaege;
+  /// Ebene 2 und 3 für die Reiter und die Community-Kacheln.
+  final ValueNotifier<CommunityHinweisStand> stand =
+      ValueNotifier<CommunityHinweisStand>(
+        const CommunityHinweisStand.leer(),
+      );
 
-  /// Meldet, was eine Home-Kachel gerade geladen hat.
+  bool _laeuft = false;
+  DateTime? _letzterAbgleich;
+
+  /// Holt alle Punkte in EINER Abfrage.
   ///
-  /// BEIDE Werte sind ABSICHTLICH optional, und nur uebergebene Werte
-  /// ueberschreiben den Stand.
+  /// [erzwingen] überspringt die Sperrfrist. Ohne sie würde jeder
+  /// Reiterwechsel eine Abfrage auslösen; die Sperrfrist von 5 Sekunden hält
+  /// das im Rahmen, ohne dass jemand auf einen Punkt wartet.
+  Future<void> aktualisieren({bool erzwingen = false}) async {
+    if (_laeuft) return;
+    final zuletzt = _letzterAbgleich;
+    if (!erzwingen &&
+        zuletzt != null &&
+        DateTime.now().difference(zuletzt) < const Duration(seconds: 5)) {
+      return;
+    }
+    if (_db.auth.currentUser == null) {
+      hatNeues.value = false;
+      stand.value = const CommunityHinweisStand.leer();
+      return;
+    }
+
+    _laeuft = true;
+    try {
+      final antwort = await _db.rpc('community_hinweispunkte');
+      if (antwort is! Map) return;
+      final neuerStand = _ausJson(Map<String, dynamic>.from(antwort));
+      stand.value = neuerStand;
+      hatNeues.value = neuerStand.punkt;
+      _letzterAbgleich = DateTime.now();
+    } catch (e) {
+      // Im Zweifel den bestehenden Zustand lassen. Ein Netzfehler ist kein
+      // Beleg dafür, dass es nichts Neues gibt — und ein Punkt, der bei
+      // jedem Funkloch verschwindet, ist schlimmer als gar keiner.
+      debugPrint('[CommunityNeuigkeit] Punkte nicht lesbar: $e');
+    } finally {
+      _laeuft = false;
+    }
+  }
+
+  static CommunityHinweisStand _ausJson(Map<String, dynamic> json) {
+    final reiterRoh = json['reiter'];
+    final reiter = <CommunityBereich, CommunityHinweis>{};
+    if (reiterRoh is Map) {
+      for (final bereich in CommunityBereich.values) {
+        if (bereich == CommunityBereich.community) continue;
+        reiter[bereich] = CommunityHinweis.ausJson(
+          reiterRoh[bereich.schluessel],
+        );
+      }
+    }
+
+    final communitiesRoh = json['communities'];
+    final communities = <String, CommunityHinweis>{};
+    if (communitiesRoh is Map) {
+      communitiesRoh.forEach((schluessel, wert) {
+        communities[schluessel.toString()] = CommunityHinweis.ausJson(wert);
+      });
+    }
+
+    return CommunityHinweisStand(reiter: reiter, communities: communities);
+  }
+
+  /// Markiert GENAU den geöffneten Bereich als gelesen.
   ///
-  /// 2026-08-11: Vorher waren beide Pflicht — und genau daran ist der Punkt
-  /// gestorben. Auf dem Startbildschirm liegen ZWEI unabhaengige Kacheln
-  /// („Kontakte" und „Gruppen"). Jede laedt nur ihre eigene Haelfte und setzte
-  /// fuer die andere den Cache des Nachbarn ein. Beim Kaltstart ist dieser
-  /// Cache noch leer, also meldete jede Kachel fuer die fremde Haelfte eine 0.
-  /// Wer zuletzt fertig wurde, gewann — und ueberschrieb den korrekten Wert
-  /// des anderen mit 0. Die Vorschlaege-Abfrage ist die langsamere, sie kam
-  /// typischerweise zuletzt: Neue Gruppen wurden dadurch regelmaessig auf 0
-  /// zurueckgesetzt und der Punkt blieb aus, obwohl es echt Neues gab. Und das
-  /// fuer die ganze Sitzung, denn melde() laeuft je Kachel nur einmal.
+  /// Kein Durchreichen nach oben und keines nach unten — das ist Vuckos
+  /// Akzeptanzkriterium 2: „Nutzer öffnet den Feed → nur der Feed-Punkt
+  /// verschwindet, die anderen bleiben."
+  ///
+  /// Die Oberfläche wird SOFORT umgestellt und der Server zieht nach
+  /// (Optimistic-UI-Grundsatz). Schlägt der Aufruf fehl, korrigiert der
+  /// nächste Abgleich.
+  Future<void> alsGesehenMarkieren(
+    CommunityBereich bereich, {
+    String? communityId,
+  }) async {
+    if (_db.auth.currentUser == null) return;
+    if (bereich == CommunityBereich.community && communityId == null) {
+      debugPrint('[CommunityNeuigkeit] community ohne ID, wird übersprungen.');
+      return;
+    }
+
+    final vorher = stand.value;
+    final nachher = bereich == CommunityBereich.community
+        ? vorher.ohneCommunity(communityId!)
+        : vorher.ohneReiter(bereich);
+    stand.value = nachher;
+    hatNeues.value = nachher.punkt;
+
+    try {
+      await _db.rpc(
+        'community_als_gesehen_markieren',
+        params: {
+          'p_bereich': bereich.schluessel,
+          'p_community_id': communityId,
+        },
+      );
+      // Sperrfrist aufheben: Nach einem Schreiben will man den echten Stand
+      // sehen, nicht den geratenen.
+      _letzterAbgleich = null;
+      await aktualisieren(erzwingen: true);
+    } catch (e) {
+      debugPrint('[CommunityNeuigkeit] Lesestand nicht schreibbar: $e');
+      // Zurückdrehen wäre falsch: der Nutzer HAT hingeschaut. Der nächste
+      // Abgleich holt den Serverstand und korrigiert, falls nötig.
+    }
+  }
+
+  /// 2026-08-24: Bleibt als leerer Durchgang bestehen.
+  ///
+  /// `community_carousel_card.dart` meldet hier seit dem 11.08. die Anzahl
+  /// geladener Gruppen und Vorschläge. Diese Zählerei ist seit heute die
+  /// falsche Grundlage (siehe Klassenkommentar), die Datei gehört aber einer
+  /// anderen Baustelle. Statt sie anzufassen, nimmt der Dienst die Meldung
+  /// entgegen und tut nichts damit — der Punkt kommt jetzt vom Server.
+  ///
+  /// Die Meldung löst allerdings einen Abgleich aus: Die Kachel lädt genau
+  /// dann, wenn der Startbildschirm aufgebaut wird, und das ist ein guter
+  /// Zeitpunkt für frische Punkte.
   Future<void> melde({int? gruppen, int? vorschlaege}) async {
-    if (gruppen != null) _letzteGruppen = gruppen;
-    if (vorschlaege != null) _letzteVorschlaege = vorschlaege;
-    try {
-      final p = await SharedPreferences.getInstance();
-      final gesehenG = p.getInt(_kGesehenGruppen);
-      final gesehenV = p.getInt(_kGesehenVorschlaege);
-
-      // Nur Haelften bewerten, zu denen es ueberhaupt eine Zahl gibt. Eine
-      // noch nicht geladene Haelfte darf weder leuchten lassen noch loeschen.
-      final g = _letzteGruppen;
-      final v = _letzteVorschlaege;
-
-      final gruppenNeu = g != null && (gesehenG == null ? g > 0 : g > gesehenG);
-      final vorschlaegeNeu =
-          v != null && (gesehenV == null ? v > 0 : v > gesehenV);
-
-      // Einmal an bleibt an, bis der Community-Tab geoeffnet wird. Sonst
-      // koennte die zweite, langsamere Kachel den Punkt wieder ausknipsen,
-      // den die erste zu Recht angeschaltet hat.
-      if (gruppenNeu || vorschlaegeNeu) hatNeues.value = true;
-    } catch (e) {
-      debugPrint('[CommunityNeuigkeit] Stand nicht lesbar: $e');
-      // Im Zweifel den bestehenden Zustand lassen — ein Fehler beim Lesen ist
-      // kein Beleg dafuer, dass es nichts Neues gibt.
-    }
+    await aktualisieren();
   }
 
-  /// Der Nutzer hat die Community geoeffnet: Punkt aus, Stand merken.
-  Future<void> alsGesehenMarkieren() async {
-    hatNeues.value = false;
-    try {
-      final p = await SharedPreferences.getInstance();
-      // Nur schreiben, was wirklich bekannt ist. Wer sofort nach dem App-Start
-      // auf Community tippt, waehrend die Kacheln noch laden, wuerde sonst 0
-      // als „gesehen" festschreiben — und danach leuchtet der Punkt bei jedem
-      // einzelnen Vorschlag wieder.
-      final g = _letzteGruppen;
-      final v = _letzteVorschlaege;
-      if (g != null) await p.setInt(_kGesehenGruppen, g);
-      if (v != null) await p.setInt(_kGesehenVorschlaege, v);
-    } catch (e) {
-      debugPrint('[CommunityNeuigkeit] Stand nicht speicherbar: $e');
-    }
-  }
-
-  /// Nur fuer Tests.
+  /// Nur für Tests.
   @visibleForTesting
   void zuruecksetzenFuerTest() {
-    _letzteGruppen = null;
-    _letzteVorschlaege = null;
     hatNeues.value = false;
+    stand.value = const CommunityHinweisStand.leer();
+    _letzterAbgleich = null;
+    _laeuft = false;
+  }
+
+  /// Nur für Tests: setzt einen Stand, als käme er vom Server.
+  @visibleForTesting
+  void standAusJsonFuerTest(Map<String, dynamic> json) {
+    final neuerStand = _ausJson(json);
+    stand.value = neuerStand;
+    hatNeues.value = neuerStand.punkt;
   }
 }

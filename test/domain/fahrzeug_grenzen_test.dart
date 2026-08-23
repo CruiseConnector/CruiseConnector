@@ -61,27 +61,24 @@ void main() {
     });
   });
 
+  // 2026-08-24 (Aufgabe 2.1): Diese Gruppe hat bis heute geprüft, dass der
+  // CLIENT die Schreibweise bestimmt („audi" → „Audi", „bmw" → „BMW").
+  // Genau das ist zurückgenommen: seit der Migration 20260824101000
+  // entscheidet die Datenbank (`vehicle_brand_canonical`, Trigger auf
+  // `profile_vehicles.brand` und `profiles.car_brand`). Der Client räumt nur
+  // noch Leerraum auf. Warum, und was das Raten kaputt gemacht hat, steht
+  // ausführlich in `test/domain/marken_liste_test.dart` und im Kommentar
+  // über `normalisiereMarke`.
   group('Markenschreibweise', () {
-    test('audi, Audi und  AUDI  werden dieselbe Marke', () {
-      const erwartet = 'Audi';
-      for (final roh in ['audi', 'Audi', '  AUDI  ', 'aUdI']) {
-        expect(FahrzeugGrenzen.normalisiereMarke(roh), erwartet, reason: roh);
-      }
-    });
-    test('Abkürzungen bleiben groß', () {
-      expect(FahrzeugGrenzen.normalisiereMarke('bmw'), 'BMW');
-      expect(FahrzeugGrenzen.normalisiereMarke('vw'), 'VW');
-      expect(FahrzeugGrenzen.normalisiereMarke('ktm'), 'KTM');
-    });
-    test('Bindestrich- und Mehrwortnamen', () {
-      expect(
-        FahrzeugGrenzen.normalisiereMarke('mercedes-benz'),
-        'Mercedes-Benz',
-      );
-      expect(FahrzeugGrenzen.normalisiereMarke('alfa   romeo'), 'Alfa Romeo');
-    });
-    test('Leer bleibt leer', () {
+    test('Nur noch Leerraum aufräumen, kein Raten', () {
+      expect(FahrzeugGrenzen.normalisiereMarke('  AUDI  '), 'AUDI');
+      expect(FahrzeugGrenzen.normalisiereMarke('alfa   romeo'), 'alfa romeo');
       expect(FahrzeugGrenzen.normalisiereMarke('   '), '');
+    });
+    test('Die getippten Zeichen bleiben stehen', () {
+      for (final roh in ['audi', 'Audi', 'aUdI', 'bmw', 'mercedes-benz']) {
+        expect(FahrzeugGrenzen.normalisiereMarke(roh), roh, reason: roh);
+      }
     });
   });
 

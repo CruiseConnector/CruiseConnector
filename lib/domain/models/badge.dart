@@ -10,6 +10,30 @@ class Badge {
   /// 2026-08-14 (vucko Starter-Paket): badge_16 „Startklar" gibt es fuer das
   /// Erfuellen der fuenf Starter-Aufgaben — zusammen mit der Doppel-XP-Woche.
   static const String starterBadgeId = 'badge_16';
+
+  /// 2026-08-24 (Aufgabe 10a, vucko woertlich): „dass community ein enzelnes
+  /// badge bekommen [...] und man dafuer bei den analytics ein badge bekommt
+  /// aber nur eins das heisst Gruende eine Community wenn man draufklickt und
+  /// sonnst nur Community heisst wenn es das nicht schon gibt."
+  ///
+  /// GEPRUEFT am 24.08.: Ein solches Abzeichen gab es NICHT. „Community-Stimme"
+  /// (badge_36) ist etwas anderes, naemlich fuenfzehn geteilte Routen.
+  ///
+  /// Bewusst OHNE Familie und OHNE Stufe („aber nur eins"): Es gibt kein
+  /// „zwei Communities" und kein „zehn Communities", genau wie bei badge_15
+  /// und badge_16. Damit landet es im Block „Weitere" der Sammlung, traegt
+  /// keine roemische Ziffer und laesst sich nicht zu einer Stufenleiter
+  /// ausbauen.
+  ///
+  /// Die Bedingung liefert die Datenbank, nicht der Client: die RPC
+  /// `meine_community_gruendung()` aus Migration 20260824103000. Sie liest
+  /// `communities.founder_id` — eine eigene, SCHREIB-EINMALIGE Spalte. Wichtig
+  /// und dort ausfuehrlich begruendet: Der GRUENDER ist NICHT dasselbe wie ein
+  /// Admin. `community_members.role = 'owner'` ist die Admin-Rolle (gemessen:
+  /// 7 Zeilen auf 6 Communities), und `communities.owner_id` wird umgeschrieben,
+  /// sobald der Gruender die Community verlaesst. Ueber beide bekaemen mehrere
+  /// Leute je Community dieses Abzeichen.
+  static const String communityGruenderBadgeId = 'badge_57';
   static const String membershipDatePlaceholder = '{datum}';
 
 
@@ -623,6 +647,25 @@ class Badge {
       assetPath: 'lib/images/badges/badge_24_night_indigo.png',
       familie: 'nacht',
       stufe: 3,
+    ),
+    // 2026-08-24 (Aufgabe 10a): Das eine Community-Abzeichen. Kachelname
+    // „Community", beim Antippen die Anleitung „Gruende eine Community" —
+    // genau Vuckos Wortlaut. Die Beschreibung IST hier die Anleitung, weil
+    // stufenlose Abzeichen keinen Fortschrittsbalken haben (badgeBedingungFuer
+    // liefert null, weil sie in keiner Familie stehen); das Detail-Blatt zeigt
+    // dann Name und Beschreibung, und mehr braucht es nicht.
+    //
+    // Emblem: badge_35_founder_ruby.png, dasselbe Gruender-Motiv wie beim
+    // Gruppengruender. Ein eigenes Bild waere schoener, kostet aber 0,6 bis
+    // 1,4 MB im Installationspaket; Austausch spaeter = nur den assetPath
+    // ersetzen.
+    Badge(
+      id: communityGruenderBadgeId,
+      name: 'Community',
+      description: 'Gründe eine Community.',
+      emoji: '\u{1F3D8}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_35_founder_ruby.png',
     ),
   ];
 

@@ -214,8 +214,14 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
                 ),
               ),
             ),
+            // 2026-08-24 (Aufgabe 4.5): Der Zaehler zeigt die SCHWELLE, nicht
+            // die Listenlaenge. Vorher stand „3/8", und acht war zugleich die
+            // Zahl der Zeilen — jetzt sind es elf Zeilen, von denen acht
+            // genuegen. „3/8" ueber elf Zeilen waere ohne den Satz darunter
+            // nicht zu verstehen.
             Text(
-              '${dienst.erledigtAnzahl}/${StarterAufgabenService.aufgaben.length}',
+              '${dienst.erledigtAnzahl.clamp(0, StarterAufgabenService.aufgabenFuerBoost)}'
+              '/${StarterAufgabenService.aufgabenFuerBoost}',
               style: TextStyle(
                 color: accent,
                 fontSize: 15,
@@ -225,10 +231,11 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
           ],
         ),
         const SizedBox(height: 6),
-        const Text(
-          'Erledige diese Schritte und du bekommst das Startklar-Abzeichen '
-          'plus eine Woche doppelte XP.',
-          style: TextStyle(color: Colors.white54, fontSize: 12.5),
+        Text(
+          'Erledige ${StarterAufgabenService.aufgabenFuerBoost} dieser '
+          '${StarterAufgabenService.aufgaben.length} Schritte und du bekommst '
+          'das Startklar-Abzeichen plus eine Woche doppelte XP.',
+          style: const TextStyle(color: Colors.white54, fontSize: 12.5),
         ),
         const SizedBox(height: 12),
         for (final aufgabe in StarterAufgabenService.aufgaben)
@@ -380,6 +387,11 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
           ],
           letzterKnopf: 'Verstanden',
         );
+      // 2026-08-24 (vucko): „erste Gruppenfahrt erstellen". Der Hinweis sagte
+      // bis heute das Gegenteil („zaehlt erst, wenn ihr die Fahrt gemeinsam
+      // bis zum Ziel durchzieht") — und genau daran ist der Boost fuer alle
+      // 183 Nutzer gescheitert: null Fahrten mit group_id in der ganzen
+      // Geschichte der App.
       case 'gruppenfahrt':
         widget.onTabChange?.call(1);
         await Future<void>.delayed(const Duration(milliseconds: 420));
@@ -391,14 +403,59 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
               ziel: TutorialZielRegistry.communityRides,
               titel: 'Gruppenfahrt',
               text:
-                  'Hier gründest du eine Gruppe oder trittst einer bei. '
-                  'Die Aufgabe zählt erst, wenn ihr die Fahrt gemeinsam bis '
-                  'zum Ziel durchzieht.',
+                  'Hier legst du eine Gruppe an. Sobald sie steht, ist die '
+                  'Aufgabe erledigt. Wer mitfährt, entscheidet ihr danach.',
               symbol: Icons.groups_rounded,
             ),
           ],
           letzterKnopf: 'Verstanden',
         );
+      // 2026-08-24 (vucko): „Auto in die Garage hinzufuegen".
+      case 'garage':
+        widget.onTabChange?.call(4);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.profilGarage,
+              titel: 'Deine Garage',
+              text:
+                  'Trag hier dein Auto ein: Marke, Modell, Leistung. Andere '
+                  'sehen dann, womit du unterwegs bist.',
+              symbol: Icons.directions_car_rounded,
+            ),
+          ],
+          letzterKnopf: 'Los geht\'s',
+        );
+      // 2026-08-24 (vucko): „die ersten drei Badges sammeln".
+      case 'abzeichen':
+        widget.onTabChange?.call(3);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.analyticsUebersicht,
+              titel: 'Deine Abzeichen',
+              text:
+                  'Hier liegt deine Sammlung. Tippe ein gesperrtes Abzeichen '
+                  'an, dann steht da, was dafür fehlt. '
+                  '${StarterAufgabenService.abzeichenFuerAufgabe} Stück, dann '
+                  'ist die Aufgabe erledigt.',
+              symbol: Icons.workspace_premium_rounded,
+            ),
+          ],
+          letzterKnopf: 'Verstanden',
+        );
+      // 2026-08-24 (vucko): „die ersten 50 Kilometer fahren".
+      case 'km50':
+        // Wie bei „runde": der Fahren-Reiter ist die Stelle, an der Strecke
+        // entsteht. Nur der Text ist ein anderer.
+        CruiseModePage.hinweisWunsch.value = 'route';
+        widget.onTabChange?.call(2);
       default:
         break;
     }

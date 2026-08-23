@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
+import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
@@ -55,6 +58,19 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   }
 
   Future<void> _openCommunity(String communityId) async {
+    // 2026-08-24 (Aufgabe 1.1, Ebene 3). Vucko: „Wenn man in der Community
+    // draufdrückt, dann halt das nochmal benachrichtigungsmäßig — wie, in
+    // welcher Community das jetzt genau war."
+    //
+    // Der Punkt geht genau HIER aus, beim wirklichen Öffnen, nicht schon
+    // beim Öffnen des Chats-Reiters. Das ist das Verhalten, das jeder aus
+    // WhatsApp kennt.
+    unawaited(
+      CommunityNeuigkeitService.instance.alsGesehenMarkieren(
+        CommunityBereich.community,
+        communityId: communityId,
+      ),
+    );
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -548,6 +564,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     final isPublic = community['is_public'] == true;
     final description = (community['description'] as String?)?.trim();
     final role = CommunityChatService.currentUserRole(community);
+    final istNeu = CommunityChatService.istVorKurzemErstellt(community);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -570,7 +587,18 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                 // gerendert (Meine Communities, Entdecken, Treffer der
                 // Code-Suche), deshalb reicht hier eine Aenderung fuer alle
                 // drei. Ohne Bild bleibt genau der bisherige Platzhalter.
-                CommunityAvatar.fromCommunity(community, size: 42),
+                // 2026-08-24 (Aufgabe 1.1, Ebene 3): Der Punkt sitzt am Bild,
+                // wie in jedem Messenger. Nur bei Communities, in denen man
+                // Mitglied ist — bei einer fremden Community aus der
+                // Entdecken-Liste gibt es keinen Lesestand und damit auch
+                // nichts „Neues fuer dich".
+                if (joined)
+                  _mitHinweispunkt(
+                    community['id']?.toString(),
+                    CommunityAvatar.fromCommunity(community, size: 42),
+                  )
+                else
+                  CommunityAvatar.fromCommunity(community, size: 42),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -587,14 +615,39 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                         ),
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        '@$ownerName',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 12,
-                        ),
+                      // 2026-08-24 (Aufgabe 1.2, Vucko: „wenn eine Community
+                      // jünger als sieben Tage ist, dass da drunter dann
+                      // ‚neu' steht oder halt ‚vor kurzem erstellt'").
+                      // Vuckos Entscheidung, bindend: der Text lautet
+                      // „Vor kurzem erstellt".
+                      //
+                      // Der Platz UNTER dem Namen ist genau diese Zeile,
+                      // deshalb steht das Etikett neben @ownerName statt in
+                      // einer eigenen Zeile: eine zusätzliche Zeile würde
+                      // jede Kachel höher machen, auch die 4 von 6, die das
+                      // Etikett heute gar nicht tragen.
+                      //
+                      // Diese Kachel rendert ALLE DREI Anzeigestellen
+                      // (Meine Communities, Öffentliche Communities, Treffer
+                      // der Code-Suche), eine Änderung deckt also alle ab.
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '@$ownerName',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          if (istNeu) ...[
+                            const SizedBox(width: 6),
+                            _buildNeuLabel(),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -655,6 +708,72 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 2026-08-24 (Aufgabe 1.1, Ebene 3): legt den Hinweispunkt auf das
+  /// Community-Bild.
+  ///
+  /// Die Zahl steht bewusst NICHT im Punkt. Vucko hat einen Punkt bestellt
+  /// („so ein kleiner Punkt … wie in den ganzen Apps halt eine
+  /// Benachrichtigung aussieht"), keine Zählerei. Die Anzahl liefert die RPC
+  /// zwar mit, aber sie in einen 10-dp-Kreis zu quetschen macht die Kachel
+  /// unruhig, ohne dass jemand etwas davon hat.
+  Widget _mitHinweispunkt(String? communityId, Widget kind) {
+    if (communityId == null) return kind;
+    return ValueListenableBuilder<CommunityHinweisStand>(
+      valueListenable: CommunityNeuigkeitService.instance.stand,
+      builder: (context, stand, bild) {
+        if (!stand.fuerCommunity(communityId).neu) return bild!;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            bild!,
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: AppAccentColors.accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF1C1F26),
+                    width: 2,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+      child: kind,
+    );
+  }
+
+  /// 2026-08-24 (Aufgabe 1.2): das Etikett selbst.
+  ///
+  /// Bewusst NICHT in der Akzentfarbe: der Akzent gehört in dieser Kachel
+  /// dem Knopf „Chat"/„Beitreten". Ein zweites akzentfarbenes Element daneben
+  /// würde mit ihm konkurrieren. Das Etikett sagt nur „diese Community
+  /// existiert erst seit Kurzem" und ist bewusst ruhig.
+  Widget _buildNeuLabel() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: const Text(
+        'Vor kurzem erstellt',
+        style: TextStyle(
+          color: Colors.white70,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

@@ -20,17 +20,176 @@ void main() {
   // 2026-08-19 (vucko): „auch noch weitere sachen wie der erste post, die
   // erste Gruppenfahrt umfasst wo man abschliessen muss und die erste runde
   // gefahren."
-  test('acht Aufgaben, die drei neuen am Ende', () {
-    expect(StarterAufgabenService.aufgaben, hasLength(8));
+  //
+  // 2026-08-24 (vucko): „erste Gruppenfahrt erstellen, ersten Post erstellen,
+  // Auto in die Garage hinzufuegen [...] die ersten drei Badges sammeln oder
+  // halt die ersten 50 Kilometer fahren."
+  test('elf Aufgaben, die drei neuen dabei', () {
+    expect(StarterAufgabenService.aufgaben, hasLength(11));
     final ids = StarterAufgabenService.aufgaben.map((a) => a.id).toList();
-    expect(ids.take(5).toSet(), {
+    expect(ids.take(5).toList(), [
       'tutorial',
       'route',
       'favorit',
       'speichern',
       'community',
+    ]);
+    // Die drei aus Vuckos Liste vom 23.08., die es bis heute nicht gab.
+    expect(ids, containsAll(<String>['garage', 'abzeichen', 'km50']));
+    // Keine ID doppelt, sonst zaehlt erledigtAnzahl falsch.
+    expect(ids.toSet(), hasLength(ids.length));
+  });
+
+  // 2026-08-24 (Aufgabe 4.5): Der Grund, warum NIE jemand den Boost bekam.
+  //
+  // GEMESSEN am 24.08. in der Produktivdatenbank: null Fahrten mit `group_id`
+  // in der ganzen Geschichte der App, und nur 15 von 183 Nutzern haben je eine
+  // Fahrt beendet. Die achte Aufgabe hiess „Eine Gruppenfahrt ABSCHLIESSEN"
+  // und war damit fuer jeden unerfuellbar; entsprechend hatte kein einziges
+  // Profil ein `starter_bonus_ende`.
+  test('die Gruppenfahrt-Aufgabe verlangt ERSTELLEN, nicht abschliessen', () {
+    final aufgabe = StarterAufgabenService.aufgaben.firstWhere(
+      (a) => a.id == 'gruppenfahrt',
+    );
+    expect(aufgabe.titel, 'Eine Gruppenfahrt erstellen');
+    expect(aufgabe.titel.toLowerCase(), isNot(contains('abschließen')));
+    expect(aufgabe.beschreibung.toLowerCase(), isNot(contains('ziel')));
+  });
+
+  test('das Erstellen allein erfuellt die Aufgabe', () async {
+    await dienst.load();
+    await dienst.synchronisiereAusKennzahlen(
+      posts: 0,
+      abgeschlosseneFahrten: 0,
+      abgeschlosseneGruppenfahrten: 0,
+      erstellteGruppen: 1,
+    );
+    expect(dienst.erledigt('gruppenfahrt'), isTrue);
+  });
+
+  // 2026-08-24: Die Schwelle. Elf von elf waere wieder unerreichbar; Vuckos
+  // Zweck ist woertlich Bindung („so bringen wir Leute dazu, dass sie auch
+  // wirklich zuverlaessig fahren"), nicht Abschreckung.
+  group('Acht von elf genuegen fuer den Boost', () {
+    test('die Schwelle liegt unter der Listenlaenge', () {
+      expect(StarterAufgabenService.aufgabenFuerBoost, 8);
+      expect(
+        StarterAufgabenService.aufgabenFuerBoost,
+        lessThan(StarterAufgabenService.aufgaben.length),
+        reason: 'sonst ist der Boost wieder an die duennste Aufgabe gekettet',
+      );
     });
-    expect(ids.skip(5).toList(), ['runde', 'post', 'gruppenfahrt']);
+
+    test('sieben reichen nicht, acht schon', () async {
+      await dienst.load();
+      const sieben = [
+        'tutorial',
+        'route',
+        'favorit',
+        'speichern',
+        'community',
+        'garage',
+        'runde',
+      ];
+      for (final id in sieben) {
+        await dienst.markiere(id);
+      }
+      expect(dienst.boostErreicht, isFalse);
+      expect(dienst.doppelXpAktiv, isFalse);
+
+      await dienst.markiere('post');
+      expect(dienst.boostErreicht, isTrue);
+      expect(dienst.doppelXpAktiv, isTrue);
+    });
+
+    // Der Weg zu den acht darf OHNE die drei duennen Aufgaben auskommen.
+    // GEMESSEN am 24.08.: 50 km haben 9 von 183, drei Abzeichen 16 von 183,
+    // eine abgeschlossene Gruppenfahrt 0 von 183.
+    test('es gibt einen Weg ohne 50 km, ohne drei Abzeichen, ohne Gruppe', () async {
+      await dienst.load();
+      for (final id in const [
+        'tutorial',
+        'route',
+        'favorit',
+        'speichern',
+        'community',
+        'garage',
+        'runde',
+        'post',
+      ]) {
+        await dienst.markiere(id);
+      }
+      expect(dienst.erledigt('km50'), isFalse);
+      expect(dienst.erledigt('abzeichen'), isFalse);
+      expect(dienst.erledigt('gruppenfahrt'), isFalse);
+      expect(dienst.boostErreicht, isTrue);
+    });
+  });
+
+  // 2026-08-24 (vucko heute): DREI, nicht fuenf. Am 23.08. sagte er in
+  // Aufnahme 5 „die ersten drei Badges", eine Minute spaeter in Aufnahme 6
+  // „vielleicht [...] eher die ersten fuenf Badges". Heute hat er drei
+  // entschieden; die Zahl steht als benannte Konstante, damit sie ohne Suchen
+  // aenderbar ist.
+  group('Die drei neuen Aufgaben aus dem Zustand', () {
+    test('Garage: ein Fahrzeug genuegt', () async {
+      await dienst.load();
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 0,
+        abgeschlosseneGruppenfahrten: 0,
+        fahrzeuge: 0,
+      );
+      expect(dienst.erledigt('garage'), isFalse);
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 0,
+        abgeschlosseneGruppenfahrten: 0,
+        fahrzeuge: 1,
+      );
+      expect(dienst.erledigt('garage'), isTrue);
+    });
+
+    test('Abzeichen: die Zahl kommt aus der Konstante, nicht aus dem Code', () async {
+      expect(StarterAufgabenService.abzeichenFuerAufgabe, 3);
+      await dienst.load();
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 0,
+        abgeschlosseneGruppenfahrten: 0,
+        abzeichen: StarterAufgabenService.abzeichenFuerAufgabe - 1,
+      );
+      expect(dienst.erledigt('abzeichen'), isFalse);
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 0,
+        abgeschlosseneGruppenfahrten: 0,
+        abzeichen: StarterAufgabenService.abzeichenFuerAufgabe,
+      );
+      expect(dienst.erledigt('abzeichen'), isTrue);
+    });
+
+    test('50 Kilometer: 49,9 reichen nicht, 50,0 schon', () async {
+      await dienst.load();
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 1,
+        abgeschlosseneGruppenfahrten: 0,
+        gesamtKm: 49.9,
+      );
+      expect(dienst.erledigt('km50'), isFalse);
+      // „runde" zaehlt EINE Fahrt, egal wie kurz — genau deshalb gibt es die
+      // Kilometer-Aufgabe zusaetzlich.
+      expect(dienst.erledigt('runde'), isTrue);
+
+      await dienst.synchronisiereAusKennzahlen(
+        posts: 0,
+        abgeschlosseneFahrten: 1,
+        abgeschlosseneGruppenfahrten: 0,
+        gesamtKm: 50.0,
+      );
+      expect(dienst.erledigt('km50'), isTrue);
+    });
   });
 
   test('markiere ist idempotent und zaehlt sauber', () async {
@@ -38,7 +197,7 @@ void main() {
     await dienst.markiere('route');
     await dienst.markiere('route');
     expect(dienst.erledigtAnzahl, 1);
-    expect(dienst.alleErledigt, isFalse);
+    expect(dienst.boostErreicht, isFalse);
   });
 
   test('alle Aufgaben erledigt: Paket einmalig, Timer startet', () async {
@@ -137,12 +296,12 @@ void main() {
       await dienst.load();
       // Fuenf von acht — nach der Erweiterung NICHT mehr „alles erledigt".
       expect(dienst.erledigtAnzahl, 5);
-      expect(dienst.alleErledigt, isFalse);
+      expect(dienst.boostErreicht, isFalse);
       // Trotzdem steht ihm das Abzeichen zu: er hatte das Paket bereits.
       expect(dienst.paketVerdient, isTrue);
     });
 
-    test('frisch alle acht erledigt: verdient', () async {
+    test('frisch alle elf erledigt: verdient', () async {
       await dienst.load();
       expect(dienst.paketVerdient, isFalse);
       for (final a in StarterAufgabenService.aufgaben) {
@@ -175,7 +334,9 @@ void main() {
       expect(dienst.erledigt('gruppenfahrt'), isFalse);
     });
 
-    test('Post und Fahrt zaehlen, die Gruppenfahrt erst abgeschlossen', () async {
+    // 2026-08-24: Hiess „die Gruppenfahrt erst abgeschlossen". Seit heute
+    // genuegt das ERSTELLEN — ohne Gruppe bleibt die Zeile aber offen.
+    test('Post und Fahrt zaehlen, die Gruppenfahrt erst mit einer Gruppe', () async {
       await dienst.load();
       await dienst.synchronisiereAusKennzahlen(
         posts: 2,
@@ -184,8 +345,8 @@ void main() {
       );
       expect(dienst.erledigt('post'), isTrue);
       expect(dienst.erledigt('runde'), isTrue);
-      // „wo man abschliessen muss": eine bloss erstellte oder abgebrochene
-      // Gruppenfahrt zaehlt ausdruecklich nicht.
+      // Ohne erstellte Gruppe und ohne abgeschlossene Gruppenfahrt bleibt
+      // die Zeile offen.
       expect(dienst.erledigt('gruppenfahrt'), isFalse);
 
       await dienst.synchronisiereAusKennzahlen(
@@ -227,7 +388,7 @@ void main() {
         abgeschlosseneFahrten: 1,
         abgeschlosseneGruppenfahrten: 1,
       );
-      expect(dienst.alleErledigt, isTrue);
+      expect(dienst.boostErreicht, isTrue);
       // Kein zweiter Timer, keine zweite Verleihung.
       expect(dienst.bonusEnde!.difference(ende).inSeconds.abs(), lessThan(2));
       expect(dienst.paketFrischVerdient.value, isFalse);
@@ -304,7 +465,7 @@ void main() {
       );
     });
 
-    test('alle acht Aufgaben fuehren hin, keine tote Schaltflaeche', () {
+    test('alle elf Aufgaben fuehren hin, keine tote Schaltflaeche', () {
       final karte = File(
         'lib/presentation/widgets/starter_paket_karte.dart',
       ).readAsStringSync();

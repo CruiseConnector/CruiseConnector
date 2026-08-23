@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 
 /// Die XP-Rechnung einer Fahrt, die sich vor den Augen aufbaut.
 ///
@@ -27,6 +29,25 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 /// Ohne Streak und ohne Bonuswoche ist der Multiplikator 1,00. Dann faellt
 /// die Multiplikations-Zeile ganz weg und es bleibt eine ruhige Zeile mit der
 /// Zahl — eine Rechnung „120 × 1,00 = 120" waere albern.
+///
+/// 2026-08-24 (Aufgabe 4.4, vucko woertlich): „wenn man eine coole Animation
+/// hat dann nach der Fahrt, dass halt irgendwie angezeigt werden kann, dass man
+/// durch den Boost die sieben Tage einen doppelten Boost hat und halt auf dem
+/// aufbauen kann."
+///
+/// Drei Dinge muss sie klarmachen. Zwei davon fehlten:
+///   1. dass man doppelte XP hat        — sagte sie schon (die Pille „×2,30"
+///                                         und der Grundtext daneben),
+///   2. dass es SIEBEN TAGE laeuft      — sagte sie NICHT,
+///   3. dass man darauf AUFBAUEN kann   — sagte sie NICHT.
+/// Dafuer gibt es jetzt eine vierte Stufe: die Bonus-Leiste unter dem
+/// Ergebnis, mit Restlaufzeit, Sieben-Tage-Balken und dem Wert von morgen.
+///
+/// AN DEN ZAHLEN DER FAHRT AENDERT SICH NICHTS. [basisXp], [multiplikator] und
+/// [gesamtXp] werden weiterhin nirgends nachgerechnet. Der Wert von morgen ist
+/// keine zweite Rechnung derselben Fahrt, sondern derselbe Multiplikator plus
+/// den EINEN Tageszuwachs aus `GamificationService.proStreakTag` — die Zahl
+/// steht also weiterhin nur an einer Stelle.
 class XpRechnungAnimation extends StatefulWidget {
   const XpRechnungAnimation({
     super.key,
@@ -35,6 +56,8 @@ class XpRechnungAnimation extends StatefulWidget {
     required this.gesamtXp,
     required this.streakTage,
     required this.doppelXpAktiv,
+    this.bonusRestlaufzeit,
+    this.multiplikatorMorgen,
   });
 
   /// Basis-XP der Fahrt, vor dem Multiplikator (`RouteXpBreakdown.baseXp`).
@@ -53,10 +76,38 @@ class XpRechnungAnimation extends StatefulWidget {
   /// Begruendungstext; der Wert selbst steckt schon in [multiplikator].
   final bool doppelXpAktiv;
 
+  /// 2026-08-24 (Aufgabe 4.4): Wie lange die Bonuswoche noch laeuft.
+  ///
+  /// `null` heisst „nicht durchgereicht" — dann fragt das Widget den
+  /// Starter-Dienst selbst. Der Weg von der Fahrt bis hierher fuehrt ueber
+  /// `cruise_mode_page.dart` und `cruise_completion_dialog.dart`, und beide
+  /// gehoeren einem anderen Arbeitsbereich. Der Rueckfall haelt die Anzeige
+  /// trotzdem vollstaendig; die Vorlage dafuer ist der Countdown auf der
+  /// Startseite (`starter_paket_karte.dart`, `_countdownText`).
+  final Duration? bonusRestlaufzeit;
+
+  /// Der Multiplikator, den dieselbe Fahrt MORGEN haette. `null` = selbst
+  /// ableiten: [multiplikator] plus ein Tageszuwachs. Genau das meint Vuckos
+  /// „auf dem aufbauen".
+  final double? multiplikatorMorgen;
+
   /// Ab hier lohnt sich die Rechnung. Knapp unter 1,0 wegen Fliesskomma.
   static const double _multiplikatorSchwelle = 1.005;
 
   bool get zeigtRechnung => multiplikator >= _multiplikatorSchwelle;
+
+  /// Die Bonus-Leiste erscheint nur, wenn die Woche wirklich laeuft.
+  bool get zeigtBonusLeiste => doppelXpAktiv && zeigtRechnung;
+
+  Duration? get restlaufzeit {
+    final durchgereicht = bonusRestlaufzeit;
+    if (durchgereicht != null) return durchgereicht;
+    final ausDemDienst = StarterAufgabenService.instance.bonusVerbleibend;
+    return ausDemDienst > Duration.zero ? ausDemDienst : null;
+  }
+
+  double get morgen =>
+      multiplikatorMorgen ?? (multiplikator + GamificationService.proStreakTag);
 
   @override
   State<XpRechnungAnimation> createState() => _XpRechnungAnimationState();
@@ -76,7 +127,11 @@ class _XpRechnungAnimationState extends State<XpRechnungAnimation>
     _controller = AnimationController(
       vsync: this,
       duration: Duration(
-        milliseconds: widget.zeigtRechnung ? 1500 : 520,
+        // Die vierte Stufe (Bonus-Leiste) braucht Luft. Ohne sie bleibt es
+        // bei den gewohnten 1500 ms.
+        milliseconds: widget.zeigtRechnung
+            ? (widget.zeigtBonusLeiste ? 1900 : 1500)
+            : 520,
       ),
     );
   }
@@ -160,9 +215,14 @@ class _XpRechnungAnimationState extends State<XpRechnungAnimation>
   }
 
   Widget _bauRechnung() {
-    final basisAnteil = _phase(0.0, 0.34, Curves.easeOutCubic);
-    final pillAnteil = _phase(0.30, 0.56, Curves.easeOutBack);
-    final ergebnisAnteil = _phase(0.50, 1.0, Curves.easeOutCubic);
+    // Mit Bonus-Leiste laeuft der Regler 1900 ms statt 1500 — die drei ersten
+    // Stufen sollen dabei GENAU SO SCHNELL bleiben wie vorher, sonst wirkt die
+    // vertraute Rechnung ploetzlich zaeh. Deshalb werden ihre Anteile auf die
+    // laengere Gesamtdauer umgerechnet (1500/1900 = 0,789).
+    final skala = widget.zeigtBonusLeiste ? 1500 / 1900 : 1.0;
+    final basisAnteil = _phase(0.0, 0.34 * skala, Curves.easeOutCubic);
+    final pillAnteil = _phase(0.30 * skala, 0.56 * skala, Curves.easeOutBack);
+    final ergebnisAnteil = _phase(0.50 * skala, 1.0 * skala, Curves.easeOutCubic);
 
     final basisWert = (widget.basisXp * basisAnteil).round();
     // Der letzte Frame ist EXAKT gesamtXp: bei anteil == 1 bleibt
@@ -273,7 +333,110 @@ class _XpRechnungAnimationState extends State<XpRechnungAnimation>
             ),
           ],
         ),
+        if (widget.zeigtBonusLeiste) _bauBonusLeiste(),
       ],
+    );
+  }
+
+  /// 2026-08-24 (Aufgabe 4.4): Die vierte Stufe. Sie sagt die beiden Dinge,
+  /// die bis heute fehlten: SIEBEN TAGE und AUFBAUEN.
+  ///
+  /// Vucko will es ausdruecklich „cool", deshalb baut sie sich nach dem
+  /// Ergebnis auf: erst schiebt sich die Leiste herein, dann faehrt der
+  /// Sieben-Tage-Balken auf seinen Stand, zuletzt kippt der Wert von morgen
+  /// dazu. Bei „Bewegung reduzieren" steht alles sofort da — der Regler steht
+  /// dann auf 1,0 und jede Stufe ist fertig.
+  Widget _bauBonusLeiste() {
+    final einzug = _phase(0.66, 0.82, Curves.easeOutCubic).clamp(0.0, 1.0);
+    final balken = _phase(0.74, 0.94, Curves.easeOutCubic).clamp(0.0, 1.0);
+    // easeOutBack schiesst bewusst ueber 1 hinaus (das gibt den kleinen
+    // Ueberschwinger). Fuer die Deckkraft muss der Wert trotzdem im Bereich
+    // bleiben, sonst wirft Opacity eine Zusicherung.
+    final morgenSchwung = _phase(0.86, 1.0, Curves.easeOutBack);
+    final morgenAnteil = morgenSchwung.clamp(0.0, 1.0);
+
+    final rest = widget.restlaufzeit;
+    final anteilVerbraucht = bonusFortschritt(rest);
+
+    return Opacity(
+      opacity: einzug,
+      child: Transform.translate(
+        offset: Offset(0, 12 * (1 - einzug)),
+        child: Container(
+          margin: const EdgeInsets.only(top: 10),
+          padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+          decoration: BoxDecoration(
+            color: AppAccentColors.accent.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(
+              color: AppAccentColors.accent.withValues(alpha: 0.22),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text('🎁', style: TextStyle(fontSize: 12)),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      bonusLaufzeitText(rest),
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 7),
+              // Der Sieben-Tage-Balken. Er ist der eigentliche Beleg fuer
+              // „das laeuft sieben Tage": man sieht, wie viel davon weg ist.
+              ClipRRect(
+                borderRadius: BorderRadius.circular(99),
+                child: LinearProgressIndicator(
+                  value: anteilVerbraucht * balken,
+                  minHeight: 5,
+                  backgroundColor: Colors.white.withValues(alpha: 0.10),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppAccentColors.accent,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Opacity(
+                opacity: morgenAnteil,
+                child: Transform.translate(
+                  offset: Offset(0, 8 * (1 - morgenSchwung)),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('📈', style: TextStyle(fontSize: 12)),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          aufbauText(
+                            morgen: widget.morgen,
+                            restlaufzeit: rest,
+                          ),
+                          style: const TextStyle(
+                            color: Color(0xFFD6DBE4),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -312,4 +475,61 @@ String grundText({
   }
   if (doppelXpAktiv) return 'Doppel-XP-Woche läuft';
   return '$tageText · ${multiplikatorText(streakAnteil)} extra';
+}
+
+/// 2026-08-24 (Aufgabe 4.4): „dass es SIEBEN TAGE laeuft."
+///
+/// Bewusst wird die Sieben IMMER genannt, auch wenn die Restlaufzeit gerade
+/// nicht durchgereicht wurde (dann kennt der Nutzer wenigstens die Laufzeit).
+/// Formuliert wie der Countdown auf der Startseite, nur ohne Abkuerzungen und
+/// ohne Gedankenstrich.
+String bonusLaufzeitText(Duration? rest) {
+  if (rest == null || rest <= Duration.zero) {
+    return 'Doppel-XP-Woche · sieben Tage lang';
+  }
+  final tage = rest.inDays;
+  final stunden = rest.inHours % 24;
+  final minuten = rest.inMinutes % 60;
+  String menge;
+  if (tage > 0) {
+    menge = '$tage ${tage == 1 ? 'Tag' : 'Tage'} '
+        '$stunden ${stunden == 1 ? 'Stunde' : 'Stunden'}';
+  } else if (stunden > 0) {
+    menge = '$stunden ${stunden == 1 ? 'Stunde' : 'Stunden'} '
+        '$minuten ${minuten == 1 ? 'Minute' : 'Minuten'}';
+  } else {
+    menge = '$minuten ${minuten == 1 ? 'Minute' : 'Minuten'}';
+  }
+  return 'Doppel-XP-Woche · noch $menge von sieben Tagen';
+}
+
+/// Wie viel der sieben Tage schon verbraucht sind, 0 bis 1. Ohne bekannte
+/// Restlaufzeit 0 — dann steht der Balken leer und behauptet nichts.
+double bonusFortschritt(Duration? rest) {
+  if (rest == null || rest <= Duration.zero) return 0;
+  final gesamt = StarterAufgabenService.bonusDauer.inMinutes;
+  if (gesamt <= 0) return 0;
+  final verbraucht = (gesamt - rest.inMinutes) / gesamt;
+  return verbraucht.clamp(0.0, 1.0);
+}
+
+/// 2026-08-24 (Aufgabe 4.4): „und halt auf dem aufbauen kann."
+///
+/// [morgen] ist [XpRechnungAnimation.multiplikator] plus EIN Tageszuwachs. Es
+/// ist keine zweite Rechnung dieser Fahrt: die gebuchten Zahlen bleiben
+/// unangetastet, hier steht nur, was der naechste Tag am Stueck brächte.
+///
+/// Am LETZTEN Tag der Woche waere „morgen ×2,40" gelogen: dann faellt die
+/// Basis von 2,0 auf 1,0 zurueck. In dem Fall nennt der Text keine Zahl.
+String aufbauText({required double morgen, Duration? restlaufzeit}) {
+  final letzterTag =
+      restlaufzeit != null && restlaufzeit <= const Duration(days: 1);
+  if (letzterTag) {
+    return 'Letzter Tag der Bonuswoche. Deine Serie läuft danach weiter und '
+        'zählt jeden Tag ${multiplikatorText(GamificationService.proStreakTag)} '
+        'dazu.';
+  }
+  return 'Darauf kannst du aufbauen: Fährst du morgen wieder, sind es schon '
+      '×${multiplikatorText(morgen)}. Jeder Tag am Stück legt '
+      '${multiplikatorText(GamificationService.proStreakTag)} drauf.';
 }

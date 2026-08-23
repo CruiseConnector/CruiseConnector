@@ -394,6 +394,151 @@ void main() {
     });
   });
 
+  // ------------------------------------------------------------------
+  // 2026-08-24 (Aufgabe 4.2): Der BODEN. Woertlich vucko am 23.08.:
+  // „wenn man halt einen Tag vergisst, dass es dann wieder auf zwei
+  // zurueckfaellt und nicht auf eins. Und das fuer die sieben Tage."
+  // ------------------------------------------------------------------
+  //
+  // Die beiden Tests weiter oben rechnen mit einem von Hand gesetzten
+  // `doppelXpAktiv`. Diese hier gehen den ECHTEN Weg: gerissene Serie, dann
+  // der Multiplikator, den die Rechnung sich SELBST vom Starter-Dienst holt.
+  // Genau so laeuft es nach einer Fahrt.
+  group('Der Boden ist 2,00 in der Bonuswoche und 1,00 danach', () {
+    final heute = _tag(2026, 8, 14);
+
+    // Zwei Fehltage am Stueck: die Serie ist wirklich 0, nicht bloss klein.
+    List<UserDriveSession> gerisseneSerie() => [
+      _fahrt(_tag(2026, 8, 9)),
+      _fahrt(_tag(2026, 8, 10)),
+      _fahrt(_tag(2026, 8, 11)),
+    ];
+
+    test('waehrend der Woche: 2,00x, und die Fahrt bekommt das Doppelte', () async {
+      SharedPreferences.setMockInitialValues({
+        'starter_paket_vergeben_v1': true,
+        'starter_bonus_ende_v1': DateTime.now()
+            .add(const Duration(days: 3))
+            .toIso8601String(),
+      });
+      await starter.load();
+      expect(starter.doppelXpAktiv, isTrue);
+
+      final serie = GamificationService.calculateDrivingStreakDays(
+        gerisseneSerie(),
+        now: heute,
+      );
+      expect(serie, 0, reason: 'zwei Fehltage am Stueck reissen die Serie');
+
+      // KEIN doppelXpAktiv uebergeben: die Rechnung fragt den Dienst selbst.
+      final b = GamificationService.calculateRouteXpBreakdown(
+        distanceKm: 10,
+        curves: 0,
+        style: 'CRUISE',
+        streakDays: serie,
+      );
+      expect(b.multiplier, closeTo(2.0, 1e-9), reason: 'nicht auf eins');
+      expect(b.baseXp, 100);
+      expect(b.totalXp, 200);
+    });
+
+    test('nach der Woche: 1,00x, ganz normal', () async {
+      SharedPreferences.setMockInitialValues({
+        'starter_paket_vergeben_v1': true,
+        'starter_bonus_ende_v1': DateTime.now()
+            .subtract(const Duration(minutes: 1))
+            .toIso8601String(),
+      });
+      await starter.load();
+      expect(starter.doppelXpAktiv, isFalse);
+
+      final serie = GamificationService.calculateDrivingStreakDays(
+        gerisseneSerie(),
+        now: heute,
+      );
+      final b = GamificationService.calculateRouteXpBreakdown(
+        distanceKm: 10,
+        curves: 0,
+        style: 'CRUISE',
+        streakDays: serie,
+      );
+      expect(b.multiplier, closeTo(1.0, 1e-9));
+      expect(b.totalXp, 100);
+    });
+
+    test('der Boden gilt genau sieben Tage, nicht laenger', () async {
+      // Die Woche endet in einer Minute. Sie laeuft also noch, der Boden ist 2.
+      SharedPreferences.setMockInitialValues({
+        'starter_paket_vergeben_v1': true,
+        'starter_bonus_ende_v1': DateTime.now()
+            .add(const Duration(minutes: 1))
+            .toIso8601String(),
+      });
+      await starter.load();
+      expect(starter.doppelXpAktiv, isTrue);
+      expect(
+        GamificationService.streakMultiplierForDays(0),
+        closeTo(2.0, 1e-9),
+      );
+      // Und die Laufzeit selbst steht an genau einer Stelle.
+      expect(StarterAufgabenService.bonusDauer, const Duration(days: 7));
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 2026-08-24 (Aufgabe 4.2): Der Schalter fuer die Schonfrist.
+  // ------------------------------------------------------------------
+  //
+  // Hier widersprechen sich zwei Aussagen von Vucko. Am 23.08.:
+  // „wenn man halt einen Tag vergisst, dass es dann wieder auf zwei
+  // zurueckfaellt". Am 19.08., auf genau diese Frage: „7 Tage ab dem Fehltag,
+  // ein zweiter beendet sie."
+  //
+  // ENTSCHEIDUNG am 24.08.: Die Schonfrist bleibt. Der Kern der Aussage vom
+  // 23.08. ist der BODEN („nicht auf eins"), und der stimmt bereits — die
+  // Gruppe darueber belegt es. Die Zahl der erlaubten Fehltage hat er vier
+  // Tage vorher ausdruecklich anders beantwortet. Umschaltbar ist es
+  // trotzdem, mit einer Zeile.
+  group('Die Schonfrist ist umschaltbar', () {
+    test('sie ist eingeschaltet, und der Schalter heisst so', () {
+      expect(GamificationService.schonfristAktiv, isTrue);
+      final quelle = File(
+        'lib/data/services/gamification_service.dart',
+      ).readAsStringSync();
+      expect(
+        quelle.contains('static const bool schonfristAktiv'),
+        isTrue,
+        reason: 'ohne benannte Konstante muesste Vucko den Code durchsuchen',
+      );
+      // Beide Zitate muessen am Schalter stehen, sonst weiss in drei Monaten
+      // niemand mehr, warum die Entscheidung so ausfiel.
+      expect(
+        quelle.contains('wieder auf zwei'),
+        isTrue,
+        reason: 'das Zitat vom 23.08. fehlt am Schalter',
+      );
+      expect(
+        quelle.contains('ein zweiter beendet sie'),
+        isTrue,
+        reason: 'das Zitat vom 19.08. fehlt am Schalter',
+      );
+    });
+
+    test('der Schalter wirkt wirklich auf die Zaehlung', () {
+      // Mit Schonfrist ueberlebt EIN Fehltag (Mi fehlt, Fr wird gefahren).
+      final serie = GamificationService.calculateDrivingStreakDays([
+        _fahrt(_tag(2026, 8, 10)),
+        _fahrt(_tag(2026, 8, 11)),
+        _fahrt(_tag(2026, 8, 12)),
+        // 13. fehlt
+        _fahrt(_tag(2026, 8, 14)),
+      ], now: _tag(2026, 8, 14));
+      // Vier bei eingeschalteter Schonfrist, eins ohne. Der Test haelt fest,
+      // welche der beiden Lesarten heute gilt.
+      expect(serie, GamificationService.schonfristAktiv ? 4 : 1);
+    });
+  });
+
   group('Verdrahtung', () {
     test('die Auswertung rechnet die Serie NICHT mehr selbst', () {
       final quelle = File(

@@ -679,6 +679,43 @@ class _EditProfilePageState extends State<EditProfilePage> {
       // Service zusätzlich in die Legacy-Profile-Spalten gespiegelt.
       await SocialService.saveUserVehicles(_vehicleDrafts);
       final uid = Supabase.instance.client.auth.currentUser?.id;
+      // 2026-08-24 (Aufgabe 2.1): Die Zeile nach dem Speichern NEU LESEN.
+      //
+      // Vucko wörtlich: „B-M-W ganz in Caps geschrieben und groß geschrieben
+      // soll das Gleiche sein wie B groß, M klein und W klein."
+      //
+      // Seit der Migration 20260824101000 hängt an `profile_vehicles.brand`
+      // ein Trigger, der `vehicle_brand_canonical()` aufruft. Getippt wird
+      // also „bmw", gespeichert wird „BMW". Ohne dieses Nachlesen zeigt das
+      // Formular weiter „bmw", während in der Datenbank „BMW" steht — und
+      // beim nächsten Speichern schriebe der Client die alte Schreibweise
+      // erneut hin.
+      //
+      // Der sichtbare Weg ist damit doppelt abgesichert: die Seite schließt
+      // sich gleich, und profile_page._loadData() liest ohnehin frisch. Das
+      // hier greift, wenn der Pop ausbleibt (App im Hintergrund, `mounted`
+      // false) und die Seite mit alten Entwürfen stehen bliebe.
+      if (uid != null) {
+        try {
+          final gespeichert = await SocialService.getUserVehicles(uid);
+          if (gespeichert.length == _vehicleDrafts.length &&
+              gespeichert.isNotEmpty) {
+            _vehicleDrafts = gespeichert
+                .map((fahrzeug) => Map<String, dynamic>.from(fahrzeug))
+                .toList();
+            final index = _selectedVehicleIndex
+                .clamp(0, _vehicleDrafts.length - 1)
+                .toInt();
+            final marke = (_vehicleDrafts[index]['brand'] as String?) ?? '';
+            if (marke.isNotEmpty && marke != _carBrandController.text) {
+              _carBrandController.text = marke;
+            }
+          }
+        } catch (e) {
+          // Nachlesen ist Kür. Das Speichern selbst ist bereits durch.
+          debugPrint('[EditProfile] Marke nicht nachgelesen: $e');
+        }
+      }
       if (mounted && uid != null) {
         context.read<CommunityProvider>().applyProfilePatch(uid, {
           'username': newName,

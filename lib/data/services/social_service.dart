@@ -1482,6 +1482,97 @@ class SocialService {
     return List<Map<String, dynamic>>.from(result);
   }
 
+  // ── Hashtags ──────────────────────────────────────────────────────────
+
+  /// 2026-08-24 — Aufgabe 1.3. Vucko, Aufnahme 3: „dass man unter Hashtags
+  /// Sachen suchen kann" und „für zukünftige Gewinnspiele wäre das auch ganz
+  /// cool, dass man da Sachen auslosen kann".
+  ///
+  /// Weil daraus AUSGELOST werden soll, muss die Liste VOLLSTÄNDIG sein. Sie
+  /// kommt deshalb aus `post_hashtags` (Migration 20260824102000) und NICHT
+  /// aus einer Textsuche: `content ilike '%tour%'` fände auch „tourenfahrt"
+  /// und „kontour". Wer aus so einer Liste auslost, verlost an Leute, die nie
+  /// teilgenommen haben.
+  ///
+  /// Groß- und Kleinschreibung sowie die Umlaut-Schreibweise spielen keine
+  /// Rolle: `#Tourenfahrt`, `#tourenfahrt`, `#kurvenkönig` und
+  /// `#kurvenkoenig` landen in derselben Liste. Die Faltung macht die
+  /// Datenbank (`hashtag_schluessel`), bewusst NICHT der Client — sonst
+  /// laufen beide irgendwann auseinander und ein Gewinnspiel verliert
+  /// Teilnehmer.
+  ///
+  /// Zwei bewusste Einschränkungen der RPC, die Vucko kennen muss: nur
+  /// `visibility = 'public'`, und keine ausgeblendeten Beiträge oder
+  /// gesperrten Konten.
+  ///
+  /// [tag] darf mit oder ohne Raute kommen.
+  static Future<List<Map<String, dynamic>>> hashtagBeitraege(
+    String tag, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final sauber = normalisiereHashtagEingabe(tag);
+    if (sauber.isEmpty) return [];
+    try {
+      final rows = await _db.rpc(
+        'hashtag_beitraege',
+        params: {'p_tag': sauber, 'p_limit': limit, 'p_offset': offset},
+      );
+      if (rows is List) {
+        return rows
+            .whereType<Map>()
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('[SocialService] hashtag_beitraege Fehler: $e');
+    }
+    return [];
+  }
+
+  /// 2026-08-24 (Aufgabe 1.3): Vorschläge beim Tippen und beliebte Hashtags.
+  ///
+  /// Ohne [praefix] die häufigsten Hashtags im Zeitfenster, mit [praefix] die
+  /// Vervollständigung. Gezählt wird über den gefalteten Schlüssel, angezeigt
+  /// die zuletzt tatsächlich getippte Schreibweise.
+  static Future<List<Map<String, dynamic>>> hashtagVorschlaege({
+    String? praefix,
+    int tage = 30,
+    int limit = 10,
+  }) async {
+    try {
+      final rows = await _db.rpc(
+        'hashtag_vorschlaege',
+        params: {
+          'p_praefix': praefix == null || praefix.trim().isEmpty
+              ? null
+              : normalisiereHashtagEingabe(praefix),
+          'p_tage': tage,
+          'p_limit': limit,
+        },
+      );
+      if (rows is List) {
+        return rows
+            .whereType<Map>()
+            .map((r) => Map<String, dynamic>.from(r))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('[SocialService] hashtag_vorschlaege Fehler: $e');
+    }
+    return [];
+  }
+
+  /// Schneidet führende Rauten und Leerzeichen weg.
+  ///
+  /// Die RPCs tun dasselbe noch einmal (`btrim(regexp_replace(…, '^#+', ''))`),
+  /// hier steht es nur, damit die Oberfläche schon vor dem Abschicken weiß,
+  /// ob überhaupt etwas übrig bleibt. Gefaltet wird hier NICHT — das ist
+  /// Sache der Datenbank.
+  static String normalisiereHashtagEingabe(String eingabe) {
+    return eingabe.trim().replaceFirst(RegExp(r'^#+'), '').trim();
+  }
+
   // ── User Search ───────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> searchUsers(String query) async {
@@ -1829,11 +1920,154 @@ class SocialService {
     return list;
   }
 
+  /// Merker auf jeder Zeile: „die Entfernung hat der Server entschieden".
+  ///
+  /// 2026-08-24 (Aufgabe 3.1): Solange dieser Schlüssel gesetzt ist, darf die
+  /// Oberfläche NICHT noch einmal nach Entfernung filtern. Sie würde sonst
+  /// genau die Gruppen wegwerfen, die der Server bewusst drin gelassen hat:
+  /// Gruppen ohne brauchbaren Startpunkt (`entfernung_m == null`).
+  static const String umkreisServerseitigKey = 'umkreis_serverseitig';
+
   /// Öffentliche Gruppen, in denen der User weder Mitglied noch Owner ist.
-  /// Sortiert nach `start_time` (nächstes Event zuerst).
-  static Future<List<Map<String, dynamic>>> getDiscoverGroups() async {
+  ///
+  /// 2026-08-24 — Aufgabe 3.1. Vucko, Aufnahme 4 [00:24]: „wenn man jetzt in
+  /// Süddeutschland wäre, dass Leute in Norddeutschland angezeigt werden und
+  /// sonst nicht."
+  ///
+  /// GEMESSENER FEHLER, den das behebt: die alte Fassung holte `.limit(80)`
+  /// und schnitt auf `.take(40)` ab — beides ENTFERNUNGSBLIND. Der
+  /// Umkreisfilter lief erst danach in der Oberfläche. In der Gegenprobe der
+  /// Migration 20260824103000 (100 fiktive Gruppen, 95 davon in
+  /// Norddeutschland und frisch, 5 im Umkreis von 50 km um Bregenz und älter)
+  /// ergab das:
+  ///     limit(80) zuerst, dann 50-km-Filter  ->  0 Treffer
+  ///     50-km-Filter zuerst                  ->  5 Treffer
+  /// Der Nutzer las „keine Gruppen in deiner Nähe", während fünf in
+  /// Reichweite standen. Genau Vuckos Norddeutschland-Beispiel.
+  ///
+  /// Deshalb entscheidet jetzt die RPC `gruppen_in_der_naehe`: sie filtert
+  /// und sortiert nach Entfernung, BEVOR abgeschnitten wird. Das kann nur der
+  /// Server, weil nur er alle Zeilen sieht.
+  ///
+  /// [radiusMeter] ist in METERN (die RPC heißt `p_radius_m`), der Regler in
+  /// der Oberfläche zeigt Kilometer. `null` heißt „alle": kein Filter, aber
+  /// weiter nach Entfernung sortiert, damit der Schnitt bei [limit] die
+  /// nächstgelegenen behält statt irgendwelche.
+  ///
+  /// Ohne [lat]/[lng] wird nichts ausgeblendet. Wir blenden nichts aus, was
+  /// wir nicht beurteilen können.
+  static Future<List<Map<String, dynamic>>> getDiscoverGroups({
+    double? lat,
+    double? lng,
+    double? radiusMeter,
+    int limit = 40,
+  }) async {
     final uid = _userId;
     if (uid == null) return [];
+
+    try {
+      final rows = await _db.rpc(
+        'gruppen_in_der_naehe',
+        params: {
+          'p_lat': lat,
+          'p_lng': lng,
+          'p_radius_m': radiusMeter,
+          'p_limit': limit,
+        },
+      );
+      if (rows is List) {
+        return rows
+            .whereType<Map>()
+            .map((row) => _entdeckenGruppeAusRpc(row))
+            .toList();
+      }
+    } on PostgrestException catch (e) {
+      // Eine Datenbank ohne die neue RPC darf die Entdecken-Liste nicht
+      // leeren. Dann zählt der alte Weg — entfernungsblind, aber sichtbar.
+      final fehlt =
+          e.code == 'PGRST202' ||
+          e.message.toLowerCase().contains('could not find the function') ||
+          e.message.toLowerCase().contains('does not exist');
+      if (!fehlt) {
+        debugPrint('[SocialService] gruppen_in_der_naehe Fehler: ${e.message}');
+      }
+    } catch (e) {
+      debugPrint('[SocialService] gruppen_in_der_naehe unerwartet: $e');
+    }
+
+    return _getDiscoverGroupsAlterWeg(uid: uid, limit: limit);
+  }
+
+  /// Baut die flache RPC-Zeile auf die Form zurück, die die Kachel-Widgets
+  /// seit jeher lesen.
+  ///
+  /// 2026-08-24: Die RPC liefert `mitglieder_anzahl`, `gastgeber_username`
+  /// und `gastgeber_avatar_url` — flach. Die Kacheln lesen dagegen
+  /// `group_members` (nur die LÄNGE, siehe community_page.dart:1473 und
+  /// :2567 sowie community_carousel_card.dart:806 und :851) und
+  /// `profiles`. Diese Widgets gehören anderen Dateien; sie hier zu ändern
+  /// wäre eine Baustelle mehr, ohne dass jemand etwas davon hätte.
+  ///
+  /// `group_members` wird deshalb als Liste der richtigen LÄNGE mit leeren
+  /// Einträgen nachgebaut. Bewusst OHNE erfundene `user_id`: eine Liste, die
+  /// so tut, als kenne sie die Mitglieder, wäre eine Lüge, und irgendwann
+  /// liest jemand sie aus.
+  static Map<String, dynamic> _entdeckenGruppeAusRpc(Map row) {
+    final gruppe = Map<String, dynamic>.from(row);
+    final anzahl = (gruppe['mitglieder_anzahl'] as num?)?.toInt() ?? 0;
+    gruppe['group_members'] = List<Map<String, dynamic>>.generate(
+      anzahl < 0 ? 0 : anzahl,
+      (_) => <String, dynamic>{},
+    );
+    gruppe['profiles'] = <String, dynamic>{
+      'id': gruppe['created_by'],
+      'username': gruppe['gastgeber_username'],
+      'avatar_url': gruppe['gastgeber_avatar_url'],
+    };
+    gruppe[umkreisServerseitigKey] = true;
+    return gruppe;
+  }
+
+  /// Nur für Tests: der Rückbau ohne Datenbank prüfbar.
+  @visibleForTesting
+  static Map<String, dynamic> entdeckenGruppeAusRpcFuerTest(Map row) =>
+      _entdeckenGruppeAusRpc(row);
+
+  /// Entfernungstext für eine Kachel der Entdecken-Liste.
+  ///
+  /// 2026-08-24 (Aufgabe 3.1, ausdrückliche Vorgabe): `entfernung_m` darf
+  /// null sein — die Gruppe hat keinen Startpunkt, oder der Nutzer hat keine
+  /// Position freigegeben. Dann steht dort „Entfernung unbekannt", NIEMALS
+  /// „0 km". Eine Null wäre die Behauptung, die Gruppe starte genau hier.
+  ///
+  /// Liefert null, wenn die Zeile gar nicht vom Server kommt (alter Weg) —
+  /// dann zeigt die Kachel wie bisher keine Entfernung an, statt eine
+  /// erfundene.
+  static String? entfernungText(Map<String, dynamic> gruppe) {
+    if (gruppe[umkreisServerseitigKey] != true) return null;
+    final meter = (gruppe['entfernung_m'] as num?)?.toDouble();
+    if (meter == null || meter.isNaN || meter.isNegative) {
+      return 'Entfernung unbekannt';
+    }
+    if (meter < 950) {
+      // Unter einem Kilometer auf 100 m gerundet, sonst stünde dort „0 km".
+      final hundert = (meter / 100).round() * 100;
+      if (hundert <= 0) return 'unter 100 m entfernt';
+      return '$hundert m entfernt';
+    }
+    final km = meter / 1000.0;
+    if (km < 10) return '${km.toStringAsFixed(1)} km entfernt';
+    return '${km.round()} km entfernt';
+  }
+
+  /// Der Weg vor dem 24.08.2026. Bleibt als Rückfallebene bestehen, falls die
+  /// RPC auf einer Datenbank fehlt (alter Stand, Wiederherstellung).
+  /// ENTFERNUNGSBLIND — deshalb setzt er [umkreisServerseitigKey] NICHT, und
+  /// die Oberfläche filtert dann wie früher selbst nach.
+  static Future<List<Map<String, dynamic>>> _getDiscoverGroupsAlterWeg({
+    required String uid,
+    required int limit,
+  }) async {
     final blocked = await getBlockedAndBlockerIds();
 
     // 2026-08-11 (vucko, Home-Kacheln): Bewusst KEIN select('*') mehr.
@@ -1869,7 +2103,7 @@ class SocialService {
     }).toList();
 
     _sortByStartTime(filtered);
-    return filtered.take(40).toList();
+    return filtered.take(limit < 1 ? 1 : limit).toList();
   }
 
   /// Entfernt Gruppen, deren Route gestartet wurde und deren 24h-Fenster
