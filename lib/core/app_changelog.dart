@@ -42,6 +42,37 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.22',
+      titel: 'Beitreten nur noch bewusst, Abzeichen aufgeräumt, Meldung am Nachmittag',
+      punkte: <String>[
+        'Ein Tipp auf eine fremde Community hat dich bisher sofort zum '
+            'Mitglied gemacht. Jetzt öffnet sich erst eine Vorschau mit Bild, '
+            'Beschreibung, Mitgliederzahl und Gründungsdatum, und du '
+            'entscheidest selbst.',
+        'Communities kannst du jetzt anpinnen. Beim Erstellen legst du fest, '
+            'ob sie für Autofahrer, Motorradfahrer oder beide ist und in '
+            'welcher Region, und danach kannst du filtern.',
+        'Tippst du oben auf den Namen einer Community, siehst du jetzt auch '
+            'als normales Mitglied alle Eckdaten. Ändern kann sie weiterhin '
+            'nur ein Admin.',
+        'Beiträge mit der Einstellung "Nur Follower" erreichen jetzt wirklich '
+            'alle deine Follower, auch die, denen du selbst nicht folgst. '
+            'Vorher blieben sie bei einseitiger Folge unsichtbar.',
+        'Deine Abzeichen-Sammlung war endlos lang. Jetzt sind die Familien '
+            'zugeklappt, und du siehst auf einen Blick, woran du gerade bist.',
+        'Die Stufe eines Abzeichens erkennst du jetzt auch an der Füllung, '
+            'nicht nur am Rand. Dazu zwölf neue Abzeichen für Garage, '
+            'Beiträge, Hashtags und Meldungen.',
+        'Nachrichten im Community-Chat kannst du sechs Stunden lang '
+            'bearbeiten und wahlweise für alle oder nur für dich löschen.',
+        'Die tägliche Meldung zum Wetter kommt jetzt am Nachmittag statt um '
+            'acht Uhr früh, jeden Tag zu einer anderen Zeit und mit einem '
+            'anderen Text.',
+        'Deine Anordnung der Startseite hängt jetzt an deinem Konto und ist '
+            'auf einem neuen Handy sofort wieder da.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.21',
       titel: 'Kein Festhängen mehr, Hashtags zeigen wer mitmacht',
       punkte: <String>[
