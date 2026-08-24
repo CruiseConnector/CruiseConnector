@@ -452,11 +452,254 @@ class CommunityChatService {
         .toList();
   }
 
+  // ##########################################################################
+  // 2026-08-24 (Auftrag Vucko): Anpinnen, Fahrzeugart, Region, Filter
+  //
+  // Fundament ist die Migration 20260824190000. Alles Filtern und Sortieren
+  // passiert dort, in `get_communities_gefiltert` — bewusst NICHT hier:
+  //
+  //  * Angepinntes muss ganz oben stehen, auch wenn die Liste bei 40
+  //    Eintraegen abgeschnitten wird. Ein Client, der 40 Zeilen holt und
+  //    danach selbst sortiert, haelt genau das nicht ein.
+  //  * Blockierte Besitzer waren bisher nur clientseitig gefiltert
+  //    (getDiscoverCommunities). Serverseitig ist das jetzt dicht.
+  //  * Die Suche muss gross- und kleinschreibungsunabhaengig sein, und der
+  //    Server kennt zu jeder Community die letzte Nachricht — der Client
+  //    haette dafuer eine zweite Abfrage gebraucht.
+  // ##########################################################################
+
+  /// Die Regionsliste, einmal geholt und dann gemerkt.
+  ///
+  /// `community_regionen` hat 54 Zeilen und aendert sich nur durch eine
+  /// Migration. Sie bei jedem Oeffnen des Filters neu zu holen waere eine
+  /// Abfrage fuer nichts.
+  static List<CommunityRegion>? _regionenSpeicher;
+
+  @visibleForTesting
+  static void setzeRegionenFuerTests(List<CommunityRegion>? regionen) {
+    _regionenSpeicher = regionen;
+  }
+
+  /// Laedt die Auswahlliste der Regionen.
+  ///
+  /// Faellt auf eine leere Liste zurueck statt zu werfen: ohne Regionsliste
+  /// steht im Filter nur „Alle Regionen", und der Rest der Seite funktioniert
+  /// weiter. Ein Filterregler ist kein Grund, die Community-Liste zu
+  /// verweigern.
+  static Future<List<CommunityRegion>> regionenLaden() async {
+    final gemerkt = _regionenSpeicher;
+    if (gemerkt != null) return gemerkt;
+    try {
+      final rows = await _db
+          .from('community_regionen')
+          .select('code, land_code, name, ist_land, sortierung')
+          .order('land_code')
+          .order('sortierung')
+          .order('name');
+      final liste = List<Map<String, dynamic>>.from(rows as List)
+          .map(CommunityRegion.ausZeile)
+          .toList();
+      _regionenSpeicher = liste;
+      return liste;
+    } catch (e) {
+      debugPrint('[CommunityChatService] Regionen laden: $e');
+      return const <CommunityRegion>[];
+    }
+  }
+
+  /// Holt eine der beiden Listen, serverseitig gefiltert und sortiert.
+  ///
+  /// [fahrzeugart] und [regionCode] gehoeren zum Filter der OEFFENTLICHEN
+  /// Liste. Wer sie auch auf [CommunityListe.meine] anwendet, blendet dem
+  /// Nutzer seine eigenen Communities aus — deshalb reicht die Oberflaeche
+  /// dort bewusst nur [suche] durch.
+  static Future<List<Map<String, dynamic>>> communitiesLaden({
+    required CommunityListe bereich,
+    CommunityFahrzeugart fahrzeugart = CommunityFahrzeugart.alle,
+    String? regionCode,
+    String? suche,
+    CommunitySortierung sortierung = CommunitySortierung.aktiv,
+    int limit = 40,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return <Map<String, dynamic>>[];
+
+    final sauberSuche = suche?.trim();
+    final sauberRegion = regionCode?.trim();
+    try {
+      final antwort = await _db.rpc(
+        'get_communities_gefiltert',
+        params: {
+          'p_bereich': bereich.wert,
+          'p_fahrzeugart': fahrzeugart.filterWert,
+          'p_region_code': (sauberRegion == null || sauberRegion.isEmpty)
+              ? null
+              : sauberRegion,
+          'p_suche': (sauberSuche == null || sauberSuche.isEmpty)
+              ? null
+              : sauberSuche,
+          'p_sortierung': sortierung.wert,
+          'p_limit': limit,
+          'p_offset': 0,
+        },
+      );
+      if (antwort is! List) return <Map<String, dynamic>>[];
+      return antwort
+          .whereType<Map>()
+          .map((zeile) => Map<String, dynamic>.from(zeile))
+          .toList();
+    } on PostgrestException catch (e) {
+      if (!_funktionFehlt(e)) rethrow;
+      // Datenbankstand VOR der Migration 20260824190000. Dort gibt es weder
+      // Fahrzeugart noch Region noch Pins — nach etwas zu filtern, das es
+      // nicht gibt, waere geraten. Die Suche geht trotzdem, weil Name und
+      // Beschreibung schon immer da waren.
+      final roh = bereich == CommunityListe.meine
+          ? await getMyCommunities()
+          : await getDiscoverCommunities();
+      return filtereOhneServer(roh, suche: sauberSuche);
+    }
+  }
+
+  /// Der Rueckfall fuer einen alten Datenbankstand: nur die Textsuche.
+  @visibleForTesting
+  static List<Map<String, dynamic>> filtereOhneServer(
+    List<Map<String, dynamic>> zeilen, {
+    String? suche,
+  }) {
+    final text = suche?.trim().toLowerCase();
+    if (text == null || text.isEmpty) return zeilen;
+    return zeilen.where((zeile) {
+      final name = zeile['name']?.toString().toLowerCase() ?? '';
+      final beschreibung = zeile['description']?.toString().toLowerCase() ?? '';
+      return name.contains(text) || beschreibung.contains(text);
+    }).toList();
+  }
+
+  /// Pinnt an oder loest. Rueckgabe: der neue Platz, oder `null` nach dem
+  /// Loesen.
+  ///
+  /// Die Datenbank haelt die Plaetze luckenlos (`community_pin_setzen`) —
+  /// der Client zaehlt hier bewusst nichts nach.
+  static Future<int?> pinSetzen({
+    required String communityId,
+    required bool angepinnt,
+  }) async {
+    if (_userId == null) {
+      throw const CommunityChatServiceException('Bitte melde dich an.');
+    }
+    try {
+      final antwort = await _db.rpc(
+        'community_pin_setzen',
+        params: {'p_community_id': communityId, 'p_angepinnt': angepinnt},
+      );
+      if (antwort is Map) {
+        final platz = antwort['position'];
+        if (platz is num) return platz.toInt();
+      }
+      return null;
+    } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(pinFehlerText(e));
+    }
+  }
+
+  /// Uebersetzt einen Fehler beim Anpinnen in einen Satz fuer den Nutzer.
+  ///
+  /// Die 10er-Grenze ist der einzige Fall, der wirklich vorkommt und den der
+  /// Nutzer auch aufloesen kann. Sie kommt als fertiger deutscher Satz aus
+  /// der Datenbank und wird deshalb durchgereicht statt nachgebaut.
+  @visibleForTesting
+  static String pinFehlerText(PostgrestException e) {
+    final roh = e.message.trim();
+    if (roh.contains('angepinnt')) return roh;
+    if (roh.contains('melde dich an')) return 'Bitte melde dich an.';
+    if (_funktionFehlt(e)) {
+      return 'Anpinnen gibt es erst nach dem nächsten Update.';
+    }
+    return 'Anpinnen gerade nicht möglich.';
+  }
+
+  /// Ob eine Zeile aus [communitiesLaden] angepinnt ist.
+  static bool istAngepinnt(Map<String, dynamic> community) =>
+      community['angepinnt'] == true || community['pin_position'] is num;
+
+  /// Der Platz einer angepinnten Community, 1 ist ganz oben.
+  static int? pinPosition(Map<String, dynamic> community) {
+    final roh = community['pin_position'];
+    return roh is num ? roh.toInt() : null;
+  }
+
+  /// Setzt den Pin-Zustand in einer geladenen Zeile — fuer die sofortige
+  /// Rueckmeldung, bevor der Server geantwortet hat (Optimistic UI).
+  static void setzePinInZeile(
+    Map<String, dynamic> community, {
+    required bool angepinnt,
+    int? position,
+  }) {
+    community['angepinnt'] = angepinnt;
+    community['pin_position'] = angepinnt ? (position ?? 1) : null;
+  }
+
+  static CommunityFahrzeugart fahrzeugartVon(Map<String, dynamic> community) =>
+      CommunityFahrzeugart.ausWert(community['fahrzeugart']);
+
+  /// Der Anzeigename der Region, oder `null` fuer „ueberregional".
+  static String? regionName(Map<String, dynamic> community) {
+    final roh = community['region_name']?.toString().trim();
+    if (roh == null || roh.isEmpty) return null;
+    return roh;
+  }
+
+  /// Der Zeitpunkt, nach dem „Aktiv" sortiert: die letzte Nachricht, sonst
+  /// die Gruendung.
+  static int _aktivitaetsWert(Map<String, dynamic> community) {
+    final roh = community['letzte_aktivitaet'] ?? community['created_at'];
+    final text = roh?.toString().trim();
+    if (text == null || text.isEmpty) return 0;
+    return DateTime.tryParse(text)?.toUtc().millisecondsSinceEpoch ?? 0;
+  }
+
+  /// Sortiert eine geladene Liste so, wie der Server sie sortiert haette:
+  /// Angepinntes zuerst nach Platz, danach die zuletzt aktive zuerst.
+  ///
+  /// Wird NUR fuer die sofortige Rueckmeldung nach einem Pin gebraucht. Die
+  /// Wahrheit liefert beim naechsten Laden wieder die Datenbank; ohne diese
+  /// Zeile springt die Kachel erst nach dem Neuladen nach oben, und genau das
+  /// verbietet der Optimistic-UI-Grundsatz dieses Projekts.
+  static void sortiereMitPinsZuerst(List<Map<String, dynamic>> liste) {
+    liste.sort((a, b) {
+      final platzA = pinPosition(a);
+      final platzB = pinPosition(b);
+      if (platzA != null && platzB == null) return -1;
+      if (platzA == null && platzB != null) return 1;
+      if (platzA != null && platzB != null && platzA != platzB) {
+        return platzA.compareTo(platzB);
+      }
+      return _aktivitaetsWert(b).compareTo(_aktivitaetsWert(a));
+    });
+  }
+
+  /// 2026-08-24 (Auftrag Vucko): [fahrzeugart] und [regionCode] kommen dazu.
+  ///
+  /// BEIDE HABEN EINE VORGABE UND SIND KEINE PFLICHT. Wer eine Community
+  /// anlegt, will schreiben, nicht ausfuellen — jedes zusaetzliche Pflichtfeld
+  /// ist eine Huerde vor dem eigentlichen Zweck. Die Vorgaben sind genau die
+  /// der Datenbank:
+  ///
+  ///  * [CommunityFahrzeugart.alle] (`both`) = offen fuer alle. Damit faellt
+  ///    eine neue Community aus KEINEM Fahrzeugart-Filter heraus.
+  ///  * [regionCode] `null` = ueberregional. Erscheint in JEDEM
+  ///    Regionsfilter.
+  ///
+  /// Waere die Vorgabe „Auto" oder „hier tippen", stuenden ab morgen falsche
+  /// Angaben in der Tabelle, weil niemand sie bewusst gewaehlt hat.
   static Future<String> createCommunity({
     required String name,
     String? description,
     required bool isPublic,
     bool ownerOnlyMessages = false,
+    CommunityFahrzeugart fahrzeugart = CommunityFahrzeugart.alle,
+    String? regionCode,
   }) async {
     final uid = _userId;
     if (uid == null) {
@@ -478,8 +721,9 @@ class CommunityChatService {
       );
     }
 
+    final sauberRegion = regionCode?.trim();
     try {
-      final payload = {
+      final payload = <String, dynamic>{
         'owner_id': uid,
         'name': cleanName,
         'description': cleanDescription == null || cleanDescription.isEmpty
@@ -487,24 +731,36 @@ class CommunityChatService {
             : cleanDescription,
         'is_public': isPublic,
         'owner_only_messages': ownerOnlyMessages,
+        'fahrzeugart': fahrzeugart.spaltenWert,
+        'region_code': (sauberRegion == null || sauberRegion.isEmpty)
+            ? null
+            : sauberRegion,
       };
-      Map row;
-      try {
-        row = await _db
-            .from('communities')
-            .insert(payload)
-            .select('id')
-            .single();
-      } on PostgrestException catch (e) {
-        if (!_isMissingColumn(e)) rethrow;
-        payload.remove('owner_only_messages');
-        row = await _db
-            .from('communities')
-            .insert(payload)
-            .select('id')
-            .single();
+      // Stufenweiser Rueckfall auf einen aelteren Datenbankstand: erst fallen
+      // die neuesten Felder weg, dann das von gestern. Die Community entsteht
+      // in JEDEM Fall — eine fehlende Spalte darf das Anlegen nicht
+      // verhindern, sonst steht eine alte App vor einer Wand.
+      const stufen = <List<String>>[
+        <String>[],
+        <String>['fahrzeugart', 'region_code'],
+        <String>['fahrzeugart', 'region_code', 'owner_only_messages'],
+      ];
+      Map? row;
+      for (var i = 0; i < stufen.length; i++) {
+        final versuch = Map<String, dynamic>.from(payload)
+          ..removeWhere((schluessel, _) => stufen[i].contains(schluessel));
+        try {
+          row = await _db
+              .from('communities')
+              .insert(versuch)
+              .select('id')
+              .single();
+          break;
+        } on PostgrestException catch (e) {
+          if (!_isMissingColumn(e) || i == stufen.length - 1) rethrow;
+        }
       }
-      return row['id'] as String;
+      return row!['id'] as String;
     } on PostgrestException catch (e) {
       // CC001 = server-seitiges Premium-Gate (Trigger, folgt nach Rollout
       // dieser App-Version) — eigener Code statt generischem 42501, weil
@@ -2050,5 +2306,269 @@ class CommunityChatTimeline {
     final weitere = namen.length - namenImText;
     final vorne = namen.sublist(0, namenImText).join(', ');
     return '$vorne und $weitere weitere $verb.';
+  }
+}
+
+// ############################################################################
+// 2026-08-24 (Auftrag Vucko): Fahrzeugart, Region, Sortierung, Filterwahl
+// ############################################################################
+
+/// Welche der beiden Listen gemeint ist.
+///
+/// Heisst bewusst NICHT `CommunityBereich` — den Namen gibt es schon in
+/// `community_neuigkeit_service.dart` und er bedeutet dort etwas anderes
+/// (welcher Reiter einen Hinweispunkt bekommt).
+enum CommunityListe {
+  /// Communities, in denen man Mitglied ist.
+  meine('meine'),
+
+  /// Öffentliche Communities, in denen man NICHT Mitglied ist.
+  entdecken('entdecken');
+
+  const CommunityListe(this.wert);
+
+  /// Der Wert für `p_bereich` in `get_communities_gefiltert`.
+  final String wert;
+}
+
+/// Für wen eine Community gedacht ist.
+///
+/// Die Werte sind wortgleich mit `profile_vehicles.vehicle_type` — gemessen
+/// am 24.08.2026: 73 `car`, 13 `motorcycle`, 0 NULL, CHECK-Constraint. Ein
+/// späteres „passt zu meinem Fahrzeug" braucht deshalb keine
+/// Übersetzungstabelle. Genau so eine ist beim Markenfeld nötig geworden.
+enum CommunityFahrzeugart {
+  auto('car', 'Auto'),
+  motorrad('motorcycle', 'Motorrad'),
+
+  /// Offen für alle. In der Datenbank `both`, und zugleich der Standardwert
+  /// der Spalte — die sechs Bestands-Communities stehen alle auf diesem Wert.
+  alle('both', 'Alle');
+
+  const CommunityFahrzeugart(this.wert, this.beschriftung);
+
+  /// Der Wert, wie er in `communities.fahrzeugart` steht.
+  final String wert;
+
+  /// Die Beschriftung im Filter.
+  final String beschriftung;
+
+  /// Der Wert, der beim Anlegen in die Spalte geschrieben wird.
+  String get spaltenWert => wert;
+
+  /// Der Wert für `p_fahrzeugart`. `null` heisst dort „egal".
+  ///
+  /// Warum nicht einfach `'both'` schicken: die Datenbank setzt `both` selbst
+  /// auf „egal" um, aber am Aufrufer soll sichtbar sein, dass hier NICHT nach
+  /// gemischten Communities gefiltert wird, sondern gar nicht.
+  String? get filterWert => this == alle ? null : wert;
+
+  /// Das Etikett an der Kachel. [alle] bekommt bewusst KEINES: „offen für
+  /// alle" ist der Normalfall, und ein Etikett an jeder einzelnen Kachel sagt
+  /// nichts.
+  String? get kachelText => switch (this) {
+    auto => 'Für Autos',
+    motorrad => 'Für Motorräder',
+    alle => null,
+  };
+
+  static CommunityFahrzeugart ausWert(Object? roh) {
+    final text = roh?.toString().trim().toLowerCase();
+    for (final art in values) {
+      if (art.wert == text) return art;
+    }
+    return alle;
+  }
+}
+
+/// Wonach die Liste sortiert wird.
+///
+/// Begründung aus den Messwerten vom 24.08.2026: „Legacy" hat 14 Mitglieder
+/// und hatte NIE eine Nachricht, „Cruise Connector" 19 Mitglieder und seit dem
+/// 14.08. keine mehr. Eine tote Community mit vielen Mitgliedern ist die
+/// schlechteste Empfehlung, die diese Liste geben kann — deshalb ist [aktiv]
+/// die Vorgabe und nicht [gross].
+enum CommunitySortierung {
+  aktiv('aktiv', 'Aktiv'),
+  gross('gross', 'Größte'),
+  neu('neu', 'Neu');
+
+  const CommunitySortierung(this.wert, this.beschriftung);
+
+  final String wert;
+  final String beschriftung;
+
+  static CommunitySortierung ausWert(Object? roh) {
+    final text = roh?.toString().trim().toLowerCase();
+    for (final art in values) {
+      if (art.wert == text) return art;
+    }
+    return aktiv;
+  }
+}
+
+/// Ein Eintrag der Auswahlliste `community_regionen`.
+class CommunityRegion {
+  const CommunityRegion({
+    required this.code,
+    required this.landCode,
+    required this.name,
+    required this.istLand,
+    this.sortierung = 100,
+  });
+
+  /// ISO 3166-2 für Bundesländer/Kantone (`AT-8`, `DE-BY`), ISO 3166-1 für
+  /// die drei „ganzes Land"-Zeilen (`AT`, `CH`, `DE`).
+  final String code;
+  final String landCode;
+  final String name;
+
+  /// `true` = die Zeile meint das ganze Land. Eine solche Community erscheint
+  /// in JEDEM Regionsfilter ihres Landes.
+  final bool istLand;
+  final int sortierung;
+
+  static CommunityRegion ausZeile(Map<String, dynamic> zeile) {
+    final roheSortierung = zeile['sortierung'];
+    return CommunityRegion(
+      code: zeile['code']?.toString() ?? '',
+      landCode: zeile['land_code']?.toString() ?? '',
+      name: zeile['name']?.toString() ?? '',
+      istLand: zeile['ist_land'] == true,
+      sortierung: roheSortierung is num ? roheSortierung.toInt() : 100,
+    );
+  }
+}
+
+/// Die Filterwahl bei den öffentlichen Communities — und ihr Gedächtnis.
+///
+/// Vucko: „Die Filterwahl soll den App-Neustart überleben." Vorbild ist
+/// [PoiSettingsService]: ein [ChangeNotifier] mit einem Spiegel in den
+/// SharedPreferences, der SOFORT meldet und erst danach schreibt.
+///
+/// KONTOGEBUNDENE SCHLÜSSEL ([NutzerPrefsSchluessel]): Auf einem geteilten
+/// Gerät soll die Wahl des einen nicht die Liste des anderen beschneiden.
+/// Ein Filter, den man nie gesetzt hat und trotzdem erbt, sieht aus wie eine
+/// leere App.
+///
+/// BEWUSST NUR AM GERÄT und nicht am Konto: Ein Filter ist eine Momentwahl
+/// beim Stöbern, keine Einstellung, die aufs nächste Handy mitkommen muss.
+/// Ihn ans Konto zu hängen hiesse, ihn bei jedem Start erst vom Server zu
+/// holen — und bis dahin die falsche Liste zu zeigen.
+class CommunityFilterEinstellungen extends ChangeNotifier {
+  CommunityFilterEinstellungen._();
+
+  static final CommunityFilterEinstellungen instance =
+      CommunityFilterEinstellungen._();
+
+  /// Nur für den Test: eine eigene, vom Singleton unabhängige Wahl.
+  @visibleForTesting
+  factory CommunityFilterEinstellungen.fuerTests() =>
+      CommunityFilterEinstellungen._();
+
+  static const String prefsBasisFahrzeugart = 'community_filter_fahrzeugart_v1';
+  static const String prefsBasisRegion = 'community_filter_region_v1';
+  static const String prefsBasisSortierung = 'community_filter_sortierung_v1';
+
+  bool _geladen = false;
+  CommunityFahrzeugart _fahrzeugart = CommunityFahrzeugart.alle;
+  String? _regionCode;
+  CommunitySortierung _sortierung = CommunitySortierung.aktiv;
+
+  bool get geladen => _geladen;
+  CommunityFahrzeugart get fahrzeugart => _fahrzeugart;
+  String? get regionCode => _regionCode;
+  CommunitySortierung get sortierung => _sortierung;
+
+  /// `true`, sobald ein Regler etwas WEGFILTERT.
+  ///
+  /// Die Sortierung zählt bewusst nicht dazu: sie ordnet um, sie blendet
+  /// nichts aus. Ein leeres Ergebnis kann sie nie erklären — und genau diese
+  /// Frage entscheidet, welcher Satz bei einer leeren Liste dasteht.
+  bool get filtertEtwasWeg =>
+      _fahrzeugart != CommunityFahrzeugart.alle ||
+      (_regionCode != null && _regionCode!.isNotEmpty);
+
+  Future<void> laden() async {
+    if (_geladen) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _fahrzeugart = CommunityFahrzeugart.ausWert(
+        prefs.getString(NutzerPrefsSchluessel.fuer(prefsBasisFahrzeugart)),
+      );
+      final region = prefs.getString(
+        NutzerPrefsSchluessel.fuer(prefsBasisRegion),
+      );
+      _regionCode = (region == null || region.isEmpty) ? null : region;
+      _sortierung = CommunitySortierung.ausWert(
+        prefs.getString(NutzerPrefsSchluessel.fuer(prefsBasisSortierung)),
+      );
+    } catch (e) {
+      debugPrint('[CommunityFilter] Wahl lesen: $e');
+    }
+    _geladen = true;
+    notifyListeners();
+  }
+
+  Future<void> setzeFahrzeugart(CommunityFahrzeugart art) async {
+    if (_fahrzeugart == art) return;
+    _fahrzeugart = art;
+    notifyListeners();
+    await _merke(prefsBasisFahrzeugart, art.wert);
+  }
+
+  /// `null` = alle Regionen.
+  Future<void> setzeRegion(String? code) async {
+    final sauber = (code == null || code.trim().isEmpty) ? null : code.trim();
+    if (_regionCode == sauber) return;
+    _regionCode = sauber;
+    notifyListeners();
+    await _merke(prefsBasisRegion, sauber ?? '');
+  }
+
+  Future<void> setzeSortierung(CommunitySortierung art) async {
+    if (_sortierung == art) return;
+    _sortierung = art;
+    notifyListeners();
+    await _merke(prefsBasisSortierung, art.wert);
+  }
+
+  /// Ein Tipp, und man sieht wieder alles. Die Sortierung bleibt dabei stehen:
+  /// sie hat nichts ausgeblendet, sie zurückzusetzen wäre eine Überraschung.
+  Future<void> zuruecksetzen() async {
+    if (!filtertEtwasWeg) return;
+    _fahrzeugart = CommunityFahrzeugart.alle;
+    _regionCode = null;
+    notifyListeners();
+    await _merke(prefsBasisFahrzeugart, CommunityFahrzeugart.alle.wert);
+    await _merke(prefsBasisRegion, '');
+  }
+
+  /// Nur für den Test.
+  @visibleForTesting
+  void setzeDirektFuerTests({
+    CommunityFahrzeugart? fahrzeugart,
+    String? regionCode,
+    bool regionLeeren = false,
+    CommunitySortierung? sortierung,
+  }) {
+    if (fahrzeugart != null) _fahrzeugart = fahrzeugart;
+    if (regionLeeren) {
+      _regionCode = null;
+    } else if (regionCode != null) {
+      _regionCode = regionCode;
+    }
+    if (sortierung != null) _sortierung = sortierung;
+    _geladen = true;
+    notifyListeners();
+  }
+
+  Future<void> _merke(String basis, String wert) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(NutzerPrefsSchluessel.fuer(basis), wert);
+    } catch (e) {
+      debugPrint('[CommunityFilter] Wahl merken: $e');
+    }
   }
 }

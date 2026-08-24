@@ -37,6 +37,10 @@ interface NotificationRecord {
   reference_id?: string | null;
   payload?: Record<string, unknown> | null;
   aggregate_count?: number | null;
+  // 2026-08-24: Der Trigger schickt die komplette notifications-Zeile, also
+  // auch created_at. Der Wetter-Text waehlt darueber seine Tagesvariante —
+  // so trifft der Push denselben Eintrag wie die App.
+  created_at?: string | null;
 }
 
 // ── FCM HTTP v1 Auth (Service-Account → OAuth2 Access-Token) ────────────────
@@ -148,6 +152,156 @@ async function sendToToken(
   return { ok: false, remove };
 }
 
+// ── Wetter-Meldung: Wortlaut ───────────────────────────────────────────────
+//
+// 2026-08-24 (vucko, Auftrag „Nachmittags-Meldung"): Der Titel stand hier
+// fest verdrahtet („Bestes Cruise-Wetter") — jeden Tag derselbe Satz auf dem
+// Sperrbildschirm, und darunter zeigte die App einen anderen Text.
+//
+// Diese Tabelle ist die ZEICHENGLEICHE Kopie von WetterPushTexte in
+// lib/data/services/notification_service.dart. Wer hier etwas aendert,
+// aendert es dort mit; test/services/wetter_push_texte_test.dart vergleicht
+// beide Dateien und schlaegt sonst fehl.
+
+const WETTER_MILD: string[][] = [
+  ['Bestes Wetter für Kurven', '{temp}° und die Landstraße ist leer. Hol dir eine Route'],
+  ['Der Nachmittag gehört dir', '{temp}° draußen. Such dir eine kurvige Runde und fahr los'],
+  ['Feierabendrunde?', '{temp}°, eine Stunde Kurven und du bist rechtzeitig zurück'],
+  ['Perfekte Fahrtemperatur', '{temp}° sind genau richtig. Motor an und ab in die Berge'],
+  ['Jetzt lohnt sich der Weg', '{temp}° draußen. Wir bauen dir eine Strecke voller Kurven'],
+  ['Kurvenwetter', '{temp}° und kaum Wind. Deine Runde wartet in der App'],
+  ['Zeit für frische Luft', '{temp}°, Fenster runter und raus auf die Landstraße'],
+  ['Deine Strecke steht bereit', '{temp}° draußen. Sag uns wie weit, wir bauen die Kurven'],
+  ['Nachmittag mit {temp}°', 'Die Straßen sind frei. Zwei Klicks und deine Runde steht'],
+  ['{temp}° und die Straße ruft', 'Zwei Stunden Kurven, dann bist du zurück. Route in der App'],
+  ['Guter Tag zum Cruisen', '{temp}° draußen. Wähle deine Länge, den Rest machen wir'],
+  ['Raus aus dem Alltag', '{temp}°, eine kurze Runde reicht schon zum Abschalten'],
+  ['Die Berge sind nah', '{temp}° draußen. Deine Passstraße ist zwei Klicks entfernt'],
+  ['Kurven statt Couch', '{temp}°, hol dir eine Route und leg einfach los'],
+  ['Der Sprit ist es wert', '{temp}° draußen. Eine Runde durch die Hügel und der Tag zählt'],
+  ['Sonnenuntergang mitnehmen', '{temp}° jetzt. In zwei Stunden steht die Sonne genau richtig'],
+  ['Straßen frei bei {temp}°', 'Such dir eine Runde in der App und fahr sie noch heute'],
+  ['Heute lohnt der Umweg', '{temp}° draußen. Die kurvige Strecke dauert kaum länger'],
+  ['Zeit für eine Ausfahrt', '{temp}°, eine Runde durchs Grüne und der Tag ist gerettet'],
+  ['Der Asphalt ist warm', '{temp}° draußen. Beste Bedingungen für eine ruhige Runde'],
+  ['Noch ist es hell', '{temp}° draußen. Für eine Runde reicht das Licht locker'],
+  ['Deine Kurven für heute', '{temp}°, sag uns die Länge und wir legen die Strecke'],
+  ['Cruisen bei {temp}°', 'Allein losfahren oder dich einer Gruppe anschließen'],
+  ['Wetterfenster offen', '{temp}° draußen. Die nächsten Stunden gehören der Straße'],
+  ['Kurze Runde gefällig?', '{temp}°, dreißig Kilometer und du bist wieder daheim'],
+  ['Heute nicht die Autobahn', '{temp}° draußen. Die kurvige Strecke kostet kaum mehr Zeit'],
+  ['Beste Zeit am Tag', '{temp}° und am späten Nachmittag ist am wenigsten los'],
+  ['Kurvenjagd am Nachmittag', '{temp}° draußen. Wir bauen dir die kurvigste Runde der Gegend'],
+  ['Fahr eine Runde für dich', '{temp}°, ohne Ziel, nur wegen der Strecke'],
+  ['Handy weg, Lenkrad her', '{temp}° draußen. Zwei Stunden nur du und die Straße'],
+  ['Der Tag hat noch Luft', '{temp}°, eine Runde geht sich vor dem Abendessen aus'],
+  ['Passstraßen bei {temp}°', 'Hol dir die Route in die App und fahr sie heute noch'],
+];
+
+const WETTER_WARM: string[][] = [
+  ['Warme {temp}° draußen', 'Fahr in die Höhe, oben ist es angenehmer. Route in der App'],
+  ['Hitze mag Höhe', '{temp}° im Tal. Such dir eine Bergstrecke, oben ist es kühler'],
+  ['Abends wird es angenehm', '{temp}° jetzt. Plane deine Runde für die Zeit nach sechs'],
+  ['{temp}° und freie Bahn', 'Schattige Waldstraßen findest du in der App'],
+  ['Sommerabend nutzen', '{temp}° draußen. Die schönste Zeit für eine Runde kommt erst'],
+  ['Cabrio oder Helm?', '{temp}° draußen. Beides geht heute, such dir die Strecke aus'],
+  ['Heiß, aber fahrbar', '{temp}° im Schatten. Nimm Wasser mit und fahr eine ruhige Runde'],
+  ['{temp}° am Nachmittag', 'Der See ist nicht weit. Wir bauen dir die kurvige Anfahrt'],
+  ['Ab in die Berge', '{temp}° unten, oben deutlich frischer. Deine Route wartet hier'],
+  ['Warme Straßen, guter Grip', '{temp}° draußen. Beste Bedingungen für eine entspannte Runde'],
+  ['Sonne satt bei {temp}°', 'Such dir eine Runde durch den Wald und bleib im Schatten'],
+  ['Der Tag ist noch lang', '{temp}° draußen. Bis zum Sonnenuntergang gehen zwei Stunden'],
+  ['Trinken nicht vergessen', '{temp}° draußen. Dann steht der Ausfahrt nichts im Weg'],
+  ['{temp}° und Fernsicht', 'Perfekt für eine Passstraße mit Aussicht. Route in der App'],
+  ['Sommerrunde planen', '{temp}° jetzt. Wähle die Länge, wir suchen die Schattenseiten'],
+  ['Raus, solange es hell ist', '{temp}° draußen. Eine kurze Runde geht immer'],
+];
+
+const WETTER_KUEHL: string[][] = [
+  ['{temp}° und klare Sicht', 'Jacke an, Straßen sind frei. Deine Runde wartet in der App'],
+  ['Kühl, aber fahrbar', '{temp}° draußen. Mit der richtigen Jacke ein guter Tag zum Fahren'],
+  ['Frische Luft, freie Straßen', '{temp}° draußen. Um diese Zeit ist kaum jemand unterwegs'],
+  ['Kurven ohne Sommerverkehr', '{temp}°, jetzt gehören die Bergstraßen dir allein'],
+  ['Jetzt oder morgen früh', 'Warm anziehen, {temp}° und eine kurze Runde lohnen sich'],
+  ['Die Sicht ist heute weit', '{temp}° draußen. Bei kühler Luft siehst du bis zum Horizont'],
+  ['Kurze Runde reicht', '{temp}° draußen. Vierzig Kilometer und du bist wieder im Warmen'],
+  ['Sitzheizung und Kurven', '{temp}° draußen. Genau dafür wurde sie eingebaut'],
+  ['Vorsicht in den Kurven', '{temp}° draußen. Kalter Asphalt braucht etwas mehr Gefühl'],
+  ['{temp}° und trotzdem Zeit', 'Für eine kurze Ausfahrt reicht der Nachmittag locker'],
+  ['Leere Straßen im Herbst', '{temp}° draußen. Die schönen Strecken hast du fast für dich'],
+  ['Der Motor will warm werden', '{temp}° draußen. Fahr eine Runde, bevor es dunkel wird'],
+  ['Noch zwei Stunden hell', '{temp}° draußen. Das reicht für eine Runde über Land'],
+  ['Handschuhe und Kurven', '{temp}° draußen. Route holen und die Kurven mitnehmen'],
+  ['Kein Regen gemeldet', '{temp}° draußen. Das Fenster für eine Runde steht offen'],
+  ['Fahren geht immer', '{temp}° draußen. Kurz raus, dann schmeckt der Kaffee besser'],
+];
+
+const WETTER_OHNE_WERT: string[][] = [
+  ['Zeit für eine Runde', 'Die Bedingungen passen heute. Such dir eine kurvige Strecke'],
+  ['Der Nachmittag ist frei', 'Gutes Wetter, freie Straßen. Deine Route wartet in der App'],
+  ['Kurven warten auf dich', 'Sag uns wie weit du willst, wir bauen die Strecke'],
+  ['Feierabend, Motor an', 'Eine Stunde Kurven und du bist rechtzeitig zurück'],
+  ['Heute passt es', 'Wetter gut, Straßen frei. Fahr eine Runde für dich'],
+  ['Ab nach draußen', 'Eine kurze Runde reicht schon zum Abschalten'],
+  ['Route steht bereit', 'Zwei Klicks in der App und du fährst los'],
+  ['Kurven statt Sofa', 'Wähle deine Länge, den Rest übernehmen wir'],
+  ['Ruhige Zeit auf der Straße', 'Am späten Nachmittag ist am wenigsten los'],
+  ['Fahr die schöne Strecke', 'Die kurvige Route dauert kaum länger als die Autobahn'],
+  ['Noch reicht das Licht', 'Für eine Runde über Land ist genug Tag übrig'],
+  ['Der Tag ist nicht vorbei', 'Eine Runde geht sich vor dem Abendessen aus'],
+];
+
+// Spiegel von WetterPushTexte.streuwert.
+function wetterStreuwert(text: string): number {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = (h * 31 + text.charCodeAt(i)) % 1000003;
+  }
+  return h;
+}
+
+// Spiegel von WetterPushTexte.tagesnummer.
+function wetterTagesnummer(erstelltAm: string | null | undefined): number {
+  const ms = erstelltAm ? Date.parse(erstelltAm) : Number.NaN;
+  return Math.floor((Number.isNaN(ms) ? Date.now() : ms) / 86400000);
+}
+
+// Spiegel von WetterPushTexte.poolFuer — Bandgrenzen zeichengleich.
+function wetterPool(temperaturC: number | null): string[][] {
+  if (temperaturC === null) return WETTER_OHNE_WERT;
+  if (temperaturC >= 27) return WETTER_WARM;
+  if (temperaturC < 13) return WETTER_KUEHL;
+  return WETTER_MILD;
+}
+
+// Spiegel von WetterPushTexte.temperaturText. Math.round rundet die halbe
+// negative Zahl anders als Dart (-2.5 → -2 statt -3), deshalb ueber den
+// Betrag runden. Minusgrade werden ausgeschrieben, weil ein Minuszeichen
+// auf dem Bildschirm ein Strich waere.
+function wetterTemperaturText(temperaturC: number): string {
+  const gerundet =
+    temperaturC < 0 ? -Math.round(-temperaturC) : Math.round(temperaturC);
+  return gerundet < 0 ? `minus ${-gerundet}` : String(gerundet);
+}
+
+// Spiegel von WetterPushTexte.fuer.
+function wetterTexte(
+  userId: string,
+  erstelltAm: string | null | undefined,
+  temperaturC: number | null,
+): { title: string; body: string } {
+  const pool = wetterPool(temperaturC);
+  const index =
+    (wetterTagesnummer(erstelltAm) + wetterStreuwert(userId)) % pool.length;
+  const paar = pool[index];
+  if (temperaturC === null) return { title: paar[0], body: paar[1] };
+  const grad = wetterTemperaturText(temperaturC);
+  return {
+    title: paar[0].split('{temp}').join(grad),
+    body: paar[1].split('{temp}').join(grad),
+  };
+}
+
 // ── Text-Rendering (Spiegel von NotificationService.renderTexts) ────────────
 
 function renderPush(
@@ -198,15 +352,11 @@ function renderPush(
       return { title: 'Repost', body: `${name} hat deinen Post geteilt` };
     case 'weather_recommendation': {
       const t = payload.temperature_c;
-      const temp = typeof t === 'number' ? Math.round(t) : null;
-      const cond = (payload.condition as string) ?? 'gut';
-      return {
-        title: 'Bestes Cruise-Wetter',
-        body:
-          temp != null
-            ? `${temp}° und ${cond} — Zeit für eine Runde`
-            : 'Heute ist es ideal für eine Tour',
-      };
+      return wetterTexte(
+        record.user_id,
+        record.created_at,
+        typeof t === 'number' ? t : null,
+      );
     }
     case 'trip_reminder':
       return {

@@ -10,6 +10,7 @@ import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/community/community_filter_leiste.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_vorschau_blatt.dart';
 
 class CommunityChatsTab extends StatefulWidget {
@@ -27,8 +28,27 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   List<Map<String, dynamic>> _discoverCommunities = [];
   Map<String, dynamic>? _codeSearchResult;
 
+  /// 2026-08-24 (Auftrag Vucko, Aufgabe 2): die Filterwahl. Sie überlebt den
+  /// App-Neustart, deshalb liegt sie im Dienst und nicht in diesem State.
+  final _filter = CommunityFilterEinstellungen.instance;
+
+  /// Die Auswahlliste der Regionen. Leer, solange sie noch nicht da ist —
+  /// dann steht im Blatt nur „Alle Regionen".
+  List<CommunityRegion> _regionen = const <CommunityRegion>[];
+
+  /// Der Suchtext, wie er zuletzt an die Datenbank gegangen ist.
+  String _suchtext = '';
+
+  /// Entprellt das Tippen im Suchfeld. Ohne das ginge bei „Vorarlberg" eine
+  /// Abfrage je Buchstabe raus.
+  Timer? _sucheTimer;
+
+  static const Duration _sucheVerzoegerung = Duration(milliseconds: 350);
+
   @override
   void dispose() {
+    _sucheTimer?.cancel();
+    _filter.removeListener(_filterGeaendert);
     _codeSearchController.dispose();
     super.dispose();
   }
@@ -36,14 +56,62 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _filter.addListener(_filterGeaendert);
+    _starten();
   }
 
+  /// Erst die gemerkte Filterwahl, dann die Liste. In dieser Reihenfolge,
+  /// sonst zeigt der erste Aufbau ungefiltert alles und schiebt eine
+  /// Zehntelsekunde später um.
+  Future<void> _starten() async {
+    await _filter.laden();
+    if (!mounted) return;
+    unawaited(_regionenLaden());
+    await _load();
+  }
+
+  Future<void> _regionenLaden() async {
+    final regionen = await CommunityChatService.regionenLaden();
+    if (!mounted || regionen.isEmpty) return;
+    setState(() => _regionen = regionen);
+  }
+
+  /// Der Filter hat sich geändert: sofort neu laden. Die Wahl selbst ist im
+  /// selben Augenblick schon sichtbar, weil der Dienst ein ChangeNotifier ist.
+  void _filterGeaendert() {
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_load());
+  }
+
+  /// Lädt beide Listen.
+  ///
+  /// FAHRZEUGART UND REGION GEHEN NUR IN DIE ÖFFENTLICHE LISTE. Vucko:
+  /// „einen filter haben bei oeffentliche communitys". Würden sie auch für
+  /// „Meine Communities" gelten, verschwänden dem Nutzer seine eigenen
+  /// Communities, sobald er nach Motorrad filtert — das wäre kein Filter,
+  /// das wäre ein Verlust.
+  ///
+  /// Die SUCHE gilt für beide: wer einen Namen tippt, sucht die Community und
+  /// nicht die Liste, in der sie zufällig steht.
+  ///
+  /// Die Sortierwahl gilt ebenfalls nur für die öffentliche Liste. „Meine
+  /// Communities" steht fest auf „Aktiv" — das ist die Reihenfolge, die jeder
+  /// Messenger benutzt, und Angepinntes steht ohnehin darüber.
   Future<void> _load() async {
     try {
       final results = await Future.wait([
-        CommunityChatService.getMyCommunities(),
-        CommunityChatService.getDiscoverCommunities(),
+        CommunityChatService.communitiesLaden(
+          bereich: CommunityListe.meine,
+          suche: _suchtext,
+        ),
+        CommunityChatService.communitiesLaden(
+          bereich: CommunityListe.entdecken,
+          fahrzeugart: _filter.fahrzeugart,
+          regionCode: _filter.regionCode,
+          suche: _suchtext,
+          sortierung: _filter.sortierung,
+        ),
       ]);
       if (!mounted) return;
       setState(() {
@@ -201,6 +269,108 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       _codeSearchResult = result;
       _codeSearchLoading = false;
     });
+  }
+
+  /// 2026-08-24 (Auftrag Vucko, Aufgabe 2): Das Feld kann jetzt ZWEIERLEI.
+  ///
+  /// Gemessen vorher: `onChanged` rief nur [_lookupCommunityCode], und
+  /// [CommunityChatService.normalizeInviteCode] liefert für alles, was nicht
+  /// wie `CCC-XXXXXX` aussieht, `null`. Wer „Opel" tippte, löste also
+  /// buchstäblich nichts aus — das Feld sah aus wie eine Suche und war keine.
+  ///
+  /// Jetzt geht der Text ZUSÄTZLICH als `p_suche` an
+  /// `get_communities_gefiltert` (Name und Beschreibung, groß-/klein egal).
+  /// Der Code-Weg bleibt unangetastet daneben stehen.
+  ///
+  /// Entprellt, weil sonst je Buchstabe zwei Abfragen rausgingen.
+  void _sucheGeaendert(String roh) {
+    _lookupCommunityCode(roh);
+    _sucheTimer?.cancel();
+    _sucheTimer = Timer(_sucheVerzoegerung, () {
+      final text = roh.trim();
+      if (!mounted || text == _suchtext) return;
+      _suchtext = text;
+      unawaited(_load());
+    });
+  }
+
+  /// 2026-08-24 (Auftrag Vucko, Aufgabe 1): „man soll auch community anpinnen
+  /// koennen".
+  ///
+  /// WARUM DER EINTRAG IM DREI-PUNKTE-MENÜ und nicht langer Druck oder
+  /// Wischen: Dieses Menü ([_buildCommunityMenu]) ist in dieser App die
+  /// Stelle, an der Kachel-Aktionen stehen — Mitglieder, Einstellungen,
+  /// Verlassen, Löschen. Ein langer Druck ist im Community-Chat schon
+  /// besetzt (Emoji-Reaktionen), und eine Wischgeste gibt es in der ganzen
+  /// App an keiner einzigen Liste. Eine neue Geste einzuführen hiesse, sie
+  /// erklären zu müssen; ein siebter Menüeintrag erklärt sich selbst.
+  ///
+  /// RÜCKMELDUNG (Optimistic-UI-Grundsatz dieses Projekts): Die Kachel
+  /// bekommt die Nadel und springt SOFORT nach oben, bevor der Server
+  /// geantwortet hat. Geht es schief, rutscht sie zurück und es steht da,
+  /// warum. Die 10er-Grenze der Datenbank ist genau so ein Fall.
+  Future<void> _pinUmschalten(Map<String, dynamic> community) async {
+    final id = community['id']?.toString();
+    if (id == null || id.isEmpty) return;
+
+    final warAngepinnt = CommunityChatService.istAngepinnt(community);
+    final alterPlatz = CommunityChatService.pinPosition(community);
+
+    setState(() {
+      CommunityChatService.setzePinInZeile(
+        community,
+        angepinnt: !warAngepinnt,
+        // Ans Ende der Pins — genau das macht `community_pin_setzen` auch.
+        position: _naechsterPinPlatz(),
+      );
+      CommunityChatService.sortiereMitPinsZuerst(_myCommunities);
+      CommunityChatService.sortiereMitPinsZuerst(_discoverCommunities);
+    });
+    _showMessage(
+      warAngepinnt ? 'Nicht mehr angepinnt.' : 'Oben angepinnt.',
+    );
+
+    try {
+      final platz = await CommunityChatService.pinSetzen(
+        communityId: id,
+        angepinnt: !warAngepinnt,
+      );
+      if (!mounted) return;
+      setState(() {
+        CommunityChatService.setzePinInZeile(
+          community,
+          angepinnt: !warAngepinnt,
+          position: platz,
+        );
+        CommunityChatService.sortiereMitPinsZuerst(_myCommunities);
+        CommunityChatService.sortiereMitPinsZuerst(_discoverCommunities);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        CommunityChatService.setzePinInZeile(
+          community,
+          angepinnt: warAngepinnt,
+          position: alterPlatz,
+        );
+        CommunityChatService.sortiereMitPinsZuerst(_myCommunities);
+        CommunityChatService.sortiereMitPinsZuerst(_discoverCommunities);
+      });
+      _showError(e);
+    }
+  }
+
+  /// Der nächste freie Platz, nur für die sofortige Anzeige. Die Wahrheit
+  /// vergibt die Datenbank.
+  int _naechsterPinPlatz() {
+    var hoechster = 0;
+    for (final liste in [_myCommunities, _discoverCommunities]) {
+      for (final zeile in liste) {
+        final platz = CommunityChatService.pinPosition(zeile);
+        if (platz != null && platz > hoechster) hoechster = platz;
+      }
+    }
+    return hoechster + 1;
   }
 
   /// 2026-08-23 (Entscheidung Vucko, bindend): Ein alter, schon geteilter
@@ -435,10 +605,19 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           _buildSectionHeader('Meine Communities', _myCommunities.length),
           const SizedBox(height: 10),
           if (_myCommunities.isEmpty)
+            // 2026-08-24: Die Suche gilt auch für diese Liste. Ohne die
+            // Fallunterscheidung stünde hier „Noch keine Community", während
+            // der Nutzer nur einen Namen getippt hat, den keine seiner
+            // Communities trägt — die falscheste Auskunft, die diese Kachel
+            // geben kann.
             _buildEmptyState(
-              icon: Icons.forum_outlined,
-              title: 'Noch keine Community',
-              text: 'Erstelle eine Community oder tritt mit einem Code bei.',
+              icon: _suchtext.isEmpty ? Icons.forum_outlined : Icons.search_off,
+              title: _suchtext.isEmpty
+                  ? 'Noch keine Community'
+                  : 'Keine deiner Communities heißt so',
+              text: _suchtext.isEmpty
+                  ? 'Erstelle eine Community oder tritt mit einem Code bei.'
+                  : 'Lösch die Suche, dann siehst du wieder alle.',
             )
           else
             ..._myCommunities.map(
@@ -454,12 +633,21 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
             _discoverCommunities.length,
           ),
           const SizedBox(height: 10),
+          // 2026-08-24 (Auftrag Vucko, Aufgabe 2): der Filter. Er steht UNTER
+          // der Überschrift „Öffentliche Communities" und nicht oben bei der
+          // Suche — dort würde er aussehen, als gälte er auch für „Meine
+          // Communities", und genau das tut er nicht.
+          CommunityFilterLeiste(
+            einstellungen: _filter,
+            regionen: _regionen,
+            onFahrzeugart: _filter.setzeFahrzeugart,
+            onRegion: _filter.setzeRegion,
+            onSortierung: _filter.setzeSortierung,
+            onZuruecksetzen: _filter.zuruecksetzen,
+          ),
+          const SizedBox(height: 12),
           if (_discoverCommunities.isEmpty)
-            _buildEmptyState(
-              icon: Icons.travel_explore,
-              title: 'Nichts Neues gefunden',
-              text: 'Öffentliche Communities tauchen hier im Entdecken auf.',
-            )
+            _buildEntdeckenLeer()
           else
             ..._discoverCommunities.map(
               (community) => _buildCommunityCard(
@@ -471,6 +659,79 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
         ],
       ),
     );
+  }
+
+  /// 2026-08-24 (Auftrag Vucko, Aufgabe 2, wörtlich): „sorg dafuer, dass ein
+  /// leeres Ergebnis erklaert wird […] statt einfach leer zu sein, und dass
+  /// man mit einem Tipp wieder alles sieht."
+  ///
+  /// Das ist hier kein Randfall, sondern der wahrscheinlichste Ausgang:
+  /// gemessen am 24.08.2026 gibt es SECHS Communities. Ein Filter auf
+  /// „Motorrad" in „Tirol" trifft mit hoher Wahrscheinlichkeit keine einzige.
+  Widget _buildEntdeckenLeer() {
+    final erklaerung = communityFilterLeerText(
+      filtertEtwasWeg: _filter.filtertEtwasWeg,
+      sucheAktiv: _suchtext.isNotEmpty,
+    );
+    if (erklaerung == null) {
+      // Wirklich nichts da — kein Filter, keine Suche.
+      return _buildEmptyState(
+        icon: Icons.travel_explore,
+        title: 'Nichts Neues gefunden',
+        text: 'Öffentliche Communities tauchen hier im Entdecken auf.',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildEmptyState(
+          icon: Icons.filter_alt_off_outlined,
+          title: erklaerung,
+          text: _filter.filtertEtwasWeg
+              ? 'Nimm den Filter raus, dann siehst du wieder alle.'
+              : 'Lösch die Suche, dann siehst du wieder alle.',
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _alleWiederAnzeigen,
+            icon: Icon(
+              Icons.refresh,
+              color: AppAccentColors.accent,
+              size: 17,
+            ),
+            label: const Text('Alle Communities anzeigen'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppAccentColors.accent,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Ein Tipp, und alles ist wieder da: Filter zurück auf „Alle", Suchfeld
+  /// leer. Beides zusammen, weil der Nutzer nicht raten soll, welches von
+  /// beidem gerade zugeschlagen hat.
+  Future<void> _alleWiederAnzeigen() async {
+    // VORHER merken: nach dem Zuruecksetzen ist `filtertEtwasWeg` immer
+    // false, und die Frage waere nicht mehr zu beantworten. Ohne das laedt
+    // die Seite zweimal — einmal ueber den Melder des Filters, einmal von
+    // hier.
+    final filterWarAktiv = _filter.filtertEtwasWeg;
+    _sucheTimer?.cancel();
+    _codeSearchController.clear();
+    setState(() {
+      _suchtext = '';
+      _codeSearchResult = null;
+    });
+    await _filter.zuruecksetzen();
+    // zuruecksetzen() meldet nur, wenn wirklich ein Filter gesetzt war — und
+    // erst dieser Melder laedt neu. War nur die Suche im Weg, muss das
+    // Neuladen von hier kommen.
+    if (!filterWarAktiv) await _load();
   }
 
   Widget _buildInlineCodeSearch() {
@@ -489,7 +750,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
             textCapitalization: TextCapitalization.characters,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: 'Community-Code suchen (CCC-XXXXXX)',
+              hintText: 'Community suchen — Name oder Code',
               hintStyle: const TextStyle(color: Colors.grey),
               counterText: '',
               prefixIcon: const Icon(Icons.search, color: Colors.grey),
@@ -515,7 +776,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
-            onChanged: (value) => _lookupCommunityCode(value),
+            onChanged: _sucheGeaendert,
             onSubmitted: (value) {
               _joinCommunityWithCode(value);
             },
@@ -668,6 +929,15 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     final description = (community['description'] as String?)?.trim();
     final role = CommunityChatService.currentUserRole(community);
     final istNeu = CommunityChatService.istVorKurzemErstellt(community);
+    final angepinnt = CommunityChatService.istAngepinnt(community);
+    // 2026-08-24 (Aufgabe 2/3): Fahrzeugart und Region an der Kachel.
+    // „Alle" bekommt bewusst KEIN Etikett — es ist der Standardwert der
+    // Spalte, es steht also an JEDER der sechs Bestands-Communities, und ein
+    // Etikett, das überall klebt, unterscheidet nichts.
+    final fahrzeugartText = CommunityChatService.fahrzeugartVon(
+      community,
+    ).kachelText;
+    final regionText = CommunityChatService.regionName(community);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -755,6 +1025,18 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                     ],
                   ),
                 ),
+                // 2026-08-24 (Aufgabe 1): die Nadel. Sie ist die Rückmeldung
+                // auf den Menüeintrag und sitzt links neben der
+                // Sichtbarkeits-Plakette, also dort, wo das Auge nach dem
+                // Namen ohnehin hinwandert.
+                if (angepinnt) ...[
+                  Icon(
+                    Icons.push_pin,
+                    size: 15,
+                    color: AppAccentColors.accent,
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 _buildVisibilityPill(isPublic),
                 if (joined) ...[
                   const SizedBox(width: 4),
@@ -773,6 +1055,25 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                   fontSize: 13,
                   height: 1.35,
                 ),
+              ),
+            ],
+            if (fahrzeugartText != null || regionText != null) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (fahrzeugartText != null)
+                    _buildMerkmal(
+                      CommunityChatService.fahrzeugartVon(community) ==
+                              CommunityFahrzeugart.motorrad
+                          ? Icons.two_wheeler
+                          : Icons.directions_car_filled,
+                      fahrzeugartText,
+                    ),
+                  if (regionText != null)
+                    _buildMerkmal(Icons.place_outlined, regionText),
+                ],
               ),
             ],
             const SizedBox(height: 13),
@@ -887,13 +1188,45 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     );
   }
 
+  /// Ein ruhiges Etikett für Fahrzeugart und Region. Bewusst dieselbe
+  /// Zurückhaltung wie [_buildNeuLabel]: der Akzent gehört in dieser Kachel
+  /// dem Knopf „Chat"/„Ansehen" und der Nadel.
+  Widget _buildMerkmal(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: Colors.grey[500]),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCommunityMenu(Map<String, dynamic> community, String? role) {
     final isAdmin = role == 'owner';
+    final angepinnt = CommunityChatService.istAngepinnt(community);
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_horiz, color: Colors.white70),
       color: const Color(0xFF1C1F26),
       onSelected: (value) {
-        if (value == 'members') {
+        if (value == 'pin') {
+          _pinUmschalten(community);
+        } else if (value == 'members') {
           _showMembers(community);
         } else if (value == 'leave') {
           _confirmLeaveCommunity(community);
@@ -904,6 +1237,29 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
         }
       },
       itemBuilder: (_) => [
+        // 2026-08-24 (Auftrag Vucko, Aufgabe 1): „man soll auch communitys
+        // anpinnen koennen". Der Eintrag steht GANZ OBEN, weil er der
+        // einzige im Menue ist, den man oefter als einmal benutzt.
+        PopupMenuItem(
+          value: 'pin',
+          child: Row(
+            children: [
+              Icon(
+                angepinnt
+                    ? Icons.push_pin_outlined
+                    : Icons.push_pin,
+                color: angepinnt ? Colors.white70 : AppAccentColors.accent,
+                size: 18,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                angepinnt ? 'Nicht mehr anpinnen' : 'Anpinnen',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
         // 2026-08-23 (Auftrag Vucko): zweiter Zugang zu den Einstellungen.
         // Vorher gab es hier nur Mitglieder, Verlassen und Loeschen, und
         // Schreibmodus und Sichtbarkeit lagen versteckt im Menue INNERHALB
@@ -986,6 +1342,18 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     var isPublic = false;
     var ownerOnlyMessages = false;
     var saving = false;
+    // 2026-08-24 (Auftrag Vucko, Aufgabe 3): „obs fuer autofahrer
+    // motorradfahrer in welcher region".
+    //
+    // VORGABEN, begründet: „Für alle" und „Keine Angabe". Beides ist genau
+    // das, was die Datenbank ohnehin setzt (`fahrzeugart` default `both`,
+    // `region_code` NULL), und beides heisst „fällt aus keinem Filter
+    // heraus". Ein Pflichtfeld wäre hier eine Hürde vor dem eigentlichen
+    // Zweck — und eine erzwungene Wahl liefert falsche Angaben, weil jemand
+    // irgendetwas antippt, um weiterzukommen. Ändern kann der Admin es
+    // später in den Einstellungen.
+    var fahrzeugart = CommunityFahrzeugart.alle;
+    String? regionCode;
 
     showModalBottomSheet<void>(
       context: context,
@@ -1006,6 +1374,8 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                   description: descCtrl.text,
                   isPublic: isPublic,
                   ownerOnlyMessages: ownerOnlyMessages,
+                  fahrzeugart: fahrzeugart,
+                  regionCode: regionCode,
                 );
                 if (!sheetContext.mounted) return;
                 Navigator.pop(sheetContext);
@@ -1020,7 +1390,10 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               }
             }
 
-            return Padding(
+            // 2026-08-24: scrollbar. Das Blatt hat mit Fahrzeugart und Region
+            // zwei Blöcke mehr; auf einem kleinen Gerät mit offener Tastatur
+            // liefe es sonst über.
+            return SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
                 18,
                 18,
@@ -1074,6 +1447,21 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 16),
+                  _buildFeldUeberschrift('Für wen ist die Community?'),
+                  const SizedBox(height: 8),
+                  CommunityFahrzeugartChips(
+                    gewaehlt: fahrzeugart,
+                    alleBeschriftung: 'Für alle',
+                    onWahl: (wahl) => setSheetState(() => fahrzeugart = wahl),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildFeldUeberschrift('Region (freiwillig)'),
+                  const SizedBox(height: 8),
+                  _buildRegionZeile(
+                    regionCode: regionCode,
+                    onWahl: (code) => setSheetState(() => regionCode = code),
                   ),
                   const SizedBox(height: 12),
                   InkWell(
@@ -1292,6 +1680,94 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           borderSide: BorderSide(color: AppAccentColors.accent),
         ),
       ),
+    );
+  }
+
+  /// Eine kleine Überschrift über einem Wahlblock im Erstellen-Blatt.
+  Widget _buildFeldUeberschrift(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Colors.grey,
+        fontSize: 11.5,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 0.4,
+      ),
+    );
+  }
+
+  /// Die Regionszeile im Erstellen-Blatt.
+  ///
+  /// „Keine Angabe" ist die Vorgabe und steht ausdrücklich als Text da, damit
+  /// niemand denkt, er hätte etwas vergessen. Der Satz darunter sagt, was das
+  /// bedeutet — sonst ist „keine Region" eine Leerstelle statt einer
+  /// Entscheidung.
+  Widget _buildRegionZeile({
+    required String? regionCode,
+    required ValueChanged<String?> onWahl,
+  }) {
+    String text = 'Keine Angabe (überregional)';
+    for (final region in _regionen) {
+      if (region.code == regionCode) text = region.name;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () async {
+            final wahl = await CommunityRegionBlatt.zeigen(
+              context,
+              regionen: _regionen,
+              aktuell: regionCode,
+              titel: 'Region der Community',
+              alleBeschriftung: 'Keine Angabe (überregional)',
+            );
+            if (wahl != null) onWahl(wahl.code);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F121A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: regionCode == null
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : AppAccentColors.accent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.place_outlined,
+                  size: 18,
+                  color: regionCode == null
+                      ? Colors.grey
+                      : AppAccentColors.accent,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: regionCode == null ? Colors.grey : Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.expand_more, color: Colors.grey, size: 20),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Ohne Angabe erscheint deine Community in jedem Regionsfilter.',
+          style: TextStyle(color: Colors.grey, fontSize: 11.5),
+        ),
+      ],
     );
   }
 

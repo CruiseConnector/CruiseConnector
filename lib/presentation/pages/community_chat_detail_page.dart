@@ -13,6 +13,7 @@ import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
+import 'package:cruise_connect/presentation/widgets/community/community_eckdaten_blatt.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_nachrichten_ansicht.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
@@ -1040,6 +1041,52 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     }
   }
 
+  /// 2026-08-24 (Auftrag Vucko): „wenn man in der community oben klickt auf
+  /// den namen wenn man drinnen ist, soll man auch als normaler user in der
+  /// gruppe die eckdaten wie mitglieder usw sehen koennen aber man soll nichts
+  /// aendern koennen das soll gelocked sein".
+  ///
+  /// GEMESSEN vorher: der Name war an beiden Stellen oben ein blosser `Row`
+  /// ohne `onTap`. Ein Mitglied kam an die Eckdaten seiner eigenen Community
+  /// nicht heran — die Einstellungen sind Admin-Sache, die Vorschau von unten
+  /// ist fuer Nichtmitglieder.
+  ///
+  /// Beide Stellen (AppBar-Titel und Kopfzeile darunter) rufen DIESE Methode,
+  /// damit sie nicht auseinanderlaufen. Wohin es geht, entscheidet
+  /// [communityKopfzeileZiel] — der Admin landet mit demselben einen
+  /// Fingertipp direkt in den Einstellungen und nicht erst in einer
+  /// Nur-Lesen-Ansicht.
+  Future<void> _oeffneEckdaten() async {
+    final community = _community;
+    if (community == null) return;
+    switch (communityKopfzeileZiel(rolle: _myRole)) {
+      case CommunityKopfzeileZiel.einstellungen:
+        await _openSettings();
+      case CommunityKopfzeileZiel.eckdaten:
+        await CommunityEckdatenBlatt.zeigen(
+          context,
+          community: community,
+          rolle: _myRole,
+          onMitgliederAnzeigen: _showMembersSheet,
+        );
+    }
+  }
+
+  /// Der Admin sieht am Zahnrad, dass sein Tipp in die Einstellungen fuehrt;
+  /// alle anderen am „i", dass es Angaben zum Nachlesen gibt. Ohne dieses
+  /// Zeichen bleibt eine antippbare Kopfzeile unentdeckt.
+  bool get _kopfzeileFuehrtInEinstellungen =>
+      communityKopfzeileZiel(rolle: _myRole) ==
+      CommunityKopfzeileZiel.einstellungen;
+
+  IconData get _kopfzeileSymbol => _kopfzeileFuehrtInEinstellungen
+      ? Icons.settings_outlined
+      : Icons.info_outline;
+
+  String get _kopfzeileHinweis => _kopfzeileFuehrtInEinstellungen
+      ? 'Community-Einstellungen'
+      : 'Eckdaten dieser Community';
+
   @override
   Widget build(BuildContext context) {
     final community = _community;
@@ -1054,23 +1101,35 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         // 2026-08-23 (Auftrag Vucko „Profilbilder fuer Communities"): erste
         // von genau drei Anzeigestellen. Die anderen beiden sind die Kopfzeile
         // unter der Leiste und die Kachel in der Uebersicht.
-        title: Row(
-          children: [
-            CommunityAvatar.fromCommunity(
-              community,
-              size: 30,
-              borderRadius: 9,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.bold),
+        title: Tooltip(
+          message: _kopfzeileHinweis,
+          child: InkWell(
+            onTap: community == null ? null : _oeffneEckdaten,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+              child: Row(
+                children: [
+                  CommunityAvatar.fromCommunity(
+                    community,
+                    size: 30,
+                    borderRadius: 9,
+                  ),
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(_kopfzeileSymbol, size: 15, color: Colors.white54),
+                ],
               ),
             ),
-          ],
+          ),
         ),
         actions: [
           // 2026-08-24 (Auftrag Vucko „chat art optimieren"): Der Wechsel
@@ -1202,28 +1261,37 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              // 2026-08-23: zweite Anzeigestelle des Community-Bildes.
-              CommunityAvatar.fromCommunity(
-                community,
-                size: 44,
-                borderRadius: 13,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  community['name']?.toString() ?? 'Community',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
+          // 2026-08-24: zweite antippbare Stelle. „Oben auf den Namen" kann
+          // beides meinen — die Leiste oder die Kopfzeile direkt darunter.
+          // Beide fuehren ueber `_oeffneEckdaten` zum selben Ziel.
+          InkWell(
+            onTap: _oeffneEckdaten,
+            borderRadius: BorderRadius.circular(12),
+            child: Row(
+              children: [
+                // 2026-08-23: zweite Anzeigestelle des Community-Bildes.
+                CommunityAvatar.fromCommunity(
+                  community,
+                  size: 44,
+                  borderRadius: 13,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    community['name']?.toString() ?? 'Community',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Icon(_kopfzeileSymbol, size: 17, color: Colors.white38),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           SingleChildScrollView(
