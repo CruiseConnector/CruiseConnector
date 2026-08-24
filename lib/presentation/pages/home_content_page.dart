@@ -93,6 +93,255 @@ class OnboardingAnsichtSchalter<T> {
   }
 }
 
+/// Woher die Anordnung stammt, die die Startseite gerade zeigt.
+enum AnordnungHerkunft {
+  /// Der Geraetestand gewinnt und wandert ins Konto.
+  geraet,
+
+  /// Das Konto gewinnt; sein Stand wird auf dem Geraet nachgezogen.
+  server,
+
+  /// Weder hier noch dort etwas: die Standard-Kacheln.
+  standard,
+
+  /// Kein Abgleich moeglich (kein Netz, nicht angemeldet). Es bleibt bei
+  /// dem, was auf dem Geraet liegt — geloescht wird NICHTS.
+  unbekannt,
+}
+
+/// Das Ergebnis eines Abgleichs zwischen Geraet und Konto.
+class AnordnungAbgleich {
+  const AnordnungAbgleich({required this.herkunft, this.kacheln, this.stand});
+
+  final AnordnungHerkunft herkunft;
+
+  /// Nur bei [AnordnungHerkunft.server] gefuellt: die rohen Kacheln aus dem
+  /// Konto, noch ungeprueft.
+  final List<dynamic>? kacheln;
+
+  /// Der Stand, der ab jetzt auf dem Geraet vermerkt gehoert.
+  final DateTime? stand;
+}
+
+/// Die Kachel-Anordnung der Startseite haengt am KONTO, nicht am Geraet.
+///
+/// 2026-08-24. Vucko hat nachgefragt, was „deine Kachel-Anordnung wandert
+/// nicht aufs neue Handy" heisst. Genau das: `home_dashboard_layout_v1` lag
+/// ausschliesslich in den SharedPreferences. Neues Handy oder Neu-
+/// installation = alles wieder Standard, die eigene Anordnung ersatzlos weg.
+/// (Der Nebenfund vom Vortag — der Schluessel trug keine Nutzerkennung, ein
+/// zweites Konto erbte die Anordnung des ersten — ist eine ANDERE Sache und
+/// steckt in [NutzerPrefsSchluessel]. Beides greift ineinander: erst
+/// kontogebunden, dann kontoweit.)
+///
+/// Seit Migration 20260824140000 stehen die Kacheln auf `profiles`
+/// (`home_layout`, `home_layout_stand`) — dieselbe schlanke Bauweise wie beim
+/// Starter-Paket am 19.08.: keine eigene Tabelle, kein Umbau, ein UPDATE pro
+/// Abgleich.
+///
+/// DIE REIHENFOLGE-REGEL, an der heute Nacht sonst jemand seine Anordnung
+/// verlieren wuerde, steht in [entscheide].
+class StartseitenAnordnung {
+  StartseitenAnordnung._();
+
+  /// Spalten auf `profiles` (Migration 20260824140000).
+  static const String spalteKacheln = 'home_layout';
+  static const String spalteStand = 'home_layout_stand';
+
+  /// Ersetzbar, damit der Test ohne Supabase auskommt.
+  @visibleForTesting
+  static Future<Map<String, dynamic>?> Function()? profilLeserFuerTests;
+
+  /// Ersetzbar, damit der Test ohne Supabase auskommt.
+  @visibleForTesting
+  static Future<void> Function(Map<String, dynamic> werte)?
+  profilSchreiberFuerTests;
+
+  /// Nur fuer Tests: beide Haken wieder abnehmen.
+  @visibleForTesting
+  static void resetForTests() {
+    profilLeserFuerTests = null;
+    profilSchreiberFuerTests = null;
+  }
+
+  /// WER GEWINNT.
+  ///
+  /// Das ist die Regel, die beim ersten Start mit dieser Fassung darueber
+  /// entscheidet, ob jemand seine heute gebaute Anordnung behaelt:
+  ///
+  ///  * Konto hat nichts, Geraet hat etwas -> das GERAET gewinnt und wird
+  ///    hochgeladen. Das ist der Uebernahme-Fall: Wer heute schon verschoben
+  ///    hat, behaelt seinen Stand, er wird nicht ueberschrieben.
+  ///  * Konto hat etwas, Geraet hat nichts -> das KONTO gewinnt. Das ist das
+  ///    neue Handy.
+  ///  * Beide haben etwas -> der juengere Stand gewinnt. Hat das Geraet gar
+  ///    keinen Stand (Anordnung aus einer aelteren App-Fassung, die noch
+  ///    keinen mitgeschrieben hat), gewinnt das Konto: dessen Stand ist
+  ///    nachweislich mit dieser Fassung entstanden und damit juenger.
+  ///  * Beide haben nichts -> Standard.
+  ///
+  /// Dieselbe Regel steht serverseitig im Trigger `trg_guard_home_layout_stand`
+  /// noch einmal, damit ein verspaetetes Geraet keine juengere Anordnung
+  /// ueberschreiben kann.
+  static AnordnungHerkunft entscheide({
+    required bool geraetHatAnordnung,
+    required DateTime? geraetStand,
+    required bool kontoHatAnordnung,
+    required DateTime? kontoStand,
+  }) {
+    if (!kontoHatAnordnung) {
+      return geraetHatAnordnung
+          ? AnordnungHerkunft.geraet
+          : AnordnungHerkunft.standard;
+    }
+    if (!geraetHatAnordnung) return AnordnungHerkunft.server;
+    if (geraetStand == null) return AnordnungHerkunft.server;
+    if (kontoStand == null) return AnordnungHerkunft.geraet;
+    return geraetStand.isAfter(kontoStand)
+        ? AnordnungHerkunft.geraet
+        : AnordnungHerkunft.server;
+  }
+
+  /// Wirft aus einer gespeicherten Anordnung alles heraus, was diese
+  /// App-Fassung nicht kennt.
+  ///
+  /// 2026-08-24 — der gefaehrlichste der drei haesslichen Faelle: eine Kachel
+  /// im gespeicherten Stand, die es hier gar nicht mehr gibt. Seit die
+  /// Anordnung vom Konto kommt, ist das kein Sonderfall mehr, sondern der
+  /// Normalfall bei zwei ungleich alten App-Fassungen: Das neue Handy legt
+  /// eine Kachel an, die das alte nicht kennt.
+  ///
+  /// * Eine unbekannte unter bekannten kostet nur sich selbst.
+  /// * Bleibt NICHTS uebrig, kommt `null` zurueck — und `null` heisst fuer
+  ///   den Aufrufer ausdruecklich „Anzeige nicht anfassen", nicht „leere
+  ///   Startseite". Vorher wurde die leere Liste anstandslos angezeigt:
+  ///   Startseite ohne einen einzigen Inhalt, ohne Fehlermeldung, ohne Weg
+  ///   zurueck ausser „Home anpassen" von Hand.
+  ///
+  /// [bekannteKacheln] kommt vom Aufrufer (die Namen aus `_HomeWidgetId`),
+  /// damit es nur EINE Wahrheit darueber gibt, welche Kacheln es gibt.
+  static List<Map<String, dynamic>>? nurBekannteKacheln(
+    Object? roh,
+    Set<String> bekannteKacheln,
+  ) {
+    if (roh is! List) return null;
+    final uebrig = <Map<String, dynamic>>[];
+    for (final eintrag in roh) {
+      if (eintrag is! Map) continue;
+      final kachel = Map<String, dynamic>.from(eintrag);
+      final ids = kachel['widgetIds'];
+      if (ids is! List) continue;
+      final bekannt = ids
+          .whereType<String>()
+          .where(bekannteKacheln.contains)
+          .toList();
+      if (bekannt.isEmpty) continue;
+      uebrig.add(<String, dynamic>{...kachel, 'widgetIds': bekannt});
+    }
+    return uebrig.isEmpty ? null : uebrig;
+  }
+
+  /// Liest das Konto, wendet [entscheide] an und laedt bei Bedarf hoch.
+  ///
+  /// Faellt das Lesen aus (kein Netz, nicht angemeldet), kommt
+  /// [AnordnungHerkunft.unbekannt] zurueck und der Aufrufer laesst alles so,
+  /// wie es ist. Ein fehlgeschlagener Abgleich darf niemals wie „das Konto
+  /// hat nichts" aussehen — sonst wuerde die Startseite auf Standard
+  /// zurueckfallen.
+  static Future<AnordnungAbgleich> abgleichen({
+    required List<Map<String, dynamic>>? geraetKacheln,
+    required DateTime? geraetStand,
+    DateTime? jetzt,
+  }) async {
+    Map<String, dynamic>? profil;
+    try {
+      profil = await _leseProfil();
+    } catch (e) {
+      debugPrint('[Home] Anordnung vom Konto lesen fehlgeschlagen: $e');
+      return const AnordnungAbgleich(herkunft: AnordnungHerkunft.unbekannt);
+    }
+    if (profil == null) {
+      return const AnordnungAbgleich(herkunft: AnordnungHerkunft.unbekannt);
+    }
+
+    final rohKacheln = profil[spalteKacheln];
+    final kontoKacheln = rohKacheln is List && rohKacheln.isNotEmpty
+        ? rohKacheln
+        : null;
+    final rohStand = profil[spalteStand];
+    final kontoStand = rohStand is String
+        ? DateTime.tryParse(rohStand)?.toLocal()
+        : null;
+
+    final hatGeraet = geraetKacheln != null && geraetKacheln.isNotEmpty;
+    final herkunft = entscheide(
+      geraetHatAnordnung: hatGeraet,
+      geraetStand: geraetStand,
+      kontoHatAnordnung: kontoKacheln != null,
+      kontoStand: kontoStand,
+    );
+
+    switch (herkunft) {
+      case AnordnungHerkunft.standard:
+      case AnordnungHerkunft.unbekannt:
+        return AnordnungAbgleich(herkunft: herkunft);
+      case AnordnungHerkunft.server:
+        return AnordnungAbgleich(
+          herkunft: herkunft,
+          kacheln: kontoKacheln,
+          stand: kontoStand,
+        );
+      case AnordnungHerkunft.geraet:
+        // Der Uebernahme-Fall. Hat das Geraet keinen eigenen Stand, bekommt
+        // die Anordnung JETZT einen — sie ist ja nachweislich vorhanden.
+        final stand = geraetStand ?? (jetzt ?? DateTime.now());
+        await hochladen(geraetKacheln!, stand);
+        return AnordnungAbgleich(herkunft: herkunft, stand: stand);
+    }
+  }
+
+  /// Schiebt eine Anordnung ins Konto. Scheitert das (kein Netz), bleibt es
+  /// still: auf dem Geraet liegt sie ja, und beim naechsten Start gewinnt sie
+  /// den Abgleich erneut und wird wieder angeboten.
+  static Future<bool> hochladen(
+    List<Map<String, dynamic>> kacheln,
+    DateTime stand,
+  ) async {
+    try {
+      await _schreibeProfil({
+        spalteKacheln: kacheln,
+        spalteStand: stand.toUtc().toIso8601String(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('[Home] Anordnung ins Konto schreiben fehlgeschlagen: $e');
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> _leseProfil() async {
+    final leser = profilLeserFuerTests;
+    if (leser != null) return leser();
+    final db = Supabase.instance.client;
+    final userId = db.auth.currentUser?.id;
+    if (userId == null) return null;
+    return db
+        .from('profiles')
+        .select('$spalteKacheln, $spalteStand')
+        .eq('id', userId)
+        .maybeSingle();
+  }
+
+  static Future<void> _schreibeProfil(Map<String, dynamic> werte) async {
+    final schreiber = profilSchreiberFuerTests;
+    if (schreiber != null) return schreiber(werte);
+    final db = Supabase.instance.client;
+    final userId = db.auth.currentUser?.id;
+    if (userId == null) return;
+    await db.from('profiles').update(werte).eq('id', userId);
+  }
+}
+
 /// Reine Regeln der Startseite - pruefbar ohne Supabase und ohne Widgets.
 class HomeStartseiteRegeln {
   const HomeStartseiteRegeln._();
@@ -378,6 +627,12 @@ class _HomeContentPageState extends State<HomeContentPage>
   // Nutzerkennung. Sie laufen jetzt alle ueber NutzerPrefsSchluessel, das
   // haengt `::<userId>` an und uebernimmt den alten Wert genau einmal.
   static const String _dashboardPrefsKey = 'home_dashboard_layout_v1';
+  // 2026-08-24: Wann die Anordnung zuletzt verschoben wurde. Steht bewusst
+  // NEBEN der Anordnung und nicht darin: der alte Schluessel behaelt damit
+  // genau sein bisheriges Format (eine JSON-Liste), eine aeltere App-Fassung
+  // liest ihn unveraendert weiter, und es gibt nichts umzuschreiben.
+  static const String _dashboardStandPrefsKey =
+      'home_dashboard_layout_stand_v1';
   static const String _badgeHuntPrefsKey = 'home_badge_hunt_id_v1';
   static const String _homeSnapshotPrefsKey = 'home_snapshot_v1';
   static const double _dashboardGap = 12;
@@ -393,6 +648,11 @@ class _HomeContentPageState extends State<HomeContentPage>
   final OnboardingAnsichtSchalter<List<_HomeDashboardItem>>
   _onboardingAnsicht = OnboardingAnsichtSchalter<List<_HomeDashboardItem>>();
   bool _customizingDashboard = false;
+  // 2026-08-24: Wann auf DIESEM Bildschirm zuletzt verschoben wurde. Schuetzt
+  // gegen das Wettrennen „Nutzer zieht eine Kachel, waehrend die Antwort des
+  // Kontos noch unterwegs ist" — eine Antwort, die aelter ist als das, was
+  // der Nutzer gerade getan hat, darf ihm nicht dazwischenfahren.
+  DateTime? _anordnungZuletztGeaendert;
   // ignore: prefer_final_fields
   bool _showLegacyHomeBodyForDebug = false;
   String? _recentlyChangedItemKey;
@@ -800,64 +1060,206 @@ class _HomeContentPageState extends State<HomeContentPage>
   Future<String> _dashboardKeyFuerKonto(SharedPreferences prefs) =>
       NutzerPrefsSchluessel.vorbereitet(prefs, _dashboardPrefsKey);
 
+  /// Der kontogebundene Schluessel fuer den Stand der Anordnung.
+  Future<String> _dashboardStandKeyFuerKonto(SharedPreferences prefs) =>
+      NutzerPrefsSchluessel.vorbereitet(prefs, _dashboardStandPrefsKey);
+
+  /// Macht aus einer rohen Kachel-Liste anzeigbare Kacheln. `null` heisst
+  /// „daraus wird keine brauchbare Startseite" — und dann bleibt stehen, was
+  /// gerade angezeigt wird. Warum das die Rettung ist, steht bei
+  /// [StartseitenAnordnung.nurBekannteKacheln].
+  List<_HomeDashboardItem>? _anordnungAusRoh(Object? roh) {
+    final bekannt = StartseitenAnordnung.nurBekannteKacheln(
+      roh,
+      _HomeWidgetId.values.map((id) => id.name).toSet(),
+    );
+    if (bekannt == null) return null;
+    final geparst = bekannt
+        .map(_HomeDashboardItem.fromJson)
+        .whereType<_HomeDashboardItem>()
+        .toList();
+    // Zweite Stufe: `_sanitizeDashboardItems` kennt zusaetzlich den Katalog
+    // (welche Kachel darf klein, welche gross, welche gibt es doppelt).
+    final geprueft = _sanitizeDashboardItems(geparst);
+    if (geprueft.isEmpty) return null;
+    return geprueft;
+  }
+
+  /// Dasselbe fuer den Text aus den SharedPreferences.
+  List<_HomeDashboardItem>? _anordnungAusText(String? text) {
+    if (text == null || text.isEmpty) return null;
+    try {
+      return _anordnungAusRoh(jsonDecode(text));
+    } catch (e) {
+      debugPrint('[Home] Anordnung vom Geraet ist unlesbar: $e');
+      return null;
+    }
+  }
+
+  /// 2026-08-16 (T6): Bestandsnutzer mit eigenem Layout bekommen die neue
+  /// Rangliste EINMAL automatisch dazu (hinter dem Streak bzw. am Ende) —
+  /// danach entscheidet wieder nur der Nutzer (entfernen/verschieben).
+  ///
+  /// Gibt `null` zurueck, wenn nichts zu tun war. Der Merker liegt bewusst
+  /// weiterhin geraetelokal: er beschreibt „diese Installation hat die Kachel
+  /// einmal angeboten", nicht den Willen des Nutzers.
+  Future<List<_HomeDashboardItem>?> _ranglisteEinmaligErgaenzen(
+    SharedPreferences prefs,
+    List<_HomeDashboardItem> vorhanden,
+  ) async {
+    const ranglisteEingefuegtKey = 'home_rangliste_kachel_eingefuegt_v1';
+    if (prefs.getBool(ranglisteEingefuegtKey) ?? false) return null;
+    if (vorhanden.any((i) => i.widgetIds.contains(_HomeWidgetId.rangliste))) {
+      return null;
+    }
+    const neu = _HomeDashboardItem(
+      key: 'rangliste',
+      widgetIds: [_HomeWidgetId.rangliste],
+      size: _DashboardWidgetSize.large,
+    );
+    final streakIdx = vorhanden.indexWhere(
+      (i) => i.widgetIds.contains(_HomeWidgetId.streak),
+    );
+    final ergaenzt = [...vorhanden];
+    if (streakIdx >= 0) {
+      ergaenzt.insert(streakIdx + 1, neu);
+    } else {
+      ergaenzt.add(neu);
+    }
+    await prefs.setBool(ranglisteEingefuegtKey, true);
+    return ergaenzt;
+  }
+
+  /// Zeigt eine Anordnung an — oder legt sie beiseite, wenn gerade die
+  /// Onboarding-Ansicht laeuft (Aufgabe 4.6).
+  void _zeigeAnordnung(List<_HomeDashboardItem> items) {
+    if (!mounted) return;
+    final anzuzeigen = _onboardingAnsicht.geladenesLayout(items);
+    if (anzuzeigen == null) return;
+    setState(() {
+      _dashboardItems = anzuzeigen;
+    });
+  }
+
+  Future<void> _speichereAnordnungAufGeraet(
+    SharedPreferences prefs,
+    String schluessel,
+    String standSchluessel,
+    List<_HomeDashboardItem> items,
+    DateTime? stand,
+  ) async {
+    await prefs.setString(
+      schluessel,
+      jsonEncode(items.map((item) => item.toJson()).toList()),
+    );
+    if (stand != null) {
+      await prefs.setString(standSchluessel, stand.toUtc().toIso8601String());
+    }
+  }
+
+  /// 2026-08-24: Erst das Geraet zeigen, dann mit dem Konto abgleichen.
+  ///
+  /// Die Reihenfolge ist der Optimistic-UI-Grundsatz dieses Projekts: Was
+  /// lokal liegt, steht sofort auf dem Bildschirm. Der Abgleich mit dem Konto
+  /// laeuft danach und korrigiert nur, wenn dort etwas Juengeres liegt.
   Future<void> _loadDashboardLayout() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final schluessel = await _dashboardKeyFuerKonto(prefs);
-      final raw = prefs.getString(schluessel);
-      if (raw == null) return;
+      final standSchluessel = await _dashboardStandKeyFuerKonto(prefs);
 
-      final decoded = jsonDecode(raw);
-      if (decoded is! List) return;
-      final parsed = decoded
-          .whereType<Map>()
-          .map(
-            (entry) =>
-                _HomeDashboardItem.fromJson(Map<String, dynamic>.from(entry)),
-          )
-          .whereType<_HomeDashboardItem>()
-          .toList();
-      var sanitized = _sanitizeDashboardItems(parsed);
-      // 2026-08-16 (T6): Bestandsnutzer mit eigenem Layout bekommen die neue
-      // Rangliste EINMAL automatisch dazu (hinter dem Streak bzw. am Ende) —
-      // danach entscheidet wieder nur der Nutzer (entfernen/verschieben).
-      const ranglisteEingefuegtKey = 'home_rangliste_kachel_eingefuegt_v1';
-      final schonAngeboten = prefs.getBool(ranglisteEingefuegtKey) ?? false;
-      final hatRangliste = sanitized.any(
-        (i) => i.widgetIds.contains(_HomeWidgetId.rangliste),
-      );
-      if (!schonAngeboten && !hatRangliste) {
-        const neu = _HomeDashboardItem(
-          key: 'rangliste',
-          widgetIds: [_HomeWidgetId.rangliste],
-          size: _DashboardWidgetSize.large,
-        );
-        final streakIdx = sanitized.indexWhere(
-          (i) => i.widgetIds.contains(_HomeWidgetId.streak),
-        );
-        sanitized = [...sanitized];
-        if (streakIdx >= 0) {
-          sanitized.insert(streakIdx + 1, neu);
-        } else {
-          sanitized.add(neu);
+      var geraet = _anordnungAusText(prefs.getString(schluessel));
+      final geraetStand = DateTime.tryParse(
+        prefs.getString(standSchluessel) ?? '',
+      )?.toLocal();
+
+      if (geraet != null) {
+        final ergaenzt = await _ranglisteEinmaligErgaenzen(prefs, geraet);
+        if (ergaenzt != null) {
+          geraet = ergaenzt;
+          await _speichereAnordnungAufGeraet(
+            prefs,
+            schluessel,
+            standSchluessel,
+            geraet,
+            null,
+          );
         }
-        await prefs.setBool(ranglisteEingefuegtKey, true);
-        await prefs.setString(
-          schluessel,
-          jsonEncode(sanitized.map((item) => item.toJson()).toList()),
-        );
+        _zeigeAnordnung(geraet);
       }
-      if (!mounted) return;
-      // 2026-08-24 (Aufgabe 4.6): Laeuft gerade das Onboarding, wandert das
-      // eigene Layout in den Schalter statt auf den Bildschirm - angezeigt
-      // bleibt die Standard-Ansicht, gespeichert wird nichts.
-      final anzuzeigen = _onboardingAnsicht.geladenesLayout(sanitized);
-      if (anzuzeigen == null) return;
-      setState(() {
-        _dashboardItems = anzuzeigen;
-      });
+
+      await _gleicheAnordnungMitKontoAb(
+        prefs: prefs,
+        schluessel: schluessel,
+        standSchluessel: standSchluessel,
+        geraet: geraet,
+        geraetStand: geraetStand,
+      );
     } catch (e) {
       debugPrint('[Home] Dashboard-Layout laden fehlgeschlagen: $e');
+    }
+  }
+
+  /// Der Abgleich mit dem Konto. Die Regel, wer gewinnt, steht in
+  /// [StartseitenAnordnung.entscheide] — hier wird sie nur ausgefuehrt.
+  Future<void> _gleicheAnordnungMitKontoAb({
+    required SharedPreferences prefs,
+    required String schluessel,
+    required String standSchluessel,
+    required List<_HomeDashboardItem>? geraet,
+    required DateTime? geraetStand,
+  }) async {
+    final ergebnis = await StartseitenAnordnung.abgleichen(
+      geraetKacheln: geraet?.map((item) => item.toJson()).toList(),
+      geraetStand: geraetStand,
+    );
+
+    switch (ergebnis.herkunft) {
+      case AnordnungHerkunft.standard:
+      case AnordnungHerkunft.unbekannt:
+        // Nichts zu holen, nichts zu schicken. Was auf dem Bildschirm steht,
+        // bleibt stehen.
+        return;
+
+      case AnordnungHerkunft.geraet:
+        // Der Geraetestand ist hochgeladen — oder es hat nicht geklappt, dann
+        // versucht es der naechste Start wieder. So oder so bekommt die
+        // Anordnung jetzt einen Stand, damit der naechste Abgleich weiss, wie
+        // alt sie ist.
+        final stand = ergebnis.stand;
+        if (stand != null) {
+          await prefs.setString(
+            standSchluessel,
+            stand.toUtc().toIso8601String(),
+          );
+        }
+        return;
+
+      case AnordnungHerkunft.server:
+        // Das Wettrennen: Hat der Nutzer waehrend des Ladens selbst
+        // verschoben, ist SEINE Tat juenger als alles, was vom Konto kommt.
+        final gerade = _anordnungZuletztGeaendert;
+        final kontoStand = ergebnis.stand;
+        if (gerade != null &&
+            (kontoStand == null || gerade.isAfter(kontoStand))) {
+          return;
+        }
+        var vomKonto = _anordnungAusRoh(ergebnis.kacheln);
+        // Unbrauchbar (z.B. lauter Kacheln, die es hier nicht gibt): stehen
+        // lassen, was da ist. Eine leere Startseite waere schlimmer als eine
+        // veraltete.
+        if (vomKonto == null) return;
+        final ergaenzt = await _ranglisteEinmaligErgaenzen(prefs, vomKonto);
+        if (ergaenzt != null) vomKonto = ergaenzt;
+        await _speichereAnordnungAufGeraet(
+          prefs,
+          schluessel,
+          standSchluessel,
+          vomKonto,
+          kontoStand,
+        );
+        _zeigeAnordnung(vomKonto);
+        return;
     }
   }
 
@@ -867,16 +1269,28 @@ class _HomeContentPageState extends State<HomeContentPage>
     // waere genau das eingetreten, was Vucko ausgeschlossen hat: „Die
     // persoenliche Anpassung des Nutzers darf dabei nicht verloren gehen."
     if (!_onboardingAnsicht.darfSpeichern) return;
+
+    // OPTIMISTIC UI: Die verschobene Kachel steht laengst an ihrem neuen
+    // Platz — die Aufrufer setzen `_dashboardItems` per setState und rufen
+    // uns nur `unawaited` hinterher. Hier wird nichts mehr gezeichnet und auf
+    // nichts gewartet: erst das Geraet, dann das Konto.
+    final kacheln = _dashboardItems.map((item) => item.toJson()).toList();
+    final stand = DateTime.now();
+    _anordnungZuletztGeaendert = stand;
     try {
       final prefs = await SharedPreferences.getInstance();
       final schluessel = await _dashboardKeyFuerKonto(prefs);
-      await prefs.setString(
-        schluessel,
-        jsonEncode(_dashboardItems.map((item) => item.toJson()).toList()),
-      );
+      final standSchluessel = await _dashboardStandKeyFuerKonto(prefs);
+      await prefs.setString(schluessel, jsonEncode(kacheln));
+      await prefs.setString(standSchluessel, stand.toUtc().toIso8601String());
     } catch (e) {
       debugPrint('[Home] Dashboard-Layout speichern fehlgeschlagen: $e');
     }
+    // Kein Netz? Dann bleibt es beim Geraetestand — sichtbar ist die neue
+    // Anordnung ja bereits. Sie traegt jetzt einen juengeren Stand als das
+    // Konto und gewinnt deshalb beim naechsten Start den Abgleich; dort wird
+    // sie dann hochgeladen.
+    unawaited(StartseitenAnordnung.hochladen(kacheln, stand));
   }
 
   Future<void> _loadBadgeHuntPreference() async {

@@ -106,6 +106,16 @@ List<InlineSpan> buildMentionSpans({
     final istHashtag = text[match.start] == '#';
 
     if (istHashtag) {
+      // 2026-08-24 (Auftrag Vucko vom 24.08.: „wenn ihn schon 17 Leute
+      // benutzt haben, dann soll das moeglichst da noch drunter stehen"):
+      // HIER steht die Zahl BEWUSST NICHT.
+      //
+      // Ein Hashtag im Fliesstext ist ein Wort in einem Satz. „Heute #bmw
+      // (17) gefahren" macht den Satz kaputt, und in einem Beitrag mit drei
+      // Hashtags stuenden drei Zahlen, die niemand vergleicht. Instagram und
+      // TikTok, Vuckos Vorbilder, zeigen die Zahl auch erst auf der
+      // Hashtag-Seite — dort, wo man sich fuer den Hashtag entschieden hat.
+      // Der Weg dorthin ist ein Tipp weit.
       spans.add(
         _MentionSpan.build(
           label: '#$wort',

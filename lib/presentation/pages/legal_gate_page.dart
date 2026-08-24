@@ -9,10 +9,15 @@ class LegalGatePage extends StatefulWidget {
     super.key,
     required this.child,
     this.source = 'app_onboarding',
+    this.onExit,
   });
 
   final Widget child;
   final String source;
+
+  /// Ausweg, wenn das Tor nicht durchschritten werden kann. Ohne Angabe:
+  /// abmelden und zurueck zum Start. Nur Tests reichen hier etwas herein.
+  final Future<void> Function(BuildContext context)? onExit;
 
   @override
   State<LegalGatePage> createState() => _LegalGatePageState();
@@ -66,7 +71,7 @@ class _LegalGatePageState extends State<LegalGatePage> {
         }
 
         if (snapshot.hasError) {
-          return _LegalGateError(onRetry: _retry);
+          return LegalGateErrorScreen(onRetry: _retry, onExit: widget.onExit);
         }
 
         if (snapshot.data == true) {
@@ -78,16 +83,26 @@ class _LegalGatePageState extends State<LegalGatePage> {
           persistAcceptance: true,
           canGoBack: false,
           onAccepted: _markAccepted,
+          onExit: widget.onExit,
         );
       },
     );
   }
 }
 
-class _LegalGateError extends StatelessWidget {
-  const _LegalGateError({required this.onRetry});
+/// 2026-07-21 (Vorfall „Rechtliches konnte nicht geprueft werden"): Dieser
+/// Bildschirm laeuft VOR jedem Login/Onboarding. Damals fehlte die
+/// `legal_acceptances`-Migration in der Prod-Datenbank — die Pruefung warf,
+/// und der einzige Knopf war „Erneut versuchen". Erneut versuchen half nicht,
+/// weil der Fehler nicht am Geraet lag: alle Nutzer standen fest. Deshalb hat
+/// dieser Bildschirm ab 2026-08-24 ZWEI Knoepfe.
+///
+/// Oeffentlich, damit der Regressionstest ihn ohne Supabase pumpen kann.
+class LegalGateErrorScreen extends StatelessWidget {
+  const LegalGateErrorScreen({super.key, required this.onRetry, this.onExit});
 
   final VoidCallback onRetry;
+  final Future<void> Function(BuildContext context)? onExit;
 
   @override
   Widget build(BuildContext context) {
@@ -131,6 +146,14 @@ class _LegalGateError extends StatelessWidget {
                     shape: const StadiumBorder(),
                   ),
                   child: const Text('Erneut versuchen'),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: () => (onExit ?? abmeldenUndZumStart)(context),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFB6BECC),
+                  ),
+                  child: const Text('Abmelden und zurück zum Start'),
                 ),
               ],
             ),

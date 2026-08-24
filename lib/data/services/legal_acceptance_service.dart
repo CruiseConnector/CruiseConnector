@@ -19,6 +19,17 @@ class LegalAcceptanceSnapshot {
   final String appVersion;
   final String platform;
 
+  /// 2026-08-24: Auf welchem Weg dem Nutzer die Texte zugaenglich gemacht
+  /// wurden. `browser` = Dokument wurde geoeffnet. `ersatzweg_link` = auf
+  /// diesem Geraet liess sich kein Browser starten (Bildschirmzeit,
+  /// verwaltetes Geraet); der Nutzer hat stattdessen die Adresse bestaetigt.
+  /// Landet in `device_info`, nicht in einer eigenen Spalte — die Zustimmung
+  /// bleibt damit nachweisbar, ohne Schema-Aenderung.
+  final String readPath;
+
+  static const readPathBrowser = 'browser';
+  static const readPathLinkFallback = 'ersatzweg_link';
+
   const LegalAcceptanceSnapshot({
     required this.termsVersion,
     required this.termsAcceptedAt,
@@ -28,9 +39,13 @@ class LegalAcceptanceSnapshot {
     required this.legalSource,
     required this.appVersion,
     required this.platform,
+    this.readPath = readPathBrowser,
   });
 
-  factory LegalAcceptanceSnapshot.current({required String source}) {
+  factory LegalAcceptanceSnapshot.current({
+    required String source,
+    String readPath = readPathBrowser,
+  }) {
     final now = DateTime.now().toUtc();
     return LegalAcceptanceSnapshot(
       termsVersion: LegalDocuments.termsVersion,
@@ -41,6 +56,7 @@ class LegalAcceptanceSnapshot {
       legalSource: source,
       appVersion: LegalDocuments.fallbackAppVersion,
       platform: LegalAcceptanceService.platformLabel,
+      readPath: readPath,
     );
   }
 
@@ -58,6 +74,7 @@ class LegalAcceptanceSnapshot {
           json['app_version'] as String? ?? LegalDocuments.fallbackAppVersion,
       platform:
           json['platform'] as String? ?? LegalAcceptanceService.platformLabel,
+      readPath: json['legal_read_path'] as String? ?? readPathBrowser,
     );
   }
 
@@ -77,17 +94,22 @@ class LegalAcceptanceSnapshot {
       'legal_source': legalSource,
       'app_version': appVersion,
       'platform': platform,
+      'legal_read_path': readPath,
     };
   }
 
   Map<String, dynamic> toAuthMetadata() => toJson();
 
   Map<String, dynamic> toInsertPayload(User user) {
+    // ACHTUNG: Hier duerfen nur echte Spalten der Tabelle stehen. `readPath`
+    // hat keine eigene Spalte und geht deshalb in `device_info` (jsonb) —
+    // ein Spread von toJson() wuerde die Insert-Anfrage zerschiessen.
+    final columns = toJson()..remove('legal_read_path');
     return {
       'user_id': user.id,
       'email': user.email,
-      ...toJson(),
-      'device_info': <String, dynamic>{},
+      ...columns,
+      'device_info': <String, dynamic>{'legal_read_path': readPath},
     };
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -5,23 +6,41 @@ import 'package:cruise_connect/data/services/safety_notice_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+/// Wie lange ein Zugriff auf den Geraetespeicher dauern darf. Danach machen wir
+/// ohne ihn weiter — ein haengender Speicher darf niemanden im Blatt festhalten.
+const Duration _speicherGrenze = Duration(seconds: 3);
+
+/// Zeigt den Hinweis „Mitteilungen erlauben".
+///
+/// 2026-08-24 (Vorfall „App haengt", iPhone 15 Pro Max): Dieses Blatt hatte
+/// dieselbe Bauart wie die Sackgasse im Standort-Hinweis — `isDismissible` und
+/// `enableDrag` aus, kein X, und der EINZIGE Ausgang war ein Knopf, der an
+/// `_busy` hing. `_busy` wurde gesetzt, bevor in den Geraetespeicher
+/// geschrieben wurde, und erst nach dem Schreiben wieder frei. Antwortet der
+/// Speicher-Kanal nicht (volle Platte, Plugin nicht da, Kanal blockiert),
+/// bleibt der einzige Knopf fuer immer grau.
+///
+/// Seitdem gilt hier hart:
+///  1. Erst schliessen, dann merken. Der Ausgang haengt an NICHTS.
+///  2. Es gibt einen zweiten, ehrlichen Weg („Jetzt nicht") und zusaetzlich
+///     Wischen/Tippen daneben.
+///  3. Jeder Speicherzugriff hat eine Zeitgrenze.
 Future<bool> showNotificationPermissionNoticeSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (!force &&
-      await SafetyNoticeService.hasSeenNotificationPermissionNotice()) {
-    return SafetyNoticeService.hasAcceptedNotificationPermissionNotice();
+  if (!force && await _hinweisSchonGesehen()) {
+    return _hinweisSchonAngenommen();
   }
   if (!context.mounted) return false;
 
   final accepted = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
-    // Apple 5.1.1(iv): Kein Ausweg vor der System-Permission-Anfrage — der
-    // Nutzer muss nach dieser Erklärung immer bei der echten Anfrage landen.
-    isDismissible: false,
-    enableDrag: false,
+    // 2026-08-24: wieder wegtippbar/wegwischbar. Wegwischen heisst „jetzt
+    // nicht" — wir fragen dann einfach keine Mitteilungen an.
+    isDismissible: true,
+    enableDrag: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.70),
@@ -30,8 +49,38 @@ Future<bool> showNotificationPermissionNoticeSheet(
   return accepted ?? false;
 }
 
+/// Speicher-Lesezugriffe mit Zeitgrenze. Antwortet der Speicher nicht, zeigen
+/// wir den Hinweis lieber nochmal, als in einem `await` zu versanden.
+Future<bool> _hinweisSchonGesehen() async {
+  try {
+    return await SafetyNoticeService.hasSeenNotificationPermissionNotice()
+        .timeout(_speicherGrenze);
+  } catch (fehler) {
+    debugPrint('[Mitteilungs-Hinweis] Merker lesen fehlgeschlagen: $fehler');
+    return false;
+  }
+}
+
+Future<bool> _hinweisSchonAngenommen() async {
+  try {
+    return await SafetyNoticeService.hasAcceptedNotificationPermissionNotice()
+        .timeout(_speicherGrenze);
+  } catch (fehler) {
+    debugPrint(
+      '[Mitteilungs-Hinweis] Zustimmung lesen fehlgeschlagen: $fehler',
+    );
+    return false;
+  }
+}
+
+/// Test-Naht: „gesehen/angenommen" merken.
+typedef MitteilungsMerker = Future<void> Function({required bool accepted});
+
 class NotificationPermissionNoticeSheet extends StatefulWidget {
-  const NotificationPermissionNoticeSheet({super.key});
+  const NotificationPermissionNoticeSheet({super.key, this.hinweisMerken});
+
+  /// Test-Naht: Standard ist `SafetyNoticeService.markNotificationPermissionNotice`.
+  final MitteilungsMerker? hinweisMerken;
 
   @override
   State<NotificationPermissionNoticeSheet> createState() =>
@@ -40,15 +89,26 @@ class NotificationPermissionNoticeSheet extends StatefulWidget {
 
 class _NotificationPermissionNoticeSheetState
     extends State<NotificationPermissionNoticeSheet> {
-  bool _busy = false;
+  bool _beendet = false;
 
-  Future<void> _close(bool accepted) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    await SafetyNoticeService.markNotificationPermissionNotice(
-      accepted: accepted,
+  /// Der Ausgang. Erst schliessen, dann merken — nie umgekehrt. Der
+  /// Geraetespeicher ist ein Plattform-Kanal und darf den Nutzer nicht
+  /// aufhalten; deshalb laeuft das Schreiben nebenher und mit Zeitgrenze.
+  void _close(bool accepted) {
+    if (_beendet || !mounted) return;
+    _beendet = true;
+    final merken =
+        widget.hinweisMerken ??
+        SafetyNoticeService.markNotificationPermissionNotice;
+    unawaited(
+      merken(accepted: accepted).timeout(_speicherGrenze).catchError((
+        Object fehler,
+      ) {
+        debugPrint(
+          '[Mitteilungs-Hinweis] Merker schreiben fehlgeschlagen: $fehler',
+        );
+      }),
     );
-    if (!mounted) return;
     Navigator.of(context).pop(accepted);
   }
 
@@ -168,24 +228,39 @@ class _NotificationPermissionNoticeSheetState
                               width: double.infinity,
                               height: 52,
                               child: FilledButton(
-                                onPressed: _busy ? null : () => _close(true),
+                                // NIE gesperrt: dieser Knopf braucht weder
+                                // Netz noch Speicher noch das System.
+                                onPressed: () => _close(true),
                                 style: FilledButton.styleFrom(
                                   backgroundColor: accent,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                 ),
-                                child: _busy
-                                    ? const CupertinoActivityIndicator(
-                                        color: Colors.white,
-                                      )
-                                    : const Text(
-                                        'Weiter',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w900,
-                                        ),
-                                      ),
+                                child: const Text(
+                                  'Weiter',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            // Zweiter, ehrlicher Ausgang: kein Zwang zur
+                            // Zustimmung, und ebenfalls nie gesperrt.
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 44,
+                              child: TextButton(
+                                onPressed: () => _close(false),
+                                child: Text(
+                                  'Jetzt nicht',
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.6),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                               ),
                             ),
                           ],

@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
+import 'package:cruise_connect/presentation/pages/hashtag_personen_page.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
@@ -38,10 +41,39 @@ import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 /// bis zu 200 Beiträge auf einmal; bei 10 Beiträgen in der ganzen Datenbank
 /// (gemessen am 24.08.) ist das mit Abstand ausreichend.
 class HashtagBeitraegePage extends StatefulWidget {
-  const HashtagBeitraegePage({super.key, required this.tag});
+  const HashtagBeitraegePage({
+    super.key,
+    required this.tag,
+    this.beitraegeLader,
+    this.kennzahlenLader,
+    this.personenLader,
+  });
 
   /// Mit oder ohne Raute, beides ist erlaubt.
   final String tag;
+
+  /// 2026-08-24: die drei Abfragen sind austauschbar, damit ein Widget-Test
+  /// die Seite mit erfundenen Daten pruefen kann. In der Datenbank stehen am
+  /// 24.08. NULL Beitraege mit einer Raute — ohne diese Naht waere die
+  /// Personenzahl an echten Daten nicht pruefbar, und ungeprueft geht sie
+  /// genau dann kaputt, wenn Vucko sie zum ersten Mal braucht.
+  ///
+  /// `null` als Ergebnis heisst FEHLER, `[]` heisst KEIN TREFFER.
+  final Future<List<Map<String, dynamic>>?> Function(
+    String tag, {
+    int limit,
+    int offset,
+  })?
+  beitraegeLader;
+
+  final Future<HashtagKennzahlen?> Function(String tag)? kennzahlenLader;
+
+  final Future<List<Map<String, dynamic>>?> Function(
+    String tag, {
+    int limit,
+    int offset,
+  })?
+  personenLader;
 
   /// Öffnet die Seite. Einziger Einstieg, damit die Normalisierung an genau
   /// einer Stelle passiert.
@@ -62,7 +94,13 @@ class HashtagBeitraegePage extends StatefulWidget {
 
 class _HashtagBeitraegePageState extends State<HashtagBeitraegePage> {
   bool _laedt = true;
+  bool _fehler = false;
   List<Map<String, dynamic>> _beitraege = const [];
+
+  /// 2026-08-24 (Auftrag Vucko vom 24.08.: „wenn ihn schon 17 Leute benutzt
+  /// haben, dann soll das moeglichst da noch drunter stehen"). `null`
+  /// heisst: die Kopfzahlen kamen nicht an, gerechnet wird aus der Liste.
+  HashtagKennzahlen? _kennzahlen;
 
   @override
   void initState() {
@@ -71,15 +109,66 @@ class _HashtagBeitraegePageState extends State<HashtagBeitraegePage> {
   }
 
   Future<void> _laden() async {
-    final treffer = await SocialService.hashtagBeitraege(
-      widget.tag,
-      limit: 200,
-    );
+    setState(() => _fehler = false);
+    // Beide Abfragen gleichzeitig. Nacheinander waeren es zwei Wartezeiten
+    // fuer eine Seite, die aus einer Zeile Text und einer Liste besteht.
+    final ergebnisse = await Future.wait<Object?>([
+      (widget.beitraegeLader ?? SocialService.hashtagBeitraegeErgebnis)(
+        widget.tag,
+        limit: 200,
+      ),
+      (widget.kennzahlenLader ?? SocialService.hashtagKennzahlen)(widget.tag),
+    ]);
     if (!mounted) return;
+    final treffer = ergebnisse[0] as List<Map<String, dynamic>>?;
     setState(() {
-      _beitraege = treffer;
       _laedt = false;
+      _fehler = treffer == null;
+      _beitraege = treffer ?? const [];
+      _kennzahlen = ergebnisse[1] as HashtagKennzahlen?;
     });
+  }
+
+  /// Die zwei Zahlen ueber der Liste.
+  ///
+  /// Aus der Datenbank, aber NIE kleiner als das, was nachweislich auf dem
+  /// Bildschirm steht. Beides kann zu klein sein: die Liste ist bei 200
+  /// gedeckelt, und die Kopfzahl-Abfrage koennte fehlen oder ihre Spalten
+  /// anders nennen. Das Groessere von beidem ist in jedem dieser Faelle die
+  /// richtige Antwort — und vor allem kann nie „5 Beitraege" ueber sieben
+  /// sichtbaren Karten stehen.
+  HashtagKennzahlen get _zahlen {
+    final ausDerListe = HashtagKennzahlen(
+      beitraege: _beitraege.length,
+      personen: SocialService.personenAusBeitraegen(_beitraege).length,
+    );
+    final ausDerDatenbank = _kennzahlen;
+    if (ausDerDatenbank == null) return ausDerListe;
+    return HashtagKennzahlen(
+      beitraege: max(ausDerDatenbank.beitraege, ausDerListe.beitraege),
+      personen: max(ausDerDatenbank.personen, ausDerListe.personen),
+    );
+  }
+
+  /// Lader fuer das Personen-Blatt, mit Notbehelf.
+  ///
+  /// Erst die Abfrage. Kommt sie nicht (Migration noch nicht da, kein Netz),
+  /// werden die Personen aus den Beitraegen gerechnet, die diese Seite
+  /// ohnehin schon geladen hat. Dann steht dort eine Liste statt einer
+  /// Fehlermeldung — und sie stimmt, solange nicht mehr als 200 Beitraege
+  /// zu dem Hashtag existieren.
+  Future<List<Map<String, dynamic>>?> _personen(
+    String tag, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final lader = widget.personenLader ?? SocialService.hashtagPersonen;
+    final ausDerDatenbank = await lader(tag, limit: limit, offset: offset);
+    if (ausDerDatenbank != null) return ausDerDatenbank;
+    if (_fehler) return null; // Wir haben auch keine Beitraege: ehrlich sein.
+    final alle = SocialService.personenAusBeitraegen(_beitraege);
+    if (offset >= alle.length) return const [];
+    return alle.sublist(offset, min(offset + limit, alle.length));
   }
 
   String _zeit(Object? roh) {
@@ -111,7 +200,9 @@ class _HashtagBeitraegePageState extends State<HashtagBeitraegePage> {
           ),
         ),
       ),
-      body: _laedt
+      body: _fehler
+          ? _fehlerZustand()
+          : _laedt
           ? const SingleChildScrollView(
               physics: NeverScrollableScrollPhysics(),
               child: PostSkeletonList(count: 4),
@@ -157,14 +248,105 @@ class _HashtagBeitraegePageState extends State<HashtagBeitraegePage> {
     );
   }
 
+  /// 2026-08-24 — Auftrag Vucko vom 24.08.: „wenn ihn schon 17 Leute benutzt
+  /// haben, dann soll das moeglichst da noch drunter stehen […] man soll
+  /// drauf klicken koennen wie bei Instagram oder TikTok."
+  ///
+  /// Hier stand vorher nur „X Beiträge" in Grau. Jetzt steht die Beitragszahl
+  /// gross und ruhig unter dem Hashtag, so wie Instagram und TikTok es
+  /// machen, und darunter die Personenzahl als antippbare Zeile.
+  ///
+  /// BEWUSST KEIN KNOPF: ein Knopf mit Rahmen und Flaeche wuerde in dieser
+  /// Kopfzeile schreien und waere in der ganzen App der einzige seiner Art.
+  /// Eine farbige Zeile mit Pfeil ist das, was hier ueberall sonst „das
+  /// oeffnet etwas" bedeutet.
   Widget _kopfzeile() {
-    final anzahl = _beitraege.length;
+    final zahlen = _zahlen;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4, left: 4),
-      child: Text(
-        anzahl == 1 ? '1 Beitrag' : '$anzahl Beiträge',
-        style: const TextStyle(color: Colors.grey, fontSize: 12.5),
+      padding: const EdgeInsets.only(bottom: 8, left: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            hashtagBeitraegeText(zahlen.beitraege),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          if (zahlen.personen > 0)
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => HashtagPersonenPage.oeffnen(
+                context,
+                widget.tag,
+                lader: _personen,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      hashtagVonLeutenText(zahlen.personen),
+                      style: TextStyle(
+                        color: AppAccentColors.accent,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: AppAccentColors.accent,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
+    );
+  }
+
+  /// Kein Netz oder Abfrage kaputt. Bewusst ein ANDERER Text als „noch kein
+  /// Beitrag": vorher stand hier auch bei abgeschaltetem Netz, es gebe keinen
+  /// Beitrag mit diesem Hashtag. Das klingt nach Auskunft und ist eine
+  /// Vermutung — bei einer Verlosung waere es eine falsche.
+  Widget _fehlerZustand() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
+      children: [
+        Icon(
+          Icons.wifi_off_rounded,
+          size: 44,
+          color: Colors.grey.withValues(alpha: 0.6),
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          'Die Beiträge konnten nicht geladen werden.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey, fontSize: 13.5),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Das heißt nicht, dass es keine gibt. Prüf die Verbindung und '
+          'versuch es nochmal.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey, fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: TextButton(
+            onPressed: _laden,
+            style: TextButton.styleFrom(
+              foregroundColor: AppAccentColors.accent,
+            ),
+            child: const Text('Erneut versuchen'),
+          ),
+        ),
+      ],
     );
   }
 

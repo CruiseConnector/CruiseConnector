@@ -1,9 +1,15 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/safety_notice_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+
+/// Kein Speicherzugriff darf den Nutzer aufhalten. Danach machen wir ohne ihn
+/// weiter.
+const Duration _speicherZeitgrenze = Duration(seconds: 3);
 
 /// Zeigt den Gruppen-Sicherheitshinweis und meldet, ob er akzeptiert wurde.
 ///
@@ -17,66 +23,152 @@ import 'package:flutter/material.dart';
 /// Mitglieder, 0 Nachrichten in der gesamten Datenbank.
 ///
 /// Der Hinweis darf nie davon abhängen, ob jemand ein Tutorial gesehen hat.
+///
+/// 2026-08-24 (eingesperrter Nutzer, iPhone 15 Pro Max): Dieses Blatt hatte
+/// dieselbe Bauart wie das Blatt aus dem Vorfall — `isDismissible: force`,
+/// `enableDrag: force`, das X nur bei `force`. Beim automatischen Aufruf war
+/// also alles aus, und der einzige Weg nach vorne hing an einer
+/// ScrollNotification. Passt der Inhalt ohne Scrollen ins Blatt, feuert die
+/// nie (`ScrollPhysics.shouldAcceptUserOffset` ist bei `maxScrollExtent == 0`
+/// false) — kein Ausgang, kein Weiterkommen.
+///
+/// Seitdem gilt hier hart:
+///  * Es gibt IMMER einen Ausgang (X, Hintergrund-Tippen, Wischen,
+///    Android-Zurück) — auf jedem Gerät, in jeder Schriftgröße.
+///  * Schließen ohne „Verstanden" ist KEINE Zustimmung: es wird nichts
+///    gespeichert, der Hinweis kommt beim nächsten Versuch wieder, und die
+///    Gruppe entsteht nicht. Der Hinweis bleibt damit verpflichtend, ohne
+///    einzusperren.
+///  * Was vollständig sichtbar ist, gilt als vollständig gelesen — auch wenn
+///    das erst nach dem Drehen oder einer Schriftänderung so ist.
+///  * Kein Speicherzugriff darf hängen oder werfen. Im Zweifel zeigen wir
+///    den Hinweis lieber einmal zu viel als den Nutzer festzusetzen.
+///
+/// BEWUSST OHNE Sperre gegen Doppelaufrufe. Das Routing-Blatt hat eine
+/// (`tryAcquireLock`) — dort ist das Ergebnis egal. Hier hängt die
+/// Gruppenerstellung daran: bliebe die Sperre je hängen (etwa weil das Blatt
+/// mit dem Navigator abgeräumt wird, ohne dass sein Future je fällt), könnte
+/// dieser Nutzer NIE wieder eine Gruppe anlegen. Zwei übereinanderliegende
+/// Hinweise sind unschön — aber jeder davon hat sein eigenes X, und das ist
+/// die harmlosere Seite.
 Future<bool> showGroupSafetyNoticeSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (!force && await SafetyNoticeService.hasAcceptedGroupSafety()) {
-    return true;
-  }
+  if (!force && await _hatBereitsZugestimmt()) return true;
   if (!context.mounted) return false;
 
   final accepted = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
-    isDismissible: force,
-    enableDrag: force,
+    // NIE auf `force` binden — sonst gibt es beim automatischen Aufruf
+    // keinen Weg nach draußen.
+    isDismissible: true,
+    enableDrag: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.72),
-    builder: (_) => GroupSafetyNoticeSheet(showCloseButton: force),
+    builder: (_) => const GroupSafetyNoticeSheet(),
   );
   return accepted ?? false;
 }
 
-class GroupSafetyNoticeSheet extends StatefulWidget {
-  const GroupSafetyNoticeSheet({super.key, this.showCloseButton = false});
+/// Fragt den Speicher, wirft aber nie und wartet nie ewig.
+///
+/// Im Fehlerfall lautet die Antwort „noch nicht zugestimmt". Das ist die
+/// harmlose Richtung: der Hinweis kommt nochmal. Die andere Richtung wäre
+/// ein Gruppen-Erstellen ohne Hinweis.
+Future<bool> _hatBereitsZugestimmt() async {
+  try {
+    return await SafetyNoticeService.hasAcceptedGroupSafety().timeout(
+      _speicherZeitgrenze,
+    );
+  } catch (error) {
+    debugPrint('[GruppenHinweis] Zustimmung nicht lesbar: $error');
+    return false;
+  }
+}
 
-  final bool showCloseButton;
+class GroupSafetyNoticeSheet extends StatefulWidget {
+  const GroupSafetyNoticeSheet({super.key});
 
   @override
   State<GroupSafetyNoticeSheet> createState() => _GroupSafetyNoticeSheetState();
 }
 
 class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
+  /// Ab hier gilt der Inhalt als bis unten gelesen. Deckt auch den Fall ab,
+  /// dass gar nichts zu scrollen ist (maxScrollExtent == 0).
+  static const double _endToleranz = 24.0;
+
+  /// Begrenzte Nachfass-Versuche, falls die Scroll-Position beim ersten
+  /// Frame noch nicht existiert. Ohne Deckel liefe das endlos.
+  static const int _maxNachfassen = 12;
+
   final ScrollController _controller = ScrollController();
   bool _readToBottom = false;
   bool _accepted = false;
   bool _saving = false;
+  bool _pruefungGeplant = false;
+  int _nachfassVersuche = 0;
 
   @override
   void initState() {
     super.initState();
-    // 2026-07-03 (vucko): Defensive Absicherung. Normal hat der Hinweis echten
-    // Overflow (~570 px) → der Nutzer scrollt bis unten und der Gate gibt frei.
-    // ABER falls der Inhalt mal komplett in die (auf 720 geklemmte) Sheet-Hoehe
-    // passt (z. B. sehr kleine System-Schriftgröße), wäre maxScrollExtent 0,
-    // es feuerte nie ein Scroll-Event und der „bis unten scrollen"-Gate liesse
-    // sich nie erfüllen → harter Deadlock bei der Gruppenerstellung. Deshalb:
-    // wenn es nach dem ersten Layout nichts zu scrollen gibt, sofort freigeben.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _markReadIfNoScroll());
+    _pruefungPlanen();
   }
 
-  void _markReadIfNoScroll() {
+  /// Prüft NACH dem Layout, ob überhaupt etwas zu scrollen übrig ist.
+  ///
+  /// 2026-07-03 gab es dafür schon eine Notbremse — aber nur EINEN einzigen
+  /// `addPostFrameCallback` aus `initState`. Ändert sich die Größe später
+  /// (Drehen, Systemschrift, Splitscreen, Tastatur), lief sie nie wieder:
+  /// wer vorher nicht gescrollt hatte, saß fest. Deshalb wird die Prüfung
+  /// jetzt aus [initState], aus jedem `build` UND bei jeder Änderung der
+  /// Scroll-Maße angestoßen.
+  void _pruefungPlanen() {
+    if (_readToBottom || _pruefungGeplant || !mounted) return;
+    _pruefungGeplant = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pruefungGeplant = false;
+      _freigebenWennAllesSichtbar();
+    });
+  }
+
+  void _freigebenWennAllesSichtbar() {
     if (!mounted || _readToBottom) return;
-    if (!_controller.hasClients) {
-      // Scroll-View haengt beim ersten Frame evtl. noch nicht → 1× nachfassen.
-      WidgetsBinding.instance.addPostFrameCallback((_) => _markReadIfNoScroll());
+    if (!_controller.hasClients || !_controller.position.hasContentDimensions) {
+      // Die Scroll-Position hängt beim allerersten Frame evtl. noch nicht.
+      if (_nachfassVersuche++ < _maxNachfassen) _pruefungPlanen();
       return;
     }
-    if (_controller.position.maxScrollExtent <= 0) {
-      setState(() => _readToBottom = true);
+    _freigebenWennAmEnde(_controller.position);
+  }
+
+  void _freigebenWennAmEnde(ScrollMetrics metrics) {
+    if (_readToBottom) return;
+    if (metrics.pixels >= metrics.maxScrollExtent - _endToleranz) {
+      _alsGelesenMerken();
     }
+  }
+
+  /// Einmal gelesen bleibt gelesen — auch wenn der Inhalt durch Drehen
+  /// wieder länger wird. Sonst könnte eine Drehung erneut einsperren.
+  void _alsGelesenMerken() {
+    if (_readToBottom) return;
+    _readToBottom = true;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    final imFrame =
+        phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks;
+    if (imFrame) {
+      // Während Layout/Build darf kein setState laufen.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {});
   }
 
   @override
@@ -88,16 +180,30 @@ class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
   Future<void> _accept() async {
     if (!_readToBottom || !_accepted || _saving) return;
     setState(() => _saving = true);
-    await SafetyNoticeService.markGroupSafetyAccepted();
+    try {
+      // Ohne Zeitgrenze blieb `_saving` bei einem hakenden Speicher für
+      // immer stehen: Dauer-Ladekringel in einem Blatt ohne Ausgang.
+      await SafetyNoticeService.markGroupSafetyAccepted().timeout(
+        _speicherZeitgrenze,
+      );
+    } catch (error) {
+      // Konnten wir es nicht merken, kommt der Hinweis eben nochmal. Das ist
+      // nicht das Problem des Nutzers — er hat zugestimmt.
+      debugPrint('[GruppenHinweis] Zustimmung nicht speicherbar: $error');
+    }
     if (!mounted) return;
     Navigator.of(context).pop(true);
   }
 
   bool _handleScroll(ScrollNotification notification) {
-    final metrics = notification.metrics;
-    if (!_readToBottom && metrics.pixels >= metrics.maxScrollExtent - 24) {
-      setState(() => _readToBottom = true);
-    }
+    _freigebenWennAmEnde(notification.metrics);
+    return false;
+  }
+
+  /// Feuert, wenn sich die Maße ändern, OHNE dass gescrollt wurde — z. B.
+  /// beim Drehen oder wenn der Nutzer die Systemschrift ändert.
+  bool _handleScrollMetrics(ScrollMetricsNotification notification) {
+    _freigebenWennAmEnde(notification.metrics);
     return false;
   }
 
@@ -105,145 +211,160 @@ class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
   Widget build(BuildContext context) {
     final accent = AppAccentColors.accent;
     final media = MediaQuery.of(context);
+    // Deckel nach oben: bei sehr grosser Systemschrift wuerden Haken-Zeile
+    // und Knopf sonst aus dem Blatt gedrueckt — beides sind Bedienelemente,
+    // die erreichbar bleiben muessen.
+    final clampedMedia = media.copyWith(
+      textScaler: media.textScaler.clamp(maxScaleFactor: 1.08),
+    );
     final height = (media.size.height * 0.82).clamp(560.0, 720.0).toDouble();
     final canAccept = _readToBottom && _accepted && !_saving;
 
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: SizedBox(
-          height: height,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              12,
-              0,
-              12,
-              media.padding.bottom == 0 ? 12 : 0,
-            ),
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(30),
+    // Jeder Rebuild kann eine neue Größe bedeuten → erneut prüfen.
+    _pruefungPlanen();
+
+    return MediaQuery(
+      data: clampedMedia,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: SizedBox(
+            height: height,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                12,
+                0,
+                12,
+                media.padding.bottom == 0 ? 12 : 0,
               ),
-              child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0xF2161921),
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(30),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(30),
+                ),
+                child: BackdropFilter(
+                  filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xF2161921),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(30),
+                      ),
+                      border: Border.all(color: accent.withValues(alpha: 0.32)),
                     ),
-                    border: Border.all(color: accent.withValues(alpha: 0.32)),
-                  ),
-                  child: SafeArea(
-                    top: false,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-                      child: Column(
-                        children: [
-                          _Header(
-                            accent: accent,
-                            showCloseButton: widget.showCloseButton,
-                          ),
-                          Expanded(
-                            child: NotificationListener<ScrollNotification>(
-                              onNotification: _handleScroll,
-                              child: SingleChildScrollView(
-                                controller: _controller,
-                                physics: const BouncingScrollPhysics(),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const SizedBox(height: 12),
-                                    _NoticeCard(
-                                      icon: CupertinoIcons.person_2_fill,
-                                      title: 'Keine Veranstaltung',
-                                      text:
-                                          'Eine Gruppe ist nur eine gemeinsame Route in der App. Sie ist keine offizielle Veranstaltung, kein Rennen und keine Straßensperrung.',
-                                      accent: accent,
-                                    ),
-                                    _NoticeCard(
-                                      icon: CupertinoIcons.shield_fill,
-                                      title: 'Jeder fährt selbst',
-                                      text:
-                                          'Alle Teilnehmer bleiben eigenverantwortlich. Abstand, Tempo, Verkehrsregeln und lokale Anweisungen gehen immer vor.',
-                                      accent: accent,
-                                    ),
-                                    _NoticeCard(
-                                      icon: CupertinoIcons.map_pin_ellipse,
-                                      title: 'Route prüfen',
-                                      text:
-                                          'Wähle Treffpunkt, Uhrzeit und Route so, dass sie sicher erreichbar sind. Öffentliche Gruppen sollen klar und verantwortungsvoll beschrieben sein.',
-                                      accent: accent,
-                                    ),
-                                    _NoticeCard(
-                                      icon: CupertinoIcons
-                                          .exclamationmark_triangle_fill,
-                                      title: 'Keine riskanten Fahrten',
-                                      text:
-                                          'Plane keine gefährlichen Aktionen. Keine illegalen Manöver, kein Druck auf andere und keine Aufforderung zu Rennen.',
-                                      accent: accent,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Scrolle bis zum Ende und setze den Haken. Danach erscheint dieser Hinweis nicht mehr automatisch.',
-                                      style: TextStyle(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.56,
+                    child: SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                        child: Column(
+                          children: [
+                            _Header(accent: accent),
+                            Expanded(
+                              child: NotificationListener<ScrollMetricsNotification>(
+                                onNotification: _handleScrollMetrics,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _handleScroll,
+                                  child: SingleChildScrollView(
+                                    controller: _controller,
+                                    physics: const BouncingScrollPhysics(),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(height: 12),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons.person_2_fill,
+                                          title: 'Keine Veranstaltung',
+                                          text:
+                                              'Eine Gruppe ist nur eine gemeinsame Route in der App. Sie ist keine offizielle Veranstaltung, kein Rennen und keine Straßensperrung.',
+                                          accent: accent,
                                         ),
-                                        fontSize: 12.5,
-                                        height: 1.3,
-                                        fontWeight: FontWeight.w700,
-                                      ),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons.shield_fill,
+                                          title: 'Jeder fährt selbst',
+                                          text:
+                                              'Alle Teilnehmer bleiben eigenverantwortlich. Abstand, Tempo, Verkehrsregeln und lokale Anweisungen gehen immer vor.',
+                                          accent: accent,
+                                        ),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons.map_pin_ellipse,
+                                          title: 'Route prüfen',
+                                          text:
+                                              'Wähle Treffpunkt, Uhrzeit und Route so, dass sie sicher erreichbar sind. Öffentliche Gruppen sollen klar und verantwortungsvoll beschrieben sein.',
+                                          accent: accent,
+                                        ),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons
+                                              .exclamationmark_triangle_fill,
+                                          title: 'Keine riskanten Fahrten',
+                                          text:
+                                              'Plane keine gefährlichen Aktionen. Keine illegalen Manöver, kein Druck auf andere und keine Aufforderung zu Rennen.',
+                                          accent: accent,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          _readToBottom
+                                              ? 'Setze den Haken und bestätige. Danach erscheint dieser Hinweis nicht mehr automatisch. Schließt du mit ✕, entsteht keine Gruppe und der Hinweis kommt wieder.'
+                                              : 'Scrolle bis zum Ende und setze den Haken. Mit ✕ oben kommst du jederzeit heraus — dann entsteht keine Gruppe.',
+                                          style: TextStyle(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.56,
+                                            ),
+                                            fontSize: 12.5,
+                                            height: 1.3,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 18),
+                                      ],
                                     ),
-                                    const SizedBox(height: 18),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          _CheckRow(
-                            text:
-                                'Ich habe die Hinweise gelesen und erstelle keine riskante oder illegale Gruppenfahrt.',
-                            accent: accent,
-                            checked: _accepted,
-                            enabled: _readToBottom,
-                            onChanged: (value) =>
-                                setState(() => _accepted = value),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 54,
-                            child: FilledButton(
-                              onPressed: canAccept ? _accept : null,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: accent,
-                                disabledBackgroundColor: Colors.white
-                                    .withValues(alpha: 0.10),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(22),
+                            _CheckRow(
+                              text:
+                                  'Ich habe die Hinweise gelesen und erstelle keine riskante oder illegale Gruppenfahrt.',
+                              accent: accent,
+                              checked: _accepted,
+                              enabled: _readToBottom,
+                              onChanged: (value) =>
+                                  setState(() => _accepted = value),
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 54,
+                              child: FilledButton(
+                                onPressed: canAccept ? _accept : null,
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: accent,
+                                  disabledBackgroundColor: Colors.white
+                                      .withValues(alpha: 0.10),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(22),
+                                  ),
                                 ),
-                              ),
-                              child: _saving
-                                  ? const CupertinoActivityIndicator(
-                                      color: Colors.white,
-                                    )
-                                  : Text(
-                                      !_readToBottom
-                                          ? 'Erst bis unten scrollen'
-                                          : !_accepted
-                                          ? 'Häkchen setzen'
-                                          : 'Verstanden',
-                                      style: const TextStyle(
+                                child: _saving
+                                    ? const CupertinoActivityIndicator(
                                         color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w900,
+                                      )
+                                    : Text(
+                                        !_readToBottom
+                                            ? 'Erst bis unten scrollen'
+                                            : !_accepted
+                                            ? 'Häkchen setzen'
+                                            : 'Verstanden',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w900,
+                                        ),
                                       ),
-                                    ),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -258,10 +379,9 @@ class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.accent, required this.showCloseButton});
+  const _Header({required this.accent});
 
   final Color accent;
-  final bool showCloseButton;
 
   @override
   Widget build(BuildContext context) {
@@ -290,11 +410,12 @@ class _Header extends StatelessWidget {
                 ),
               ),
             ),
-            if (showCloseButton)
-              IconButton(
-                onPressed: () => Navigator.of(context).pop(false),
-                icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
-              ),
+            // Notausgang. Immer sichtbar — nie an `force` koppeln.
+            IconButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              tooltip: 'Schließen',
+              icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
+            ),
           ],
         ),
       ],

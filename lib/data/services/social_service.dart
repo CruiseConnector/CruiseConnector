@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -39,11 +41,7 @@ enum GruppenZugang {
 /// Ergebnis von [SocialService.pruefeGruppenZugang] samt dem, was wir von der
 /// Gruppe lesen durften (kann leer sein, wenn die Lesepolitik sie versteckt).
 class GruppenZugangsBescheid {
-  const GruppenZugangsBescheid(
-    this.zugang, {
-    this.gruppe,
-    this.gruppenName,
-  });
+  const GruppenZugangsBescheid(this.zugang, {this.gruppe, this.gruppenName});
 
   final GruppenZugang zugang;
   final Map<String, dynamic>? gruppe;
@@ -130,6 +128,23 @@ class DuplicateSharedGroupPostException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// 2026-08-24 — Auftrag Vucko: „wenn ihn schon 17 Leute benutzt haben, dann
+/// soll das moeglichst da noch drunter stehen".
+///
+/// Die zwei Zahlen ueber einem Hashtag. Sie sind BEWUSST getrennt von der
+/// geladenen Trefferliste: die Liste ist gedeckelt (die Seite holt 200
+/// Beitraege), die Kopfzahlen sind es nicht. Wer bei 300 Beitraegen die
+/// Laenge der Liste anzeigt, luegt.
+class HashtagKennzahlen {
+  const HashtagKennzahlen({required this.beitraege, required this.personen});
+
+  /// Anzahl oeffentlicher, sichtbarer Beitraege mit diesem Hashtag.
+  final int beitraege;
+
+  /// Anzahl VERSCHIEDENER Verfasser. Das ist die Zahl, die Vucko meint.
+  final int personen;
 }
 
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
@@ -1506,13 +1521,21 @@ class SocialService {
   /// gesperrten Konten.
   ///
   /// [tag] darf mit oder ohne Raute kommen.
-  static Future<List<Map<String, dynamic>>> hashtagBeitraege(
+  /// 2026-08-24 (Auftrag Vucko vom 24.08.): dieselbe Abfrage, aber mit
+  /// unterscheidbarem Ausgang. `null` heisst FEHLER, `[]` heisst KEIN
+  /// TREFFER.
+  ///
+  /// Vorher lieferten beide Faelle `[]` und die Seite schrieb „Noch kein
+  /// oeffentlicher Beitrag mit diesem Hashtag" — auch bei abgeschaltetem
+  /// Netz. Das ist die schlimmste Sorte Text: er klingt nach einer Auskunft
+  /// und ist eine Vermutung.
+  static Future<List<Map<String, dynamic>>?> hashtagBeitraegeErgebnis(
     String tag, {
     int limit = 50,
     int offset = 0,
   }) async {
     final sauber = normalisiereHashtagEingabe(tag);
-    if (sauber.isEmpty) return [];
+    if (sauber.isEmpty) return const [];
     try {
       final rows = await _db.rpc(
         'hashtag_beitraege',
@@ -1524,10 +1547,24 @@ class SocialService {
             .map((r) => Map<String, dynamic>.from(r))
             .toList();
       }
+      return const [];
     } catch (e) {
       debugPrint('[SocialService] hashtag_beitraege Fehler: $e');
+      return null;
     }
-    return [];
+  }
+
+  static Future<List<Map<String, dynamic>>> hashtagBeitraege(
+    String tag, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final treffer = await hashtagBeitraegeErgebnis(
+      tag,
+      limit: limit,
+      offset: offset,
+    );
+    return treffer ?? const [];
   }
 
   /// 2026-08-24 (Aufgabe 1.3): Vorschläge beim Tippen und beliebte Hashtags.
@@ -1561,6 +1598,211 @@ class SocialService {
       debugPrint('[SocialService] hashtag_vorschlaege Fehler: $e');
     }
     return [];
+  }
+
+  // ── Wer benutzt diesen Hashtag? ───────────────────────────────────────
+  //
+  // 2026-08-24 — Vucko am 24.08.: „Aber da moechte ich das auch noch mit den
+  // Hashtags so haben, dass wenn man einen #Bmw, #BayerischeMotorenWerke oder
+  // sonstige, dass man sieht, wer alles so einen # benutzt hat. Also wenn ihn
+  // schon 17 Leute benutzt haben, dann soll das moeglichst da noch drunter
+  // stehen […] man soll drauf klicken koennen wie bei Instagram oder TikTok."
+  //
+  // WARUM NICHT `hashtag_vorschlaege` benutzt wird: die Spalte `anzahl` dort
+  // zaehlt BEITRAEGE. Wer denselben Hashtag zehnmal schreibt, stuende dort
+  // als „10". Vucko will aber „1 Person". Beide Zahlen sind richtig, sie
+  // beantworten nur verschiedene Fragen — deshalb eigene Abfragen.
+  //
+  // #Bmw und #BayerischeMotorenWerke sind und bleiben ZWEI Hashtags. Die
+  // Marken-Vereinheitlichung vom 24.08. gilt fuer das Fahrzeug-Markenfeld,
+  // nicht hier. Gefaltet werden nur Gross-/Kleinschreibung und Umlaute, und
+  // das macht die Datenbank (`hashtag_schluessel`).
+  //
+  // DIE NAMEN DER ABFRAGEN STEHEN HIER UND NUR HIER, und sie muessen zu
+  // Migration 20260824120000_hashtag_personen_und_kennzahlen.sql passen:
+  //
+  //   hashtag_personen(p_tag, p_limit, p_offset)
+  //     -> user_id, username, avatar_url, beitraege, zuletzt
+  //   hashtag_kennzahlen(p_tag)
+  //     -> tag, tag_schluessel, beitraege_anzahl, personen_anzahl,
+  //        personen_sichtbar
+  //
+  // `personen_sichtbar` wird hier bewusst NICHT angezeigt. Die Zahl unter dem
+  // Hashtag ist laut Migration die objektive (`personen_anzahl`, ohne
+  // Blockfilter), damit nicht jeder eine andere Zahl sieht und man an einer
+  // sinkenden Zahl ablesen koennte, dass einen jemand blockiert hat. Die
+  // Liste selbst ist gefiltert; sie kann also in Einzelfaellen eine Zeile
+  // weniger haben als die Zahl verspricht. Am 24.08. stehen 0 Zeilen in
+  // `user_blocks`, der Fall existiert heute nicht.
+  //
+  // Ein Test vergleicht diese Namen mit der Migrationsdatei
+  // (test/community/hashtag_leute_test.dart) und wird rot, wenn sie
+  // auseinanderlaufen. Dieselbe Fehlerklasse wie bei der
+  // Laender-Klassifikation.
+  static const String rpcHashtagPersonen = 'hashtag_personen';
+  static const String rpcHashtagKennzahlen = 'hashtag_kennzahlen';
+
+  /// Die Leute, die einen Hashtag benutzt haben — die haeufigsten zuerst.
+  ///
+  /// `null` heisst FEHLER (kein Netz, Abfrage fehlt noch), `[]` heisst
+  /// NIEMAND. Die Oberflaeche muss beides verschieden anzeigen: „keiner" ist
+  /// eine Auskunft, „ich weiss es gerade nicht" ist keine.
+  static Future<List<Map<String, dynamic>>?> hashtagPersonen(
+    String tag, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final sauber = normalisiereHashtagEingabe(tag);
+    if (sauber.isEmpty) return const [];
+    try {
+      final rows = await _db.rpc(
+        rpcHashtagPersonen,
+        params: {'p_tag': sauber, 'p_limit': limit, 'p_offset': offset},
+      );
+      if (rows is List) {
+        return rows.whereType<Map>().map(hashtagPersonZeile).toList();
+      }
+      return const [];
+    } catch (e) {
+      debugPrint('[SocialService] $rpcHashtagPersonen Fehler: $e');
+      return null;
+    }
+  }
+
+  /// Die zwei Kopfzahlen ueber einem Hashtag. `null` heisst wieder FEHLER.
+  ///
+  /// Sie kommen bewusst NICHT aus der Laenge der geladenen Trefferliste: die
+  /// ist gedeckelt. Wer bei 300 Beitraegen „200 Beitraege" anzeigt, luegt.
+  static Future<HashtagKennzahlen?> hashtagKennzahlen(String tag) async {
+    final sauber = normalisiereHashtagEingabe(tag);
+    if (sauber.isEmpty) {
+      return const HashtagKennzahlen(beitraege: 0, personen: 0);
+    }
+    try {
+      final antwort = await _db.rpc(
+        rpcHashtagKennzahlen,
+        params: {'p_tag': sauber},
+      );
+      Map<dynamic, dynamic>? roh;
+      if (antwort is List) {
+        for (final zeile in antwort) {
+          if (zeile is Map) {
+            roh = zeile;
+            break;
+          }
+        }
+      } else if (antwort is Map) {
+        roh = antwort;
+      }
+      if (roh == null) {
+        return const HashtagKennzahlen(beitraege: 0, personen: 0);
+      }
+      return hashtagKennzahlenAusZeile(roh);
+    } catch (e) {
+      debugPrint('[SocialService] $rpcHashtagKennzahlen Fehler: $e');
+      return null;
+    }
+  }
+
+  /// Liest die Kopfzahlen aus einer Antwortzeile.
+  ///
+  /// Getrennt und oeffentlich, damit ein Test die Umsetzung pruefen kann,
+  /// ohne eine Datenbank zu brauchen.
+  static HashtagKennzahlen hashtagKennzahlenAusZeile(
+    Map<dynamic, dynamic> roh,
+  ) {
+    final m = Map<String, dynamic>.from(roh);
+    return HashtagKennzahlen(
+      beitraege: _zahlAus(m, const [
+        'beitraege_anzahl',
+        'beitraege',
+        'anzahl_beitraege',
+        'anzahl',
+      ]),
+      personen: _zahlAus(m, const [
+        'personen_anzahl',
+        'personen',
+        'anzahl_personen',
+      ]),
+    );
+  }
+
+  /// Bringt eine Zeile der Personen-Abfrage in die EINE Form, die die
+  /// Oberflaeche kennt: `user_id`, `username`, `avatar_url`, `anzahl`.
+  ///
+  /// Die Spalte mit der Haeufigkeit kann je nach Bauart `anzahl`,
+  /// `beitraege` oder `anzahl_beitraege` heissen. Hier faellt das zusammen.
+  /// Sonst stuende bei einer abweichenden Benennung ueberall „0 Beitraege" —
+  /// ein stiller Fehler, den kein Nutzer meldet, weil die Liste ja da ist.
+  static Map<String, dynamic> hashtagPersonZeile(Map<dynamic, dynamic> roh) {
+    final m = Map<String, dynamic>.from(roh);
+    return <String, dynamic>{
+      ...m,
+      'user_id': m['user_id']?.toString(),
+      'username': m['username']?.toString(),
+      'avatar_url': m['avatar_url']?.toString(),
+      'anzahl': _zahlAus(m, const ['beitraege', 'anzahl', 'anzahl_beitraege']),
+    };
+  }
+
+  static int _zahlAus(Map<String, dynamic> zeile, List<String> schluessel) {
+    for (final name in schluessel) {
+      final wert = zeile[name];
+      if (wert is num) return wert.toInt();
+      if (wert is String) {
+        final zahl = int.tryParse(wert.trim());
+        if (zahl != null) return zahl;
+      }
+    }
+    return 0;
+  }
+
+  /// Notbehelf: rechnet die Personen aus einer schon geladenen Trefferliste.
+  ///
+  /// Solange die Abfrage aus der Migration nicht da ist — oder der Aufruf
+  /// scheitert — rechnet die App mit den Beitraegen, die sie ohnehin geladen
+  /// hat. Das stimmt EXAKT, solange alle Beitraege geladen wurden (die Seite
+  /// holt 200, in der Datenbank stehen am 24.08. zehn), und wird zu klein,
+  /// sobald es mehr sind. Genau deshalb ist es der zweite Weg und nicht der
+  /// erste.
+  ///
+  /// Sortiert wie die Abfrage: haeufigste zuerst, bei Gleichstand nach Name.
+  /// Die zweite Stufe ist wichtig, damit die Liste bei lauter Einsern nicht
+  /// bei jedem Laden anders aussieht.
+  static List<Map<String, dynamic>> personenAusBeitraegen(
+    List<Map<String, dynamic>> beitraege,
+  ) {
+    final nachPerson = <String, Map<String, dynamic>>{};
+    for (final beitrag in beitraege) {
+      final userId = beitrag['user_id']?.toString();
+      if (userId == null || userId.isEmpty) continue;
+      final vorhanden = nachPerson[userId];
+      if (vorhanden == null) {
+        nachPerson[userId] = <String, dynamic>{
+          'user_id': userId,
+          'username': beitrag['username']?.toString(),
+          'avatar_url': beitrag['avatar_url']?.toString(),
+          'anzahl': 1,
+        };
+      } else {
+        vorhanden['anzahl'] = (vorhanden['anzahl'] as int) + 1;
+        // Aeltere Beitraege koennen ein leeres Profil haben; die erste
+        // brauchbare Angabe gewinnt.
+        vorhanden['username'] ??= beitrag['username']?.toString();
+        vorhanden['avatar_url'] ??= beitrag['avatar_url']?.toString();
+      }
+    }
+    final liste = nachPerson.values.toList();
+    liste.sort((a, b) {
+      final nachAnzahl = (b['anzahl'] as int).compareTo(a['anzahl'] as int);
+      if (nachAnzahl != 0) return nachAnzahl;
+      final nameA = (a['username']?.toString() ?? '').toLowerCase();
+      final nameB = (b['username']?.toString() ?? '').toLowerCase();
+      final nachName = nameA.compareTo(nameB);
+      if (nachName != 0) return nachName;
+      return (a['user_id'] as String).compareTo(b['user_id'] as String);
+    });
+    return liste;
   }
 
   /// Schneidet führende Rauten und Leerzeichen weg.
@@ -1810,12 +2052,13 @@ class SocialService {
       meinLand = null;
     }
 
-    final pool = (recent as List)
-        .whereType<Map<String, dynamic>>()
-        .where((p) => !excluded.contains(p['id']))
-        .where((p) => !ergebnis.containsKey(p['id']))
-        .toList()
-      ..shuffle();
+    final pool =
+        (recent as List)
+            .whereType<Map<String, dynamic>>()
+            .where((p) => !excluded.contains(p['id']))
+            .where((p) => !ergebnis.containsKey(p['id']))
+            .toList()
+          ..shuffle();
     // Landsleute nach vorne — stabile Sortierung erhaelt die Zufallsreihenfolge
     // innerhalb beider Gruppen.
     if (meinLand != null && meinLand.isNotEmpty) {
@@ -1840,7 +2083,7 @@ class SocialService {
   static String? mutualFollowersLine(Map<String, dynamic> user) {
     final names =
         (user['mutual_names'] as List?)?.whereType<String>().toList() ??
-            const <String>[];
+        const <String>[];
     final count = (user['mutual_count'] as int?) ?? names.length;
     if (count <= 0 || names.isEmpty) return null;
     final a = '@${names[0]}';
@@ -2850,7 +3093,19 @@ class SocialService {
       contentType: 'image/jpeg',
     );
     if (url == null) return null;
-    await _db.from('profiles').update({'avatar_url': url}).eq('id', uid);
+    // 2026-08-24 (vucko): Der Upload selbst ist seit #179 begrenzt (25 s, drei
+    // Versuche) — das Nachtragen der URL ins Profil war es nicht. Genau daran
+    // wartet der Onboarding-Schritt „Profilbild" mit gesperrten Knoepfen.
+    try {
+      await _db
+          .from('profiles')
+          .update({'avatar_url': url})
+          .eq('id', uid)
+          .timeout(const Duration(seconds: 25));
+    } catch (e) {
+      debugPrint('[Social] uploadAvatar: avatar_url nicht gesetzt: $e');
+      return null;
+    }
     return url;
   }
 
@@ -2878,7 +3133,20 @@ class SocialService {
   }
 
   /// True, wenn der eingeloggte User das Onboarding noch durchlaufen muss.
-  static Future<bool> needsOnboarding() async {
+  ///
+  /// 2026-08-24 (vucko): Zeitgrenze, weil an dieser einen Abfrage das
+  /// Post-Auth-Tor haengt — der Bildschirm, den JEDER Nutzer nach JEDER
+  /// Anmeldung sieht. Ohne Grenze drehte sich dort bei schlechtem Netz ein
+  /// Ladekreis ohne Ende, und es gab keinen Weg zurueck.
+  ///
+  /// Ein Haenger wird BEWUSST nicht wie ein Fehler behandelt: Fehler haben
+  /// eine Antwort und fallen defensiv auf false (= App, kein erzwungenes
+  /// Onboarding). Eine abgelaufene Zeitgrenze heisst „wir wissen nichts" —
+  /// die `TimeoutException` geht deshalb an den Aufrufer durch, damit der dem
+  /// Nutzer die Wahl lassen kann, statt ihn still am Onboarding vorbeizulotsen.
+  static Future<bool> needsOnboarding({
+    Duration zeitgrenze = const Duration(seconds: 12),
+  }) async {
     final uid = _userId;
     if (uid == null) return false;
     try {
@@ -2886,8 +3154,12 @@ class SocialService {
           .from('profiles')
           .select('onboarding_completed')
           .eq('id', uid)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(zeitgrenze);
       return (row as Map?)?['onboarding_completed'] != true;
+    } on TimeoutException {
+      debugPrint('[Social] needsOnboarding Zeitgrenze ($zeitgrenze) erreicht');
+      rethrow;
     } catch (e) {
       debugPrint('[Social] needsOnboarding Fehler: $e');
       return false;
@@ -3195,7 +3467,9 @@ class SocialService {
         return '$publicUrl?t=${DateTime.now().millisecondsSinceEpoch}';
       } catch (e) {
         lastError = e;
-        debugPrint('[Social] Upload-Versuch $attempt/3 fehlgeschlagen ($path): $e');
+        debugPrint(
+          '[Social] Upload-Versuch $attempt/3 fehlgeschlagen ($path): $e',
+        );
         if (attempt < 3) {
           await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
         }
@@ -3276,7 +3550,9 @@ class SocialService {
       await _db.storage.from(communityImagesBucket).remove([path]);
       return true;
     } catch (e) {
-      debugPrint('[Social] Community-Storage-Cleanup fehlgeschlagen ($path): $e');
+      debugPrint(
+        '[Social] Community-Storage-Cleanup fehlgeschlagen ($path): $e',
+      );
       return false;
     }
   }

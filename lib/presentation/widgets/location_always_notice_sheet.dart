@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -7,11 +8,39 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 
+/// Wie lange ein Schreib-/Lesezugriff auf den Geraetespeicher dauern darf.
+/// Danach machen wir ohne ihn weiter — ein haengender Speicher darf niemanden
+/// im Blatt festhalten.
+const Duration _speicherGrenze = Duration(seconds: 3);
+
+/// Zeigt den Hinweis „Standort für die Navigation".
+///
+/// 2026-08-24 (Vorfall „App haengt", iPhone 15 Pro Max): Dieses Blatt war die
+/// gefaehrlichste Sackgasse der App, weil es direkt nach der Anmeldung
+/// automatisch aufgeht (`home_page.dart`, `_runFirstLoginGuidance`):
+///  * `isDismissible: false`, `enableDrag: false`, kein X — kein Wischen, kein
+///    Tippen daneben, auf iOS auch keine Zurueck-Geste.
+///  * Beide Knoepfe (auch der Ausweg) haengen an `_busy`.
+///  * `_busy` wurde erst zurueckgesetzt, NACHDEM die Standort-Anfrage
+///    zurueckkam — und die lief ueber zwei `Geolocator.requestPermission()`
+///    ohne jede Zeitgrenze. Antwortet das System nicht (auf iOS ist genau die
+///    Hochstufung auf „Immer" so ein Fall), blieb `_busy` fuer immer `true`.
+/// Ergebnis: alle Knoepfe grau, kein Ausgang, direkt nach der Anmeldung.
+///
+/// Seitdem gilt hier hart:
+///  1. Der Ausweg „Später" ist von Anfang an sichtbar und NIE gesperrt. Er
+///     braucht weder Netz noch Berechtigung noch eine Antwort des Systems.
+///  2. Zusaetzlich sind Wischen und Tippen daneben wieder erlaubt — drei
+///     unabhaengige Auswege statt einem. (Das widerspricht Apple 5.1.1(iv)
+///     nicht: die Regel verbietet, Nutzer zu einer Freigabe zu ZWINGEN.)
+///  3. Kein Aufruf ins System oder in den Speicher ohne Zeitgrenze.
+///  4. `_busy` wird in einem `finally` zurueckgesetzt — auch ein Fehler laesst
+///     den Nutzer nicht stehen.
 Future<bool> showLocationAlwaysNoticeSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (!force && await SafetyNoticeService.hasSeenLocationAlwaysNotice()) {
+  if (!force && await _hinweisSchonGesehen()) {
     return true;
   }
   if (!context.mounted) return false;
@@ -19,10 +48,11 @@ Future<bool> showLocationAlwaysNoticeSheet(
   final accepted = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
-    // Apple 5.1.1(iv): Kein Ausweg vor der System-Permission-Anfrage — der
-    // Nutzer muss nach dieser Erklärung immer bei der echten Anfrage landen.
-    isDismissible: false,
-    enableDrag: false,
+    // 2026-08-24: bewusst wieder wegtippbar/wegwischbar. Der Hinweis bleibt
+    // trotzdem verpflichtend — wer wegwischt, hat nicht zugestimmt, und beim
+    // Start einer Gruppenfahrt fragt die App erneut.
+    isDismissible: true,
+    enableDrag: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.70),
@@ -31,8 +61,53 @@ Future<bool> showLocationAlwaysNoticeSheet(
   return accepted ?? false;
 }
 
+/// Liest den „schon gesehen"-Merker. Antwortet der Speicher nicht, lautet die
+/// Antwort `false` — dann erscheint der Hinweis eben nochmal. Das ist die
+/// harmlose Richtung; haengenbleiben ist es nicht.
+Future<bool> _hinweisSchonGesehen() async {
+  try {
+    return await SafetyNoticeService.hasSeenLocationAlwaysNotice().timeout(
+      _speicherGrenze,
+    );
+  } catch (fehler) {
+    debugPrint('[Standort-Hinweis] Merker lesen fehlgeschlagen: $fehler');
+    return false;
+  }
+}
+
+/// Fragt die Standort-Freigabe an. Getrennt herausgezogen, damit Tests das
+/// Verhalten bei „System antwortet nie" und „Aufruf wirft" nachstellen koennen.
+typedef StandortFreigabeAnfrage = Future<geo.LocationPermission> Function();
+
+/// Oeffnet die App-Einstellungen. `true` = die Einstellungen sind wirklich
+/// aufgegangen (Test-Naht wie oben).
+typedef EinstellungenOeffner = Future<bool> Function();
+
+/// Merkt „Hinweis gesehen" im Geraetespeicher (Test-Naht wie oben).
+typedef HinweisMerker = Future<void> Function();
+
 class LocationAlwaysNoticeSheet extends StatefulWidget {
-  const LocationAlwaysNoticeSheet({super.key});
+  const LocationAlwaysNoticeSheet({
+    super.key,
+    this.freigabeAnfragen,
+    this.einstellungenOeffnen,
+    this.hinweisMerken,
+    this.antwortGrenze = LocationPermissionHelper.antwortGrenze,
+  });
+
+  /// Test-Naht: Standort-Freigabe anfragen. Standard ist der echte Helfer.
+  final StandortFreigabeAnfrage? freigabeAnfragen;
+
+  /// Test-Naht: App-Einstellungen oeffnen.
+  final EinstellungenOeffner? einstellungenOeffnen;
+
+  /// Test-Naht: „gesehen" merken.
+  final HinweisMerker? hinweisMerken;
+
+  /// Wie lange wir auf eine Antwort des Systems warten — gezaehlt wird NUR die
+  /// Zeit, in der unsere App vorne ist (siehe [SystemAntwortWache]). Waehrend
+  /// der System-Dialog offen ist, steht diese Uhr still.
+  final Duration antwortGrenze;
 
   @override
   State<LocationAlwaysNoticeSheet> createState() =>
@@ -47,45 +122,139 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
   // App-Standort-Einstellungen öffnet (wo „Immer erlauben" gesetzt wird),
   // statt ihn hart aus der App zu werfen.
   bool _needsSettingsStep = false;
+  // Das System hat innerhalb der Zeitgrenze nicht geantwortet (oder der Aufruf
+  // ist gescheitert). Wir sagen es ehrlich, statt weiter grau zu bleiben.
+  bool _keineSystemantwort = false;
+  // Verhindert ein zweites `pop` (z. B. wenn eine spaete Antwort eintrifft,
+  // nachdem der Nutzer schon „Später" getippt hat).
+  bool _beendet = false;
+
+  Future<geo.LocationPermission> _freigabeAnfragen() async {
+    final naht = widget.freigabeAnfragen;
+    if (naht != null) return naht();
+    final serviceEnabled = await LocationPermissionHelper.isServiceEnabled();
+    if (!serviceEnabled) return geo.LocationPermission.denied;
+    // Fragt an + stuft (so weit per Dialog möglich) auf „Immer" hoch. Die
+    // Einstellungen öffnen wir bewusst NICHT automatisch — dafür gibt es
+    // den klaren Folge-Button, damit der Nutzer nicht überrascht rausfliegt.
+    return LocationPermissionHelper.requestAlways(openSettingsIfNeeded: false);
+  }
+
+  /// Schreibt den Merker im Hintergrund. Nie `await`en, wo der Nutzer darauf
+  /// wartet: der Geraetespeicher ist ein Plattform-Kanal und kann haengen.
+  void _merkenImHintergrund() {
+    final merken =
+        widget.hinweisMerken ??
+        SafetyNoticeService.markLocationAlwaysNoticeSeen;
+    unawaited(
+      merken().timeout(_speicherGrenze).catchError((Object fehler) {
+        debugPrint(
+          '[Standort-Hinweis] Merker schreiben fehlgeschlagen: $fehler',
+        );
+      }),
+    );
+  }
+
+  /// Der Ausgang. Muss unter allen Umstaenden funktionieren — deshalb erst
+  /// schliessen, dann (nebenher) merken.
+  void _schliessen(bool ergebnis) {
+    if (_beendet || !mounted) return;
+    _beendet = true;
+    _merkenImHintergrund();
+    Navigator.of(context).pop(ergebnis);
+  }
 
   Future<void> _acceptPermission() async {
     if (_busy) return;
-    setState(() => _busy = true);
-    await SafetyNoticeService.markLocationAlwaysNoticeSeen();
-    var result = geo.LocationPermission.denied;
+    setState(() {
+      _busy = true;
+      _keineSystemantwort = false;
+    });
+    _merkenImHintergrund();
+
+    geo.LocationPermission? antwort;
     try {
-      final serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        // Fragt an + stuft (so weit per Dialog möglich) auf „Immer" hoch. Die
-        // Einstellungen öffnen wir bewusst NICHT automatisch — dafür gibt es
-        // den klaren Folge-Button, damit der Nutzer nicht überrascht rausfliegt.
-        result = await LocationPermissionHelper.requestAlways(
-          openSettingsIfNeeded: false,
-        );
-      }
-    } catch (_) {
-      // Best-effort: Wenn iOS/Android gerade nicht antwortet, bleibt die App ruhig.
+      final anfrage = _freigabeAnfragen();
+      _spaeteAntwortBeobachten(anfrage);
+      antwort = await SystemAntwortWache.warte<geo.LocationPermission?>(
+        anfrage,
+        grenze: widget.antwortGrenze,
+        beiZeitgrenze: null,
+      );
+    } catch (fehler) {
+      // Der Wachhund faengt Fehler bereits ab; dieser Zweig ist die Rueckfall-
+      // ebene, falls schon das Erzeugen des Futures wirft.
+      debugPrint('[Standort-Hinweis] Anfrage fehlgeschlagen: $fehler');
+      antwort = null;
+    } finally {
+      // IMMER — sonst bleibt der Nutzer im grauen Blatt sitzen.
+      if (mounted && !_beendet) setState(() => _busy = false);
     }
-    if (!mounted) return;
-    if (result == geo.LocationPermission.always) {
-      Navigator.of(context).pop(true);
+
+    if (!mounted || _beendet) return;
+    if (antwort == geo.LocationPermission.always) {
+      _schliessen(true);
       return;
     }
-    // „Immer" fehlt noch (nur Beim-Verwenden / abgelehnt) → Einstellungs-Schritt.
+    // `unableToDetermine` ist die Antwort des Helfers, wenn dessen eigene
+    // Zeitgrenze zuschlug; `null` die unserer. Beides heisst dasselbe: wir
+    // wissen nichts.
+    final ohneAntwort =
+        antwort == null || antwort == geo.LocationPermission.unableToDetermine;
     setState(() {
-      _busy = false;
-      _needsSettingsStep = true;
+      // Keine Antwort => wir bleiben im ersten Schritt und sagen es. Den Nutzer
+      // in den Einstellungs-Schritt zu schicken waere gelogen: wir wissen gar
+      // nicht, ob er etwas erteilt hat.
+      _keineSystemantwort = ohneAntwort;
+      _needsSettingsStep = !ohneAntwort;
     });
+  }
+
+  /// Eine Zeitgrenze bricht den Aufruf nicht ab — kommt die Antwort spaeter
+  /// doch noch und lautet „Immer", nehmen wir sie an.
+  void _spaeteAntwortBeobachten(Future<geo.LocationPermission> anfrage) {
+    unawaited(
+      anfrage
+          .then((spaet) {
+            if (!mounted || _beendet) return;
+            if (spaet == geo.LocationPermission.always) _schliessen(true);
+          })
+          .catchError((Object _) {}),
+    );
   }
 
   Future<void> _openSettings() async {
     if (_busy) return;
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _keineSystemantwort = false;
+    });
+    var geoeffnet = false;
     try {
-      await LocationPermissionHelper.openSettings();
-    } catch (_) {}
-    if (!mounted) return;
-    Navigator.of(context).pop(true);
+      final oeffnen = widget.einstellungenOeffnen;
+      geoeffnet = await SystemAntwortWache.warte<bool>(
+        oeffnen != null ? oeffnen() : LocationPermissionHelper.openSettings(),
+        grenze: LocationPermissionHelper.einstellungenGrenze,
+        beiZeitgrenze: false,
+      );
+    } catch (fehler) {
+      debugPrint(
+        '[Standort-Hinweis] Einstellungen oeffnen fehlgeschlagen: $fehler',
+      );
+    } finally {
+      // IMMER — auch ein haengender Intent darf das Blatt nicht sperren.
+      if (mounted && !_beendet) setState(() => _busy = false);
+    }
+    if (!mounted || _beendet) return;
+    if (geoeffnet) {
+      // Der Nutzer ist jetzt in den Einstellungen; das Blatt hat seine Arbeit
+      // getan und darf sich schliessen.
+      _schliessen(true);
+      return;
+    }
+    // Die Einstellungen gingen nicht auf. Blatt offen lassen, ehrlich sein —
+    // der Ausweg „Später" steht ohnehin daneben.
+    setState(() => _keineSystemantwort = true);
   }
 
   @override
@@ -183,6 +352,14 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                       ),
                                     ),
                                     const SizedBox(height: 16),
+                                    if (_keineSystemantwort)
+                                      const _HintRow(
+                                        accent: Color(0xFFFF9500),
+                                        icon: CupertinoIcons
+                                            .exclamationmark_triangle_fill,
+                                        text:
+                                            'Das System hat nicht geantwortet. Versuch es nochmal oder fahr erstmal ohne die Freigabe weiter.',
+                                      ),
                                     if (_needsSettingsStep) ...[
                                       _HintRow(
                                         accent: accent,
@@ -192,7 +369,8 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                       ),
                                       _HintRow(
                                         accent: accent,
-                                        icon: CupertinoIcons.checkmark_seal_fill,
+                                        icon:
+                                            CupertinoIcons.checkmark_seal_fill,
                                         text:
                                             'Genauen Standort aktiviert lassen.',
                                       ),
@@ -247,7 +425,9 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                         // „Weiter" → führt nur zur echten iOS-Anfrage.
                                         _needsSettingsStep
                                             ? 'In den Einstellungen öffnen'
-                                            : 'Weiter',
+                                            : (_keineSystemantwort
+                                                  ? 'Nochmal versuchen'
+                                                  : 'Weiter'),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontWeight: FontWeight.w900,
@@ -255,28 +435,29 @@ class _LocationAlwaysNoticeSheetState extends State<LocationAlwaysNoticeSheet> {
                                       ),
                               ),
                             ),
-                            // Nur im Einstellungs-Schritt (also NACH dem System-
-                            // Dialog, Apple 5.1.1(iv)-konform): ein Ausweg, damit
-                            // der Nutzer mit „Beim Verwenden" weiterfahren kann.
-                            if (_needsSettingsStep) ...[
-                              const SizedBox(height: 6),
-                              SizedBox(
-                                width: double.infinity,
-                                height: 44,
-                                child: TextButton(
-                                  onPressed: _busy
-                                      ? null
-                                      : () => Navigator.of(context).pop(true),
-                                  child: Text(
-                                    'Später, mit „Beim Verwenden" fahren',
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.6),
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                            // 2026-08-24: Der Ausweg ist IMMER da und NIE
+                            // gesperrt — auch waehrend `_busy`. Er braucht weder
+                            // Netz noch Berechtigung noch eine Antwort des
+                            // Systems und ist damit der garantierte Weg nach
+                            // draussen. Vorher gab es ihn erst im zweiten
+                            // Schritt und er hing zusaetzlich an `_busy`.
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 44,
+                              child: TextButton(
+                                onPressed: () => _schliessen(true),
+                                child: Text(
+                                  _needsSettingsStep
+                                      ? 'Später, mit „Beim Verwenden" fahren'
+                                      : 'Später entscheiden',
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.6),
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
                               ),
-                            ],
+                            ),
                           ],
                         ),
                       ),

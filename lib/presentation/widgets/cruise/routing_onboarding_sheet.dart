@@ -4,26 +4,49 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/routing_onboarding_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
+/// Zeigt den Routing-/Haftungshinweis „Routing verstehen".
+///
+/// 2026-08-24 (eingesperrter Nutzer, iPhone 15 Pro Max, TikTok-Meldung):
+/// Dieses Blatt hatte beim automatischen Aufruf KEINEN Ausgang —
+/// `isDismissible: force`, `enableDrag: force` und der Schließen-Knopf waren
+/// alle aus, und der einzige Knopf gab erst nach einer ScrollNotification
+/// frei. Passt der Inhalt ohne Scrollen in das Blatt, schaltet Flutter die
+/// Zieh-Geste ab (`ScrollPhysics.shouldAcceptUserOffset` ist bei
+/// `maxScrollExtent == 0` false), es feuert nie eine Notification — die App
+/// war eingefroren, Neustart und Neuinstallation halfen nicht.
+///
+/// Seitdem gilt hier hart:
+///  * Es gibt IMMER einen Ausgang (Schließen-Knopf, Hintergrund-Tippen,
+///    Wischen, Android-Zurück) — auf jedem Gerät, in jeder Schriftgröße.
+///  * Schließen ohne „Verstanden" ist KEINE Zustimmung: nichts wird
+///    gespeichert, der Hinweis kommt beim nächsten Cruise-Aufruf wieder.
+///    Der rechtliche Hinweis bleibt damit verpflichtend, ohne einzusperren.
+///  * Was vollständig sichtbar ist, gilt als vollständig gelesen.
 Future<void> showRoutingOnboardingSheet(
   BuildContext context, {
   bool force = false,
 }) async {
-  if (RoutingOnboardingService.isOpen) return;
-  if (!force && await RoutingOnboardingService.hasAccepted()) return;
-  if (!context.mounted) return;
-
-  RoutingOnboardingService.acquireLock();
+  // Sperre atomar holen, BEVOR irgendein await läuft. Vorher stand der
+  // isOpen-Check vor `await hasAccepted()`; zwei gleichzeitige Aufrufe
+  // (Doppel-Frame, App-Wechsel, Provider-Rebuild) kamen beide durch.
+  if (!RoutingOnboardingService.tryAcquireLock()) return;
   try {
+    if (!force && await RoutingOnboardingService.hasAccepted()) return;
+    if (!context.mounted) return;
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      isDismissible: force,
-      enableDrag: force,
+      // NIE auf `force` binden — sonst gibt es beim automatischen Aufruf
+      // keinen Weg nach draußen.
+      isDismissible: true,
+      enableDrag: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.74),
-      builder: (_) => RoutingOnboardingSheet(showCloseButton: force),
+      builder: (_) => const RoutingOnboardingSheet(),
     );
   } finally {
     RoutingOnboardingService.releaseLock();
@@ -31,18 +54,32 @@ Future<void> showRoutingOnboardingSheet(
 }
 
 class RoutingOnboardingSheet extends StatefulWidget {
-  const RoutingOnboardingSheet({super.key, this.showCloseButton = false});
-
-  final bool showCloseButton;
+  const RoutingOnboardingSheet({super.key});
 
   @override
   State<RoutingOnboardingSheet> createState() => _RoutingOnboardingSheetState();
 }
 
 class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
+  /// Ab hier gilt der Inhalt als bis unten gelesen. Deckt auch den Fall ab,
+  /// dass gar nichts zu scrollen ist (maxScrollExtent == 0).
+  static const double _endToleranz = 24.0;
+
+  /// Begrenzte Nachfass-Versuche, falls die Scroll-Position beim ersten
+  /// Frame noch nicht existiert. Ohne Deckel liefe das endlos.
+  static const int _maxNachfassen = 12;
+
   final ScrollController _controller = ScrollController();
   bool _readToBottom = false;
   bool _saving = false;
+  bool _pruefungGeplant = false;
+  int _nachfassVersuche = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _pruefungPlanen();
+  }
 
   @override
   void dispose() {
@@ -50,19 +87,77 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
     super.dispose();
   }
 
+  /// Prüft NACH dem Layout, ob überhaupt etwas zu scrollen übrig ist.
+  ///
+  /// Wird aus [initState], aus jedem `build` und bei jeder Änderung der
+  /// Scroll-Maße angestoßen. Damit greift die Freigabe auch dann, wenn sich
+  /// die Größe erst später ändert: Drehen, Tastatur, Schriftgröße im
+  /// laufenden Betrieb, Splitscreen.
+  void _pruefungPlanen() {
+    if (_readToBottom || _pruefungGeplant || !mounted) return;
+    _pruefungGeplant = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pruefungGeplant = false;
+      _freigebenWennAllesSichtbar();
+    });
+  }
+
+  void _freigebenWennAllesSichtbar() {
+    if (!mounted || _readToBottom) return;
+    if (!_controller.hasClients || !_controller.position.hasContentDimensions) {
+      // Die Scroll-Position hängt beim allerersten Frame evtl. noch nicht.
+      if (_nachfassVersuche++ < _maxNachfassen) _pruefungPlanen();
+      return;
+    }
+    _freigebenWennAmEnde(_controller.position);
+  }
+
+  void _freigebenWennAmEnde(ScrollMetrics metrics) {
+    if (_readToBottom) return;
+    if (metrics.pixels >= metrics.maxScrollExtent - _endToleranz) {
+      _alsGelesenMerken();
+    }
+  }
+
+  /// Einmal gelesen bleibt gelesen — auch wenn der Inhalt durch Drehen
+  /// wieder länger wird. Sonst könnte eine Drehung erneut einsperren.
+  void _alsGelesenMerken() {
+    if (_readToBottom) return;
+    _readToBottom = true;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    final imFrame =
+        phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks;
+    if (imFrame) {
+      // Während Layout/Build darf kein setState laufen.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+    setState(() {});
+  }
+
   Future<void> _accept() async {
-    if (!_readToBottom || _saving) return;
+    if (_saving || !_readToBottom) return;
     setState(() => _saving = true);
+    // markAccepted wirft nie und hängt nie (Timeout im Service). Selbst wenn
+    // nichts gespeichert werden konnte, wird das Blatt geschlossen — sonst
+    // bliebe der Nutzer im Ladezustand stehen.
     await RoutingOnboardingService.markAccepted();
     if (!mounted) return;
     Navigator.of(context).pop();
   }
 
   bool _handleScroll(ScrollNotification notification) {
-    final metrics = notification.metrics;
-    if (!_readToBottom && metrics.pixels >= metrics.maxScrollExtent - 24) {
-      setState(() => _readToBottom = true);
-    }
+    _freigebenWennAmEnde(notification.metrics);
+    return false;
+  }
+
+  /// Feuert, wenn sich die Maße ändern, OHNE dass gescrollt wurde — z. B.
+  /// beim Drehen oder wenn der Nutzer die Systemschrift ändert.
+  bool _handleScrollMetrics(ScrollMetricsNotification notification) {
+    _freigebenWennAmEnde(notification.metrics);
     return false;
   }
 
@@ -74,6 +169,9 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
       textScaler: media.textScaler.clamp(maxScaleFactor: 1.08),
     );
     final height = (media.size.height * 0.84).clamp(560.0, 720.0).toDouble();
+
+    // Jeder Rebuild kann eine neue Größe bedeuten → erneut prüfen.
+    _pruefungPlanen();
 
     return MediaQuery(
       data: clampedMedia,
@@ -117,65 +215,69 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
                         padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
                         child: Column(
                           children: [
-                            _Header(
-                              accent: accent,
-                              showCloseButton: widget.showCloseButton,
-                            ),
+                            _Header(accent: accent),
                             Expanded(
-                              child: NotificationListener<ScrollNotification>(
-                                onNotification: _handleScroll,
-                                child: SingleChildScrollView(
-                                  controller: _controller,
-                                  physics: const BouncingScrollPhysics(),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const SizedBox(height: 12),
-                                      _NoticeCard(
-                                        icon:
-                                            CupertinoIcons.shield_lefthalf_fill,
-                                        title: 'Route bleibt Vorschlag',
-                                        text:
-                                            'Cruise Connector plant Routen. Du prüfst immer selbst, ob Straße, Manöver, Wetter und Situation sicher und erlaubt sind.',
-                                        accent: accent,
-                                      ),
-                                      _NoticeCard(
-                                        icon: CupertinoIcons.map_fill,
-                                        title: 'Kartendaten können abweichen',
-                                        text:
-                                            'Sperren, Privatwege, Baustellen, Tempolimits und Anweisungen vor Ort haben immer Vorrang vor der App.',
-                                        accent: accent,
-                                      ),
-                                      _NoticeCard(
-                                        icon: CupertinoIcons.hand_raised_fill,
-                                        title:
-                                            'Nicht während der Fahrt bedienen',
-                                        text:
-                                            'Plane vor dem Losfahren. Während der Fahrt bleibt das Handy in der Halterung; Änderungen machst du nur sicher im Stand.',
-                                        accent: accent,
-                                      ),
-                                      _NoticeCard(
-                                        icon: CupertinoIcons.person_crop_circle,
-                                        title: 'Du fährst eigenverantwortlich',
-                                        text:
-                                            'Fahrstil, Abstand, Tempo und Verkehrsregeln bleiben deine Entscheidung. Die App ersetzt keine Sorgfalt.',
-                                        accent: accent,
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Scrolle bis zum Ende. Danach erscheint dieser Cruise-Hinweis nicht mehr automatisch.',
-                                        style: TextStyle(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.56,
-                                          ),
-                                          fontSize: 12.5,
-                                          height: 1.3,
-                                          fontWeight: FontWeight.w700,
+                              child: NotificationListener<ScrollMetricsNotification>(
+                                onNotification: _handleScrollMetrics,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _handleScroll,
+                                  child: SingleChildScrollView(
+                                    controller: _controller,
+                                    physics: const BouncingScrollPhysics(),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const SizedBox(height: 12),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons
+                                              .shield_lefthalf_fill,
+                                          title: 'Route bleibt Vorschlag',
+                                          text:
+                                              'Cruise Connector plant Routen. Du prüfst immer selbst, ob Straße, Manöver, Wetter und Situation sicher und erlaubt sind.',
+                                          accent: accent,
                                         ),
-                                      ),
-                                      const SizedBox(height: 18),
-                                    ],
+                                        _NoticeCard(
+                                          icon: CupertinoIcons.map_fill,
+                                          title: 'Kartendaten können abweichen',
+                                          text:
+                                              'Sperren, Privatwege, Baustellen, Tempolimits und Anweisungen vor Ort haben immer Vorrang vor der App.',
+                                          accent: accent,
+                                        ),
+                                        _NoticeCard(
+                                          icon: CupertinoIcons.hand_raised_fill,
+                                          title:
+                                              'Nicht während der Fahrt bedienen',
+                                          text:
+                                              'Plane vor dem Losfahren. Während der Fahrt bleibt das Handy in der Halterung; Änderungen machst du nur sicher im Stand.',
+                                          accent: accent,
+                                        ),
+                                        _NoticeCard(
+                                          icon:
+                                              CupertinoIcons.person_crop_circle,
+                                          title:
+                                              'Du fährst eigenverantwortlich',
+                                          text:
+                                              'Fahrstil, Abstand, Tempo und Verkehrsregeln bleiben deine Entscheidung. Die App ersetzt keine Sorgfalt.',
+                                          accent: accent,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          _readToBottom
+                                              ? 'Mit „Verstanden" erscheint dieser Cruise-Hinweis nicht mehr automatisch. Schließt du oben mit ✕, zeigen wir ihn beim nächsten Mal wieder.'
+                                              : 'Scrolle bis zum Ende, danach kannst du bestätigen. Mit ✕ oben kommst du jederzeit heraus — der Hinweis kommt dann erneut.',
+                                          style: TextStyle(
+                                            color: Colors.white.withValues(
+                                              alpha: 0.56,
+                                            ),
+                                            fontSize: 12.5,
+                                            height: 1.3,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 18),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -226,10 +328,9 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.accent, required this.showCloseButton});
+  const _Header({required this.accent});
 
   final Color accent;
-  final bool showCloseButton;
 
   @override
   Widget build(BuildContext context) {
@@ -268,11 +369,12 @@ class _Header extends StatelessWidget {
                 ),
               ),
             ),
-            if (showCloseButton)
-              IconButton(
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
-              ),
+            // Notausgang. Immer sichtbar — nie an `force` koppeln.
+            IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              tooltip: 'Schließen',
+              icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
+            ),
           ],
         ),
       ],

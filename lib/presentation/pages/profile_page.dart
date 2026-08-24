@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -2553,76 +2555,204 @@ class _ProfilePageState extends State<ProfilePage>
     if (uid == null) return;
     final groupId = group['id'] as String;
 
-    // Owner-Rolle über group_members prüfen (mehrere Owner möglich,
-    // da ein Owner die Rolle weitergeben kann).
-    final iAmOwner = await SocialService.isOwner(groupId);
-    final otherOwners = iAmOwner
-        ? await SocialService.countOtherOwners(groupId, uid)
-        : 0;
+    // 2026-08-24: Auch DIESE Abfrage hing frueher ohne Zeitgrenze. Antwortet
+    // Supabase nicht, passierte auf Knopfdruck gar nichts — kein Dialog,
+    // keine Meldung. Jetzt sagen wir nach spaetestens einer Zeitgrenze,
+    // warum es nicht weitergeht.
+    final bool iAmOwner;
+    final int otherOwners;
+    try {
+      // Owner-Rolle über group_members prüfen (mehrere Owner möglich,
+      // da ein Owner die Rolle weitergeben kann).
+      iAmOwner = await SocialService.isOwner(
+        groupId,
+      ).timeout(LeaveGroupDialog.netzZeitgrenze);
+      otherOwners = iAmOwner
+          ? await SocialService.countOtherOwners(
+              groupId,
+              uid,
+            ).timeout(LeaveGroupDialog.netzZeitgrenze)
+          : 0;
+    } catch (e) {
+      debugPrint('[Profil] Gruppenrolle nicht abrufbar: $e');
+      if (!mounted) return;
+      _zeigeGruppenHinweis(
+        'Die Gruppendaten sind gerade nicht erreichbar. Bitte prüfe deine '
+        'Verbindung und versuch es noch einmal.',
+        fehler: true,
+      );
+      return;
+    }
     // Gruppe nur löschen, wenn ich Owner bin UND es keinen weiteren Owner gibt.
     final willDelete = iAmOwner && otherOwners == 0;
 
     if (!mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => _LeaveGroupDialog(
-        willDelete: willDelete,
-        iAmOwner: iAmOwner,
-        onConfirm: () async {
-          if (willDelete) {
-            await SocialService.deleteGroup(groupId);
-          } else {
-            await SocialService.leaveGroup(groupId);
-          }
-        },
+    // Ein System-Pop (Android-Zurueck) liefert `null`. Dann wissen wir nicht,
+    // ob schon etwas rausgegangen ist — also behandeln wir es wie „unklar"
+    // und laden die Liste neu, statt eine Vermutung anzuzeigen.
+    final ergebnis =
+        await showDialog<LeaveGroupErgebnis>(
+          context: context,
+          // Der Ausgang ist hier „Abbrechen", und der ist NIE gesperrt.
+          // Deshalb bleibt der Hintergrund bewusst zu: ein Fehltipp neben
+          // den Dialog soll eine laufende Loeschung nicht wegreissen.
+          barrierDismissible: false,
+          builder: (ctx) => LeaveGroupDialog(
+            willDelete: willDelete,
+            iAmOwner: iAmOwner,
+            onConfirm: () async {
+              if (willDelete) {
+                await SocialService.deleteGroup(groupId);
+              } else {
+                await SocialService.leaveGroup(groupId);
+              }
+            },
+          ),
+        ) ??
+        LeaveGroupErgebnis.unklar;
+
+    if (!mounted) return;
+    switch (ergebnis) {
+      case LeaveGroupErgebnis.abgebrochen:
+        return;
+      case LeaveGroupErgebnis.erledigt:
+        await _loadData();
+      case LeaveGroupErgebnis.unklar:
+        // Ehrlich bleiben: eine abgebrochene Anfrage kann trotzdem
+        // angekommen sein. Der Nutzer muss wissen, dass er nachsehen muss.
+        _zeigeGruppenHinweis(
+          willDelete
+              ? 'Ob die Gruppe gelöscht wurde, ist unklar. Wir laden die '
+                    'Liste neu — schau bitte nach.'
+              : 'Ob du die Gruppe verlassen hast, ist unklar. Wir laden die '
+                    'Liste neu — schau bitte nach.',
+        );
+        await _loadData();
+    }
+  }
+
+  void _zeigeGruppenHinweis(String text, {bool fehler = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: fehler
+            ? const Color(0xFF301B20)
+            : const Color(0xFF1C1F26),
+        duration: const Duration(seconds: 6),
       ),
     );
-    if (confirmed != true) return;
-
-    if (mounted) await _loadData();
   }
+}
+
+/// Womit der „Gruppe verlassen"-Dialog geendet ist.
+///
+/// Drei Faelle statt `bool?`, weil „abgebrochen" und „wir wissen es nicht"
+/// eben NICHT dasselbe sind: eine abgebrochene Anfrage kann trotzdem beim
+/// Server angekommen sein. Der Aufrufer muss die Liste dann neu laden und es
+/// dem Nutzer sagen.
+enum LeaveGroupErgebnis {
+  /// Es ist nie eine Anfrage rausgegangen. Nichts hat sich geaendert.
+  abgebrochen,
+
+  /// Die Aktion ist sauber durchgelaufen.
+  erledigt,
+
+  /// Eine Anfrage lief los, ihr Ausgang ist offen (Zeitgrenze, Fehler oder
+  /// Abbruch mitten im Lauf).
+  unklar,
 }
 
 /// Bestätigungsdialog für „Gruppe verlassen". Letzter Admin sieht eine
 /// destruktive Variante mit Warntext + roter Lösch-Aktion und Inline-Spinner
 /// während das Backend läuft.
-class _LeaveGroupDialog extends StatefulWidget {
+///
+/// Öffentlich, damit der Widget-Test ihn ohne Supabase-Attrappe pumpen kann.
+///
+/// 2026-08-24 (Vorfall „eingesperrter Nutzer"): Dieser Dialog hatte dieselbe
+/// Bauart wie das Blatt, in dem der Nutzer festsass. `barrierDismissible`
+/// war aus, und BEIDE Knoepfe waren mit `_busy ? null` gesperrt — auch
+/// „Abbrechen". Dahinter lief `deleteGroup`/`leaveGroup` ohne Zeitgrenze.
+/// Antwortete Supabase nicht, blieb `_busy` fuer immer stehen: auf iOS gab
+/// es dann keinen Ausweg mehr, auf Android nur die Zurueck-Geste — schon
+/// wieder ein Unterschied zwischen den Plattformen.
+///
+/// Seitdem gilt:
+///  * „Abbrechen" ist NIE gesperrt. Es braucht kein Netz und nichts vom
+///    System.
+///  * Jeder Netz-Aufruf laeuft gegen [netzZeitgrenze] und endet mit einer
+///    Meldung, die sagt, was der Nutzer jetzt nicht weiss.
+class LeaveGroupDialog extends StatefulWidget {
   final bool willDelete;
   final bool iAmOwner;
   final Future<void> Function() onConfirm;
 
-  const _LeaveGroupDialog({
+  const LeaveGroupDialog({
+    super.key,
     required this.willDelete,
     required this.iAmOwner,
     required this.onConfirm,
   });
 
+  /// Nach dieser Zeit gilt ein Netz-Aufruf als unbeantwortet. Lieber eine
+  /// ehrliche Meldung als ein Kringel, der sich bis zum App-Neustart dreht.
+  static const Duration netzZeitgrenze = Duration(seconds: 12);
+
   @override
-  State<_LeaveGroupDialog> createState() => _LeaveGroupDialogState();
+  State<LeaveGroupDialog> createState() => _LeaveGroupDialogState();
 }
 
-class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
+class _LeaveGroupDialogState extends State<LeaveGroupDialog> {
   bool _busy = false;
+
+  /// Ist mindestens eine Anfrage rausgegangen? Danach ist „Abbrechen" nicht
+  /// mehr folgenlos — die Anfrage kann trotzdem angekommen sein.
+  bool _versuchGelaufen = false;
   String? _error;
 
   Future<void> _handleConfirm() async {
     if (_busy) return;
     setState(() {
       _busy = true;
+      _versuchGelaufen = true;
       _error = null;
     });
     try {
-      await widget.onConfirm();
-      if (mounted) Navigator.pop(context, true);
+      // Ohne Zeitgrenze konnte hier alles stehenbleiben. `timeout` bricht die
+      // Anfrage NICHT ab — sie kann also durchlaufen. Genau deshalb sagt die
+      // Meldung unten, dass der Ausgang offen ist.
+      await widget.onConfirm().timeout(LeaveGroupDialog.netzZeitgrenze);
+      if (mounted) Navigator.pop(context, LeaveGroupErgebnis.erledigt);
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = widget.willDelete
+            ? 'Das dauert zu lange. Die Anfrage kann trotzdem angekommen '
+                  'sein — schließe den Dialog und sieh nach, ob die Gruppe '
+                  'noch da ist.'
+            : 'Das dauert zu lange. Die Anfrage kann trotzdem angekommen '
+                  'sein — schließe den Dialog und sieh nach, ob du noch '
+                  'Mitglied bist.';
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = 'Aktion fehlgeschlagen: $e';
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Aktion fehlgeschlagen: $e';
+      });
     }
+  }
+
+  /// Der Ausgang. Braucht kein Netz, keine Berechtigung, keine Antwort des
+  /// Systems — und ist deshalb NIE gesperrt.
+  void _abbrechen() {
+    Navigator.pop(
+      context,
+      _versuchGelaufen
+          ? LeaveGroupErgebnis.unklar
+          : LeaveGroupErgebnis.abgebrochen,
+    );
   }
 
   @override
@@ -2673,8 +2803,9 @@ class _LeaveGroupDialogState extends State<_LeaveGroupDialog> {
         ],
       ),
       actions: [
+        // NIE an `_busy` haengen — das war der Weg in die Sackgasse.
         TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context, false),
+          onPressed: _abbrechen,
           child: const Text('Abbrechen', style: TextStyle(color: Colors.grey)),
         ),
         if (destructive)

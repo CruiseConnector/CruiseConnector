@@ -37,6 +37,19 @@ const Color _muted = Color(0xFF8A93A6);
 const Color _ok = Color(0xFF2ECC71);
 const Color _err = Color(0xFFE74C3C);
 
+// 2026-08-24 (vucko, nach dem Vorfall „Nutzer sitzt fest"): Jeder Aufruf, auf
+// den dieser Assistent mit `_busy = true` wartet, sperrt den GANZEN Bildschirm
+// — Weiter, Überspringen und Zurück sind dann tot, und `PopScope(canPop:
+// false)` verhindert zusätzlich die Zurück-Geste. Ein `finally` hilft dabei
+// nur gegen Fehler, NICHT gegen einen Aufruf, der nie zurückkommt: dann läuft
+// das `finally` nie. Deshalb hat jeder dieser Aufrufe eine Zeitgrenze. Läuft
+// sie ab, greift das `finally`, der Bildschirm wird wieder bedienbar und der
+// Nutzer bekommt eine Meldung statt eines gesperrten Knopfes.
+const Duration _netzZeitgrenze = Duration(seconds: 20);
+
+/// Abmelden darf kürzer warten — es soll nur schnell zur Startseite zurück.
+const Duration _abmeldeZeitgrenze = Duration(seconds: 8);
+
 enum _UNameState { idle, checking, available, taken, reserved, invalid, error }
 
 enum _Step {
@@ -187,7 +200,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     }
     setState(() => _uState = _UNameState.checking);
     _debounce = Timer(const Duration(milliseconds: 450), () async {
-      final res = await SocialService.isUsernameAvailable(v);
+      // Ohne Zeitgrenze bleibt `_uState` bei einem hängenden Aufruf für
+      // immer auf `checking` — und weil „Weiter" auf der @-Name-Seite an
+      // `_canLeaveUsernamePage` hängt, käme der Nutzer nie weiter. Bei
+      // Ablauf derselbe Zustand wie bei einem Fehler: „Konnte gerade nicht
+      // prüfen." Jeder weitere Tastendruck startet die Prüfung neu.
+      final res = await SocialService.isUsernameAvailable(v).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => (available: false, reason: 'error'),
+      );
       if (!mounted || _usernameCtrl.text.trim() != v) return;
       setState(() {
         switch (res.reason) {
@@ -228,7 +249,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     if (_committedUsername == v) return true;
     setState(() => _busy = true);
     try {
-      final res = await SocialService.setUsername(v);
+      final res = await SocialService.setUsername(v).timeout(_netzZeitgrenze);
       if (res.ok) {
         _committedUsername = v;
         return true;
@@ -247,6 +268,12 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           _suggestions = _genSuggestions(v);
         });
       }
+      return false;
+    } on TimeoutException {
+      _showError(
+        'Der @-Name konnte gerade nicht gespeichert werden. Prüfe deine '
+        'Verbindung und tippe nochmal auf „Weiter".',
+      );
       return false;
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -297,7 +324,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         email: email,
         password: pw,
         legalAcceptance: legalAcceptance,
-      );
+      ).timeout(_netzZeitgrenze);
       if (AuthService.currentUser == null) {
         // E-Mail-Bestätigung nötig (Autoconfirm aus): NICHT hängen bleiben und
         // NICHT zum Neu-Login zwingen. Stattdessen in den In-App-Code-Schritt
@@ -317,6 +344,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       return true;
     } on AuthException catch (e) {
       setState(() => _accountErr = _translateAuthError(e.message));
+      return false;
+    } on TimeoutException {
+      setState(
+        () => _accountErr =
+            'Der Server antwortet gerade nicht. Prüfe deine Verbindung und '
+            'versuche es erneut.',
+      );
       return false;
     } catch (e) {
       debugPrint('[Onboarding] signUp Fehler: $e');
@@ -376,8 +410,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         }
         setState(() => _busy = true);
         try {
-          await SocialService.setDisplayName(name);
+          await SocialService.setDisplayName(name).timeout(_netzZeitgrenze);
         } catch (_) {
+          // Anzeigename ist nachträglich im Profil änderbar — hier zählt
+          // nur, dass der Assistent weiterläuft statt zu hängen.
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -424,7 +460,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         email: _pendingEmail,
         token: code,
         legalAcceptance: _pendingLegal,
-      );
+      ).timeout(_netzZeitgrenze);
       if (AuthService.currentUser == null) {
         setState(() => _codeErr = 'Code ungültig oder abgelaufen.');
         return false;
@@ -436,6 +472,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       return true;
     } on AuthException catch (e) {
       setState(() => _codeErr = _translateOtpError(e.message));
+      return false;
+    } on TimeoutException {
+      setState(
+        () => _codeErr =
+            'Der Server antwortet gerade nicht. Prüfe deine Verbindung und '
+            'tippe nochmal auf „Weiter".',
+      );
       return false;
     } catch (e) {
       debugPrint('[Onboarding] verifyCode Fehler: $e');
@@ -484,7 +527,9 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     if (_resendIn > 0 || _busy || _pendingEmail.isEmpty) return;
     setState(() => _busy = true);
     try {
-      await AuthService.resendVerificationEmail(_pendingEmail);
+      await AuthService.resendVerificationEmail(
+        _pendingEmail,
+      ).timeout(_netzZeitgrenze);
       _startResendCooldown();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -582,8 +627,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   Future<void> _cancelOnboarding() async {
     setState(() => _busy = true);
     try {
-      await AuthService.signOut();
-    } catch (_) {}
+      // Der Weg zurück zur Startseite darf NICHT am Abmelden hängen: läuft
+      // die Zeitgrenze ab, geht es trotzdem raus. Eine noch offene lokale
+      // Session wird beim nächsten Start ohnehin neu geprüft.
+      await AuthService.signOut().timeout(_abmeldeZeitgrenze);
+    } catch (e) {
+      debugPrint('[Onboarding] Abmelden fehlgeschlagen/hängt: $e');
+    }
+    if (mounted) setState(() => _busy = false);
     _toWelcome();
   }
 
@@ -627,16 +678,23 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
           await SocialService.updateCarProfile(
             brand: brand.isEmpty ? null : brand,
             name: model.isEmpty ? null : model,
-          );
+          ).timeout(_netzZeitgrenze);
         } catch (_) {}
       }
       await SocialService.completeOnboarding(
         countryCode: _country == 'Andere' ? null : _country,
         region: _country,
         language: 'de',
-      );
-    } catch (_) {
+      ).timeout(_netzZeitgrenze);
+    } catch (e) {
       // Onboarding darf nie hängen bleiben — im Zweifel weiter zur App.
+      // 2026-08-24 (vucko): Das galt bisher nur für Fehler. Ohne Zeitgrenze
+      // blieb `_busy` bei einem hängenden Aufruf für immer true — und weil
+      // `_finish` als einzige Stelle kein `finally` hat, wären Weiter,
+      // Überspringen UND Zurück dauerhaft tot gewesen. Schlägt das
+      // Abschliessen fehl, bleibt `onboarding_completed` false: das Post-Auth-
+      // Tor holt den Assistenten beim nächsten Start nach.
+      debugPrint('[Onboarding] Abschluss nicht gespeichert: $e');
     }
     // Offline-Karte direkt nach abgeschlossener Registrierung automatisch laden
     // (falls noch nicht vorhanden, nur WLAN, im Hintergrund).
@@ -667,8 +725,15 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       _busy = true;
     });
     try {
-      await SocialService.uploadAvatar(bytes);
-    } catch (_) {
+      // uploadAvatar ist in social_service.dart durchgehend begrenzt
+      // (Upload 3 x 25 s, danach das Setzen von avatar_url 25 s) und kann
+      // deshalb nicht endlos hängen. Zusätzlich hier eine harte Obergrenze,
+      // damit der Bildschirm garantiert wieder bedienbar wird.
+      await SocialService.uploadAvatar(
+        bytes,
+      ).timeout(const Duration(minutes: 2));
+    } catch (e) {
+      debugPrint('[Onboarding] Profilbild nicht hochgeladen: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1827,7 +1892,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   Future<void> _folgeMitfahrer(String id) async {
     setState(() => _folgenLaeuft.add(id));
     try {
-      await SocialService.followUser(id);
+      await SocialService.followUser(id).timeout(_netzZeitgrenze);
       if (!mounted) return;
       setState(() {
         _gefolgt.add(id);
