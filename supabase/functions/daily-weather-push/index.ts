@@ -61,14 +61,24 @@ const FENSTER_ENDE_MINUTE = 20 * 60;
 /// Laenge null, wenn OpenMeteo einmal Unsinn liefert.
 const FENSTER_MINDESTENDE_MINUTE = 15 * 60;
 
-/// Rasterweite der Slots. 5 Minuten ergibt im vollen Fenster 84 Slots — genug,
+/// Rasterweite der Slots. 5 Minuten ergibt im vollen Fenster 84 Ticks — genug,
 /// dass 183 Nutzer sich auf rund zwei pro Tick verteilen.
 const SLOT_MINUTEN = 5;
 
-/// Obergrenze pro Lauf. Im Normalbetrieb sind es zwei bis drei Nutzer; die
-/// Grenze schuetzt nur den Nachhol-Lauf nach einer Stoerung davor, in die
-/// Laufzeitgrenze der Edge Function zu rennen. Der Rest kommt beim naechsten
-/// Tick.
+/// Die letzten drei Ticks des Fensters bekommen KEINE eigenen Slots, sie sind
+/// reiner Kehraus. Ohne diesen Puffer haengt der letzte Slot am letzten Tick:
+/// faellt genau der aus, verlieren die Nutzer dieses Slots ihren Tag. Gemessen
+/// in der Rechenprobe: bei jedem zweiten ausgefallenen Tick blieben zwei von
+/// 183 Nutzern liegen. Mit dem Puffer bleibt keiner liegen.
+const KEHRAUS_TICKS = 3;
+
+/// Obergrenze fuer die Nutzer, die ein Lauf ANFASST — gezaehlt wird jeder, der
+/// einen OpenMeteo-Abruf ausloest, nicht nur der, bei dem am Ende etwas
+/// rausgeht. Bei schlechtem Wetter wird ja nichts gesendet, der Abruf hat aber
+/// trotzdem Zeit gekostet. Im Normalbetrieb sind es zwei bis drei Nutzer pro
+/// Tick; die Grenze schuetzt nur den Nachhol-Lauf nach einer Stoerung davor, in
+/// die Laufzeitgrenze der Edge Function zu rennen. Der Rest kommt beim
+/// naechsten Tick.
 const MAX_PRO_LAUF = 60;
 
 /// FNV-1a, 32 Bit. Gebraucht wird nur: gleiche Eingabe -> gleicher Slot,
@@ -143,7 +153,7 @@ function fensterEndeMinute(sonnenuntergang: number | null): number {
 function slotMinute(userId: string, datum: string, endeMinute: number): number {
   const slots = Math.max(
     1,
-    Math.floor((endeMinute - FENSTER_START_MINUTE) / SLOT_MINUTEN),
+    Math.floor((endeMinute - FENSTER_START_MINUTE) / SLOT_MINUTEN) - KEHRAUS_TICKS,
   );
   const slot = streuHash(`${userId}:${datum}`) % slots;
   return FENSTER_START_MINUTE + slot * SLOT_MINUTEN;
@@ -249,8 +259,9 @@ serve(async (_req) => {
   let sent = 0;
   let skipped = 0;
   let failed = 0;
-  let ausserhalb = 0;
+  let vertagt = 0;
   let nochNichtDran = 0;
+  let verarbeitet = 0;
   try {
     // 0. Fensterende bestimmen (20:00, aber nie nach Sonnenuntergang).
     const endeMinute = fensterEndeMinute(await holeSonnenuntergangMinute());
@@ -280,6 +291,23 @@ serve(async (_req) => {
       return new Response(JSON.stringify({ error: 'no users' }), { status: 500 });
     }
 
+    // Wer heute schon eine Wetter-Meldung hat — in EINER Abfrage statt einer
+    // pro Nutzer. Gerechnet wird ab WIENER Mitternacht. Vorher stand hier
+    // UTC-Mitternacht, und genau daran ist die Idempotenz am 24.05.
+    // gescheitert: ein Lauf um 01:03 Wiener Zeit lag in UTC noch im Vortag,
+    // der Lauf um 08:01 sah ihn deshalb nicht.
+    // Zwischen dieser Momentaufnahme und dem INSERT kann ein zweiter Lauf
+    // dazwischenfunken — dagegen steht der UNIQUE-Index, nicht diese Liste.
+    const { data: schonHeute } = await supabase
+      .from('notifications')
+      .select('user_id')
+      .eq('type', 'weather_recommendation')
+      .gte('created_at', tagesbeginn)
+      .limit(20000);
+    const erledigt = new Set<string>(
+      (schonHeute ?? []).map((z) => (z as { user_id: string }).user_id),
+    );
+
     for (const u of users) {
       const userId = u.id as string;
 
@@ -288,28 +316,27 @@ serve(async (_req) => {
         nochNichtDran++;
         continue;
       }
-      if (sent >= MAX_PRO_LAUF) {
-        ausserhalb++;
-        continue;
-      }
 
-      // 3. Vorpruefung: heute schon eine Wetter-Meldung? Gerechnet wird ab
-      // WIENER Mitternacht. Vorher stand hier UTC-Mitternacht — genau daran
-      // ist die Idempotenz am 24.05. gescheitert: ein Lauf um 01:03 Wiener
-      // Zeit lag in UTC noch im Vortag, der Lauf um 08:01 sah ihn nicht.
-      const { data: existing } = await supabase
-        .from('notifications')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('type', 'weather_recommendation')
-        .gte('created_at', tagesbeginn)
-        .limit(1);
-      if (existing && existing.length > 0) {
+      // 3. Hat er heute schon eine? Das kostet nichts, es steht schon im
+      // Gedaechtnis — und es muss VOR der Budgetgrenze stehen. Andernfalls
+      // verbrauchen die laengst erledigten Nutzer das Budget, und wer weiter
+      // hinten in der Liste steht, kommt nie an die Reihe.
+      // Gemessen beim ersten Tick am 24.08. um 19:50, als die Grenze noch
+      // davor stand: verarbeitet=60, davon 60 sofort uebersprungen, 126
+      // vertagt — der Lauf hat sein ganzes Budget fuer nichts ausgegeben.
+      if (erledigt.has(userId)) {
         skipped++;
         continue;
       }
 
-      // 4. Position: zuerst aus profile, dann aus session, dann Fallback
+      // 4. Ab hier kostet es einen Wetter-Abruf. Erst jetzt zaehlt das Budget.
+      if (verarbeitet >= MAX_PRO_LAUF) {
+        vertagt++;
+        continue;
+      }
+      verarbeitet++;
+
+      // 5. Position: zuerst aus profile, dann aus session, dann Fallback
       let lat: number | null = null;
       let lng: number | null = null;
       const profileLat = (u as { last_known_lat?: number | null }).last_known_lat;
@@ -353,14 +380,14 @@ serve(async (_req) => {
         lng = 9.7471;
       }
 
-      // 5. Wetter checken
+      // 6. Wetter checken
       const wx = await checkWeather(lat, lng);
       if (!wx || !wx.ok) {
         skipped++;
         continue;
       }
 
-      // 6. Notification erstellen (self-from_user_id = system marker)
+      // 7. Notification erstellen (self-from_user_id = system marker)
       const { error: insErr } = await supabase.from('notifications').insert({
         user_id: userId,
         from_user_id: userId, // system uses self as from
@@ -400,7 +427,8 @@ serve(async (_req) => {
       JSON.stringify({
         sent, skipped, failed,
         noch_nicht_dran: nochNichtDran,
-        vertagt: ausserhalb,
+        vertagt,
+        verarbeitet,
         total: users.length,
         wiener_minute: jetztMinute,
         fenster_ende: endeMinute,
