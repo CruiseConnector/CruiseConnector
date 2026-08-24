@@ -24,8 +24,11 @@ void main() {
   // 2026-08-24 (vucko): „erste Gruppenfahrt erstellen, ersten Post erstellen,
   // Auto in die Garage hinzufuegen [...] die ersten drei Badges sammeln oder
   // halt die ersten 50 Kilometer fahren."
-  test('elf Aufgaben, die drei neuen dabei', () {
-    expect(StarterAufgabenService.aufgaben, hasLength(11));
+  // 2026-08-24 (Aufgabe 4): Aus elf wurden zwoelf — „Einen Hashtag benutzen"
+  // ist dazugekommen. Die Schwelle fuer den Boost bleibt bei acht, siehe
+  // test/services/starter_hashtag_und_ehrlichkeit_test.dart.
+  test('zwoelf Aufgaben, die drei neuen dabei', () {
+    expect(StarterAufgabenService.aufgaben, hasLength(12));
     final ids = StarterAufgabenService.aufgaben.map((a) => a.id).toList();
     expect(ids.take(5).toList(), [
       'tutorial',

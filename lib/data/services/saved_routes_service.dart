@@ -269,7 +269,24 @@ class SavedRoutesService {
         .select('id')
         .maybeSingle();
     invalidateWeeklyTopRouteCache();
+    _meldeSpeichernAufgabe();
     return inserted?['id']?.toString();
+  }
+
+  /// Starter-Aufgabe „Eine Route speichern" — NACH dem erfolgreichen INSERT.
+  ///
+  /// 2026-08-24 (Aufgabe 4, vucko: „auch wirklich absolvieren"): Die Meldung
+  /// stand bis heute als ERSTE Zeile in [saveRoute] und [saveExistingRoute] —
+  /// noch vor `if (userId == null) return null;` und noch vor jedem
+  /// Datenbankzugriff. Ein Speichern, das an fehlender Anmeldung, am Netz oder
+  /// an einer Rechtepruefung scheiterte, hakte die Aufgabe trotzdem ab. Von
+  /// den zwoelf Starter-Aufgaben war das die einzige mit diesem Fehler.
+  ///
+  /// Jetzt haengt sie an der Stelle, an der die Zeile wirklich steht. Alle
+  /// Spalten-Rueckfaelle in [saveRoute] laufen durch [_insertRouteRow], sind
+  /// also mit abgedeckt.
+  static void _meldeSpeichernAufgabe() {
+    unawaited(StarterAufgabenService.instance.markiere('speichern'));
   }
 
   /// Speichert eine Route für den eingeloggten User.
@@ -296,8 +313,6 @@ class SavedRoutesService {
     String? groupId,
     String? photoUrl,
   }) async {
-    // Starter-Aufgabe „Eine Route speichern" (2026-08-14).
-    unawaited(StarterAufgabenService.instance.markiere('speichern'));
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
 
@@ -412,10 +427,10 @@ class SavedRoutesService {
 
   /// Speichert eine bestehende Route (z.B. empfohlene Route) für den aktuellen User.
   static Future<void> saveExistingRoute(SavedRoute route) async {
-    // Starter-Aufgabe „Eine Route speichern" (2026-08-16, T5): Auch die
-    // Home-Empfehlung, Feed-Anhaenge usw. laufen hier — nicht nur der
-    // Abschluss einer Fahrt.
-    unawaited(StarterAufgabenService.instance.markiere('speichern'));
+    // 2026-08-16 (T5): Auch die Home-Empfehlung, Feed-Anhaenge usw. laufen
+    // hier — nicht nur der Abschluss einer Fahrt. Die Starter-Aufgabe wird
+    // seit dem 24.08. erst nach dem erfolgreichen Speichern gemeldet, siehe
+    // [_meldeSpeichernAufgabe].
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
 
@@ -425,6 +440,9 @@ class SavedRoutesService {
         '[SavedRoutes] Route bereits gespeichert: id=${route.id}, '
         'fingerprint=${route.routeFingerprint ?? route.routeSignature}',
       );
+      // Die Strecke LIEGT in der Sammlung — die Tat ist getan, nur eben
+      // frueher. Der Haken gehoert hierher.
+      _meldeSpeichernAufgabe();
       return;
     }
 
@@ -433,6 +451,7 @@ class SavedRoutesService {
     try {
       await _db.from('routes').insert(row);
       invalidateWeeklyTopRouteCache();
+      _meldeSpeichernAufgabe();
     } on PostgrestException catch (e) {
       if (e.code == 'PGRST204') {
         debugPrint(
@@ -446,11 +465,14 @@ class SavedRoutesService {
           ..remove('route_meta');
         await _db.from('routes').insert(row);
         invalidateWeeklyTopRouteCache();
+        _meldeSpeichernAufgabe();
       } else if (e.code == '23505') {
         // Unique constraint: diese Route ist für den User bereits gespeichert.
+        // Auch das heisst: sie liegt in der Sammlung.
         debugPrint(
           '[SavedRoutes] Duplicate Save durch DB verhindert: id=${route.id}',
         );
+        _meldeSpeichernAufgabe();
         return;
       } else {
         rethrow;

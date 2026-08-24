@@ -216,10 +216,18 @@ void main() {
       expect(cm.contains("'cruise_setup_fuehrung_v1_gesehen'"), isTrue);
     });
 
+    // 2026-08-24 (Aufgabe 4): Die Meldung heisst nicht mehr direkt
+    // `markiere('speichern')`, sondern laeuft ueber `_meldeSpeichernAufgabe`
+    // — und die sitzt seitdem HINTER dem erfolgreichen Schreiben statt davor
+    // (vorher hakte auch ein fehlgeschlagenes Speichern die Aufgabe ab).
+    // Der Zweck dieses Tests bleibt derselbe: Empfehlung und Feed muessen
+    // mitzaehlen, nicht nur der Fahrt-Abschluss.
     test('Route speichern zaehlt auch ueber die Empfehlung/den Feed', () {
       final saved = File('lib/data/services/saved_routes_service.dart').readAsStringSync();
       final i = saved.indexOf('static Future<void> saveExistingRoute(');
-      expect(saved.substring(i, i + 500).contains("markiere('speichern')"), isTrue);
+      final koerper = saved.substring(i, saved.indexOf('buildExistingRouteInsertForTest', i));
+      expect(koerper.contains('_meldeSpeichernAufgabe()'), isTrue);
+      expect(saved.contains("markiere('speichern')"), isTrue);
       final home = File('lib/presentation/pages/home_content_page.dart').readAsStringSync();
       expect(home.contains('TutorialZielRegistry.homeRouteSpeichern'), isTrue);
       expect(home.contains('StarterPaketKarte(onTabChange: widget.onTabChange)'), isTrue);

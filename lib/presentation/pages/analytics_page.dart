@@ -3315,166 +3315,15 @@ class _AnalyticsPageState extends State<AnalyticsPage>
             onBadgeTippen: _oeffneBadge,
           ),
           const SizedBox(height: 16),
-          // 2026-08-18 (Aufgabe 4.2): Die Sammlung ist nach FAMILIEN
-          // gegliedert, nicht mehr eine lange Reihe gleichwertiger Kacheln.
-          // Ueber jedem Block steht, wie weit die naechste Stufe entfernt ist.
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final crossAxisCount = constraints.maxWidth >= 700
-                  ? 4
-                  : constraints.maxWidth >= 500
-                  ? 3
-                  : 2;
-              final cardWidth =
-                  (constraints.maxWidth - (crossAxisCount - 1) * 8) /
-                  crossAxisCount;
-              final erreichteIds = _earnedBadges.map((b) => b.id).toSet();
-              final metriken = _badgeMetriken();
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final schluessel in app.Badge.familienReihenfolge)
-                    _buildBadgeFamilienBlock(
-                      schluessel: schluessel,
-                      erreichteIds: erreichteIds,
-                      cardWidth: cardWidth,
-                      metriken: metriken,
-                    ),
-                  _buildBadgeFamilienBlock(
-                    schluessel: null,
-                    erreichteIds: erreichteIds,
-                    cardWidth: cardWidth,
-                    metriken: metriken,
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Ein Familien-Block: Ueberschrift, Fortschritt zur naechsten Stufe und die
-  /// Kacheln der Familie. [schluessel] null = die Badges ohne Familie.
-  Widget _buildBadgeFamilienBlock({
-    required String? schluessel,
-    required Set<String> erreichteIds,
-    required double cardWidth,
-    required Map<app.BadgeMetrik, double>? metriken,
-  }) {
-    final badges = schluessel == null
-        ? app.Badge.all.where((b) => b.familie == null).toList()
-        : app.Badge.familienBadges(schluessel);
-    if (badges.isEmpty) return const SizedBox.shrink();
-
-    final titel = schluessel == null
-        ? 'Weitere'
-        : (app.badgeFamilieVon(schluessel)?.titel ?? schluessel);
-    final erreicht = badges.where((b) => erreichteIds.contains(b.id)).length;
-    // 2026-08-19 (vucko): Der Block zeigt seinen Stufenpfad jetzt schon in
-    // der Ueberschrift, und der Balken traegt die Farbe der Stufe, auf die
-    // er zeigt — nicht mehr das Akzent-Orange fuer alles.
-    final familie = schluessel == null
-        ? null
-        : app.badgeFamilieVon(schluessel);
-    final hoechsteStufe = schluessel == null
-        ? 0
-        : app.Badge.hoechsteErreichteStufe(schluessel, erreichteIds);
-    final zielStil = badgeStufenStil(
-      familie == null ? 0 : (badgeZielBadge(familie, erreichteIds)?.stufe ?? 0),
-    );
-    final fortschritt = (schluessel == null || metriken == null)
-        ? null
-        : app.badgeFamilienFortschritt(
-            familie: schluessel,
-            erreichteBadgeIds: erreichteIds,
-            metriken: metriken,
-          );
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (familie?.istGestuft ?? false) ...[
-                BadgeStufenPfadLeiste(
-                  erreichteStufen: hoechsteStufe,
-                  punktGroesse: 13,
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  titel,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.3,
-                  ),
-                ),
-              ),
-              Text(
-                '$erreicht/${badges.length}',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.42),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
-          ),
-          if (fortschritt != null) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(99),
-                    child: LinearProgressIndicator(
-                      value: fortschritt.anteil,
-                      minHeight: 4,
-                      backgroundColor: Colors.white.withValues(alpha: 0.07),
-                      color: zielStil.farbe,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  fortschritt.zahlen,
-                  style: TextStyle(
-                    color: zielStil.farbeHell.withValues(alpha: 0.9),
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final badge in badges)
-                SizedBox(
-                  width: cardWidth,
-                  height: 138,
-                  // 2026-08-15 (vucko): Jede Kachel oeffnet das Overlay —
-                  // freigeschaltet mit Beschreibung, gesperrt mit
-                  // Bedingung und Fortschritt.
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => _oeffneBadge(badge),
-                    child: _buildBadgeTile(badge),
-                  ),
-                ),
-            ],
+          // 2026-08-24 (vucko woertlich): „die stufen badges sollen noch
+          // besser angezeigt werden man scrollt da endlos". Der Katalog liegt
+          // jetzt in Schubladen, eine je Familie — Begruendung und Messung
+          // stehen bei [BadgeKatalogListe].
+          BadgeKatalogListe(
+            erreichteIds: _earnedBadges.map((b) => b.id).toSet(),
+            metriken: _badgeMetriken(),
+            kachelBauer: _buildBadgeTile,
+            onBadgeTippen: _oeffneBadge,
           ),
         ],
       ),
@@ -4099,4 +3948,423 @@ class _AnalyticsCache {
   final List<UserDriveSession> sessions;
   final Map<_LeaderboardPeriod, List<_LeaderboardEntry>> leaderboards;
   final DateTime at;
+}
+
+
+// ---------------------------------------------------------------------------
+// Der Katalog unter der Uebersicht — gegen das endlose Scrollen
+// ---------------------------------------------------------------------------
+
+/// 2026-08-24 (vucko woertlich): „die stufen badges sollen noch besser
+/// angezeigt werden man scrollt da endlos".
+///
+/// GEMESSEN (Test `test/presentation/badge_katalog_schubladen_test.dart`, bei
+/// 390 Punkten Breite — ein uebliches Telefon): der Katalog stand mit ALLEN
+/// Kacheln untereinander, am 24.08. sind das 68 Kacheln zu je 138 Punkten in
+/// 22 Bloecken. Das ergab 11.007 Punkte. Ein Telefon zeigt rund 700 davon auf
+/// einmal: SECHZEHN volle Bildschirme, allein unterhalb der Uebersicht. Genau
+/// das meinte „endlos". Mit den Schubladen sind es im Auslieferungszustand
+/// 1.767 Punkte, also gut zweieinhalb Bildschirme — und die waechst nur noch
+/// mit der Zahl der FAMILIEN (eine Zeile je Familie), nicht mehr mit der Zahl
+/// der Abzeichen. Der Test rechnet diese Schranke mit und faellt, wenn wieder
+/// Kacheln in zugeklappten Schubladen landen.
+///
+/// WARUM HIER NICHT DIESELBE EINTEILUNG WIE OBEN:
+/// [badgeFamilienGruppen] teilt den Katalog nach Zustand („In Arbeit",
+/// „Geschafft", „Noch nicht begonnen"). Oben im Uebersichts-Panel ist das
+/// richtig, dort lautet die Frage „wo stehe ich". Hier unten lautet sie „was
+/// gibt es ueberhaupt", und dafuer taugt der Zustand nicht:
+///   - Die drei Ueberschriften stuenden zweimal auf derselben Seite, keine
+///     zwei Bildschirme voneinander entfernt.
+///   - Die Reihenfolge einer SAMMLUNG darf sich nicht bewegen. Wer weiss, wo
+///     „Kilometer" liegt, soll es nach der naechsten Fahrt dort wiederfinden.
+///     Nach Zustand sortiert wandert eine Familie beim Freischalten weg.
+/// Der Katalog behaelt deshalb seine feste Reihenfolge
+/// ([Badge.familienReihenfolge]); zur Schublade wird jede FAMILIE einzeln.
+/// Wiederverwendet wird aus dem Panel, was hier wirklich passt:
+/// [badgeFamilieFertig] und [badgeZielBadge] — damit „fertig" oben und unten
+/// dasselbe heisst.
+///
+/// ES VERSCHWINDET NICHTS: Jede Familie behaelt ihre Kopfzeile mit Stufenpfad
+/// und Stand, bleibt also sichtbar; ein Tipp oeffnet ihre Kacheln, und „Alle
+/// aufklappen" stellt mit einem Tipp wieder den vollen Katalog her.
+///
+/// ES WIRD AUCH NICHTS LEER: Eine Schublade steht immer offen — die Familie,
+/// der man am naechsten ist ([vorgabeOffen]). Beim Hinscrollen sieht man also
+/// sofort echte Kacheln und nicht nur eine Liste von Zeilen.
+///
+/// KEINE DOPPLUNG MIT „Als Naechstes": Der Fortschrittsbalken einer Familie
+/// steht nur in der OFFENEN Schublade. Zugeklappt traegt die Kopfzeile nur
+/// Stufenpfad und Zaehler — die Zahlen zum naechsten Ziel stehen oben.
+///
+/// Oeffentlich, damit der Test die Hoehe messen kann, ohne die ganze Seite
+/// (und damit Supabase) hochzufahren.
+class BadgeKatalogListe extends StatefulWidget {
+  const BadgeKatalogListe({
+    super.key,
+    required this.erreichteIds,
+    required this.metriken,
+    required this.kachelBauer,
+    this.onBadgeTippen,
+  });
+
+  final Set<String> erreichteIds;
+
+  /// null = die Kennzahlen sind noch nicht geladen. Dann entfaellt der
+  /// Fortschrittsbalken, die Schubladen stehen trotzdem.
+  final Map<app.BadgeMetrik, double>? metriken;
+
+  /// Baut die Kachel eines Abzeichens. Als Rueckruf, weil die Kachel den
+  /// Zustand der Seite braucht (freigeschaltet, Akzentfarbe).
+  final Widget Function(app.Badge badge) kachelBauer;
+
+  final void Function(app.Badge badge)? onBadgeTippen;
+
+  /// Die Schublade der Abzeichen ohne Familie („Weitere").
+  static const String weitereSchluessel = '__weitere__';
+
+  /// Welche Schublade steht ohne Zutun offen?
+  ///
+  /// Die Familie, der man am naechsten ist und die noch nicht durch ist. Ohne
+  /// Kennzahlen die erste noch offene Familie, und wenn wirklich alles
+  /// geschafft ist, die erste ueberhaupt — offen ist IMMER genau eine, damit
+  /// der Abschnitt nie leer wirkt. Bei Gleichstand gewinnt die frueher im
+  /// Katalog stehende, sonst spraenge die offene Schublade zwischen zwei
+  /// gleich weiten Familien hin und her.
+  static String vorgabeOffen({
+    required Set<String> erreichteIds,
+    Map<app.BadgeMetrik, double>? metriken,
+  }) {
+    final offene = app.badgeFamilien
+        .where((f) => !badgeFamilieFertig(f, erreichteIds))
+        .toList();
+    if (offene.isEmpty) {
+      return app.badgeFamilien.isEmpty
+          ? weitereSchluessel
+          : app.badgeFamilien.first.schluessel;
+    }
+    if (metriken != null) {
+      app.BadgeFamilie? beste;
+      var bester = -1.0;
+      for (final familie in offene) {
+        final anteil =
+            app
+                .badgeFamilienFortschritt(
+                  familie: familie.schluessel,
+                  erreichteBadgeIds: erreichteIds,
+                  metriken: metriken,
+                )
+                ?.anteil ??
+            0.0;
+        if (anteil > bester) {
+          bester = anteil;
+          beste = familie;
+        }
+      }
+      if (beste != null) return beste.schluessel;
+    }
+    return offene.first.schluessel;
+  }
+
+  /// Die Abzeichen einer Schublade. Oeffentlich, damit der Test pruefen kann,
+  /// dass die Schubladen zusammen den vollen Katalog ergeben.
+  static List<app.Badge> badgesVon(String schluessel) =>
+      schluessel == weitereSchluessel
+      ? app.Badge.all.where((b) => b.familie == null).toList()
+      : app.Badge.familienBadges(schluessel);
+
+  /// Alle Schubladen in Katalogreihenfolge; leere entfallen.
+  static List<String> schubladen() => <String>[
+    ...app.Badge.familienReihenfolge,
+    weitereSchluessel,
+  ].where((s) => badgesVon(s).isNotEmpty).toList();
+
+  @override
+  State<BadgeKatalogListe> createState() => _BadgeKatalogListeState();
+}
+
+class _BadgeKatalogListeState extends State<BadgeKatalogListe> {
+  /// Nur die eigenhaendig umgeschalteten Schubladen. Die Vorgabe wird bei
+  /// jedem Aufbau neu gerechnet: Kennzahlen und erreichte Abzeichen kommen
+  /// nachgeladen, eingefroren stuende sonst die falsche Schublade offen.
+  final Map<String, bool> _umgeschaltet = {};
+
+  bool _offen(String schluessel, String vorgabe) =>
+      _umgeschaltet[schluessel] ?? (schluessel == vorgabe);
+
+  @override
+  Widget build(BuildContext context) {
+    final vorgabe = BadgeKatalogListe.vorgabeOffen(
+      erreichteIds: widget.erreichteIds,
+      metriken: widget.metriken,
+    );
+    final schubladen = BadgeKatalogListe.schubladen();
+    final alleOffen = schubladen.every((s) => _offen(s, vorgabe));
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final spalten = constraints.maxWidth >= 700
+            ? 4
+            : constraints.maxWidth >= 500
+            ? 3
+            : 2;
+        final kachelBreite =
+            (constraints.maxWidth - (spalten - 1) * 8) / spalten;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _katalogKopf(schubladen, alleOffen),
+            const SizedBox(height: 9),
+            for (var i = 0; i < schubladen.length; i++) ...[
+              if (i > 0) const SizedBox(height: 7),
+              _KatalogSchublade(
+                schluessel: schubladen[i],
+                erreichteIds: widget.erreichteIds,
+                metriken: widget.metriken,
+                kachelBreite: kachelBreite,
+                kachelBauer: widget.kachelBauer,
+                onBadgeTippen: widget.onBadgeTippen,
+                offen: _offen(schubladen[i], vorgabe),
+                aufTippen: () => setState(() {
+                  final s = schubladen[i];
+                  _umgeschaltet[s] = !_offen(s, vorgabe);
+                }),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  /// Ueberschrift des Katalogs und der Schalter fuer alles auf einmal.
+  Widget _katalogKopf(List<String> schubladen, bool alleOffen) {
+    return Row(
+      children: [
+        const Expanded(
+          child: Text(
+            'Alle Abzeichen',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() {
+            for (final s in schubladen) {
+              _umgeschaltet[s] = !alleOffen;
+            }
+          }),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  alleOffen
+                      ? Icons.unfold_less_rounded
+                      : Icons.unfold_more_rounded,
+                  size: 15,
+                  color: Colors.white.withValues(alpha: 0.6),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  alleOffen ? 'Alle zuklappen' : 'Alle aufklappen',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Eine Familie als Schublade: Kopfzeile mit Stufenpfad und Stand, aufgeklappt
+/// darunter der Fortschritt zur naechsten Stufe und die Kacheln.
+class _KatalogSchublade extends StatelessWidget {
+  const _KatalogSchublade({
+    required this.schluessel,
+    required this.erreichteIds,
+    required this.metriken,
+    required this.kachelBreite,
+    required this.kachelBauer,
+    required this.offen,
+    required this.aufTippen,
+    this.onBadgeTippen,
+  });
+
+  final String schluessel;
+  final Set<String> erreichteIds;
+  final Map<app.BadgeMetrik, double>? metriken;
+  final double kachelBreite;
+  final Widget Function(app.Badge badge) kachelBauer;
+  final bool offen;
+  final VoidCallback aufTippen;
+  final void Function(app.Badge badge)? onBadgeTippen;
+
+  @override
+  Widget build(BuildContext context) {
+    final istWeitere = schluessel == BadgeKatalogListe.weitereSchluessel;
+    final badges = BadgeKatalogListe.badgesVon(schluessel);
+    final familie = istWeitere ? null : app.badgeFamilieVon(schluessel);
+    final titel = istWeitere ? 'Weitere' : (familie?.titel ?? schluessel);
+    final erreicht = badges.where((b) => erreichteIds.contains(b.id)).length;
+    final hoechsteStufe = istWeitere
+        ? 0
+        : app.Badge.hoechsteErreichteStufe(schluessel, erreichteIds);
+    // „fertig" heisst hier dasselbe wie oben im Panel: kein Abzeichen der
+    // Familie ist mehr offen — Meilensteine eingeschlossen.
+    final fertig = familie == null
+        ? erreicht == badges.length
+        : badgeFamilieFertig(familie, erreichteIds);
+    final zielStil = badgeStufenStil(
+      familie == null ? 0 : (badgeZielBadge(familie, erreichteIds)?.stufe ?? 3),
+    );
+    final fortschritt = (istWeitere || metriken == null)
+        ? null
+        : app.badgeFamilienFortschritt(
+            familie: schluessel,
+            erreichteBadgeIds: erreichteIds,
+            metriken: metriken!,
+          );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: offen ? 0.03 : 0.02),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: fertig
+              ? zielStil.farbe.withValues(alpha: 0.30)
+              : Colors.white.withValues(alpha: 0.05),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: aufTippen,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 9, 7, 9),
+              child: Row(
+                children: [
+                  if (familie?.istGestuft ?? false) ...[
+                    BadgeStufenPfadLeiste(
+                      erreichteStufen: hoechsteStufe,
+                      punktGroesse: 13,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: Text(
+                      titel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$erreicht/${badges.length}',
+                    style: TextStyle(
+                      color: fertig
+                          ? zielStil.farbeHell.withValues(alpha: 0.95)
+                          : Colors.white.withValues(alpha: 0.42),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  AnimatedRotation(
+                    turns: offen ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 160),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 19,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (offen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(9, 0, 9, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (fortschritt != null) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(99),
+                            child: LinearProgressIndicator(
+                              value: fortschritt.anteil,
+                              minHeight: 4,
+                              backgroundColor: Colors.white.withValues(
+                                alpha: 0.07,
+                              ),
+                              color: zielStil.farbe,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          fortschritt.zahlen,
+                          style: TextStyle(
+                            color: zielStil.farbeHell.withValues(alpha: 0.9),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final badge in badges)
+                        SizedBox(
+                          width: kachelBreite,
+                          height: 138,
+                          // 2026-08-15 (vucko): Jede Kachel oeffnet das
+                          // Overlay — freigeschaltet mit Beschreibung,
+                          // gesperrt mit Bedingung und Fortschritt.
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => onBadgeTippen?.call(badge),
+                            child: kachelBauer(badge),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

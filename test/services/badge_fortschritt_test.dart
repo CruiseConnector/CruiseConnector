@@ -87,8 +87,15 @@ void main() {
     final page = File(
       'lib/presentation/pages/analytics_page.dart',
     ).readAsStringSync();
-    expect(page.contains('onTap: () => _oeffneBadge(badge)'), isTrue);
-    expect(page.contains('fortschritt: earned ? null : _fortschrittFuer(badge)'),
-        isTrue);
+    // 2026-08-24: Der Katalog liegt jetzt in `BadgeKatalogListe`, die Kachel
+    // meldet ueber den Rueckruf zurueck. Dass der Tipp wirklich ankommt,
+    // prueft `test/presentation/badge_katalog_schubladen_test.dart` am
+    // laufenden Widget; hier bleibt nur die Verdrahtung der Seite.
+    expect(page.contains('onBadgeTippen: _oeffneBadge'), isTrue);
+    expect(page.contains('kachelBauer: _buildBadgeTile'), isTrue);
+    expect(
+      page.contains('fortschritt: earned ? null : _fortschrittFuer(badge)'),
+      isTrue,
+    );
   });
 }

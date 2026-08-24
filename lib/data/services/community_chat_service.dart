@@ -1,8 +1,13 @@
+import 'dart:io' show HttpDate;
+
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/community_chat_message.dart';
 
@@ -168,7 +173,19 @@ class CommunityChatService {
       'updated_at, community_members(user_id, role), '
       'profiles:owner_id(id, username, avatar_url)';
 
+  /// ACHTUNG fuer spaeter: das Leserecht auf `community_messages` ist seit der
+  /// Migration 20260824160000 SPALTENWEISE. Jede neue Spalte braucht ein
+  /// eigenes `grant select` — sonst meldet PostgREST „permission denied" statt
+  /// „column does not exist", und der [_isMissingColumn]-Rueckfall greift NICHT.
   static const String _messageSelect =
+      'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
+      'reply_to_message_id, route_attachment, pinned_at, pinned_by, '
+      'bearbeitet_am, '
+      'profiles:user_id(id, username, avatar_url), '
+      'community_message_reactions(emoji, user_id)';
+
+  /// Stand VOR der Migration 20260824160000 (kein `bearbeitet_am`).
+  static const String _messageSelectOhneBearbeitet =
       'id, community_id, user_id, body, created_at, updated_at, deleted_at, '
       'reply_to_message_id, route_attachment, pinned_at, pinned_by, '
       'profiles:user_id(id, username, avatar_url), '
@@ -643,46 +660,112 @@ class CommunityChatService {
     return Map<String, dynamic>.from(row as Map);
   }
 
+  /// Die Auswahllisten in absteigender Vollstaendigkeit. Faellt eine Spalte
+  /// weg (aeltere Datenbank), wird die naechste probiert.
+  static const List<String> _messageSelectStufen = <String>[
+    _messageSelect,
+    _messageSelectOhneBearbeitet,
+    _messageSelectWithoutPins,
+    _legacyMessageSelect,
+  ];
+
+  /// Holt die Nachrichten einer Community.
+  ///
+  /// 2026-08-24 (Auftrag Vucko): Es kommen jetzt ZWEI Listen zurueck, in einer
+  /// zusammengefuehrt.
+  ///
+  ///  1. Die lebenden Nachrichten, wie bisher.
+  ///  2. Die HUELLEN der fuer alle geloeschten — nur Kennung, Verfasser und
+  ///     Zeitpunkt, damit die Oberflaeche „Diese Nachricht wurde geloescht."
+  ///     an der richtigen Stelle zeigen kann, statt dass eine Antwort ins
+  ///     Leere verweist.
+  ///
+  /// WARUM EINE ZWEITE, SCHMALE ABFRAGE und nicht einfach der Filter weg:
+  /// `deleted_at` zu setzen loescht den Text NICHT, `body` steht weiter in der
+  /// Zeile und ist fuer jedes Mitglied lesbar. Wuerde hier der Filter
+  /// wegfallen, laege der Text jeder geloeschten Nachricht wieder auf dem
+  /// Geraet — „fuer alle geloescht" waere ein Etikett ohne Wirkung. Die
+  /// Huellen-Abfrage fragt `body` gar nicht erst ab.
   static Future<List<Map<String, dynamic>>> fetchMessages(
     String communityId,
   ) async {
     dynamic rows;
-    try {
-      rows = await _db
-          .from('community_messages')
-          .select(_messageSelect)
-          .eq('community_id', communityId)
-          .isFilter('deleted_at', null)
-          .order('created_at', ascending: true)
-          .limit(150);
-    } on PostgrestException catch (e) {
-      if (!_isMissingColumn(e)) rethrow;
+    PostgrestException? letzterFehler;
+    for (final auswahl in _messageSelectStufen) {
       try {
         rows = await _db
             .from('community_messages')
-            .select(_messageSelectWithoutPins)
+            .select(auswahl)
             .eq('community_id', communityId)
             .isFilter('deleted_at', null)
             .order('created_at', ascending: true)
             .limit(150);
-      } on PostgrestException catch (fallbackError) {
-        if (!_isMissingColumn(fallbackError)) rethrow;
-        rows = await _db
-            .from('community_messages')
-            .select(_legacyMessageSelect)
-            .eq('community_id', communityId)
-            .isFilter('deleted_at', null)
-            .order('created_at', ascending: true)
-            .limit(150);
+        letzterFehler = null;
+        break;
+      } on PostgrestException catch (e) {
+        letzterFehler = e;
+        if (!_isMissingColumn(e)) rethrow;
       }
     }
-    return (rows as List)
-        .map(
-          (row) => CommunityChatMessage.fromJson(
-            Map<String, dynamic>.from(row as Map),
-          ).toJson(),
-        )
-        .toList(growable: false);
+    if (letzterFehler != null) throw letzterFehler;
+
+    final lebendig = (rows as List).map((row) {
+      final roh = Map<String, dynamic>.from(row as Map);
+      final karte = CommunityChatMessage.fromJson(roh).toJson();
+      // `CommunityChatMessage` kennt `bearbeitet_am` nicht und wuerde es beim
+      // Umweg ueber toJson() verlieren. Das Modell gehoert einem anderen
+      // Auftrag, deshalb wird der Wert hier zurueckgelegt.
+      if (roh.containsKey('bearbeitet_am')) {
+        karte['bearbeitet_am'] = roh['bearbeitet_am'];
+      }
+      return karte;
+    }).toList();
+
+    final huellen = await _fetchGeloeschteHuellen(communityId);
+    if (huellen.isEmpty) return List<Map<String, dynamic>>.unmodifiable(lebendig);
+
+    final zusammen = <Map<String, dynamic>>[...lebendig, ...huellen]
+      ..sort((a, b) {
+        final az =
+            DateTime.tryParse(a['created_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bz =
+            DateTime.tryParse(b['created_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return az.compareTo(bz);
+      });
+    return List<Map<String, dynamic>>.unmodifiable(zusammen);
+  }
+
+  /// Die Huellen der fuer alle geloeschten Nachrichten. OHNE `body` — siehe
+  /// die Begruendung in [fetchMessages].
+  static Future<List<Map<String, dynamic>>> _fetchGeloeschteHuellen(
+    String communityId,
+  ) async {
+    try {
+      final rows = await _db
+          .from('community_messages')
+          .select(
+            'id, community_id, user_id, created_at, deleted_at, '
+            'reply_to_message_id, profiles:user_id(id, username, avatar_url)',
+          )
+          .eq('community_id', communityId)
+          .not('deleted_at', 'is', null)
+          .order('created_at', ascending: true)
+          .limit(150);
+      return [
+        for (final row in rows as List)
+          if (row is Map)
+            <String, dynamic>{
+              ...Map<String, dynamic>.from(row),
+              'body': '',
+              '_geloescht': true,
+            },
+      ];
+    } catch (e) {
+      debugPrint('[CommunityChatService] Geloeschte Huellen lesen: $e');
+      return const [];
+    }
   }
 
   static Future<List<Map<String, dynamic>>> fetchMembers(
@@ -1089,17 +1172,6 @@ class CommunityChatService {
     }
   }
 
-  static Future<void> deleteMessage(String messageId) async {
-    try {
-      await _db
-          .from('community_messages')
-          .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
-          .eq('id', messageId);
-    } on PostgrestException catch (e) {
-      throw CommunityChatServiceException(e.message);
-    }
-  }
-
   static Future<void> setMessagePinned({
     required String messageId,
     required bool pinned,
@@ -1232,5 +1304,751 @@ class CommunityChatService {
     );
     channel.subscribe(onStatus);
     return channel;
+  }
+
+  // --------------------------------------------------------------------------
+  // 2026-08-24 (Auftrag Vucko): bearbeiten, löschen, Verlauf, Chat-Art
+  // --------------------------------------------------------------------------
+
+  /// Die Frist, innerhalb derer eine eigene Nachricht bearbeitet werden darf.
+  ///
+  /// DIESE KONSTANTE SETZT NICHTS DURCH. Sie ist die Kopie der Frist, die im
+  /// Trigger `trg_wacht_ueber_community_nachricht` steht, damit die Oberfläche
+  /// „noch 4 Std. 12 Min." anzeigen kann. Wer sie hier ändert, ändert nur den
+  /// Text — die Datenbank lehnt weiterhin nach sechs Stunden ab.
+  static const Duration bearbeitungsfrist = Duration(hours: 6);
+
+  /// Benannter Grund, damit [CommunityChatServiceException] durch den
+  /// Rauschfilter der Oberfläche kommt (siehe [writeLockedCode]). Die
+  /// Ablehnungen der Datenbank („Frist abgelaufen") sind fachliche Antworten
+  /// und dürfen NIE als „Aktion gerade nicht möglich." verschluckt werden.
+  static const String nachrichtAbgelehntCode = 'CC003';
+
+  /// Wie lange noch bearbeitet werden darf.
+  ///
+  /// `null` heißt „unbekannt": entweder fehlt der Zeitstempel oder es wurde
+  /// noch keine Serverzeit gemessen. Der Aufrufer zeigt dann keine Frist an
+  /// und lässt den Bearbeiten-Eintrag trotzdem stehen — die Datenbank
+  /// entscheidet.
+  static Duration? verbleibendeBearbeitungszeit({
+    required DateTime? erstelltAm,
+    required DateTime? serverJetzt,
+  }) {
+    if (erstelltAm == null || serverJetzt == null) return null;
+    final rest =
+        bearbeitungsfrist - serverJetzt.toUtc().difference(erstelltAm.toUtc());
+    return rest.isNegative ? Duration.zero : rest;
+  }
+
+  /// Darf diese Nachricht gerade bearbeitet werden?
+  ///
+  /// Bewusst großzügig bei [verbleibend] == null: ohne gemessene Serverzeit
+  /// wird der Eintrag angeboten und der Server lehnt gegebenenfalls mit einer
+  /// ehrlichen Meldung ab. Der umgekehrte Fehler wäre schlimmer — ein Nutzer,
+  /// dem die Bearbeitung genommen wird, weil sein Handy falsch geht.
+  static bool darfBearbeiten({
+    required bool istEigene,
+    required bool istGeloescht,
+    required bool istUnterwegs,
+    required Duration? verbleibend,
+  }) {
+    if (!istEigene || istGeloescht || istUnterwegs) return false;
+    if (verbleibend == null) return true;
+    return verbleibend > Duration.zero;
+  }
+
+  /// „Noch 4 Std. 12 Min." — ohne Gedankenstriche, mit echten Umlauten.
+  static String fristText(Duration verbleibend) {
+    if (verbleibend <= Duration.zero) return 'Frist abgelaufen';
+    if (verbleibend.inHours >= 1) {
+      final minuten = verbleibend.inMinutes % 60;
+      return minuten == 0
+          ? 'Noch ${verbleibend.inHours} Std. bearbeitbar'
+          : 'Noch ${verbleibend.inHours} Std. $minuten Min. bearbeitbar';
+    }
+    if (verbleibend.inMinutes >= 1) {
+      return 'Noch ${verbleibend.inMinutes} Min. bearbeitbar';
+    }
+    return 'Noch ${verbleibend.inSeconds} Sek. bearbeitbar';
+  }
+
+  /// Übersetzt die Ablehnungen der Datenbank in Sätze mit echten Umlauten.
+  ///
+  /// Die Meldungen der Migration 20260824160000 sind bewusst ohne Umlaute
+  /// geschrieben (SQL-Datei). Angezeigt wird in dieser App aber mit Umlauten,
+  /// also werden die bekannten Fälle hier umgesetzt. Ein unbekannter Fall
+  /// fällt auf einen ehrlichen Sammelsatz zurück, statt Postgres-Rohtext zu
+  /// zeigen.
+  static String _lesbareNachrichtenmeldung(
+    PostgrestException e, {
+    required String rueckfall,
+  }) {
+    final roh = e.message;
+    if (roh.contains('Bearbeitungsfrist')) {
+      return 'Die Bearbeitungsfrist von 6 Stunden ist abgelaufen.';
+    }
+    if (roh.contains('geloeschte Nachricht')) {
+      return 'Eine gelöschte Nachricht kann nicht mehr bearbeitet werden.';
+    }
+    if (roh.contains('Verfasser kann seine Nachricht')) {
+      return 'Nur der Verfasser kann seine Nachricht bearbeiten.';
+    }
+    if (roh.contains('Verfasser oder ein Admin')) {
+      return 'Nur der Verfasser oder ein Admin kann diese Nachricht für alle löschen.';
+    }
+    if (roh.contains('darf nicht leer sein')) {
+      return 'Die Nachricht darf nicht leer sein.';
+    }
+    if (roh.contains('zu lang')) return 'Nachricht ist zu lang.';
+    if (roh.contains('nicht gefunden')) return 'Nachricht nicht gefunden.';
+    if (roh.contains('melde dich an')) return 'Bitte melde dich an.';
+    return rueckfall;
+  }
+
+  static bool _funktionFehlt(PostgrestException e) {
+    final text = e.message.toLowerCase();
+    return _isMissingColumn(e) ||
+        text.contains('function') ||
+        text.contains('schema cache');
+  }
+
+  /// Bearbeitet die eigene Nachricht. Die Frist setzt die Datenbank durch.
+  ///
+  /// Rückgabe: der Zeitpunkt der Bearbeitung, wie ihn die Datenbank gesetzt
+  /// hat. Er ist ein echter Serverzeitstempel und wird gleich benutzt, um den
+  /// Versatz der [Serverzeit] nachzuziehen — so wird die angezeigte Frist mit
+  /// jeder Bearbeitung genauer, ohne einen zusätzlichen Aufruf.
+  static Future<DateTime?> editMessage({
+    required String messageId,
+    required String body,
+  }) async {
+    final sauber = body.trim();
+    if (sauber.isEmpty) {
+      throw const CommunityChatServiceException(
+        'Die Nachricht darf nicht leer sein.',
+        code: nachrichtAbgelehntCode,
+      );
+    }
+    if (sauber.length > AppInputLimits.communityMessageMaxLength) {
+      throw const CommunityChatServiceException(
+        'Nachricht ist zu lang.',
+        code: nachrichtAbgelehntCode,
+      );
+    }
+    try {
+      final antwort = await _db.rpc(
+        'community_nachricht_bearbeiten',
+        params: {'p_message_id': messageId, 'p_body': sauber},
+      );
+      final zeit = DateTime.tryParse(antwort?.toString() ?? '')?.toUtc();
+      if (zeit != null) Serverzeit.merkeServerzeit(zeit);
+      return zeit;
+    } on PostgrestException catch (e) {
+      if (_funktionFehlt(e)) {
+        throw const CommunityChatServiceException(
+          'Bearbeiten ist in der Datenbank noch nicht aktiv.',
+          code: nachrichtAbgelehntCode,
+        );
+      }
+      throw CommunityChatServiceException(
+        _lesbareNachrichtenmeldung(
+          e,
+          rueckfall: 'Nachricht konnte nicht bearbeitet werden.',
+        ),
+        code: nachrichtAbgelehntCode,
+      );
+    }
+  }
+
+  /// Löscht eine Nachricht — für alle oder nur für den Aufrufer.
+  ///
+  /// [fuerAlle] `true`  setzt `deleted_at` (Serverzeit, unbefristet, nur
+  ///                    Verfasser oder Moderation).
+  /// [fuerAlle] `false` legt eine Zeile in `community_nachricht_ausgeblendet`
+  ///                    an — am Konto, nicht am Gerät.
+  ///
+  /// Der alte Weg (direktes UPDATE mit `DateTime.now()` des Geräts) ist
+  /// ersatzlos weg. Er war genau die Manipulierbarkeit, die Vucko
+  /// ausschließen wollte. Der Rückfall unten schreibt zwar wieder direkt, aber
+  /// nur auf einer Datenbank OHNE die Migration — dort gibt es die Frist
+  /// ohnehin nicht.
+  static Future<void> deleteMessage(
+    String messageId, {
+    required bool fuerAlle,
+  }) async {
+    try {
+      await _db.rpc(
+        'community_nachricht_loeschen',
+        params: {'p_message_id': messageId, 'p_fuer_alle': fuerAlle},
+      );
+    } on PostgrestException catch (e) {
+      if (_funktionFehlt(e)) {
+        if (!fuerAlle) {
+          throw const CommunityChatServiceException(
+            'Nur für mich löschen ist in der Datenbank noch nicht aktiv.',
+            code: nachrichtAbgelehntCode,
+          );
+        }
+        await _db
+            .from('community_messages')
+            .update({'deleted_at': DateTime.now().toUtc().toIso8601String()})
+            .eq('id', messageId);
+        return;
+      }
+      throw CommunityChatServiceException(
+        _lesbareNachrichtenmeldung(
+          e,
+          rueckfall: 'Nachricht konnte nicht gelöscht werden.',
+        ),
+        code: nachrichtAbgelehntCode,
+      );
+    }
+  }
+
+  /// Nimmt ein „nur für mich" zurück. Das ist die Rückgängig-Taste im Hinweis
+  /// nach dem Ausblenden — deshalb darf sie nicht scheitern, ohne dass es
+  /// jemand merkt.
+  static Future<void> zeigeNachrichtWiederAn(String messageId) async {
+    final uid = _userId;
+    if (uid == null) return;
+    await _db
+        .from('community_nachricht_ausgeblendet')
+        .delete()
+        .eq('user_id', uid)
+        .eq('message_id', messageId);
+  }
+
+  /// Die Kennungen der Nachrichten, die der Aufrufer „nur für mich" gelöscht
+  /// hat. Schlägt die Abfrage fehl (alte Datenbank, kein Netz), kommt eine
+  /// leere Menge zurück: dann sieht man eine Nachricht wieder, die man
+  /// weggeräumt hatte. Das ist der harmlosere der beiden Fehler — die
+  /// Gegenrichtung wäre, Nachrichten stumm zu verstecken.
+  static Future<Set<String>> fetchAusgeblendeteIds(String communityId) async {
+    final uid = _userId;
+    if (uid == null) return <String>{};
+    try {
+      final rows = await _db
+          .from('community_nachricht_ausgeblendet')
+          .select('message_id')
+          .eq('user_id', uid)
+          .eq('community_id', communityId);
+      return {
+        for (final row in rows as List)
+          if (row is Map && row['message_id'] != null)
+            row['message_id'].toString(),
+      };
+    } catch (e) {
+      debugPrint('[CommunityChatService] Ausgeblendete lesen fehlgeschlagen: $e');
+      return <String>{};
+    }
+  }
+
+  static const String _verlaufSelect =
+      'id, community_id, user_id, art, ausgeloest_von, am, nachgetragen, '
+      'profiles:user_id(id, username, avatar_url)';
+
+  /// Wer kam und wer ging (Tabelle `community_mitglieder_verlauf`).
+  ///
+  /// Die Tabelle ist nur lesbar, geschrieben wird ausschließlich vom Trigger
+  /// `trg_community_mitgliedschaft_protokoll`. Fehlt sie (alte Datenbank),
+  /// kommt eine leere Liste — der Chat sieht dann aus wie bisher.
+  ///
+  /// ZWEI WEGE, weil es zwei Fremdschlüssel auf `profiles` gibt (`user_id`
+  /// und `ausgeloest_von`). Lehnt PostgREST das eingebettete Profil ab, holt
+  /// der zweite Weg die Namen mit einer eigenen Abfrage nach. Ohne diesen
+  /// Rückfall wäre der Verlauf im Fehlerfall STILL leer — und niemand würde
+  /// merken, dass es an der Abfrage liegt und nicht daran, dass niemand
+  /// beigetreten ist.
+  static Future<List<Map<String, dynamic>>> fetchVerlauf(
+    String communityId,
+  ) async {
+    List<Map<String, dynamic>> zeilen;
+    try {
+      final rows = await _db
+          .from('community_mitglieder_verlauf')
+          .select(_verlaufSelect)
+          .eq('community_id', communityId)
+          .order('am', ascending: true)
+          .limit(300);
+      return [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+    } catch (e) {
+      debugPrint(
+        '[CommunityChatService] Verlauf mit Profil fehlgeschlagen, '
+        'zweiter Weg: $e',
+      );
+    }
+    try {
+      final rows = await _db
+          .from('community_mitglieder_verlauf')
+          .select('id, community_id, user_id, art, ausgeloest_von, am, nachgetragen')
+          .eq('community_id', communityId)
+          .order('am', ascending: true)
+          .limit(300);
+      zeilen = [
+        for (final row in rows as List) Map<String, dynamic>.from(row as Map),
+      ];
+    } catch (e) {
+      debugPrint('[CommunityChatService] Verlauf lesen fehlgeschlagen: $e');
+      return const [];
+    }
+    if (zeilen.isEmpty) return zeilen;
+    try {
+      final kennungen = <String>{
+        for (final zeile in zeilen)
+          if (zeile['user_id'] != null) zeile['user_id'].toString(),
+      };
+      final profile = await _db
+          .from('profiles')
+          .select('id, username, avatar_url')
+          .inFilter('id', kennungen.toList());
+      final nachId = <String, Map<String, dynamic>>{
+        for (final row in profile as List)
+          if (row is Map && row['id'] != null)
+            row['id'].toString(): Map<String, dynamic>.from(row),
+      };
+      for (final zeile in zeilen) {
+        final profil = nachId[zeile['user_id']?.toString()];
+        if (profil != null) zeile['profiles'] = profil;
+      }
+    } catch (e) {
+      debugPrint('[CommunityChatService] Verlaufs-Namen nachladen: $e');
+    }
+    return zeilen;
+  }
+
+  /// Ein Beitritt soll sofort auftauchen, ohne dass jemand neu lädt. Die
+  /// Tabelle liegt dafür in der Publikation `supabase_realtime`
+  /// (Migration 20260824160000).
+  static RealtimeChannel subscribeVerlauf(
+    String communityId,
+    void Function() onChange, {
+    void Function(RealtimeSubscribeStatus status, Object? error)? onStatus,
+  }) {
+    final channel = _db.channel('community_verlauf_$communityId');
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'community_mitglieder_verlauf',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'community_id',
+        value: communityId,
+      ),
+      callback: (_) => onChange(),
+    );
+    channel.subscribe(onStatus);
+    return channel;
+  }
+
+  /// Schlüssel des Spiegels in den SharedPreferences (kontogebunden, siehe
+  /// [NutzerPrefsSchluessel]).
+  static const String chatDarstellungPrefsBasis = 'community_chat_darstellung_v1';
+
+  /// Ersetzbar, damit der Test ohne Supabase auskommt.
+  @visibleForTesting
+  static Future<ChatDarstellung?> Function()? chatDarstellungLeserFuerTests;
+
+  /// Ersetzbar, damit der Test ohne Supabase auskommt.
+  @visibleForTesting
+  static Future<void> Function(ChatDarstellung art)?
+  chatDarstellungSchreiberFuerTests;
+
+  @visibleForTesting
+  static void resetChatDarstellungFuerTests() {
+    chatDarstellungLeserFuerTests = null;
+    chatDarstellungSchreiberFuerTests = null;
+  }
+
+  /// Die zuletzt gewählte Darstellung, aus dem Gerätespiegel.
+  ///
+  /// WARUM ÜBERHAUPT EIN SPIEGEL, wenn der Wert am Konto steht: damit der Chat
+  /// beim Öffnen SOFORT in der richtigen Art erscheint. Ohne ihn zeichnete die
+  /// Seite erst die Beitragsansicht und klappte eine Zehntelsekunde später in
+  /// die Nachrichten-Ansicht um. Der Spiegel ist die Anzeige, das Konto ist
+  /// die Wahrheit.
+  static Future<ChatDarstellung?> chatDarstellungVomGeraet() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final schluessel = NutzerPrefsSchluessel.fuer(chatDarstellungPrefsBasis);
+      return ChatDarstellung.ausWert(prefs.getString(schluessel));
+    } catch (e) {
+      debugPrint('[CommunityChatService] Chat-Art vom Gerät lesen: $e');
+      return null;
+    }
+  }
+
+  /// Die Darstellung, wie sie am Konto steht (`profiles.chat_darstellung`).
+  /// `null` = noch nie gewählt oder nicht lesbar.
+  static Future<ChatDarstellung?> chatDarstellungVomKonto() async {
+    final test = chatDarstellungLeserFuerTests;
+    if (test != null) return test();
+    final uid = _userId;
+    if (uid == null) return null;
+    try {
+      final row = await _db
+          .from('profiles')
+          .select('chat_darstellung')
+          .eq('id', uid)
+          .maybeSingle();
+      return ChatDarstellung.ausWert(row?['chat_darstellung']);
+    } catch (e) {
+      debugPrint('[CommunityChatService] Chat-Art vom Konto lesen: $e');
+      return null;
+    }
+  }
+
+  /// Merkt sich die Wahl — erst am Gerät (sofort wirksam), dann am Konto.
+  ///
+  /// Schlägt das Konto fehl (kein Netz), bleibt die Wahl trotzdem am Gerät
+  /// stehen und der Neustart überlebt sie. Beim nächsten Umschalten mit Netz
+  /// wandert sie hoch.
+  static Future<void> merkeChatDarstellung(ChatDarstellung art) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final schluessel = NutzerPrefsSchluessel.fuer(chatDarstellungPrefsBasis);
+      await prefs.setString(schluessel, art.wert);
+    } catch (e) {
+      debugPrint('[CommunityChatService] Chat-Art am Gerät merken: $e');
+    }
+    final test = chatDarstellungSchreiberFuerTests;
+    if (test != null) {
+      await test(art);
+      return;
+    }
+    final uid = _userId;
+    if (uid == null) return;
+    try {
+      await _db
+          .from('profiles')
+          .update({'chat_darstellung': art.wert})
+          .eq('id', uid);
+    } catch (e) {
+      debugPrint('[CommunityChatService] Chat-Art am Konto merken: $e');
+    }
+  }
+
+}
+
+// ############################################################################
+// 2026-08-24 (Auftrag Vucko): Chat-Art, Bearbeiten, Löschen, Verlauf
+// ############################################################################
+
+/// Die beiden Darstellungen des Community-Chats.
+///
+/// Vucko am 24.08.: „man soll die chat art optimieren koennen wie bspw. ob man
+/// den standart chat oder einen Nachrichten Chat bevorzugt".
+///
+/// * [standard] — die Beitragsansicht, wie sie bis heute die einzige war:
+///   breite Karten untereinander, Kopfzeile „r/Thema · Name · Uhrzeit",
+///   Antwortzähler, eine Aktionsleiste unter jedem Beitrag. Das liest sich wie
+///   ein Forum und ist gut, wenn wenige, längere Beiträge stehen.
+/// * [nachrichten] — die Messenger-Ansicht: schmale Sprechblasen, eigene
+///   rechts, fremde links, aufeinanderfolgende Beiträge derselben Person
+///   zusammengefasst, Tagestrenner. Das ist gut, wenn viele kurze Zeilen
+///   hin und her gehen.
+///
+/// Der Wert steht auf `profiles.chat_darstellung` (Migration 20260824160000),
+/// also am KONTO und nicht am Gerät — die Wahl kommt aufs nächste Handy mit.
+enum ChatDarstellung {
+  standard('standard'),
+  nachrichten('nachrichten');
+
+  const ChatDarstellung(this.wert);
+
+  /// Der Wert, wie er in der Datenbank steht (CHECK
+  /// `profiles_chat_darstellung_chk`).
+  final String wert;
+
+  static ChatDarstellung? ausWert(Object? roh) {
+    final text = roh?.toString();
+    for (final art in ChatDarstellung.values) {
+      if (art.wert == text) return art;
+    }
+    return null;
+  }
+
+  String get titel =>
+      this == ChatDarstellung.standard ? 'Beiträge' : 'Nachrichten';
+}
+
+/// Die Uhr, die zählt.
+///
+/// Vucko am 24.08.: „und nicht durch zeit zurueckstellen oder datum
+/// zurueckstellen irgendwie manipuliert werden kann".
+///
+/// DURCHGESETZT wird die 6-Stunden-Frist ausschließlich in der Datenbank
+/// (Trigger `trg_wacht_ueber_community_nachricht`, Migration 20260824160000).
+/// Diese Klasse ist NUR für die ANZEIGE da: „noch 4 Std. 12 Min. bearbeitbar".
+/// Würde die Anzeige gegen `DateTime.now()` rechnen, zeigte ein verstelltes
+/// Handy Unsinn an — mal „abgelaufen" bei einer frischen Nachricht, mal „noch
+/// 5 Stunden" bei einer von gestern.
+///
+/// WOHER DIE SERVERZEIT KOMMT: aus dem `Date`-Kopf jeder HTTP-Antwort der
+/// Supabase-Schnittstelle. Absichtlich kein neuer Aufruf in der Datenbank —
+/// jede Antwort trägt den Zeitstempel ohnehin, und ein HEAD auf die REST-Wurzel
+/// kostet keine Zeile und keine Rechte. Der Versatz wird EINMAL beim Öffnen
+/// des Chats gemessen und danach jedes Mal nachgezogen, wenn die Datenbank
+/// ohnehin einen echten Serverzeitstempel zurückgibt (siehe
+/// [CommunityChatService.editMessage]).
+///
+/// IST DER VERSATZ UNBEKANNT, wird KEINE Frist angezeigt und der
+/// Bearbeiten-Eintrag bleibt sichtbar. Lieber ein Angebot, das der Server
+/// ablehnt (mit ehrlicher Meldung), als ein Eintrag, den eine falsche Uhr
+/// vorschnell wegnimmt.
+class Serverzeit {
+  Serverzeit._();
+
+  static Duration? _versatz;
+
+  /// Ersetzbar, damit der Test ohne Netz auskommt.
+  @visibleForTesting
+  static Future<DateTime?> Function()? abfrageFuerTests;
+
+  /// Ersetzbar, damit der Test die Geräteuhr selbst bestimmt.
+  @visibleForTesting
+  static DateTime Function()? geraetezeitFuerTests;
+
+  @visibleForTesting
+  static void resetForTests() {
+    _versatz = null;
+    abfrageFuerTests = null;
+    geraetezeitFuerTests = null;
+  }
+
+  static DateTime _geraetezeit() =>
+      (geraetezeitFuerTests?.call() ?? DateTime.now()).toUtc();
+
+  /// `true`, sobald ein Serverzeitstempel gemessen wurde.
+  static bool get istAbgeglichen => _versatz != null;
+
+  /// Der aktuelle Zeitpunkt aus Sicht des Servers, oder `null`, solange
+  /// niemand abgeglichen hat. `null` heißt ausdrücklich „ich weiß es nicht" —
+  /// nicht „jetzt".
+  static DateTime? get jetzt {
+    final versatz = _versatz;
+    if (versatz == null) return null;
+    return _geraetezeit().add(versatz);
+  }
+
+  /// Merkt sich den Versatz aus einem bekannten Serverzeitpunkt.
+  static void merkeServerzeit(DateTime serverzeit, {DateTime? gemessenAm}) {
+    final bezug = (gemessenAm ?? _geraetezeit()).toUtc();
+    _versatz = serverzeit.toUtc().difference(bezug);
+  }
+
+  /// Holt die Serverzeit aus dem `Date`-Kopf der REST-Schnittstelle.
+  /// Liefert `true`, wenn danach ein Versatz bekannt ist.
+  static Future<bool> abgleichen() async {
+    final abfrage = abfrageFuerTests;
+    if (abfrage != null) {
+      final zeit = await abfrage();
+      if (zeit == null) return false;
+      merkeServerzeit(zeit);
+      return true;
+    }
+    try {
+      final rest = Supabase.instance.client.rest;
+      final vorher = _geraetezeit();
+      final antwort = await http
+          .head(Uri.parse(rest.url), headers: rest.headers)
+          .timeout(const Duration(seconds: 6));
+      final roh = antwort.headers['date'];
+      if (roh == null || roh.isEmpty) return false;
+      final serverzeit = HttpDate.parse(roh).toUtc();
+      final nachher = _geraetezeit();
+      // Der Kopf entstand irgendwo zwischen Absenden und Empfang. Die halbe
+      // Laufzeit ist die beste Schätzung, die ohne zweiten Aufruf zu haben
+      // ist; sie liegt in der Praxis unter einer Sekunde und ist gegenüber
+      // einer 6-Stunden-Frist bedeutungslos.
+      final halbeLaufzeit = Duration(
+        microseconds: nachher.difference(vorher).inMicroseconds ~/ 2,
+      );
+      merkeServerzeit(serverzeit.add(halbeLaufzeit), gemessenAm: nachher);
+      return true;
+    } catch (e) {
+      debugPrint('[Serverzeit] Abgleich fehlgeschlagen: $e');
+      return false;
+    }
+  }
+}
+
+/// Was in der Zeitleiste des Chats stehen kann.
+enum ChatZeileArt {
+  /// Eine echte Nachricht.
+  nachricht,
+
+  /// Eine für alle gelöschte Nachricht. Der Text ist NICHT dabei — der Client
+  /// holt ihn gar nicht erst (siehe [CommunityChatService.fetchMessages]).
+  geloescht,
+
+  /// Eine oder mehrere Zu- oder Abgänge, zu einer Zeile zusammengefasst.
+  verlauf,
+}
+
+/// Eine Zeile der Chat-Zeitleiste. Beide Darstellungen zeichnen dieselbe
+/// Liste — deshalb liegt das Zusammenstellen hier und nicht in einem Widget.
+class ChatZeile {
+  const ChatZeile({
+    required this.art,
+    required this.zeit,
+    this.nachricht,
+    this.verlauf = const [],
+    this.angepinnt = false,
+  });
+
+  final ChatZeileArt art;
+  final DateTime zeit;
+  final Map<String, dynamic>? nachricht;
+  final List<Map<String, dynamic>> verlauf;
+  final bool angepinnt;
+
+  String? get id => art == ChatZeileArt.verlauf
+      ? 'verlauf-${verlauf.isEmpty ? zeit.toIso8601String() : verlauf.first['id']}'
+      : nachricht?['id']?.toString();
+}
+
+/// Stellt die Zeitleiste zusammen: Nachrichten, Grabsteine gelöschter
+/// Nachrichten und die Zu- und Abgänge.
+class CommunityChatTimeline {
+  CommunityChatTimeline._();
+
+  /// Ab wie vielen Namen eine Verlaufszeile zusammenfasst.
+  ///
+  /// Vucko: die Zu- und Abgänge „sollen den Verlauf zeigen, aber den Chat
+  /// nicht dominieren". Deshalb werden AUFEINANDERFOLGENDE Ereignisse
+  /// derselben Art zu EINER Zeile zusammengezogen. Treten an einem Tag zehn
+  /// Leute bei, steht dort eine einzige graue Zeile statt zehn — und wer die
+  /// Namen sehen will, tippt sie an.
+  static const int namenImText = 3;
+
+  static DateTime _zeitpunkt(Object? roh) =>
+      DateTime.tryParse(roh?.toString() ?? '')?.toUtc() ??
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+
+  /// Baut die Zeitleiste.
+  ///
+  /// [ausgeblendet] sind die Kennungen der Nachrichten, die der Aufrufer „nur
+  /// für mich" gelöscht hat. Sie fallen restlos weg — auch der Grabstein.
+  /// Genau das ist der Unterschied zu „für alle": bei „nur für mich" soll die
+  /// Zeile weg sein, nicht durchgestrichen dastehen.
+  ///
+  /// [angepinntZuerst] gilt nur für die Beitragsansicht. Die
+  /// Nachrichten-Ansicht ist streng chronologisch (alles andere fühlt sich in
+  /// einem Messenger kaputt an); dort steht das Angepinnte in einem Band über
+  /// der Liste.
+  static List<ChatZeile> baue({
+    required List<Map<String, dynamic>> nachrichten,
+    required List<Map<String, dynamic>> verlauf,
+    required Set<String> ausgeblendet,
+    required bool angepinntZuerst,
+  }) {
+    final zeilen = <ChatZeile>[];
+
+    for (final nachricht in nachrichten) {
+      final id = nachricht['id']?.toString();
+      if (id != null && ausgeblendet.contains(id)) continue;
+      final istGeloescht =
+          nachricht['_geloescht'] == true || nachricht['deleted_at'] != null;
+      zeilen.add(
+        ChatZeile(
+          art: istGeloescht ? ChatZeileArt.geloescht : ChatZeileArt.nachricht,
+          zeit: _zeitpunkt(nachricht['created_at']),
+          nachricht: nachricht,
+          angepinnt: !istGeloescht && nachricht['pinned_at'] != null,
+        ),
+      );
+    }
+
+    for (final eintrag in verlauf) {
+      zeilen.add(
+        ChatZeile(
+          art: ChatZeileArt.verlauf,
+          zeit: _zeitpunkt(eintrag['am']),
+          verlauf: [eintrag],
+        ),
+      );
+    }
+
+    zeilen.sort((a, b) => a.zeit.compareTo(b.zeit));
+
+    final zusammengefasst = _fasseVerlaufZusammen(zeilen);
+    if (!angepinntZuerst) return zusammengefasst;
+
+    final angepinnte = zusammengefasst.where((z) => z.angepinnt).toList()
+      ..sort((a, b) {
+        final ap = _zeitpunkt(a.nachricht?['pinned_at']);
+        final bp = _zeitpunkt(b.nachricht?['pinned_at']);
+        return bp.compareTo(ap);
+      });
+    final rest = zusammengefasst.where((z) => !z.angepinnt).toList();
+    return [...angepinnte, ...rest];
+  }
+
+  /// Zieht direkt aufeinanderfolgende Verlaufszeilen GLEICHER Art zusammen.
+  ///
+  /// Gleiche Art, nicht nur „irgendwie Verlauf": „Anna und Ben sind
+  /// beigetreten" und „Cem hat die Community verlassen" gehören nicht in einen
+  /// Satz. Steht eine Nachricht dazwischen, bleibt die Trennung erhalten — der
+  /// Verlauf soll ja zeigen, WANN jemand kam.
+  static List<ChatZeile> _fasseVerlaufZusammen(List<ChatZeile> zeilen) {
+    final ergebnis = <ChatZeile>[];
+    for (final zeile in zeilen) {
+      if (zeile.art != ChatZeileArt.verlauf || ergebnis.isEmpty) {
+        ergebnis.add(zeile);
+        continue;
+      }
+      final letzte = ergebnis.last;
+      if (letzte.art != ChatZeileArt.verlauf ||
+          letzte.verlauf.last['art'] != zeile.verlauf.first['art']) {
+        ergebnis.add(zeile);
+        continue;
+      }
+      ergebnis[ergebnis.length - 1] = ChatZeile(
+        art: ChatZeileArt.verlauf,
+        zeit: letzte.zeit,
+        verlauf: [...letzte.verlauf, ...zeile.verlauf],
+      );
+    }
+    return ergebnis;
+  }
+
+  /// Der Satz unter einer zusammengefassten Verlaufszeile.
+  ///
+  /// Ein Name: „Anna ist beigetreten."
+  /// Zwei:     „Anna und Ben sind beigetreten."
+  /// Drei:     „Anna, Ben und Cem sind beigetreten."
+  /// Mehr:     „Anna, Ben, Cem und 7 weitere sind beigetreten."
+  static String verlaufText(List<Map<String, dynamic>> gruppe) {
+    if (gruppe.isEmpty) return '';
+    final namen = <String>[];
+    for (final eintrag in gruppe) {
+      final profil = eintrag['profiles'];
+      namen.add(
+        CommunityChatService.displayName(
+          profil is Map ? Map<String, dynamic>.from(profil) : null,
+          fallbackUserId: eintrag['user_id']?.toString(),
+        ),
+      );
+    }
+    final art = gruppe.first['art']?.toString();
+    final mehrzahl = namen.length > 1;
+    final verb = switch (art) {
+      'austritt' => mehrzahl
+          ? 'haben die Community verlassen'
+          : 'hat die Community verlassen',
+      'entfernt' => mehrzahl ? 'wurden entfernt' : 'wurde entfernt',
+      _ => mehrzahl ? 'sind beigetreten' : 'ist beigetreten',
+    };
+
+    if (namen.length == 1) return '${namen.first} $verb.';
+    if (namen.length <= namenImText) {
+      final vorne = namen.sublist(0, namen.length - 1).join(', ');
+      return '$vorne und ${namen.last} $verb.';
+    }
+    final weitere = namen.length - namenImText;
+    final vorne = namen.sublist(0, namenImText).join(', ');
+    return '$vorne und $weitere weitere $verb.';
   }
 }

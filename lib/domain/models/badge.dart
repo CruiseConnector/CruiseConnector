@@ -34,6 +34,32 @@ class Badge {
   /// sobald der Gruender die Community verlaesst. Ueber beide bekaemen mehrere
   /// Leute je Community dieses Abzeichen.
   static const String communityGruenderBadgeId = 'badge_57';
+
+  /// 2026-08-24 (Auftrag vom 24.08., vucko woertlich): „das tutorial bzw. das
+  /// onboarding soll einmal pro account absolviert werden und man soll dafuer
+  /// auch ein badge bekommen wenn man es abgeschlossen hat wie startklar".
+  ///
+  /// ABGRENZUNG ZU badge_16 „Startklar" — GEPRUEFT am 24.08., weil zwei fast
+  /// gleiche Abzeichen schlimmer waeren als keines:
+  ///
+  ///   badge_16 haengt NICHT am Tutorial, sondern an
+  ///   `StarterAufgabenService.paketVerdient`, also an
+  ///   `erledigtAnzahl >= aufgabenFuerBoost` = ACHT von ELF Starter-Aufgaben.
+  ///   Das Tutorial ist dort nur EINE Zeile der Liste; die anderen sieben
+  ///   verlangen unter anderem eine zu Ende gefahrene Runde und einen
+  ///   Beitrag. GEMESSEN am 24.08.: 0 von 183 Profilen tragen badge_16
+  ///   verdient (es steht heute nur durch die Migration vom 24.08. bei allen).
+  ///
+  /// Die beiden messen also verschiedene Dinge und liegen zeitlich weit
+  /// auseinander: badge_58 faellt in der Minute an, in der die Tour zu Ende
+  /// ist, badge_16 fruehestens nach der ersten echten Fahrt. Deshalb ist es
+  /// KEIN Doppel. Waere badge_16 „Tutorial fertig", dann waere badge_58
+  /// ueberfluessig gewesen und dieser Eintrag haette nicht kommen duerfen.
+  ///
+  /// Der Abschluss selbst liegt seit Migration 20260824150000 am KONTO
+  /// (`profiles`), nicht mehr nur in den SharedPreferences. Diese Datei legt
+  /// nur den Katalog-Eintrag an; vergeben wird er an der Serverseite.
+  static const String onboardingBadgeId = 'badge_58';
   static const String membershipDatePlaceholder = '{datum}';
 
 
@@ -100,7 +126,7 @@ class Badge {
       id: 'badge_03',
       name: 'Level 25',
       description: 'Erreiche Level 25.',
-      emoji: '\u{1F6E3}\uFE0F',
+      emoji: '\u{1F6E1}\uFE0F',
       category: 'level',
       familie: 'level',
       stufe: 2,
@@ -150,7 +176,7 @@ class Badge {
       id: 'badge_08',
       name: 'Level 50',
       description: 'Erreiche Level 50.',
-      emoji: '\u{1F3CE}\uFE0F',
+      emoji: '\u{1F3C5}',
       category: 'level',
       familie: 'level',
       stufe: 3,
@@ -212,7 +238,7 @@ class Badge {
       name: 'Startklar',
       description:
           'Alle Starter-Aufgaben erledigt. Dein Einstieg ist geschafft.',
-      emoji: '\u{1F3C1}',
+      emoji: '\u{1F511}',
       category: 'membership',
       assetPath: 'lib/images/badges/badge_16_amber_ignition.png',
     ),
@@ -236,7 +262,7 @@ class Badge {
       id: 'badge_18',
       name: 'Dauerbrenner',
       description: 'Fünfzig abgeschlossene Fahrten. Das ist kein Hobby mehr.',
-      emoji: '\u{1F525}',
+      emoji: '\u{2699}\uFE0F',
       category: 'routes',
       familie: 'fahrten',
       stufe: 3,
@@ -258,7 +284,7 @@ class Badge {
       name: 'Langstrecke',
       description:
           'Über 100 Kilometer in einer einzigen Fahrt. Respekt.',
-      emoji: '\u{1F6E3}',
+      emoji: '\u{1F6E3}\uFE0F',
       category: 'distance',
       familie: 'langstrecke',
       stufe: 1,
@@ -377,7 +403,7 @@ class Badge {
       id: 'badge_31',
       name: '1.000 km',
       description: 'Tausend Kilometer insgesamt. Vierstellig.',
-      emoji: '\u{1F6E3}',
+      emoji: '\u{1F4CF}',
       category: 'distance',
       familie: 'distanz',
       assetPath: 'lib/images/badges/badge_31_1000km_gold.png',
@@ -386,7 +412,7 @@ class Badge {
       id: 'badge_32',
       name: '5.000 km',
       description: 'Fünftausend Kilometer insgesamt. Halber Weg zur Legende.',
-      emoji: '\u{1F30D}',
+      emoji: '\u{1F310}',
       category: 'distance',
       familie: 'distanz',
       assetPath: 'lib/images/badges/badge_32_5000km_violet.png',
@@ -415,7 +441,7 @@ class Badge {
       id: 'badge_35',
       name: 'Gruppengründer',
       description: 'Drei Gruppen gegründet. Du bringst Leute zusammen.',
-      emoji: '\u{1F465}',
+      emoji: '\u{1F46A}',
       category: 'groups',
       familie: 'gegruendet',
       stufe: 2,
@@ -425,7 +451,7 @@ class Badge {
       id: 'badge_36',
       name: 'Community-Stimme',
       description: 'Fünfzehn Routen geteilt. Andere fahren, was du findest.',
-      emoji: '\u{1F4E3}',
+      emoji: '\u{1F5E3}\uFE0F',
       category: 'social',
       familie: 'geteilt',
       stufe: 3,
@@ -446,7 +472,7 @@ class Badge {
       name: 'Konvoi-Legende',
       description: 'Zwanzig Gruppenfahrten gemeinsam beendet. Ohne dich '
           'faehrt keiner los.',
-      emoji: '\u{1F697}',
+      emoji: '\u{1F699}',
       category: 'groups',
       assetPath: 'lib/images/badges/badge_19_convoy_wings.png',
       familie: 'gruppenfahrt',
@@ -456,7 +482,7 @@ class Badge {
       id: 'badge_38',
       name: 'Szenegründer',
       description: 'Zehn Gruppen gegründet. Du baust eine ganze Szene auf.',
-      emoji: '\u{1F465}',
+      emoji: '\u{1F3D9}\uFE0F',
       category: 'groups',
       assetPath: 'lib/images/badges/badge_35_founder_ruby.png',
       familie: 'gegruendet',
@@ -466,7 +492,7 @@ class Badge {
       id: 'badge_39',
       name: 'Archivar',
       description: 'Vierzig Routen gespeichert. Dein Archiv ist beachtlich.',
-      emoji: '\u{1F4DA}',
+      emoji: '\u{1F5C3}\uFE0F',
       category: 'saved',
       assetPath: 'lib/images/badges/badge_34_collector_emerald.png',
       familie: 'gespeichert',
@@ -476,7 +502,7 @@ class Badge {
       id: 'badge_40',
       name: 'Zehn Stunden',
       description: 'Zehn Stunden am Lenkrad. Der Anfang einer langen Strecke.',
-      emoji: '\u{23F1}',
+      emoji: '\u{23F0}',
       category: 'distance',
       assetPath: 'lib/images/badges/badge_22_hours_teal.png',
       familie: 'stunden',
@@ -487,7 +513,7 @@ class Badge {
       name: 'Kurvenfreund',
       description: 'Drei Kurvenjagd-Fahrten beendet. Du hast Geschmack '
           'gefunden.',
-      emoji: '\u{1F3CE}',
+      emoji: '\u{1F300}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
       familie: 'kurven',
@@ -498,7 +524,7 @@ class Badge {
       name: 'Kurvenmeister',
       description: 'Fünfundzwanzig Kurvenjagd-Fahrten. Jede Serpentine kennt '
           'dich.',
-      emoji: '\u{1F3C1}',
+      emoji: '\u{1F40D}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
       familie: 'kurven',
@@ -509,7 +535,7 @@ class Badge {
       name: 'Weitfahrer',
       description: 'Über 200 Kilometer in einer einzigen Fahrt. Ein ganzer '
           'Tag Straße.',
-      emoji: '\u{1F6E3}',
+      emoji: '\u{1F3DC}\uFE0F',
       category: 'distance',
       assetPath: 'lib/images/badges/badge_20_roadhorizon_gold.png',
       familie: 'langstrecke',
@@ -520,7 +546,7 @@ class Badge {
       name: 'Grenzgänger',
       description: 'Über 300 Kilometer am Stück. Das ist eine Reise, keine '
           'Runde.',
-      emoji: '\u{1F30D}',
+      emoji: '\u{1F3D4}\uFE0F',
       category: 'distance',
       assetPath: 'lib/images/badges/badge_20_roadhorizon_gold.png',
       familie: 'langstrecke',
@@ -531,7 +557,7 @@ class Badge {
       name: 'Wochenend-Stammgast',
       description: 'Zwanzig Fahrten am Wochenende. Der Samstag gehört dem '
           'Auto.',
-      emoji: '\u{1F4C6}',
+      emoji: '\u{1F576}\uFE0F',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_25_weekend_lime.png',
       familie: 'wochenende',
@@ -541,7 +567,7 @@ class Badge {
       id: 'badge_46',
       name: 'Wochenend-Legende',
       description: 'Fünfzig Fahrten am Wochenende. Zwei Tage, ein Plan.',
-      emoji: '\u{1F3C6}',
+      emoji: '\u{1F389}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_25_weekend_lime.png',
       familie: 'wochenende',
@@ -551,7 +577,7 @@ class Badge {
       id: 'badge_47',
       name: 'Drei in Folge',
       description: 'Drei Tage hintereinander gefahren. Der Anfang einer Serie.',
-      emoji: '\u{1F525}',
+      emoji: '\u{1F331}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_26_streak_flame.png',
       familie: 'serie',
@@ -561,7 +587,7 @@ class Badge {
       id: 'badge_48',
       name: 'Dreißig Tage Serie',
       description: 'Dreißig Tage in Folge gefahren. Das schafft kaum jemand.',
-      emoji: '\u{1F525}',
+      emoji: '\u{26A1}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_26_streak_flame.png',
       familie: 'serie',
@@ -571,7 +597,7 @@ class Badge {
       id: 'badge_49',
       name: 'Runden-Einsteiger',
       description: 'Fünf Rundkurse gefahren. Immer schön wieder heim.',
-      emoji: '\u{1F501}',
+      emoji: '\u{1F502}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_29_loop_teal.png',
       familie: 'rundkurs',
@@ -581,7 +607,7 @@ class Badge {
       id: 'badge_50',
       name: 'Runden-Legende',
       description: 'Fünfzig Rundkurse. Deine Heimatrunden sind Kult.',
-      emoji: '\u{1F501}',
+      emoji: '\u{1F3A1}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_29_loop_teal.png',
       familie: 'rundkurs',
@@ -591,7 +617,7 @@ class Badge {
       id: 'badge_51',
       name: 'Wegfinder',
       description: 'Fünf Fahrten von A nach B. Du hast ein Ziel vor Augen.',
-      emoji: '\u{1F3AF}',
+      emoji: '\u{1F9ED}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_30_target_blue.png',
       familie: 'zielstrebig',
@@ -601,7 +627,7 @@ class Badge {
       id: 'badge_52',
       name: 'Zielsicher',
       description: 'Fünfzig Fahrten von A nach B. Umwege sind für andere.',
-      emoji: '\u{1F3AF}',
+      emoji: '\u{1F3F9}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_30_target_blue.png',
       familie: 'zielstrebig',
@@ -612,7 +638,7 @@ class Badge {
       name: 'Morgenroutine',
       description: 'Zehn Fahrten vor acht Uhr gestartet. Der Wecker klingelt '
           'gern.',
-      emoji: '\u{1F305}',
+      emoji: '\u{2615}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_23_dawn_amber.png',
       familie: 'frueh',
@@ -622,7 +648,7 @@ class Badge {
       id: 'badge_54',
       name: 'Sonnenaufgangsjäger',
       description: 'Dreißig Frühfahrten. Du siehst den Tag vor allen anderen.',
-      emoji: '\u{1F305}',
+      emoji: '\u{1F304}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_23_dawn_amber.png',
       familie: 'frueh',
@@ -632,7 +658,7 @@ class Badge {
       id: 'badge_55',
       name: 'Nachtfahrer',
       description: 'Zehn Fahrten nach 22 Uhr. Die leeren Straßen sind deine.',
-      emoji: '\u{1F319}',
+      emoji: '\u{1F989}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_24_night_indigo.png',
       familie: 'nacht',
@@ -642,7 +668,7 @@ class Badge {
       id: 'badge_56',
       name: 'Mitternachtsclub',
       description: 'Dreißig Nachtfahrten. Der Mond kennt deine Route.',
-      emoji: '\u{1F319}',
+      emoji: '\u{1F30C}',
       category: 'routes',
       assetPath: 'lib/images/badges/badge_24_night_indigo.png',
       familie: 'nacht',
@@ -666,6 +692,173 @@ class Badge {
       emoji: '\u{1F3D8}',
       category: 'social',
       assetPath: 'lib/images/badges/badge_35_founder_ruby.png',
+    ),
+    // 2026-08-24 (Auftrag vom 24.08.): Das Abzeichen fuer das abgeschlossene
+    // Onboarding. Stufenlos wie badge_15 und badge_16 — es gibt kein „zweites
+    // Tutorial". Abgrenzung zu „Startklar" siehe [onboardingBadgeId].
+    //
+    // Emblem: badge_11 war die letzte ungenutzte Luecke der Bildserie (das
+    // Motiv wurde nie einem Abzeichen zugeordnet) und ist ein Lenkrad — das
+    // passende Bild fuer „jetzt darfst du losfahren".
+    Badge(
+      id: onboardingBadgeId,
+      name: 'Eingewiesen',
+      description: 'Das Tutorial einmal komplett durchgespielt.',
+      emoji: '\u{1F393}',
+      category: 'membership',
+      assetPath: 'lib/images/badges/badge_11_silver_steering_wings_large.png',
+    ),
+    // -----------------------------------------------------------------
+    // 2026-08-24 (Auftrag vom 24.08., vucko woertlich): „erstelle fuer die
+    // genannten kategorien selber noch badges [...] Routen, Kurven,
+    // Kilometer, Gruppenfahrten, Community, Beitraege, Hashtags, Meldungen
+    // (Baustellen und Stau), Fahrzeuge in der Garage, Streak, Fruehaufsteher,
+    // Nachtfahrten."
+    //
+    // GEPRUEFT: Von dieser Liste hatten Routen, Kurven, Kilometer,
+    // Gruppenfahrten, Streak, Frueh und Nacht bereits je drei Stufen, und
+    // KEINE einzige Familie stand auf nur einer Stufe. Die Luecken waren
+    // ganze BEREICHE der App ohne jedes Abzeichen:
+    //
+    //   Garage      86 Fahrzeuge bei 62 Nutzern — und kein Abzeichen dafuer.
+    //   Beitraege   10 Beitraege von 7 Nutzern. Die vorhandene Familie
+    //               „Geteilte Routen" misst NUR Beitraege mit angehaengter
+    //               Route (`posts.shared_route_id`); davon gibt es in der
+    //               ganzen Geschichte der App GENAU NULL. Diese Leiter ist
+    //               also fuer jeden unerreichbar, und der normale Beitrag
+    //               zaehlte nirgends.
+    //   Hashtags    Seit Migration 20260824102000 gibt es `post_hashtags`,
+    //               bisher 0 Zeilen. Vucko nennt Hashtags ausdruecklich.
+    //   Meldungen   8 Meldungen von 2 Nutzern, eine Person allein hat 7.
+    //
+    // ALLE SCHWELLEN SIND AUS DIESEN ZAHLEN ABGELEITET, nicht geraten. Es gibt
+    // 183 Konten, aber nur 15 Menschen haben je eine Fahrt beendet. Ein
+    // Abzeichen fuer „1000 Beitraege" waere Hohn — die dritte Stufe liegt
+    // deshalb bei 20 und nicht bei 100.
+    //
+    // Regel wie gehabt: neue ID statt geaenderter Schwelle, damit es keine
+    // Datenmigration braucht.
+    // -----------------------------------------------------------------
+    Badge(
+      id: 'badge_59',
+      name: 'Erstes Auto',
+      description: 'Dein erstes Fahrzeug steht in der Garage.',
+      emoji: '\u{1F527}',
+      category: 'saved',
+      assetPath: 'lib/images/badges/badge_11_silver_steering_wings_large.png',
+      familie: 'garage',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_60',
+      name: 'Volle Garage',
+      description: 'Drei Fahrzeuge im Profil. Für jede Laune eines.',
+      emoji: '\u{1F6E0}\uFE0F',
+      category: 'saved',
+      assetPath: 'lib/images/badges/badge_11_silver_steering_wings_large.png',
+      familie: 'garage',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_61',
+      name: 'Fuhrpark',
+      description: 'Fünf Fahrzeuge in der Garage. Mehr hat hier niemand.',
+      emoji: '\u{1F9F0}',
+      category: 'saved',
+      assetPath: 'lib/images/badges/badge_11_silver_steering_wings_large.png',
+      familie: 'garage',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_62',
+      name: 'Erster Beitrag',
+      description: 'Dein erster Beitrag in der Community.',
+      emoji: '\u{1F4DD}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_36_voice_coral.png',
+      familie: 'beitraege',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_63',
+      name: 'Mitredner',
+      description: 'Fünf Beiträge geschrieben. Man kennt deinen Namen.',
+      emoji: '\u{1F4F0}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_36_voice_coral.png',
+      familie: 'beitraege',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_64',
+      name: 'Vielschreiber',
+      description: 'Zwanzig Beiträge. Ohne dich wäre es hier still.',
+      emoji: '\u{1F3A4}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_36_voice_coral.png',
+      familie: 'beitraege',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_65',
+      name: 'Erster Hashtag',
+      description: 'Einen Beitrag mit einem Hashtag versehen.',
+      emoji: '\u{23}\uFE0F\u{20E3}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_28_styles_prism.png',
+      familie: 'hashtags',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_66',
+      name: 'Themensetzer',
+      description: 'Fünf Beiträge mit Hashtag. Deine Themen finden andere.',
+      emoji: '\u{1F516}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_28_styles_prism.png',
+      familie: 'hashtags',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_67',
+      name: 'Trendmacher',
+      description: 'Zwanzig Beiträge mit Hashtag. Du gibst das Thema vor.',
+      emoji: '\u{1F9F5}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_28_styles_prism.png',
+      familie: 'hashtags',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_68',
+      name: 'Erste Meldung',
+      description: 'Eine Baustelle oder einen Stau gemeldet.',
+      emoji: '\u{26A0}\uFE0F',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
+      familie: 'meldungen',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_69',
+      name: 'Aufmerksam',
+      description: 'Fünf Meldungen abgesetzt. Andere fahren dank dir sicherer.',
+      emoji: '\u{1F6A7}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
+      familie: 'meldungen',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_70',
+      name: 'Straßenwacht',
+      description: 'Zwanzig Meldungen abgesetzt. Die Strecke ist bei dir in '
+          'guten Händen.',
+      emoji: '\u{1F9BA}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_27_curve_crimson.png',
+      familie: 'meldungen',
+      stufe: 3,
     ),
   ];
 
@@ -830,6 +1023,14 @@ enum BadgeMetrik {
   fruehFahrten,
   nachtFahrten,
   gefahreneStile,
+  // 2026-08-24 (Auftrag vom 24.08.): vier Bereiche, die bisher kein Abzeichen
+  // hatten. Die Werte liefert `GamificationService.calculateAndSync` — drei
+  // davon liegen dort schon vor (`fahrzeugAnzahl`, `postZahlen.gesamt`), die
+  // Hashtag- und Meldungszahl muss es noch laden.
+  fahrzeuge,
+  beitraege,
+  hashtagBeitraege,
+  meldungen,
 }
 
 /// Eine Schwelle und das Badge, das sie freischaltet.
@@ -1299,6 +1500,130 @@ const List<BadgeFamilie> badgeFamilien = [
       ),
     ],
   ),
+  // ---------------------------------------------------------------------
+  // 2026-08-24 (Auftrag vom 24.08.): Vier Familien fuer Bereiche, die bisher
+  // kein einziges Abzeichen hatten. Herleitung der Schwellen aus der
+  // Produktivdatenbank, gemessen am 24.08. — siehe auch der Block ueber
+  // badge_59 in [Badge.all].
+  // ---------------------------------------------------------------------
+  //
+  // GEMESSEN: 86 Fahrzeuge bei 62 Nutzern, 18 Leute haben zwei oder mehr, 2
+  // haben drei oder mehr, das Maximum sind FUENF. Die dritte Stufe liegt
+  // deshalb genau auf diesen fuenf: erreichbar, aber bisher von genau einer
+  // Person erreicht. Eine Stufe bei zehn Autos waere eine Zierleiste ohne Tuer.
+  BadgeFamilie(
+    schluessel: 'garage',
+    titel: 'Garage',
+    metrik: BadgeMetrik.fahrzeuge,
+    einheit: 'Fahrzeuge',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_59',
+        schwelle: 1,
+        anleitung: 'Trage dein Auto im Profil ein.',
+      ),
+      BadgeStufe(
+        id: 'badge_60',
+        schwelle: 3,
+        anleitung: 'Trage drei Fahrzeuge in deine Garage ein.',
+      ),
+      BadgeStufe(
+        id: 'badge_61',
+        schwelle: 5,
+        anleitung: 'Trage fünf Fahrzeuge in deine Garage ein.',
+      ),
+    ],
+  ),
+  // GEMESSEN: 10 Beitraege von 7 Nutzern, das Maximum sind ZWEI pro Person.
+  // Die erste Stufe steht deshalb auf 1 (sieben Leute haetten sie sofort),
+  // die dritte auf 20 — das ist das Zehnfache des heutigen Rekords und damit
+  // ein Fernziel, kein Hohn wie „hundert Beitraege" bei zehn insgesamt.
+  //
+  // WICHTIG, nicht mit „Geteilte Routen" verwechseln: Jene Familie misst
+  // `posts.shared_route_id`, also nur Beitraege MIT angehaengter Route. Davon
+  // gibt es in der ganzen Geschichte der App null. Diese hier zaehlt jeden
+  // Beitrag.
+  BadgeFamilie(
+    schluessel: 'beitraege',
+    titel: 'Beiträge',
+    metrik: BadgeMetrik.beitraege,
+    einheit: 'Beiträge',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_62',
+        schwelle: 1,
+        anleitung: 'Schreibe deinen ersten Beitrag.',
+      ),
+      BadgeStufe(
+        id: 'badge_63',
+        schwelle: 5,
+        anleitung: 'Schreibe fünf Beiträge.',
+      ),
+      BadgeStufe(
+        id: 'badge_64',
+        schwelle: 20,
+        anleitung: 'Schreibe zwanzig Beiträge.',
+      ),
+    ],
+  ),
+  // GEMESSEN: `post_hashtags` (Migration 20260824102000) hat 0 Zeilen — die
+  // Funktion ist zwei Tage alt. Die erste Stufe ist deshalb bewusst EIN
+  // Hashtag: genau Vuckos „benutze einen hashtag". Gezaehlt werden eigene
+  // BEITRAEGE mit mindestens einem Hashtag, nicht die Hashtags selbst; sonst
+  // brächte ein einziger Beitrag mit zwanzig Schlagworten die hoechste Stufe.
+  BadgeFamilie(
+    schluessel: 'hashtags',
+    titel: 'Hashtags',
+    metrik: BadgeMetrik.hashtagBeitraege,
+    einheit: 'Beiträge',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_65',
+        schwelle: 1,
+        anleitung: 'Setze in einen Beitrag einen Hashtag.',
+      ),
+      BadgeStufe(
+        id: 'badge_66',
+        schwelle: 5,
+        anleitung: 'Schreibe fünf Beiträge mit Hashtag.',
+      ),
+      BadgeStufe(
+        id: 'badge_67',
+        schwelle: 20,
+        anleitung: 'Schreibe zwanzig Beiträge mit Hashtag.',
+      ),
+    ],
+  ),
+  // GEMESSEN: 8 Meldungen von 2 Nutzern, eine Person allein hat 7. Die zweite
+  // Stufe steht auf 5 (diese Person haette sie), die dritte auf 20.
+  //
+  // Gezaehlt werden EIGENE Meldungen in `road_incidents` (Spalte
+  // `reported_by`). Bestaetigungen fremder Meldungen zaehlen bewusst NICHT:
+  // die sind ein Tastendruck und laden zum Klicken auf Verdacht ein — genau
+  // das, wogegen der Missbrauchsschutz vom 26.07. gebaut wurde.
+  BadgeFamilie(
+    schluessel: 'meldungen',
+    titel: 'Meldungen',
+    metrik: BadgeMetrik.meldungen,
+    einheit: 'Meldungen',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_68',
+        schwelle: 1,
+        anleitung: 'Melde eine Baustelle oder einen Stau.',
+      ),
+      BadgeStufe(
+        id: 'badge_69',
+        schwelle: 5,
+        anleitung: 'Setze fünf Meldungen ab.',
+      ),
+      BadgeStufe(
+        id: 'badge_70',
+        schwelle: 20,
+        anleitung: 'Setze zwanzig Meldungen ab.',
+      ),
+    ],
+  ),
 ];
 
 /// Die Kennzahlen eines Nutzers in der Form, die [badgeFamilien] versteht.
@@ -1323,6 +1648,10 @@ Map<BadgeMetrik, double> badgeMetriken({
   int gefahreneStile = 0,
   int rundkurse = 0,
   int aNachBFahrten = 0,
+  int fahrzeuge = 0,
+  int beitraege = 0,
+  int hashtagBeitraege = 0,
+  int meldungen = 0,
 }) {
   return {
     BadgeMetrik.level: level.toDouble(),
@@ -1342,6 +1671,10 @@ Map<BadgeMetrik, double> badgeMetriken({
     BadgeMetrik.fruehFahrten: fruehFahrten.toDouble(),
     BadgeMetrik.nachtFahrten: nachtFahrten.toDouble(),
     BadgeMetrik.gefahreneStile: gefahreneStile.toDouble(),
+    BadgeMetrik.fahrzeuge: fahrzeuge.toDouble(),
+    BadgeMetrik.beitraege: beitraege.toDouble(),
+    BadgeMetrik.hashtagBeitraege: hashtagBeitraege.toDouble(),
+    BadgeMetrik.meldungen: meldungen.toDouble(),
   };
 }
 
@@ -1449,6 +1782,10 @@ BadgeFortschritt? badgeFortschrittFuer({
   int gefahreneStile = 0,
   int rundkurse = 0,
   int aNachBFahrten = 0,
+  int fahrzeuge = 0,
+  int beitraege = 0,
+  int hashtagBeitraege = 0,
+  int meldungen = 0,
 }) {
   return badgeFortschrittAus(
     badgeId,
@@ -1470,6 +1807,10 @@ BadgeFortschritt? badgeFortschrittFuer({
       gefahreneStile: gefahreneStile,
       rundkurse: rundkurse,
       aNachBFahrten: aNachBFahrten,
+      fahrzeuge: fahrzeuge,
+      beitraege: beitraege,
+      hashtagBeitraege: hashtagBeitraege,
+      meldungen: meldungen,
     ),
   );
 }

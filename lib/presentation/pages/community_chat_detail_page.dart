@@ -13,6 +13,7 @@ import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
+import 'package:cruise_connect/presentation/widgets/community/community_nachrichten_ansicht.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_attachment_card.dart';
@@ -20,14 +21,9 @@ import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 enum _CommunityChatPostFilter { all, groupRides, sharedRoutes }
 
-const _communityChatTopicMentions = {
-  'gruppe',
-  'gruppen',
-  'gruppenfahrt',
-  'gruppenfahrten',
-  'gruppenfahert',
-  'geteilteroute',
-};
+// 2026-08-24: Die Liste steht jetzt in community_nachrichten_ansicht.dart,
+// damit beide Darstellungen dieselbe benutzen.
+const _communityChatTopicMentions = communityChatThemenErwaehnungen;
 
 // 2026-07-22 (vucko Emoji-Reaktionen): identische Auswahl wie im Gruppen-Chat
 // (group_chat_panel.dart), damit sich beide Chat-Arten gleich anfühlen.
@@ -51,6 +47,11 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   List<Map<String, dynamic>> _messages = [];
   List<Map<String, dynamic>> _members = [];
   final Map<String, GlobalKey> _messageKeys = {};
+
+  /// Marke an der Liste selbst. Der Anker beim Umschalten der Darstellung muss
+  /// gegen die Oberkante der LISTE gemessen werden, nicht gegen die des
+  /// Bildschirms — darueber sitzen Leiste, Kopfzeile und Filterzeile.
+  final GlobalKey _listenKey = GlobalKey();
   RealtimeChannel? _messagesChannel;
   RealtimeChannel? _membersChannel;
   RealtimeChannel? _communityChannel;
@@ -64,6 +65,23 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   Timer? _reloadDebounce;
   _CommunityChatPostFilter _postFilter = _CommunityChatPostFilter.all;
 
+  /// 2026-08-24 (Auftrag Vucko „chat art optimieren"): die gewaehlte
+  /// Darstellung. Voreinstellung ist die Beitragsansicht — sie war bis heute
+  /// die einzige, niemand soll sich nach einem Update neu zurechtfinden
+  /// muessen.
+  ChatDarstellung _darstellung = ChatDarstellung.standard;
+
+  /// True, sobald in dieser Sitzung selbst umgeschaltet wurde. Danach darf
+  /// eine spaet eintreffende Antwort vom Konto die Wahl nicht mehr umwerfen.
+  bool _wahlGetroffen = false;
+
+  /// Wer kam und wer ging (`community_mitglieder_verlauf`).
+  List<Map<String, dynamic>> _verlauf = [];
+
+  /// Kennungen der Nachrichten, die ICH „nur fuer mich" geloescht habe.
+  Set<String> _ausgeblendet = {};
+  RealtimeChannel? _verlaufChannel;
+
   @override
   void initState() {
     super.initState();
@@ -71,6 +89,16 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _subscribeMessages();
     _subscribeMembers();
     _subscribeCommunity();
+    _subscribeVerlauf();
+    unawaited(_ladeDarstellung());
+    // Die Serveruhr EINMAL messen. Sie entscheidet ueber nichts (das tut die
+    // Datenbank), aber ohne sie kann die Seite nicht ehrlich anzeigen, wie
+    // lange noch bearbeitet werden darf.
+    unawaited(
+      Serverzeit.abgleichen().then((ok) {
+        if (ok && mounted) setState(() {});
+      }),
+    );
   }
 
   @override
@@ -79,6 +107,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _messagesChannel?.unsubscribe();
     _membersChannel?.unsubscribe();
     _communityChannel?.unsubscribe();
+    _verlaufChannel?.unsubscribe();
     _messageCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -95,11 +124,19 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       final members = await CommunityChatService.fetchMembers(
         widget.communityId,
       );
+      // 2026-08-24: beide Abfragen sind winzig und unabhaengig voneinander;
+      // nacheinander waeren es zwei Umlaeufe mehr beim Oeffnen.
+      final zusatz = await Future.wait([
+        CommunityChatService.fetchVerlauf(widget.communityId),
+        CommunityChatService.fetchAusgeblendeteIds(widget.communityId),
+      ]);
       if (!mounted) return;
       setState(() {
         _community = community;
         _messages = messages;
         _members = members;
+        _verlauf = zusatz[0] as List<Map<String, dynamic>>;
+        _ausgeblendet = zusatz[1] as Set<String>;
         _loading = false;
       });
       if (scrollToBottom) _scrollToBottom();
@@ -434,28 +471,6 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _showToast('Nachricht kopiert.');
   }
 
-  Future<void> _deleteMessage(Map<String, dynamic> message) async {
-    final id = message['id']?.toString();
-    if (id == null || id.isEmpty) return;
-    if (id.startsWith('local-')) {
-      setState(() {
-        _messages = _messages.where((entry) => entry['id'] != id).toList();
-      });
-      return;
-    }
-    final previous = List<Map<String, dynamic>>.from(_messages);
-    setState(() {
-      _messages = _messages.where((entry) => entry['id'] != id).toList();
-    });
-    try {
-      await CommunityChatService.deleteMessage(id);
-      unawaited(_load(scrollToBottom: false));
-    } catch (e) {
-      if (mounted) setState(() => _messages = previous);
-      _showError(e, fallback: 'Nachricht konnte nicht gelöscht werden.');
-    }
-  }
-
   Future<void> _setMessagePinned(
     Map<String, dynamic> message, {
     required bool pinned,
@@ -556,15 +571,39 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   void _showMessageActions(Map<String, dynamic> message) {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     final isMine = message['user_id'] == uid;
-    final canDelete = isMine || CommunityChatService.canModerate(_myRole);
+    final istGeloescht = message['_geloescht'] == true;
     final isPinned = message['pinned_at'] != null;
     final messageId = message['id']?.toString();
+    final istLokal = messageId == null || messageId.startsWith('local-');
+    final istUnterwegs = message['_pending'] == true;
+    // Für alle löschen darf, wer die Nachricht geschrieben hat, und die
+    // Moderation. Unverändert gegenüber heute — eine stille Verschärfung
+    // gehört nicht in diesen Auftrag.
+    // `istLokal` heisst: die Nachricht ist noch gar nicht in der Datenbank.
+    // „Fuer alle loeschen" waere dafuer das falsche Wort — es gibt niemanden,
+    // bei dem sie steht. Sie wird verworfen.
+    final darfFuerAlleLoeschen =
+        !istGeloescht &&
+        !istLokal &&
+        (isMine || CommunityChatService.canModerate(_myRole));
+
+    // 2026-08-24 (Auftrag Vucko): Die Frist wird gegen die SERVERZEIT
+    // gerechnet. Ist sie unbekannt, bleibt der Eintrag stehen und der Server
+    // lehnt gegebenenfalls mit einer ehrlichen Meldung ab — siehe
+    // CommunityChatService.darfBearbeiten.
+    final verbleibend = _verbleibendeFrist(message);
+    final darfBearbeiten =
+        !istLokal &&
+        CommunityChatService.darfBearbeiten(
+          istEigene: isMine,
+          istGeloescht: istGeloescht,
+          istUnterwegs: istUnterwegs,
+          verbleibend: verbleibend,
+        );
+
     // Reagieren nur auf echte Server-Nachrichten (keine optimistische
-    // "sendet..."-Zeile mit lokaler ID).
-    final canReact =
-        message['_pending'] != true &&
-        messageId != null &&
-        !messageId.startsWith('local-');
+    // "sendet..."-Zeile mit lokaler ID, kein Grabstein).
+    final canReact = !istUnterwegs && !istLokal && !istGeloescht;
 
     showModalBottomSheet<void>(
       context: context,
@@ -649,23 +688,40 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                   ),
                 if (canReact)
                   Divider(color: Colors.white.withValues(alpha: 0.06), height: 18),
-                _MessageActionTile(
-                  icon: Icons.reply_rounded,
-                  label: 'Antworten',
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    setState(() => _replyToMessage = message);
-                  },
-                ),
-                _MessageActionTile(
-                  icon: Icons.copy_rounded,
-                  label: 'Kopieren',
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    unawaited(_copyMessage(message));
-                  },
-                ),
-                if (_canPinMessages)
+                if (!istGeloescht)
+                  _MessageActionTile(
+                    icon: Icons.reply_rounded,
+                    label: 'Antworten',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      setState(() => _replyToMessage = message);
+                    },
+                  ),
+                if (darfBearbeiten)
+                  _MessageActionTile(
+                    icon: Icons.edit_outlined,
+                    label: 'Bearbeiten',
+                    // Der Hinweis ist die Anzeige der Frist. Steht dort nichts,
+                    // ist die Serverzeit noch nicht gemessen — dann wird auch
+                    // nichts behauptet.
+                    hinweis: verbleibend == null
+                        ? null
+                        : CommunityChatService.fristText(verbleibend),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_bearbeiteNachricht(message));
+                    },
+                  ),
+                if (!istGeloescht)
+                  _MessageActionTile(
+                    icon: Icons.copy_rounded,
+                    label: 'Kopieren',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_copyMessage(message));
+                    },
+                  ),
+                if (_canPinMessages && !istGeloescht)
                   _MessageActionTile(
                     icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
                     label: isPinned ? 'Pin entfernen' : 'Anpinnen',
@@ -674,14 +730,38 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                       unawaited(_setMessagePinned(message, pinned: !isPinned));
                     },
                   ),
-                if (canDelete)
+                // 2026-08-24 (Auftrag Vucko „wie bei WhatsApp"): zwei
+                // Möglichkeiten, und die Wörter müssen den Unterschied selbst
+                // erklären. „Löschen" allein sagte nicht, wen es trifft.
+                if (!istLokal)
+                  _MessageActionTile(
+                    icon: Icons.visibility_off_outlined,
+                    label: 'Nur für mich löschen',
+                    hinweis: 'Die anderen sehen sie weiter.',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_loescheNurFuerMich(message));
+                    },
+                  ),
+                if (darfFuerAlleLoeschen)
                   _MessageActionTile(
                     icon: Icons.delete_outline_rounded,
-                    label: 'Löschen',
+                    label: 'Für alle löschen',
+                    hinweis: 'Verschwindet bei allen Mitgliedern.',
                     destructive: true,
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      unawaited(_deleteMessage(message));
+                      unawaited(_loescheFuerAlle(message));
+                    },
+                  ),
+                if (istLokal)
+                  _MessageActionTile(
+                    icon: Icons.close_rounded,
+                    label: 'Entwurf verwerfen',
+                    destructive: true,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(_loescheFuerAlle(message));
                     },
                   ),
               ],
@@ -836,10 +916,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       );
       return;
     }
-    final visibleMessages = _visibleMessages();
-    final index = visibleMessages.indexWhere(
-      (message) => message['id']?.toString() == messageId,
-    );
+    final zeilen = _zeilen();
+    final index = zeilen.indexWhere((zeile) => zeile.id == messageId);
     if (index < 0 || !_scrollCtrl.hasClients) return;
     _scrollCtrl.animateTo(
       (index * 86.0).clamp(0.0, _scrollCtrl.position.maxScrollExtent),
@@ -995,6 +1073,21 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
           ],
         ),
         actions: [
+          // 2026-08-24 (Auftrag Vucko „chat art optimieren"): Der Wechsel
+          // gehoert dorthin, wo der Chat ist, und nicht in ein
+          // Einstellungsmenue drei Ebenen tiefer. Ein Tipp, sofort sichtbar.
+          IconButton(
+            tooltip: _darstellung == ChatDarstellung.standard
+                ? 'Ansicht wechseln: Nachrichten'
+                : 'Ansicht wechseln: Beiträge',
+            onPressed: _wechsleDarstellung,
+            icon: Icon(
+              _darstellung == ChatDarstellung.standard
+                  ? Icons.chat_bubble_outline_rounded
+                  : Icons.view_agenda_outlined,
+              color: Colors.white,
+            ),
+          ),
           IconButton(
             tooltip: 'Mitglieder',
             onPressed: _showMembersSheet,
@@ -1080,7 +1173,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                 children: [
                   if (community != null) _buildCommunityHeader(community),
                   _buildPostFilters(),
-                  Expanded(child: _buildMessages()),
+                  Expanded(key: _listenKey, child: _buildMessages()),
                   _buildComposer(),
                 ],
               ),
@@ -1361,8 +1454,12 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     );
   }
 
+  /// Die Nachrichten nach dem gewaehlten Themenfilter. Die Reihenfolge macht
+  /// seit dem 24.08. [CommunityChatTimeline] — sie haengt an der Darstellung
+  /// (Beitragsansicht: Angepinntes zuerst; Nachrichten-Ansicht: streng
+  /// chronologisch) und muss deshalb an einer Stelle liegen, die beide kennt.
   List<Map<String, dynamic>> _visibleMessages() {
-    final filtered = switch (_postFilter) {
+    return switch (_postFilter) {
       _CommunityChatPostFilter.all => _messages.toList(),
       _CommunityChatPostFilter.groupRides =>
         _messages.where(_messageMatchesGroupRide).toList(),
@@ -1371,27 +1468,6 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
             .where((message) => _routeAttachmentFrom(message) != null)
             .toList(),
     };
-    filtered.sort((a, b) {
-      final aPinned = a['pinned_at'] != null;
-      final bPinned = b['pinned_at'] != null;
-      if (aPinned != bPinned) return aPinned ? -1 : 1;
-      if (aPinned && bPinned) {
-        final ap =
-            DateTime.tryParse(a['pinned_at']?.toString() ?? '') ??
-            DateTime.fromMillisecondsSinceEpoch(0);
-        final bp =
-            DateTime.tryParse(b['pinned_at']?.toString() ?? '') ??
-            DateTime.fromMillisecondsSinceEpoch(0);
-        return bp.compareTo(ap);
-      }
-      return _messageDate(a).compareTo(_messageDate(b));
-    });
-    return filtered;
-  }
-
-  DateTime _messageDate(Map<String, dynamic> message) {
-    return DateTime.tryParse(message['created_at']?.toString() ?? '') ??
-        DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   bool _messageMatchesGroupRide(Map<String, dynamic> message) {
@@ -1406,9 +1482,14 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
 
   int _replyCountFor(String? messageId) {
     if (messageId == null || messageId.isEmpty) return 0;
+    // 2026-08-24: Eine geloeschte oder von mir ausgeblendete Antwort zaehlt
+    // nicht mit — sonst stuende „3 Antworten" ueber zwei sichtbaren.
     return _messages
         .where(
-          (message) => message['reply_to_message_id']?.toString() == messageId,
+          (message) =>
+              message['reply_to_message_id']?.toString() == messageId &&
+              message['_geloescht'] != true &&
+              !_ausgeblendet.contains(message['id']?.toString()),
         )
         .length;
   }
@@ -1422,8 +1503,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   }
 
   Widget _buildMessages() {
-    final visibleMessages = _visibleMessages();
-    if (visibleMessages.isEmpty) {
+    final zeilen = _zeilen();
+    if (zeilen.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -1458,18 +1539,41 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       );
     }
 
+    if (_darstellung == ChatDarstellung.nachrichten) {
+      return CommunityNachrichtenAnsicht(
+        zeilen: zeilen,
+        scrollController: _scrollCtrl,
+        messageKeys: _messageKeys,
+        eigeneUserId: Supabase.instance.client.auth.currentUser?.id,
+        onAktionen: _showMessageActions,
+        onAntworten: (nachricht) =>
+            setState(() => _replyToMessage = nachricht),
+        onZuNachricht: _scrollToMessage,
+        reaktionenBauer: _buildReactions,
+        zitatTextFuer: _zitatText,
+        antwortenZahlFuer: _replyCountFor,
+      );
+    }
+
     return ListView.builder(
       controller: _scrollCtrl,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
-      itemCount: visibleMessages.length,
+      itemCount: zeilen.length,
       itemBuilder: (context, index) {
-        final message = visibleMessages[index];
-        final id = message['id']?.toString();
+        final zeile = zeilen[index];
+        final id = zeile.id;
         final key = id == null
             ? null
             : _messageKeys.putIfAbsent(id, GlobalKey.new);
-        return KeyedSubtree(key: key, child: _buildCommunityPostCard(message));
+        final inhalt = switch (zeile.art) {
+          ChatZeileArt.verlauf => CommunitySystemZeile(
+            eintraege: zeile.verlauf,
+          ),
+          ChatZeileArt.geloescht => _buildGeloeschtKarte(zeile.nachricht!),
+          ChatZeileArt.nachricht => _buildCommunityPostCard(zeile.nachricht!),
+        };
+        return KeyedSubtree(key: key, child: inhalt);
       },
     );
   }
@@ -1489,11 +1593,14 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     final time = _formatMessageTime(message['created_at'] as String?);
     final isPending = message['_pending'] == true;
     final replyToId = message['reply_to_message_id']?.toString();
-    final repliedMessage = _messageById(replyToId);
     final routeAttachment = _routeAttachmentFrom(message);
     final messageId = message['id']?.toString();
     final replies = _replyCountFor(messageId);
     final isPinned = message['pinned_at'] != null;
+    // 2026-08-24 (Auftrag Vucko): „Eine bearbeitete Nachricht muss als
+    // bearbeitet erkennbar sein." `bearbeitet_am` setzt ausschliesslich der
+    // Trigger in der Datenbank; ein mitgeschickter Wert wird dort verworfen.
+    final istBearbeitet = message['bearbeitet_am'] != null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1557,7 +1664,8 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '${_postTopicLabel(message)} · $name · $time',
+                        '${_postTopicLabel(message)} · $name · $time'
+                        '${istBearbeitet ? ' · bearbeitet' : ''}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -1621,8 +1729,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                         ),
                       ),
                       child: Text(
-                        repliedMessage?['body']?.toString() ??
-                            'Antwort anzeigen',
+                        _zitatText(replyToId),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1982,6 +2089,479 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     );
   }
 
+
+  // --------------------------------------------------------------------------
+  // 2026-08-24 (Auftrag Vucko): Chat-Art, Bearbeiten, Löschen, Verlauf
+  // --------------------------------------------------------------------------
+
+  /// Liest die bevorzugte Darstellung — erst vom Gerät (sofort), dann vom
+  /// Konto (Wahrheit). Hat der Nutzer in der Zwischenzeit selbst umgeschaltet,
+  /// gewinnt seine Wahl: eine langsame Antwort darf einen Tipp nicht
+  /// zurückdrehen.
+  Future<void> _ladeDarstellung() async {
+    final vomGeraet = await CommunityChatService.chatDarstellungVomGeraet();
+    if (mounted && vomGeraet != null && !_wahlGetroffen) {
+      setState(() => _darstellung = vomGeraet);
+    }
+    final vomKonto = await CommunityChatService.chatDarstellungVomKonto();
+    if (!mounted || vomKonto == null || _wahlGetroffen) return;
+    setState(() => _darstellung = vomKonto);
+  }
+
+  void _subscribeVerlauf() {
+    _verlaufChannel = CommunityChatService.subscribeVerlauf(
+      widget.communityId,
+      () {
+        _reloadDebounce?.cancel();
+        _reloadDebounce = Timer(const Duration(milliseconds: 160), () {
+          if (mounted) _load(scrollToBottom: false);
+        });
+      },
+    );
+  }
+
+  /// Wechselt zwischen Beitragsansicht und Nachrichten-Ansicht.
+  ///
+  /// „Es soll zuverlaessig sein" (Vucko) heißt hier drei Dinge:
+  ///  * Es wird NICHTS nachgeladen. Beide Ansichten zeichnen dieselbe Liste
+  ///    aus dem Zustand dieser Seite.
+  ///  * Es springt nicht. Die Zeile, die gerade oben im Bild steht, wird
+  ///    gemerkt und nach dem Umschalten wieder angesteuert — die Höhen der
+  ///    beiden Darstellungen sind verschieden, ein einfaches Beibehalten der
+  ///    Rollposition landete irgendwo.
+  ///  * Die Wahl überlebt den Neustart: sie geht sofort ans Gerät und ans
+  ///    Konto (`profiles.chat_darstellung`).
+  void _wechsleDarstellung() {
+    final anker = _ankerZeile();
+    final neu = _darstellung == ChatDarstellung.standard
+        ? ChatDarstellung.nachrichten
+        : ChatDarstellung.standard;
+    setState(() {
+      _darstellung = neu;
+      _wahlGetroffen = true;
+    });
+    unawaited(CommunityChatService.merkeChatDarstellung(neu));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (anker != null) {
+        _scrollToMessage(anker);
+      } else {
+        _scrollToBottom();
+      }
+    });
+    _showToast('Ansicht: ${neu.titel}');
+  }
+
+  /// Die oberste Zeile, die gerade im Bild steht. Sie ist der Anker beim
+  /// Umschalten der Darstellung.
+  String? _ankerZeile() {
+    if (!_scrollCtrl.hasClients) return null;
+    final listenBox = _listenKey.currentContext?.findRenderObject();
+    final listenOberkante = listenBox is RenderBox && listenBox.hasSize
+        ? listenBox.localToGlobal(Offset.zero).dy
+        : 0.0;
+    String? bester;
+    var besteEntfernung = double.infinity;
+    for (final zeile in _zeilen()) {
+      final id = zeile.id;
+      if (id == null) continue;
+      final ctx = _messageKeys[id]?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) continue;
+      final oben = box.localToGlobal(Offset.zero).dy - listenOberkante;
+      if (oben < -4) continue;
+      if (oben < besteEntfernung) {
+        besteEntfernung = oben;
+        bester = id;
+      }
+    }
+    return bester;
+  }
+
+  /// Die Zeitleiste: Nachrichten, Grabsteine und die Zu- und Abgänge.
+  ///
+  /// Die Zu- und Abgänge erscheinen nur unter „Alles". Unter einem Themen-
+  /// filter („@Gruppenfahrten") wären sie Beiwerk, das nicht zum Filter passt.
+  List<ChatZeile> _zeilen() {
+    return CommunityChatTimeline.baue(
+      nachrichten: _visibleMessages(),
+      verlauf: _postFilter == _CommunityChatPostFilter.all
+          ? _verlauf
+          : const [],
+      ausgeblendet: _ausgeblendet,
+      angepinntZuerst: _darstellung == ChatDarstellung.standard,
+    );
+  }
+
+  /// Der Text, der im Antwort-Zitat steht.
+  ///
+  /// Vorher stand hier `repliedMessage?['body'] ?? 'Antwort anzeigen'`. Seit
+  /// eine gelöschte Nachricht als Grabstein in der Liste bleibt, hätte das
+  /// eine leere Zeile ergeben.
+  String _zitatText(String? messageId) {
+    final message = _messageById(messageId);
+    if (message == null) return 'Antwort anzeigen';
+    if (message['_geloescht'] == true) return communityGeloeschtText;
+    final body = message['body']?.toString() ?? '';
+    if (body.isNotEmpty) return body;
+    return _routeAttachmentFrom(message) != null
+        ? 'Route geteilt'
+        : 'Antwort anzeigen';
+  }
+
+  /// Wie lange die Nachricht noch bearbeitet werden darf — gerechnet gegen die
+  /// SERVERZEIT. `null` heißt „unbekannt", nicht „abgelaufen".
+  Duration? _verbleibendeFrist(Map<String, dynamic> message) {
+    return CommunityChatService.verbleibendeBearbeitungszeit(
+      erstelltAm: DateTime.tryParse(message['created_at']?.toString() ?? ''),
+      serverJetzt: Serverzeit.jetzt,
+    );
+  }
+
+  /// Bearbeiten. Der Server setzt die Frist durch, dieser Dialog zeigt sie.
+  ///
+  /// Der Zähler läuft mit: schlägt es null, schließt sich der Dialog von
+  /// selbst. Das ist ehrlicher, als den Nutzer noch zu Ende tippen zu lassen
+  /// und ihn dann in eine Ablehnung laufen zu lassen.
+  Future<void> _bearbeiteNachricht(Map<String, dynamic> message) async {
+    final id = message['id']?.toString();
+    if (id == null || id.isEmpty || id.startsWith('local-')) return;
+    final alterText = message['body']?.toString() ?? '';
+    final ctrl = TextEditingController(text: alterText);
+    // Der Zaehler laeuft, solange der Dialog offen ist. Er wird unten wieder
+    // abgestellt — ein Timer.periodic, den niemand abstellt, laeuft bis zum
+    // Ende der App weiter.
+    Timer? ticker;
+
+    final neuerText = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (builderContext, setzeDialog) {
+            ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+              if (!builderContext.mounted) return;
+              final rest = _verbleibendeFrist(message);
+              if (rest != null && rest <= Duration.zero) {
+                Navigator.pop(dialogContext);
+                return;
+              }
+              setzeDialog(() {});
+            });
+            final rest = _verbleibendeFrist(message);
+            return AlertDialog(
+              backgroundColor: const Color(0xFF151821),
+              title: const Text(
+                'Nachricht bearbeiten',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: ctrl,
+                    autofocus: true,
+                    minLines: 1,
+                    maxLines: 6,
+                    maxLength: AppInputLimits.communityMessageMaxLength,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      counterText: '',
+                      filled: true,
+                      fillColor: const Color(0xFF0B0E14),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.schedule_rounded,
+                        size: 14,
+                        color: Colors.white38,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          rest == null
+                              // Ohne gemessene Serverzeit wird KEINE Frist
+                              // behauptet. Ein „noch 6 Stunden", das auf der
+                              // Geraeteuhr beruht, waere geraten.
+                              ? 'Bearbeiten geht 6 Stunden lang. Die genaue '
+                                    'Restzeit kommt vom Server.'
+                              : CommunityChatService.fristText(rest),
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text(
+                    'Abbrechen',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, ctrl.text),
+                  child: Text(
+                    'Speichern',
+                    style: TextStyle(
+                      color: AppAccentColors.accent,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    ticker?.cancel();
+    ctrl.dispose();
+    if (!mounted) return;
+    final sauber = neuerText?.trim();
+    if (sauber == null || sauber.isEmpty || sauber == alterText.trim()) return;
+
+    final vorher = List<Map<String, dynamic>>.from(_messages);
+    setState(() {
+      _messages = [
+        for (final eintrag in _messages)
+          if (eintrag['id']?.toString() == id)
+            {
+              ...eintrag,
+              'body': sauber,
+              'bearbeitet_am': DateTime.now().toUtc().toIso8601String(),
+            }
+          else
+            eintrag,
+      ];
+    });
+    try {
+      await CommunityChatService.editMessage(messageId: id, body: sauber);
+      unawaited(_load(scrollToBottom: false));
+      if (mounted) _showToast('Nachricht bearbeitet.');
+    } catch (e) {
+      if (mounted) setState(() => _messages = vorher);
+      _showError(e, fallback: 'Nachricht konnte nicht bearbeitet werden.');
+    }
+  }
+
+  /// Für alle löschen. MIT Rückfrage: das trifft jeden anderen und lässt sich
+  /// nicht zurückholen.
+  Future<void> _loescheFuerAlle(Map<String, dynamic> message) async {
+    final id = message['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    if (id.startsWith('local-')) {
+      setState(() {
+        _messages = _messages.where((entry) => entry['id'] != id).toList();
+      });
+      return;
+    }
+
+    final sicher = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF151821),
+        title: const Text(
+          'Für alle löschen?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'Die Nachricht verschwindet bei allen Mitgliedern. An ihrer Stelle '
+          'steht „Diese Nachricht wurde gelöscht." Das lässt sich nicht '
+          'rückgängig machen.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'Für alle löschen',
+              style: TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (sicher != true || !mounted) return;
+
+    final vorher = List<Map<String, dynamic>>.from(_messages);
+    setState(() {
+      _messages = [
+        for (final eintrag in _messages)
+          if (eintrag['id']?.toString() == id)
+            {
+              ...eintrag,
+              'body': '',
+              'route_attachment': null,
+              'community_message_reactions': const <Map<String, dynamic>>[],
+              '_geloescht': true,
+              'deleted_at': DateTime.now().toUtc().toIso8601String(),
+            }
+          else
+            eintrag,
+      ];
+    });
+    try {
+      await CommunityChatService.deleteMessage(id, fuerAlle: true);
+      unawaited(_load(scrollToBottom: false));
+    } catch (e) {
+      if (mounted) setState(() => _messages = vorher);
+      _showError(e, fallback: 'Nachricht konnte nicht gelöscht werden.');
+    }
+  }
+
+  /// Nur für mich löschen. OHNE Rückfrage — aber mit „Rückgängig".
+  ///
+  /// Die Abwägung: eine Rückfrage schützt vor einem Fehlgriff, der hier nur
+  /// die eigene Ansicht trifft und niemandem sonst etwas wegnimmt. Ein
+  /// „Rückgängig" im Hinweis ist die bessere Antwort auf denselben Fehlgriff:
+  /// es kostet keinen zusätzlichen Tipp im Normalfall und macht den Fehler
+  /// wirklich rückgängig, statt ihn nur zu bestätigen. Bei „für alle" geht das
+  /// nicht — deshalb steht dort die Rückfrage.
+  Future<void> _loescheNurFuerMich(Map<String, dynamic> message) async {
+    final id = message['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    if (id.startsWith('local-')) {
+      setState(() {
+        _messages = _messages.where((entry) => entry['id'] != id).toList();
+      });
+      return;
+    }
+
+    setState(() => _ausgeblendet = {..._ausgeblendet, id});
+    try {
+      await CommunityChatService.deleteMessage(id, fuerAlle: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Nur bei dir entfernt.',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+          ),
+          backgroundColor: const Color(0xFF171B24),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          action: SnackBarAction(
+            label: 'Rückgängig',
+            textColor: AppAccentColors.accent,
+            onPressed: () => unawaited(_zeigeWiederAn(id)),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _ausgeblendet = {..._ausgeblendet}..remove(id);
+        });
+      }
+      _showError(e, fallback: 'Nachricht konnte nicht entfernt werden.');
+    }
+  }
+
+  Future<void> _zeigeWiederAn(String messageId) async {
+    setState(() {
+      _ausgeblendet = {..._ausgeblendet}..remove(messageId);
+    });
+    try {
+      await CommunityChatService.zeigeNachrichtWiederAn(messageId);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _ausgeblendet = {..._ausgeblendet, messageId});
+      }
+      _showError(e, fallback: 'Konnte nicht zurückgeholt werden.');
+    }
+  }
+
+  /// Der Grabstein in der Beitragsansicht.
+  Widget _buildGeloeschtKarte(Map<String, dynamic> message) {
+    final rawProfile = message['profiles'];
+    final profile = rawProfile is Map
+        ? Map<String, dynamic>.from(rawProfile)
+        : <String, dynamic>{};
+    final name = CommunityChatService.displayName(
+      profile,
+      fallbackUserId: message['user_id'] as String?,
+    );
+    final time = _formatMessageTime(message['created_at'] as String?);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: () => _showMessageActions(message),
+        child: Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+          child: Row(
+            children: [
+              const Icon(Icons.block_rounded, size: 15, color: Colors.white38),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$name · $time',
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      communityGeloeschtText,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 14,
+                        fontStyle: FontStyle.italic,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   String _formatMessageTime(String? raw) {
     final dt = DateTime.tryParse(raw ?? '')?.toLocal();
     if (dt == null) return '';
@@ -2095,12 +2675,17 @@ class _MessageActionTile extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.destructive = false,
+    this.hinweis,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final bool destructive;
+
+  /// 2026-08-24: die zweite Zeile unter dem Eintrag — die verbleibende
+  /// Bearbeitungszeit oder der Satz, der sagt, WEN das Loeschen trifft.
+  final String? hinweis;
 
   @override
   Widget build(BuildContext context) {
@@ -2112,6 +2697,16 @@ class _MessageActionTile extends StatelessWidget {
         label,
         style: TextStyle(color: color, fontWeight: FontWeight.w800),
       ),
+      subtitle: hinweis == null
+          ? null
+          : Text(
+              hinweis!,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
     );
   }
 }

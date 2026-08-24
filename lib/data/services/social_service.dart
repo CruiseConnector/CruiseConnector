@@ -147,6 +147,83 @@ class HashtagKennzahlen {
   final int personen;
 }
 
+/// 2026-08-24 (Vucko: „bei der community page hat cozy mal was gepostet aber
+/// ich sehe es nicht in meinem feed obwohl ich ihm folge.")
+///
+/// Wer sieht welchen Beitrag? Die Antwort steht ab jetzt AN EINER STELLE,
+/// weil sie vorher in jeder Abfrage neu und jedes Mal anders erfunden wurde.
+///
+/// Die Sichtbarkeitsstufe heisst in der App schlicht „Follower"
+/// (create_post_page.dart). Wer sie waehlt, meint SEINE FOLLOWER — nicht die
+/// Teilmenge davon, der er selbst auch folgt. Der Feed holte solche Beitraege
+/// aber nur von Leuten, die ZURUECKFOLGEN („mutual"). Gemessen am 24.08.:
+/// Vucko folgt cozy, cozy folgt nicht zurueck — cozys zwei Beitraege vom
+/// 21.08. blieben deshalb unsichtbar. Kein Datenfehler, ein Regelfehler.
+///
+/// Der alte Kommentar an dieser Stelle begruendete die Mutual-Bedingung mit
+/// „sonst leakt Privates an einseitige Follower". Das ist verkehrt herum
+/// gedacht: ein einseitiger Follower ist genau das Publikum, fuer das
+/// „Follower" gemacht ist. Wer nur gegenseitige Kontakte erreichen will,
+/// braucht dafuer eine EIGENE, so beschriftete Stufe — nicht eine stille
+/// Verschaerfung dieser hier.
+///
+/// Wer das zurueckdreht, aendert bitte zuerst die Beschriftung in
+/// `create_post_page.dart`. Solange dort „Follower" steht, gilt diese Regel.
+class FeedSichtbarkeit {
+  /// Stufen, die ich von jemandem sehen darf, DEM ICH FOLGE.
+  static const List<String> stufenVonGefolgten = <String>[
+    'public',
+    'followers',
+  ];
+
+  /// Stufen, die ich von jemandem sehen darf, dem ich NICHT folge.
+  /// (Im Feed steht ohnehin niemand, dem ich nicht folge — die Liste gilt
+  /// fuer fremde Profile und „Entdecken".)
+  static const List<String> stufenVonFremden = <String>['public'];
+
+  static List<String> stufenFuerVerfasser({required bool folgeIchIhm}) =>
+      folgeIchIhm ? stufenVonGefolgten : stufenVonFremden;
+
+  /// Gehoert der Beitrag in den Feed von [betrachterId]?
+  ///
+  /// Doppelter Boden: die Abfragen filtern bereits serverseitig, diese
+  /// Pruefung laeuft trotzdem noch einmal ueber das Ergebnis. Sie ist die
+  /// Stelle, die der Test festnagelt.
+  static bool imFeedSichtbar({
+    required String betrachterId,
+    required String verfasserId,
+    required String? sichtbarkeit,
+    required Set<String> folgeIch,
+    Set<String> blockiert = const <String>{},
+    bool istAusgeblendet = false,
+  }) {
+    if (istAusgeblendet) return false;
+    if (blockiert.contains(verfasserId)) return false;
+    // Eigene Beitraege sieht man immer, egal auf welche Stufe gestellt.
+    if (verfasserId == betrachterId) return true;
+    if (!folgeIch.contains(verfasserId)) return false;
+    return stufenVonGefolgten.contains(sichtbarkeit ?? 'public');
+  }
+
+  /// Gehoert der Beitrag auf das Profil, das [betrachterId] gerade ansieht?
+  ///
+  /// Dieselbe Regel wie im Feed, nur ohne die Bedingung „steht im Feed":
+  /// oeffentliche Beitraege sieht hier auch, wer nicht folgt.
+  static bool aufProfilSichtbar({
+    required String? betrachterId,
+    required String verfasserId,
+    required String? sichtbarkeit,
+    required bool folgeIchIhm,
+    bool istAusgeblendet = false,
+  }) {
+    if (betrachterId != null && betrachterId == verfasserId) return true;
+    if (istAusgeblendet) return false;
+    return stufenFuerVerfasser(
+      folgeIchIhm: folgeIchIhm,
+    ).contains(sichtbarkeit ?? 'public');
+  }
+}
+
 /// Service für soziale Features: Posts, Follows, Gruppen, Notifications.
 class SocialService {
   static SupabaseClient get _db => Supabase.instance.client;
@@ -384,51 +461,36 @@ class SocialService {
       // Beitraege. Beide Abbrueche sind deshalb weg; eigene Beitraege holt
       // jetzt eine dritte, eigene Abfrage.
 
-      // Mutual = Subset von following, die mir zurück folgen.
-      // Nur dann darf ich `visibility='followers'`-Posts (= "Nur Follower")
-      // sehen — sonst leakt Privates an einseitige Follower.
-      final Set<String> mutual;
-      if (allowedFollowing.isEmpty) {
-        // Ein leeres inFilter erzeugt `user_id=in.()` und laesst PostgREST
-        // stolpern, deshalb hier gar nicht erst fragen.
-        mutual = <String>{};
-      } else {
-        final back = await _db
-            .from('follows')
-            .select('follower_id')
-            .eq('following_id', uid)
-            .eq('status', 'accepted')
-            .inFilter('follower_id', allowedFollowing);
-        mutual = (back as List)
-            .map((r) => (r as Map)['follower_id'] as String)
-            .toSet();
-      }
+      // 2026-08-24 (vucko „cozy hat gepostet, ich sehe es nicht"): Hier stand
+      // eine zweite Abfrage, die aus `allowedFollowing` die Menge „mutual"
+      // schnitt — nur wer ZURUECKFOLGT, dessen „Nur Follower"-Beitraege
+      // kamen in den Feed. Gemessen: Vucko folgt cozy, cozy folgt nicht
+      // zurueck, cozys zwei Beitraege vom 21.08. fehlten deshalb.
+      //
+      // Die Bedingung ist ersatzlos weg. Wer „Follower" waehlt, meint seine
+      // Follower — die Begruendung steht ausfuehrlich bei
+      // [FeedSichtbarkeit]. Die Menge „mutual" wird weiterhin gebraucht,
+      // aber woanders (`getMutualFollowIds`, Gruppen-Einladungen in
+      // group_lobby_page.dart) — dort ist „gegenseitig" auch gemeint.
 
       // 2026-07-03 (vucko Gruppen-Share): shared_group_id analog zu shared_route_id
       // mitgeladen (kommt über `*` ohnehin mit, hier explizit fürs Muster).
       const select =
           '*, profiles(id, username, avatar_url), shared_route_id, shared_group_id';
 
-      // Zwei disjunkte Queries (nach visibility) parallel — Filter auf
-      // Query-Ebene verhindert, dass private Posts überhaupt ans Frontend
-      // kommen, falls Mutual fehlt. is_hidden filter ist tolerant: alte
-      // Spalten ohne Default werden als null = nicht hidden behandelt.
+      // Der Filter bleibt bewusst auf Query-Ebene, obwohl die Leseregel der
+      // Datenbank dasselbe durchsetzt: doppelt haelt besser, und der Client
+      // soll nichts anfragen, was er ohnehin nicht bekommen darf. Ein leeres
+      // inFilter erzeugt `user_id=in.()` und laesst PostgREST stolpern,
+      // deshalb die Abfrage nur bei nicht-leerer Liste. Der is_hidden-Filter
+      // ist tolerant: alte Zeilen ohne Default sind null = nicht hidden.
       final results = await Future.wait([
         if (allowedFollowing.isNotEmpty)
           _db
               .from('posts')
               .select(select)
               .inFilter('user_id', allowedFollowing)
-              .eq('visibility', 'public')
-              .neq('is_hidden', true)
-              .order('created_at', ascending: false)
-              .limit(80),
-        if (mutual.isNotEmpty)
-          _db
-              .from('posts')
-              .select(select)
-              .inFilter('user_id', mutual.toList())
-              .eq('visibility', 'followers')
+              .inFilter('visibility', FeedSichtbarkeit.stufenVonGefolgten)
               .neq('is_hidden', true)
               .order('created_at', ascending: false)
               .limit(80),
@@ -445,12 +507,26 @@ class SocialService {
             .limit(80),
       ]);
 
+      final folgeIch = allowedFollowing.toSet();
       final merged = <String, Map<String, dynamic>>{};
       for (final batch in results) {
         for (final row in batch as List) {
           final post = Map<String, dynamic>.from(row as Map);
           final id = post['id'] as String?;
-          if (id != null) merged[id] = post;
+          final verfasser = post['user_id'] as String?;
+          if (id == null || verfasser == null) continue;
+          // Zweiter Boden hinter Query-Filter und Leseregel der Datenbank.
+          if (!FeedSichtbarkeit.imFeedSichtbar(
+            betrachterId: uid,
+            verfasserId: verfasser,
+            sichtbarkeit: post['visibility'] as String?,
+            folgeIch: folgeIch,
+            blockiert: blocked,
+            istAusgeblendet: post['is_hidden'] == true,
+          )) {
+            continue;
+          }
+          merged[id] = post;
         }
       }
 
@@ -468,7 +544,8 @@ class SocialService {
       await _hydratePostReactionState(capped);
       final eigene = capped.where((p) => p['user_id'] == uid).length;
       debugPrint(
-        '[Feed] uid=$uid following=${following.length} mutual=${mutual.length} '
+        '[Feed] uid=$uid following=${following.length} '
+        '(erlaubt: ${allowedFollowing.length}) '
         '→ posts=${capped.length} (davon eigene: $eigene)',
       );
       return capped;
@@ -491,6 +568,14 @@ class SocialService {
   }
 
   /// IDs mit gegenseitiger Folge (Kontakte).
+  ///
+  /// 2026-08-24 (vucko): Diese Menge ist NICHT das Publikum der
+  /// Sichtbarkeitsstufe „Nur Follower" — dafuer zaehlt allein
+  /// [getFollowingIds] in der Gegenrichtung. Gebraucht wird „gegenseitig"
+  /// nur dort, wo es auch draufsteht: Gruppen-Einladungen in
+  /// `group_lobby_page.dart`. Wer sie wieder in eine Beitrags-Abfrage
+  /// einbaut, macht den Fehler vom 24.08. noch einmal — Begruendung bei
+  /// [FeedSichtbarkeit].
   static Future<Set<String>> getMutualFollowIds(String uid) async {
     final following = await getFollowingIds(uid);
     if (following.isEmpty) return {};
@@ -518,15 +603,52 @@ class SocialService {
     return (rows as List).length >= 2;
   }
 
+  /// Beitraege eines Profils.
+  ///
+  /// 2026-08-24 (vucko): dieselbe Regel wie im Feed — hier war bis heute
+  /// GAR KEINE. Die Abfrage gab jeden Beitrag des Profils heraus, auch die
+  /// auf „Nur Follower" gestellten und die moderierten (`is_hidden`). Das
+  /// ist die Gegenrichtung desselben Denkfehlers: im Feed war „Follower" zu
+  /// eng ausgelegt, auf dem fremden Profil gar nicht. Beide Stellen fragen
+  /// jetzt [FeedSichtbarkeit].
+  ///
+  /// Auf dem EIGENEN Profil bleibt alles sichtbar, auch Ausgeblendetes —
+  /// wer moderiert wurde, soll sehen, was mit seinem Beitrag passiert ist.
   static Future<List<Map<String, dynamic>>> getUserPosts(String userId) async {
     try {
-      final posts = await _db
+      final uid = _userId;
+      final istEigenesProfil = uid != null && uid == userId;
+      final folgeIchIhm =
+          istEigenesProfil || (await getFollowStatus(userId)) == 'accepted';
+
+      var query = _db
           .from('posts')
           .select('*, profiles(id, username, avatar_url)')
-          .eq('user_id', userId)
-          .order('created_at', ascending: false);
+          .eq('user_id', userId);
+      if (!istEigenesProfil) {
+        // Doppelt haelt besser: serverseitig gefiltert UND unten noch einmal
+        // geprueft. Der Client fragt nicht nach, was er nicht sehen darf.
+        query = query
+            .inFilter(
+              'visibility',
+              FeedSichtbarkeit.stufenFuerVerfasser(folgeIchIhm: folgeIchIhm),
+            )
+            .neq('is_hidden', true);
+      }
+      final posts = await query.order('created_at', ascending: false);
 
-      final list = List<Map<String, dynamic>>.from(posts);
+      final list = (posts as List)
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .where(
+            (p) => FeedSichtbarkeit.aufProfilSichtbar(
+              betrachterId: uid,
+              verfasserId: userId,
+              sichtbarkeit: p['visibility'] as String?,
+              folgeIchIhm: folgeIchIhm,
+              istAusgeblendet: p['is_hidden'] == true,
+            ),
+          )
+          .toList();
       await _hydratePostReactionState(list);
       return list;
     } catch (e) {
@@ -678,6 +800,14 @@ class SocialService {
     await _db.from('posts').delete().eq('id', postId);
   }
 
+  /// Ein einzelner Beitrag, geoeffnet ueber die Glocke oder einen Deeplink.
+  ///
+  /// 2026-08-24 (vucko): Der dritte Umweg an derselben Wurzel. Wer eine
+  /// Beitrags-Kennung hatte — aus einer Kommentar-Benachrichtigung, aus einem
+  /// geteilten Link — bekam den Beitrag hier ungefiltert, auch den auf „Nur
+  /// Follower" gestellten. Aufrufer sind `notification_router.dart` und der
+  /// Deeplink in `main.dart`. Es gilt dieselbe Regel wie auf dem Profil:
+  /// eigene Beitraege immer, „Nur Follower" nur fuer Follower.
   static Future<Map<String, dynamic>?> getPostById(String postId) async {
     try {
       final result = await _db
@@ -689,6 +819,25 @@ class SocialService {
           .maybeSingle();
       if (result == null) return null;
       final post = Map<String, dynamic>.from(result);
+
+      final uid = _userId;
+      final verfasser = post['user_id'] as String?;
+      if (verfasser != null) {
+        final folgeIchIhm =
+            uid != null &&
+            (uid == verfasser ||
+                (await getFollowStatus(verfasser)) == 'accepted');
+        if (!FeedSichtbarkeit.aufProfilSichtbar(
+          betrachterId: uid,
+          verfasserId: verfasser,
+          sichtbarkeit: post['visibility'] as String?,
+          folgeIchIhm: folgeIchIhm,
+          istAusgeblendet: post['is_hidden'] == true,
+        )) {
+          return null;
+        }
+      }
+
       await _hydratePostReactionState([post]);
       return post;
     } catch (e) {
@@ -805,6 +954,25 @@ class SocialService {
 
   // ── Likes ─────────────────────────────────────────────────────────────
 
+  /// Hat die Datenbank das Liken/Reposten abgelehnt, weil der Beitrag fuer
+  /// mich gar nicht sichtbar ist?
+  ///
+  /// 2026-08-24 (vucko): Seit die Leseregel „Nur Follower" serverseitig
+  /// durchsetzt (Migration 20260824170000), koennen `toggle_post_like` und
+  /// `toggle_post_repost` mit `beitrag_nicht_sichtbar` (42501) ablehnen.
+  /// Der Rueckfallweg darunter ist fuer den Fall gedacht, dass die RPC FEHLT
+  /// — er darf eine ABLEHNUNG nicht als „RPC kaputt" missverstehen und es
+  /// dann direkt ueber die Tabelle noch einmal versuchen. Das scheitert
+  /// zweitens an der Regel und wirft dem Nutzer eine rohe
+  /// Datenbank-Ausnahme ins Gesicht.
+  @visibleForTesting
+  static bool istAblehnungWegenSichtbarkeit(Object error) {
+    if (error is! PostgrestException) return false;
+    if (error.code == '42501') return true;
+    final text = '${error.message} ${error.details ?? ''}'.toLowerCase();
+    return text.contains('beitrag_nicht_sichtbar');
+  }
+
   static Future<bool> toggleLike(String postId) async {
     final result = await toggleLikeWithCount(postId);
     return result.isActive;
@@ -827,6 +995,14 @@ class SocialService {
       }
       return result;
     } catch (e) {
+      if (istAblehnungWegenSichtbarkeit(e)) {
+        // Kein Rueckfall: die Datenbank hat NEIN gesagt, nicht geschwiegen.
+        debugPrint('[SocialService] Like abgelehnt (Beitrag nicht sichtbar)');
+        return (
+          isActive: false,
+          count: await _countPostReactions('post_likes', postId),
+        );
+      }
       debugPrint('[SocialService] toggle_post_like RPC fallback: $e');
     }
 
@@ -874,6 +1050,13 @@ class SocialService {
   }
 
   /// Alle Posts, die ein User geliket hat (für "Gefällt mir" im Profil-Menü).
+  ///
+  /// 2026-08-24 (vucko): Derselbe Umweg wie beim Repost — die Liste traegt
+  /// fremde Beitraege mit. Ein Like darf das Publikum nicht aendern, das sich
+  /// der VERFASSER ausgesucht hat. Geprueft wird gegen den Verfasser des
+  /// Beitrags, nicht gegen den, der geliket hat. Heute ruft nur
+  /// `liked_posts_page.dart` mit der eigenen Kennung auf; die Funktion nimmt
+  /// aber eine fremde entgegen, und dann waere die Luecke offen.
   static Future<List<Map<String, dynamic>>> getUserLikes(String userId) async {
     final likes = await _db
         .from('post_likes')
@@ -881,7 +1064,26 @@ class SocialService {
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
-    final list = List<Map<String, dynamic>>.from(likes);
+    final betrachter = _userId;
+    final folgeIch = betrachter == null
+        ? <String>{}
+        : await getFollowingIds(betrachter);
+
+    final list = List<Map<String, dynamic>>.from(likes).where((like) {
+      final post = like['posts'];
+      // Zeilen ohne mitgeladenen Beitrag (geloescht) bleiben erhalten wie
+      // bisher — die Seite ueberspringt sie ohnehin.
+      if (post is! Map) return true;
+      final verfasser = post['user_id'] as String?;
+      if (verfasser == null) return true;
+      return FeedSichtbarkeit.aufProfilSichtbar(
+        betrachterId: betrachter,
+        verfasserId: verfasser,
+        sichtbarkeit: post['visibility'] as String?,
+        folgeIchIhm: folgeIch.contains(verfasser),
+        istAusgeblendet: post['is_hidden'] == true,
+      );
+    }).toList();
     final nestedPosts = <String, Map<String, dynamic>>{};
     for (final like in list) {
       final post = like['posts'];
@@ -1083,6 +1285,13 @@ class SocialService {
       }
       return result;
     } catch (e) {
+      if (istAblehnungWegenSichtbarkeit(e)) {
+        debugPrint('[SocialService] Repost abgelehnt (Beitrag nicht sichtbar)');
+        return (
+          isActive: false,
+          count: await _countPostReactions('reposts', postId),
+        );
+      }
       debugPrint('[SocialService] toggle_post_repost RPC fallback: $e');
     }
 
@@ -1130,6 +1339,11 @@ class SocialService {
   }
 
   /// Alle Reposts eines Users (für Profil-Seite)
+  /// 2026-08-24 (vucko): Ein Repost traegt den fremden Beitrag mit. Wer ihn
+  /// weiterreicht, darf damit nicht das Publikum aendern, das sich der
+  /// VERFASSER ausgesucht hat — ein auf „Nur Follower" gestellter Beitrag
+  /// blieb ueber den Umweg Repost sonst fuer jeden lesbar. Geprueft wird
+  /// gegen den Verfasser des Originals, nicht gegen den, der repostet hat.
   static Future<List<Map<String, dynamic>>> getUserReposts(
     String userId,
   ) async {
@@ -1139,7 +1353,24 @@ class SocialService {
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
-    final list = List<Map<String, dynamic>>.from(reposts);
+    final betrachter = _userId;
+    final folgeIch = betrachter == null
+        ? <String>{}
+        : await getFollowingIds(betrachter);
+
+    final list = List<Map<String, dynamic>>.from(reposts).where((repost) {
+      final post = repost['posts'];
+      if (post is! Map) return false;
+      final verfasser = post['user_id'] as String?;
+      if (verfasser == null) return false;
+      return FeedSichtbarkeit.aufProfilSichtbar(
+        betrachterId: betrachter,
+        verfasserId: verfasser,
+        sichtbarkeit: post['visibility'] as String?,
+        folgeIchIhm: folgeIch.contains(verfasser),
+        istAusgeblendet: post['is_hidden'] == true,
+      );
+    }).toList();
     final nestedPosts = <String, Map<String, dynamic>>{};
     for (final repost in list) {
       final post = repost['posts'];

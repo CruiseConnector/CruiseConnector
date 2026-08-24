@@ -87,7 +87,10 @@ void main() {
     });
 
     test('keine Stufe teilt Farbe, Form oder Symbol mit einer anderen', () {
-      expect(badgeStufenSkala.map((s) => s.farbe.toARGB32()).toSet(), hasLength(3));
+      expect(
+        badgeStufenSkala.map((s) => s.farbe.toARGB32()).toSet(),
+        hasLength(3),
+      );
       expect(badgeStufenSkala.map((s) => s.form).toSet(), hasLength(3));
       expect(
         badgeStufenSkala.map((s) => s.symbol.codePoint).toSet(),
@@ -173,6 +176,120 @@ void main() {
     });
   });
 
+  group('Die Stufe steckt auch INNEN drin', () {
+    /// 2026-08-24 (vucko woertlich): „das schlechteste soll nicht nur im kreis
+    /// die andere farbe haben sondern auch innen drinnen".
+    ///
+    /// Vorher war die Fuellung bei jeder Stufe derselbe Hauch Leitfarbe auf
+    /// dem dunklen Grund — Stufe I und Stufe III lagen innen nur 1,23 : 1
+    /// auseinander, und Stufe II war heller als Stufe III. Wer die Stufe
+    /// erkennen wollte, musste die RAENDER vergleichen.
+
+    /// Wie die Fuellung am Ende wirklich aussieht: der Farbwert, ueber den
+    /// dunklen App-Grund gelegt.
+    Color aufGrund(Color farbe) => Color.alphaBlend(farbe, grund);
+
+    List<Color> fuellung(BadgeStufenStil stil, {required bool offen}) => [
+      for (final c in badgeStufenInnenFarben(stil, freigeschaltet: offen))
+        aufGrund(c),
+    ];
+
+    test('die unterste Stufe ist INNEN dunkler als jede andere', () {
+      // Das ist Vuckos Satz, in eine Zahl uebersetzt: „das schlechteste"
+      // erkennt man an der Flaeche, ohne die Raender zu vergleichen.
+      final unterste = fuellung(badgeStufenSkala.first, offen: true).first;
+      for (final stil in badgeStufenSkala.skip(1)) {
+        final andere = fuellung(stil, offen: true).first;
+        expect(
+          leuchtdichte(unterste),
+          lessThan(leuchtdichte(andere)),
+          reason: '${stil.name} ist innen nicht heller als Bronze',
+        );
+        final abstand = kontrast(unterste, andere);
+        expect(
+          abstand,
+          greaterThanOrEqualTo(1.45),
+          reason:
+              'Bronze und ${stil.name} liegen innen nur '
+              '${abstand.toStringAsFixed(2)} : 1 auseinander',
+        );
+      }
+    });
+
+    test('keine zwei Stufen sehen innen gleich aus', () {
+      // Tuerkis und Violett liegen in der HELLIGKEIT nah beieinander. Sie
+      // muessen sich deshalb im Farbton trennen — Summe der Kanalabstaende,
+      // 3,0 waere Schwarz gegen Weiss.
+      double kanalabstand(Color a, Color b) =>
+          (a.r - b.r).abs() + (a.g - b.g).abs() + (a.b - b.b).abs();
+
+      for (var i = 0; i < badgeStufenSkala.length; i++) {
+        for (var j = i + 1; j < badgeStufenSkala.length; j++) {
+          final a = fuellung(badgeStufenSkala[i], offen: true).first;
+          final b = fuellung(badgeStufenSkala[j], offen: true).first;
+          final abstand = kanalabstand(a, b);
+          expect(
+            abstand,
+            greaterThanOrEqualTo(0.45),
+            reason:
+                '${badgeStufenSkala[i].name} und ${badgeStufenSkala[j].name} '
+                'haben innen fast dieselbe Farbe '
+                '(Abstand ${abstand.toStringAsFixed(2)} von 3,0)',
+          );
+        }
+      }
+    });
+
+    test('die Fuellung hebt sich ueberhaupt vom Grund ab', () {
+      for (final stil in badgeStufenSkala) {
+        for (final farbe in fuellung(stil, offen: true)) {
+          expect(
+            kontrast(farbe, grund),
+            greaterThanOrEqualTo(1.3),
+            reason: '${stil.name}: das Innere verschwindet im Hintergrund',
+          );
+        }
+      }
+    });
+
+    test('das Symbol bleibt auf der neuen Fuellung lesbar', () {
+      // Die Falle bei der hellen Stufe: fuellt man mit der satten Leitfarbe,
+      // faellt das helle Symbol darin zusammen. 3 : 1 ist die Schwelle fuer
+      // grafische Elemente.
+      for (final stil in badgeStufenSkala) {
+        for (final farbe in fuellung(stil, offen: true)) {
+          final wert = kontrast(stil.farbeHell, farbe);
+          expect(
+            wert,
+            greaterThanOrEqualTo(3.0),
+            reason:
+                '${stil.name}: Symbol auf der Fuellung nur '
+                '${wert.toStringAsFixed(2)} : 1',
+          );
+        }
+      }
+    });
+
+    test('gesperrt sieht nicht aus wie eine niedrige Stufe', () {
+      for (final stil in badgeStufenSkala) {
+        final zu = fuellung(stil, offen: false);
+        for (final farbe in zu) {
+          expect(
+            kontrast(farbe, grund),
+            lessThan(1.2),
+            reason: '${stil.name}: gesperrt wirkt gefuellt statt hohl',
+          );
+        }
+        // Und der Abstand zur echten, freigeschalteten Stufe ist gross.
+        expect(
+          kontrast(zu.first, fuellung(stil, offen: true).first),
+          greaterThanOrEqualTo(1.3),
+          reason: '${stil.name}: gesperrt und offen sehen innen gleich aus',
+        );
+      }
+    });
+  });
+
   group('Gesperrt bleibt die Stufe ablesbar', () {
     test('die Form wird auch gesperrt vollstaendig gezeichnet', () async {
       for (final stil in badgeStufenSkala) {
@@ -183,8 +300,7 @@ void main() {
         expect(
           flaecheZu,
           greaterThan(flaecheOffen * 0.9),
-          reason:
-              '${stil.name}: die gesperrte Kachel verliert ihre Silhouette',
+          reason: '${stil.name}: die gesperrte Kachel verliert ihre Silhouette',
         );
         // Der Rand behaelt genug Deckkraft, um die Stufe zu erkennen.
         expect(

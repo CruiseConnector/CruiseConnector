@@ -278,6 +278,15 @@ void main() {
           // badge_16. Steht am Ende, weil neue Abzeichen hier immer angehaengt
           // werden — bestehende IDs und ihre Reihenfolge bleiben unberuehrt.
           'badge_57',
+          // 2026-08-24 (Auftrag vom 24.08., vucko): „man soll dafuer auch ein
+          // badge bekommen wenn man es abgeschlossen hat wie startklar" —
+          // badge_58 „Eingewiesen" fuer das durchgespielte Tutorial.
+          'badge_58',
+          // 2026-08-24 (Auftrag vom 24.08.): vier neue Familien fuer Bereiche
+          // ohne jedes Abzeichen — Garage (59-61), Beitraege (62-64),
+          // Hashtags (65-67), Meldungen (68-70). Angehaengt, nie eingeschoben:
+          // bestehende IDs und ihre Reihenfolge bleiben unberuehrt.
+          for (var i = 59; i <= 70; i++) 'badge_$i',
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);

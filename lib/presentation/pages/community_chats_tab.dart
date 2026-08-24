@@ -10,6 +10,7 @@ import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/community/community_vorschau_blatt.dart';
 
 class CommunityChatsTab extends StatefulWidget {
   const CommunityChatsTab({super.key});
@@ -80,14 +81,107 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     if (mounted) _load();
   }
 
-  Future<void> _joinCommunity(Map<String, dynamic> community) async {
+  /// 2026-08-24 (Auftrag Vucko, dringend): „wenn man auf eine community
+  /// klickt, dass man direkt beitritt ohne beitrettbutton -> fixxen".
+  ///
+  /// Hier stand vorher `_joinCommunity`, und es hing am `onTap` der KOMPLETTEN
+  /// Kachel. Ein Tipp auf Bild, Name oder Beschreibung einer fremden Community
+  /// machte einen sofort zum Mitglied, ohne Rueckfrage und ohne dass man
+  /// gesehen haette, worum es geht.
+  ///
+  /// Jetzt faellt die Entscheidung in genau einer Funktion,
+  /// [communityKachelZiel]: Mitglied fuehrt in den Chat, alle anderen in die
+  /// Vorschau. Ein Beitritt kann von hier aus gar nicht mehr ausgeloest
+  /// werden, dafuer gibt es nur noch den Knopf im Vorschau-Blatt.
+  Future<void> _kachelGetippt(
+    Map<String, dynamic> community, {
+    required bool istMitglied,
+    String? inviteCode,
+  }) async {
+    switch (communityKachelZiel(istMitglied: istMitglied)) {
+      case CommunityKachelZiel.chat:
+        final id = community['id']?.toString();
+        if (id != null && id.isNotEmpty) await _openCommunity(id);
+      case CommunityKachelZiel.vorschau:
+        await _zeigeCommunityVorschau(community, inviteCode: inviteCode);
+    }
+  }
+
+  /// Zeigt die Vorschau und raeumt danach auf.
+  ///
+  /// Nach einem erfolgreichen Beitritt wird ZUERST die Liste neu geladen und
+  /// erst dann der Chat geoeffnet: die Community wandert von „Öffentliche
+  /// Communities" zu „Meine Communities" und die Mitgliederzahl steigt um
+  /// eins. Kommt der Nutzer aus dem Chat zurueck, stimmt die Liste damit
+  /// schon, statt erst beim naechsten Herunterziehen.
+  Future<void> _zeigeCommunityVorschau(
+    Map<String, dynamic> community, {
+    String? inviteCode,
+  }) async {
+    final ergebnis = await CommunityVorschauBlatt.zeigen(
+      context,
+      community: community,
+      istMitglied: CommunityChatService.isCurrentUserMember(community),
+      onBeitreten: () => _beitrittAusfuehren(community, inviteCode: inviteCode),
+    );
+    if (!mounted || ergebnis == null) return;
+    await _load();
+    if (!mounted || !ergebnis.oeffnetChat) return;
+    final id = ergebnis.communityId.isNotEmpty
+        ? ergebnis.communityId
+        : (community['id']?.toString() ?? '');
+    if (id.isNotEmpty) await _openCommunity(id);
+  }
+
+  /// Der einzige Weg in eine Mitgliedschaft, der aus dieser Seite heraus noch
+  /// existiert. Wird ausschliesslich vom Knopf im Vorschau-Blatt gerufen.
+  ///
+  /// Zwei Wege, ein Ergebnis:
+  /// - ohne Einladungscode (Entdecken-Liste): direkter Eintrag, geht nur bei
+  ///   oeffentlichen Communities. Eine private Community landet gar nicht
+  ///   erst in dieser Liste, und faellt sie doch einmal hinein, antwortet die
+  ///   Datenbank mit 42501 und der Dienst mit dem passenden Satz.
+  /// - mit Einladungscode: die RPC entscheidet, und bei einer privaten
+  ///   Community wird daraus eine Beitrittsanfrage beim Admin (Entscheidung
+  ///   Vucko vom 23.08.), kein Beitritt.
+  Future<CommunityBeitrittsErgebnis> _beitrittAusfuehren(
+    Map<String, dynamic> community, {
+    String? inviteCode,
+  }) async {
+    final id = community['id']?.toString() ?? '';
     try {
-      final id = community['id'] as String;
+      final code = inviteCode?.trim();
+      if (code != null && code.isNotEmpty) {
+        final result = await CommunityChatService.joinCommunityByCode(code);
+        final ausgang = switch (result.status) {
+          CommunityJoinStatus.joined => CommunityBeitrittAusgang.beigetreten,
+          CommunityJoinStatus.alreadyMember =>
+            CommunityBeitrittAusgang.schonMitglied,
+          _ => CommunityBeitrittAusgang.angefragt,
+        };
+        return CommunityBeitrittsErgebnis(
+          ausgang,
+          communityId: result.communityId.isNotEmpty ? result.communityId : id,
+          meldung: result.userMessage,
+        );
+      }
+      if (id.isEmpty) {
+        return const CommunityBeitrittsErgebnis(
+          CommunityBeitrittAusgang.fehler,
+          meldung: 'Diese Community gibt es nicht mehr.',
+        );
+      }
       await CommunityChatService.joinCommunity(id);
-      if (!mounted) return;
-      await _openCommunity(id);
+      return CommunityBeitrittsErgebnis(
+        CommunityBeitrittAusgang.beigetreten,
+        communityId: id,
+      );
     } catch (e) {
-      _showError(e);
+      return CommunityBeitrittsErgebnis(
+        CommunityBeitrittAusgang.fehler,
+        communityId: id,
+        meldung: beitrittsFehlerText(e),
+      );
     }
   }
 
@@ -351,7 +445,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               (community) => _buildCommunityCard(
                 community,
                 joined: true,
-                onTap: () => _openCommunity(community['id'] as String),
+                onTap: () => _kachelGetippt(community, istMitglied: true),
               ),
             ),
           const SizedBox(height: 22),
@@ -371,7 +465,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               (community) => _buildCommunityCard(
                 community,
                 joined: false,
-                onTap: () => _joinCommunity(community),
+                onTap: () => _kachelGetippt(community, istMitglied: false),
               ),
             ),
         ],
@@ -432,8 +526,17 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           _buildCommunityCard(
             result,
             joined: false,
-            onTap: () => _joinCommunityWithCode(
-              result['invite_code']?.toString() ?? _codeSearchController.text,
+            // 2026-08-24: auch der Treffer der Code-Suche fuehrt jetzt in die
+            // Vorschau statt direkt in den Beitritt. Ein Code kann von
+            // jemand anderem in die Zwischenablage geraten sein, und bei
+            // einer privaten Community loest der Knopf ohnehin nur eine
+            // Anfrage aus. Der Nutzer soll vorher sehen, wo er landet.
+            onTap: () => _kachelGetippt(
+              result,
+              istMitglied: false,
+              inviteCode:
+                  result['invite_code']?.toString() ??
+                  _codeSearchController.text,
             ),
           ),
         ],
@@ -692,14 +795,22 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                   ),
                 ),
                 const Spacer(),
+                // 2026-08-24: Der Knopf hiess bei einer fremden Community
+                // „Beitreten" und trat auch sofort bei. Jetzt heisst er
+                // „Ansehen" und fuehrt in dieselbe Vorschau wie ein Tipp auf
+                // die Kachel. Der Knopf „Beitreten" existiert weiterhin, aber
+                // nur noch EINMAL und nur dort, wo man vorher gesehen hat,
+                // um welche Community es geht: unten im Vorschau-Blatt.
                 TextButton.icon(
                   onPressed: onTap,
                   icon: Icon(
-                    joined ? Icons.chat_bubble_outline : Icons.login,
+                    joined
+                        ? Icons.chat_bubble_outline
+                        : Icons.visibility_outlined,
                     color: AppAccentColors.accent,
                     size: 16,
                   ),
-                  label: Text(joined ? 'Chat' : 'Beitreten'),
+                  label: Text(joined ? 'Chat' : 'Ansehen'),
                   style: TextButton.styleFrom(
                     foregroundColor: AppAccentColors.accent,
                     padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -740,10 +851,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                 decoration: BoxDecoration(
                   color: AppAccentColors.accent,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xFF1C1F26),
-                    width: 2,
-                  ),
+                  border: Border.all(color: const Color(0xFF1C1F26), width: 2),
                 ),
               ),
             ),
@@ -807,10 +915,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               children: [
                 Icon(Icons.settings_outlined, color: Colors.white70, size: 18),
                 SizedBox(width: 10),
-                Text(
-                  'Einstellungen',
-                  style: TextStyle(color: Colors.white),
-                ),
+                Text('Einstellungen', style: TextStyle(color: Colors.white)),
               ],
             ),
           ),
@@ -1078,10 +1183,9 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               if (saving) return;
               setSheetState(() => saving = true);
               try {
-                final result =
-                    await CommunityChatService.joinCommunityByCode(
-                      codeCtrl.text,
-                    );
+                final result = await CommunityChatService.joinCommunityByCode(
+                  codeCtrl.text,
+                );
                 if (!sheetContext.mounted) return;
                 Navigator.pop(sheetContext);
                 if (!mounted) return;

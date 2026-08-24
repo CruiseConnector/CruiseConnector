@@ -8,10 +8,16 @@
 /// Diese Uebersicht beantwortet drei Fragen ohne Scrollen:
 ///   1. Was bedeuten die Stufen? -> Legende mit Form, Farbe, Symbol und wie
 ///      viele Badges der jeweiligen Stufe schon offen sind.
-///   2. Wo stehe ich ueberall? -> Ein Raster mit allen siebzehn Familien und
-///      ihrem Stufenpfad. Gefuellter Punkt = geschafft, Umriss = offen.
+///   2. Wo stehe ich ueberall? -> Drei Schubladen („In Arbeit", „Geschafft",
+///      „Noch nicht begonnen"), in denen die Familien mit ihrem Stufenpfad
+///      liegen. Gefuellter Punkt = geschafft, Umriss = offen.
 ///   3. Was ist als Naechstes dran? -> Die drei Ziele, denen man am naechsten
 ///      ist, mit Balken und Restweg.
+///
+/// 2026-08-24 (vucko woertlich): „die stufen badges sollen noch besser
+/// angezeigt werden man scrollt da endlos". Punkt 2 war bis dahin EIN Wrap
+/// ueber alle siebzehn Familien am Stueck. Seit dieser Fassung liegen sie in
+/// aufklappbaren Schubladen — Begruendung bei [badgeFamilienGruppen].
 ///
 /// Erst darunter kommen die Familien-Bloecke mit den Kacheln, die Vucko
 /// ausdruecklich behalten wollte.
@@ -44,10 +50,7 @@ class BadgeNaechstesZiel {
 /// 2.500 km. Stuenden Name und Balken aus verschiedenen Quellen, zeigte die
 /// Uebersicht „2.500 km" ueber einem Balken, der gegen 1.000 rechnet. Diese
 /// Funktion benutzt deshalb dieselbe Regel wie der Fortschritt.
-app.Badge? badgeZielBadge(
-  app.BadgeFamilie familie,
-  Set<String> erreichteIds,
-) {
+app.Badge? badgeZielBadge(app.BadgeFamilie familie, Set<String> erreichteIds) {
   app.BadgeStufe? naechste;
   for (final stufe in familie.alleStufen) {
     if (erreichteIds.contains(stufe.id)) continue;
@@ -109,6 +112,122 @@ String badgeRestweg(app.BadgeFortschritt fortschritt) {
   );
   final gerundet = rest.ceil();
   return 'noch $gerundet ${badgeEinheit(fortschritt.einheit, gerundet)}';
+}
+
+// ---------------------------------------------------------------------------
+// Gruppierung — gegen das endlose Scrollen
+// ---------------------------------------------------------------------------
+
+/// 2026-08-24 (vucko woertlich): „die stufen badges sollen noch besser
+/// angezeigt werden man scrollt da endlos".
+///
+/// Vorher stand hier EIN Wrap ueber alle siebzehn Familien am Stueck, und der
+/// Katalog waechst weiter. Jetzt liegen die Familien in drei Schubladen.
+///
+/// WARUM NACH ZUSTAND UND NICHT NACH THEMA: Eine Einteilung nach Bereichen
+/// („Fahren", „Sozial", …) braucht eine Tabelle Familienschluessel → Bereich.
+/// Jede neue Familie, die jemand in `badge.dart` ergaenzt, faellt dann
+/// entweder in einen Resterampen-Topf oder verschwindet, bis jemand die
+/// Tabelle nachzieht. Der Zustand dagegen ergibt sich aus den Daten selbst:
+/// eine neue Familie landet automatisch in „Noch nicht begonnen" und wandert
+/// von allein weiter. Ausserdem beantwortet der Zustand genau die drei Fragen,
+/// die jemand vor dieser Seite hat:
+///   „Was ist als Naechstes dran?" → In Arbeit
+///   „Was habe ich schon?"        → Geschafft
+///   „Was gibt es ueberhaupt?"    → Noch nicht begonnen
+///
+/// ES VERSCHWINDET NICHTS: Jede Familie liegt in genau einer Gruppe, jede
+/// Gruppe laesst sich aufklappen. Der Test prueft, dass die Vereinigung der
+/// Gruppen wieder der volle Katalog ist — auch wenn er waechst.
+class BadgeFamilienGruppe {
+  const BadgeFamilienGruppe({
+    required this.titel,
+    required this.erklaerung,
+    required this.familien,
+  });
+
+  /// „In Arbeit", „Geschafft", „Noch nicht begonnen".
+  final String titel;
+
+  /// Eine Zeile darunter, damit die Schublade sich selbst erklaert.
+  final String erklaerung;
+
+  final List<app.BadgeFamilie> familien;
+}
+
+/// Titel der Schublade, die beim Oeffnen der Seite offen steht.
+const String badgeGruppeInArbeit = 'In Arbeit';
+const String badgeGruppeGeschafft = 'Geschafft';
+const String badgeGruppeOffen = 'Noch nicht begonnen';
+
+/// Ist in dieser Familie wirklich NICHTS mehr offen?
+///
+/// Bewusst „jedes Abzeichen", nicht „Stufe III erreicht": eine Familie kann
+/// neben den drei Stufen Meilensteine tragen (bei „Kilometer" etwa die 1.000).
+/// Waere Stufe III das Mass, laege die Familie unter „Geschafft" und tauchte
+/// gleichzeitig unten unter „Als Naechstes" wieder als Ziel auf.
+bool badgeFamilieFertig(app.BadgeFamilie familie, Set<String> erreichteIds) =>
+    familie.alleStufen.every((s) => erreichteIds.contains(s.id));
+
+/// Teilt den Katalog in die drei Schubladen. Leere Schubladen entfallen.
+///
+/// Innerhalb von „In Arbeit" steht das Naechstliegende oben — dafuer werden,
+/// wenn die Kennzahlen schon geladen sind, dieselben Fortschritte benutzt wie
+/// im Abschnitt „Als Naechstes". Ohne Kennzahlen bleibt die Katalogreihenfolge.
+List<BadgeFamilienGruppe> badgeFamilienGruppen({
+  required Set<String> erreichteIds,
+  Map<app.BadgeMetrik, double>? metriken,
+}) {
+  final inArbeit = <app.BadgeFamilie>[];
+  final geschafft = <app.BadgeFamilie>[];
+  final offen = <app.BadgeFamilie>[];
+
+  for (final familie in app.badgeFamilien) {
+    if (badgeFamilieFertig(familie, erreichteIds)) {
+      geschafft.add(familie);
+    } else if (familie.alleStufen.any((s) => erreichteIds.contains(s.id))) {
+      inArbeit.add(familie);
+    } else {
+      offen.add(familie);
+    }
+  }
+
+  if (metriken != null) {
+    double naehe(app.BadgeFamilie f) =>
+        app
+            .badgeFamilienFortschritt(
+              familie: f.schluessel,
+              erreichteBadgeIds: erreichteIds,
+              metriken: metriken,
+            )
+            ?.anteil ??
+        0.0;
+    final gewicht = {for (final f in inArbeit) f.schluessel: naehe(f)};
+    inArbeit.sort(
+      (a, b) => gewicht[b.schluessel]!.compareTo(gewicht[a.schluessel]!),
+    );
+  }
+
+  return [
+    if (inArbeit.isNotEmpty)
+      BadgeFamilienGruppe(
+        titel: badgeGruppeInArbeit,
+        erklaerung: 'Angefangen, noch nicht durch',
+        familien: inArbeit,
+      ),
+    if (geschafft.isNotEmpty)
+      BadgeFamilienGruppe(
+        titel: badgeGruppeGeschafft,
+        erklaerung: 'Nichts mehr offen',
+        familien: geschafft,
+      ),
+    if (offen.isNotEmpty)
+      BadgeFamilienGruppe(
+        titel: badgeGruppeOffen,
+        erklaerung: 'Hier ist noch alles zu holen',
+        familien: offen,
+      ),
+  ];
 }
 
 /// Kurzer Name fuer die enge Kachel im Raster.
@@ -189,8 +308,9 @@ class BadgeUebersichtPanel extends StatelessWidget {
           const SizedBox(height: 13),
           _ueberschrift('Wo du stehst'),
           const SizedBox(height: 9),
-          _FamilienRaster(
+          _FamilienSchubladen(
             erreichteIds: erreichteIds,
+            metriken: werte,
             onBadgeTippen: onBadgeTippen,
           ),
           if (ziele.isNotEmpty) ...[
@@ -301,10 +421,190 @@ class _LegendenZelle extends StatelessWidget {
   }
 }
 
-/// Alle siebzehn Familien auf einen Blick, jede mit ihrem Stufenpfad.
-class _FamilienRaster extends StatelessWidget {
-  const _FamilienRaster({required this.erreichteIds, this.onBadgeTippen});
+/// Die drei Schubladen mit ihren Familien.
+///
+/// STANDARD: „In Arbeit" ist offen, der Rest zugeklappt. Damit ist die Hoehe
+/// dieses Abschnitts an die Zahl der ANGEFANGENEN Familien gebunden, nicht an
+/// die Groesse des Katalogs — genau der Punkt, der Vucko gestoert hat. Hat
+/// jemand noch nichts angefangen, bleibt alles zu: zwei Kopfzeilen statt
+/// siebzehn Kacheln, und der Abschnitt „Als Naechstes" darunter sagt ohnehin
+/// schon, wo es losgeht.
+///
+/// Eigenhaendig auf- oder zugeklappte Schubladen merkt sich [_umgeschaltet].
+/// Die Vorgabe wird deshalb bei JEDEM Aufbau neu berechnet und nicht in
+/// `initState` eingefroren: die Kennzahlen und die erreichten Abzeichen kommen
+/// nachgeladen: waere die Vorgabe eingefroren, stuende beim ersten Aufbau noch
+/// „nichts angefangen" und die falsche Schublade waere offen.
+class _FamilienSchubladen extends StatefulWidget {
+  const _FamilienSchubladen({
+    required this.erreichteIds,
+    required this.metriken,
+    this.onBadgeTippen,
+  });
 
+  final Set<String> erreichteIds;
+  final Map<app.BadgeMetrik, double>? metriken;
+  final void Function(app.Badge badge)? onBadgeTippen;
+
+  @override
+  State<_FamilienSchubladen> createState() => _FamilienSchubladenState();
+}
+
+class _FamilienSchubladenState extends State<_FamilienSchubladen> {
+  final Map<String, bool> _umgeschaltet = {};
+
+  @override
+  Widget build(BuildContext context) {
+    final gruppen = badgeFamilienGruppen(
+      erreichteIds: widget.erreichteIds,
+      metriken: widget.metriken,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < gruppen.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _Schublade(
+            gruppe: gruppen[i],
+            offen:
+                _umgeschaltet[gruppen[i].titel] ??
+                gruppen[i].titel == badgeGruppeInArbeit,
+            aufTippen: () => setState(() {
+              final titel = gruppen[i].titel;
+              _umgeschaltet[titel] =
+                  !(_umgeschaltet[titel] ?? titel == badgeGruppeInArbeit);
+            }),
+            erreichteIds: widget.erreichteIds,
+            onBadgeTippen: widget.onBadgeTippen,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Eine Schublade: Kopfzeile mit Stand, darunter das Raster ihrer Familien.
+class _Schublade extends StatelessWidget {
+  const _Schublade({
+    required this.gruppe,
+    required this.offen,
+    required this.aufTippen,
+    required this.erreichteIds,
+    this.onBadgeTippen,
+  });
+
+  final BadgeFamilienGruppe gruppe;
+  final bool offen;
+  final VoidCallback aufTippen;
+  final Set<String> erreichteIds;
+  final void Function(app.Badge badge)? onBadgeTippen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: offen ? 0.03 : 0.02),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: aufTippen,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 9, 8, 9),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          gruppe.titel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          gruppe.erklaerung,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.42),
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    child: Text(
+                      '${gruppe.familien.length}',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.72),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: offen ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 160),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 19,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (offen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 9),
+              child: _FamilienRaster(
+                familien: gruppe.familien,
+                erreichteIds: erreichteIds,
+                onBadgeTippen: onBadgeTippen,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Die Familien einer Schublade, jede mit ihrem Stufenpfad.
+class _FamilienRaster extends StatelessWidget {
+  const _FamilienRaster({
+    required this.familien,
+    required this.erreichteIds,
+    this.onBadgeTippen,
+  });
+
+  final List<app.BadgeFamilie> familien;
   final Set<String> erreichteIds;
   final void Function(app.Badge badge)? onBadgeTippen;
 
@@ -324,7 +624,7 @@ class _FamilienRaster extends StatelessWidget {
           spacing: luecke,
           runSpacing: luecke,
           children: [
-            for (final familie in app.badgeFamilien)
+            for (final familie in familien)
               SizedBox(
                 width: breite,
                 child: _FamilienZelle(

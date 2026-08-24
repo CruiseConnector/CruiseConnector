@@ -154,6 +154,13 @@ class _CreatePostPageState extends State<CreatePostPage> {
     }
   }
 
+  /// Was die gewaehlte Sichtbarkeit konkret bedeutet. Bewusst ohne das Wort
+  /// „gegenseitig": „Nur Follower" heisst ALLE Follower, auch die, denen man
+  /// selbst nicht folgt.
+  String get _visibilityHint => _visibility == 'followers'
+      ? 'Sehen nur deine Follower, auch die, denen du selbst nicht folgst.'
+      : 'Sieht jeder in der App, auch wer dir nicht folgt.';
+
   Widget _buildVisibilityChip(String value, IconData icon, String label) {
     final selected = _visibility == value;
     return GestureDetector(
@@ -270,8 +277,19 @@ class _CreatePostPageState extends State<CreatePostPage> {
               children: [
                 _buildVisibilityChip('public', Icons.public, 'Alle'),
                 const SizedBox(width: 8),
-                _buildVisibilityChip('followers', Icons.group, 'Follower'),
+                _buildVisibilityChip('followers', Icons.group, 'Nur Follower'),
               ],
+            ),
+          ),
+          // 2026-08-24 (vucko): Die Knopfbeschriftung allein sagt nicht, WER
+          // den Beitrag danach sieht. Genau diese Unklarheit hat die Regel im
+          // Feed schleichend enger werden lassen (nur gegenseitige Kontakte).
+          // Ein Satz unter den Knoepfen macht das Publikum vorhersehbar.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              _visibilityHint,
+              style: TextStyle(color: Colors.grey[500], fontSize: 12),
             ),
           ),
           if (widget.sharedRouteId != null) ...[

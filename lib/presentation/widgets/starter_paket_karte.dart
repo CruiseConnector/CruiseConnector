@@ -387,6 +387,28 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
           ],
           letzterKnopf: 'Verstanden',
         );
+      // 2026-08-24 (Aufgabe 4, vucko): „benutze einen hashtag". Fuehrt an
+      // dieselbe Stelle wie „post" — die Raute entsteht im Beitragstext, es
+      // gibt keinen eigenen Ort dafuer.
+      case 'hashtag':
+        widget.onTabChange?.call(1);
+        await Future<void>.delayed(const Duration(milliseconds: 420));
+        if (!context.mounted) return;
+        await showZielHinweise(
+          context,
+          schritte: const [
+            HinweisSchritt(
+              ziel: TutorialZielRegistry.communityFeed,
+              titel: 'Hashtag setzen',
+              text:
+                  'Schreib in deinen Beitrag ein Wort mit Raute davor, zum '
+                  'Beispiel #Kurvenjagd. Andere finden dich dann darüber — '
+                  'und die Aufgabe ist erledigt.',
+              symbol: Icons.tag_rounded,
+            ),
+          ],
+          letzterKnopf: 'Verstanden',
+        );
       // 2026-08-24 (vucko): „erste Gruppenfahrt erstellen". Der Hinweis sagte
       // bis heute das Gegenteil („zaehlt erst, wenn ihr die Fahrt gemeinsam
       // bis zum Ziel durchzieht") — und genau daran ist der Boost fuer alle

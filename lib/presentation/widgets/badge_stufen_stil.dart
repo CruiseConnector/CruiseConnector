@@ -197,6 +197,82 @@ Path badgeStufenPfad(BadgeStufenForm form, Rect feld) {
 }
 
 // ---------------------------------------------------------------------------
+// Die Fuellung — die Stufe steckt auch INNEN drin
+// ---------------------------------------------------------------------------
+
+/// 2026-08-24 (vucko woertlich): „das schlechteste soll nicht nur im kreis die
+/// andere farbe haben sondern auch innen drinnen".
+///
+/// Bis hierher trug praktisch nur der RAND die Stufe. Die Fuellung war ein
+/// Hauch der Leitfarbe (Deckkraft 0,34 nach 0,55) und lief bei allen drei
+/// Stufen auf fast denselben dunklen Grund hinaus — gemessen lagen Stufe I und
+/// Stufe III innen nur 1,23 : 1 auseinander. Wer die Stufe erkennen wollte,
+/// musste die Raender vergleichen. Jetzt traegt die Flaeche selbst die Stufe.
+///
+/// NACHGERECHNET, nicht nach Gefuehl gewaehlt — gegen den App-Grund #0B0E14
+/// und gegen [BadgeStufenStil.farbeHell], die als Symbol MITTEN auf dieser
+/// Fuellung sitzt:
+///   Innenhelligkeit (relative Leuchtdichte) Stufe I 0,057 · II 0,157 ·
+///   III 0,144. Die unterste Stufe — Vuckos „das schlechteste" — liegt damit
+///   INNEN klar unter den beiden anderen: 1,93 : 1 gegen Tuerkis, 1,81 : 1
+///   gegen Violett. Vorher waren es 1,54 : 1 und 1,23 : 1, letzteres unter
+///   jeder Wahrnehmungsschwelle.
+///   Tuerkis und Violett liegen in der Helligkeit nah beieinander (1,07 : 1),
+///   trennen sich aber im Farbton deutlich (Kanalabstand 0,70 von 3,0) — dazu
+///   kommen wie bisher eigene Form und eigenes Symbol.
+///   Symbol auf der Fuellung: Stufe I 4,7 : 1, Stufe II 4,2 : 1,
+///   Stufe III 3,4 : 1. Die helle Stufe ist die knappste und liegt damit immer
+///   noch ueber den 3 : 1 fuer grafische Elemente.
+///
+/// WARUM DIE TIEFFARBE UND NICHT DIE LEITFARBE DIE FLAECHE TRAEGT: Fuellt man
+/// mit der satten Leitfarbe, faellt das helle Symbol darin zusammen — Tuerkis
+/// #4FE6D4 unter #A8F7EC ergaebe 1,3 : 1. Die Flaeche bleibt deshalb im tiefen
+/// Ende der Stufe und wird nur nach oben hin aufgehellt.
+///
+/// UND NICHT ZU DUNKEL: Das untere Ende des Verlaufs behaelt mindestens
+/// 1,4 : 1 gegen den App-Grund. Eine noch tiefere Bronze-Fuellung sah im
+/// ersten Anlauf aus wie ein GESPERRTES Abzeichen (gemessen 1,15 : 1) — genau
+/// die Verwechslung, die hier nicht entstehen darf.
+///
+/// GESPERRT bleibt bewusst hohl: ein Hauch Farbe auf dem dunklen Grund. Der
+/// Abstand zwischen „gesperrt" und „niedrigste Stufe" wird durch diese
+/// Aenderung GROESSER (Deckkraft 0,10 gegen voll gedeckt), nicht kleiner.
+///
+/// `test/presentation/badge_stufen_darstellung_test.dart` rechnet das nach.
+///
+/// Mischung der Fuellung je Stufe. Negativ = zu Schwarz hin, positiv = zur
+/// Leitfarbe hin. `oben` ist der Anfang des Verlaufs (oben links), `unten`
+/// sein Ende (unten rechts).
+const Map<int, ({double oben, double unten})> _innenMischung = {
+  0: (oben: -0.05, unten: -0.20),
+  1: (oben: 0.00, unten: -0.30),
+  2: (oben: 0.10, unten: -0.30),
+  3: (oben: 0.35, unten: -0.15),
+};
+
+Color _innenMischen(BadgeStufenStil stil, double anteil) => anteil >= 0
+    ? Color.lerp(stil.farbeTief, stil.farbe, anteil)!
+    : Color.lerp(stil.farbeTief, const Color(0xFF000000), -anteil)!;
+
+/// Die beiden Stufen des Fuell-Verlaufs, von oben links nach unten rechts.
+List<Color> badgeStufenInnenFarben(
+  BadgeStufenStil stil, {
+  required bool freigeschaltet,
+}) {
+  if (!freigeschaltet) {
+    return [
+      stil.farbe.withValues(alpha: 0.10),
+      stil.farbeTief.withValues(alpha: 0.16),
+    ];
+  }
+  final mischung = _innenMischung[stil.stufe] ?? _innenMischung[0]!;
+  return [
+    _innenMischen(stil, mischung.oben),
+    _innenMischen(stil, mischung.unten),
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Bausteine
 // ---------------------------------------------------------------------------
 
@@ -225,10 +301,7 @@ class BadgeStufenRahmenPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            stil.farbe.withValues(alpha: freigeschaltet ? 0.34 : 0.10),
-            stil.farbeTief.withValues(alpha: freigeschaltet ? 0.55 : 0.16),
-          ],
+          colors: badgeStufenInnenFarben(stil, freigeschaltet: freigeschaltet),
         ).createShader(feld),
     );
 

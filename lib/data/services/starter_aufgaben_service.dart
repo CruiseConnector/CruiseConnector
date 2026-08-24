@@ -24,16 +24,18 @@ class StarterAufgabe {
 /// haben, und einen zusätzlichen Bonus von einer Woche, wo man doppelt so
 /// viele XP bekommt — und der Timer wirklich nur eine Woche läuft."
 ///
-/// ABLAUF: Acht Aufgaben. Sind alle erledigt, gibt es einmalig das
-/// Startklar-Badge, und die Doppel-XP-Woche beginnt — exakt sieben Tage ab
-/// diesem Moment, danach schaltet sich der Bonus von selbst ab. Der
-/// Endzeitpunkt wird EINMAL gespeichert und nie neu angesetzt; ein
-/// App-Neustart verlängert nichts.
+/// ABLAUF: Zwölf Aufgaben, von denen [aufgabenFuerBoost] genügen. Ist die
+/// Schwelle erreicht, gibt es einmalig das Startklar-Badge, und die
+/// Doppel-XP-Woche beginnt — exakt sieben Tage ab diesem Moment, danach
+/// schaltet sich der Bonus von selbst ab. Der Endzeitpunkt wird EINMAL
+/// gespeichert und nie neu angesetzt; ein App-Neustart verlängert nichts.
 ///
 /// Die Erfüllung wird an den echten Stellen gemeldet (Route gesucht, Favorit
-/// gespeichert, Route gespeichert, Community geöffnet, Tutorial beendet). Die
-/// drei Fahr- und Social-Aufgaben werden nicht gemeldet, sondern aus dem
-/// ZUSTAND abgeleitet — siehe [synchronisiereAusKennzahlen].
+/// gespeichert, Community geöffnet, Tutorial beendet). Alles, was einen
+/// Server-Beleg hat, wird NICHT gemeldet, sondern aus dem ZUSTAND abgeleitet —
+/// siehe [synchronisiereAusKennzahlen]. Seit 24.08. gehört „Eine Route
+/// speichern" dazu: gemeldet wurde sie vorher, bevor die Zeile überhaupt
+/// geschrieben war.
 class StarterAufgabenService extends ChangeNotifier {
   StarterAufgabenService._();
   static final StarterAufgabenService instance = StarterAufgabenService._();
@@ -91,9 +93,10 @@ class StarterAufgabenService extends ChangeNotifier {
   /// und such ja auch noch Aufgaben, wie beispielsweise die ersten drei
   /// Badges sammeln oder halt die ersten 50 Kilometer fahren".
   ///
-  /// Elf Aufgaben. Die ersten sechs sind ohne Fahrt erfuellbar (Durchspielen
-  /// auf der Couch), die letzten fuenf verlangen echtes Tun. Sie stehen
-  /// bewusst am Ende, damit der Einstieg gleich bleibt.
+  /// Zwoelf Aufgaben (seit 24.08. ist „Einen Hashtag benutzen" dabei). Die
+  /// ersten sechs sind ohne Fahrt erfuellbar (Durchspielen auf der Couch), die
+  /// letzten sechs verlangen echtes Tun. Sie stehen bewusst am Ende, damit der
+  /// Einstieg gleich bleibt.
   ///
   /// DIE WICHTIGSTE AENDERUNG STEHT BEI 'gruppenfahrt'. Sie hiess
   /// „Eine Gruppenfahrt abschliessen". GEMESSEN am 24.08. in der
@@ -149,6 +152,23 @@ class StarterAufgabenService extends ChangeNotifier {
       titel: 'Den ersten Post teilen',
       beschreibung: 'Zeig der Community, wo du unterwegs warst.',
     ),
+    // 2026-08-24 (Aufgabe 4, vucko woertlich): „man muss die sachen wie ersten
+    // post oder benutze einen hashtag wenn das noch nicht als aufgabe drinnen
+    // ist auch wirklich absolvieren".
+    //
+    // Sie stand NICHT drin. Es gibt sie jetzt, und sie ist echt gedeckt: die
+    // Ablage `post_hashtags` (Migration 20260824102000) wird ausschliesslich
+    // vom Trigger `post_hashtags_trg` aus dem Beitragstext gefuellt, nie vom
+    // Client. Es reicht also nicht, ein Hashtag-Feld zu oeffnen — die Raute
+    // muss in einem veroeffentlichten Beitrag stehen.
+    //
+    // Sie steht direkt hinter „post", weil sie einen Beitrag voraussetzt.
+    StarterAufgabe(
+      id: 'hashtag',
+      titel: 'Einen Hashtag benutzen',
+      beschreibung: 'Schreib ein #Thema in deinen Beitrag, dann finden dich '
+          'andere darüber.',
+    ),
     // 2026-08-24 (vucko): „erste Gruppenfahrt erstellen". Vorher hiess die
     // Zeile „Eine Gruppenfahrt abschliessen" — daran ist der Boost fuer alle
     // 183 Nutzer gescheitert, siehe der Kommentar ueber dieser Liste.
@@ -191,7 +211,23 @@ class StarterAufgabenService extends ChangeNotifier {
   /// lang, in denen sich Fahren doppelt lohnt. Die drei uebrigen bleiben als
   /// Ziel stehen, statt als Sperre zu wirken.
   ///
-  /// Die Zahl ist eine Zeile. Wer sie auf 11 stellt, verlangt wieder alles.
+  /// Die Zahl ist eine Zeile. Wer sie auf 12 stellt, verlangt wieder alles.
+  ///
+  /// 2026-08-24, ZWEITE ENTSCHEIDUNG (Aufgabe 4): Mit der zwoelften Aufgabe
+  /// („Einen Hashtag benutzen") WANDERT DIE SCHWELLE NICHT MIT. Sie bleibt
+  /// bei acht.
+  ///
+  /// Begruendung: Acht ist kein Anteil, sondern ein Preis — so viel Einsatz
+  /// kostet der Boost. Waere die Schwelle ein Anteil, muesste sie bei zwoelf
+  /// Aufgaben auf neun steigen, und der einzige Weg dorthin fuehrte ueber
+  /// „post" UND „hashtag", also ueber denselben Beitrag zweimal. Der Preis
+  /// stiege, ohne dass jemand mehr von der App gesehen haette.
+  ///
+  /// Dazu die Zahl, die hier alles entscheidet: 0 von 183 Nutzern haben den
+  /// Boost je bekommen, weil die Schwelle unerreichbar war. Zwei Tage spaeter
+  /// die Schwelle wieder anzuheben, waere derselbe Fehler mit einer anderen
+  /// Zahl. Die Hashtag-Aufgabe kommt als ZIEL dazu, nicht als Sperre — genau
+  /// wie die 50 Kilometer und die drei Abzeichen.
   static const int aufgabenFuerBoost = 8;
 
   static final Set<String> _gueltigeIds = aufgaben.map((a) => a.id).toSet();
@@ -376,6 +412,22 @@ class StarterAufgabenService extends ChangeNotifier {
   /// Abzeichen" an ihrem eigenen Ergebnis.
   ///
   /// [gesamtKm] sind die aufaddierten Kilometer aller Fahrten.
+  ///
+  /// [hashtagBenutzt] kommt aus `post_hashtags` (Migration 20260824102000).
+  /// Diese Ablage fuellt AUSSCHLIESSLICH der Trigger `post_hashtags_trg` aus
+  /// dem Beitragstext — der Client darf dort nicht schreiben. Damit ist die
+  /// Aufgabe nicht vortaeuschbar: die Raute muss in einem veroeffentlichten
+  /// Beitrag stehen.
+  ///
+  /// [gespeicherteRouten] zaehlt `routes` und `route_bookmarks` des Nutzers.
+  /// 2026-08-24 (Aufgabe 4, Pruefung der bestehenden Aufgaben): „speichern"
+  /// war die einzige Aufgabe, die sich VOR der Tat abhaken liess — die
+  /// Meldung stand in `SavedRoutesService.saveRoute` noch vor der
+  /// Anmelde-Pruefung und vor dem INSERT. Ein fehlgeschlagenes Speichern
+  /// (kein Netz, RLS-Fehler) hakte sie trotzdem ab. Die Meldung sitzt jetzt
+  /// hinter dem erfolgreichen INSERT, und dieser Zustandsabgleich ist die
+  /// zweite Sicherung: Wer auf einem anderen Geraet gespeichert hat, bekommt
+  /// den Haken hier nachgetragen.
   Future<void> synchronisiereAusKennzahlen({
     required int posts,
     required int abgeschlosseneFahrten,
@@ -384,13 +436,17 @@ class StarterAufgabenService extends ChangeNotifier {
     int fahrzeuge = 0,
     int abzeichen = 0,
     double gesamtKm = 0,
+    bool hashtagBenutzt = false,
+    int gespeicherteRouten = 0,
   }) async {
     await markiereAlle([
       if (posts > 0) 'post',
+      if (hashtagBenutzt) 'hashtag',
       if (abgeschlosseneFahrten > 0) 'runde',
       if (erstellteGruppen > 0 || abgeschlosseneGruppenfahrten > 0)
         'gruppenfahrt',
       if (fahrzeuge > 0) 'garage',
+      if (gespeicherteRouten > 0) 'speichern',
       if (abzeichen >= abzeichenFuerAufgabe) 'abzeichen',
       if (gesamtKm >= kilometerFuerAufgabe) 'km50',
     ]);

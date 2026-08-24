@@ -34,6 +34,10 @@ class GamificationResult {
     this.gefahreneStile = 0,
     this.rundkurse = 0,
     this.aNachBFahrten = 0,
+    this.fahrzeuge = 0,
+    this.beitraege = 0,
+    this.hashtagBeitraege = 0,
+    this.meldungen = 0,
   });
 
   final UserLevel level;
@@ -66,11 +70,54 @@ class GamificationResult {
   final int rundkurse;
   final int aNachBFahrten;
 
+  /// 2026-08-24: Zaehler fuer die vier neuen Familien badge_59 … badge_70
+  /// (Garage, Beitraege, Hashtags, Meldungen). Sie liegen im Sync ohnehin vor
+  /// und werden hier nur mitgeliefert — dieselbe Begruendung wie oben bei den
+  /// Fahr-Kennzahlen: die Sammlung zeigt den Fortschritt aus derselben Zahl,
+  /// aus der auch freigeschaltet wird.
+  final int fahrzeuge;
+  final int beitraege;
+  final int hashtagBeitraege;
+  final int meldungen;
+
   List<Badge> get earnedBadges =>
       earnedBadgeIds.map(Badge.getById).whereType<Badge>().toList();
 
   List<Badge> get newBadges =>
       newBadgeIds.map(Badge.getById).whereType<Badge>().toList();
+}
+
+/// Liest die Antwort der RPC `meine_badge_kennzahlen`.
+///
+/// Eigene Funktion, damit sie ohne Datenbank pruefbar ist. Sie muss robust
+/// sein: eine alte App trifft auf eine neue Datenbank und umgekehrt, und eine
+/// fehlende Zahl darf nie ein Abzeichen sperren ODER faelschlich vergeben —
+/// sie wird zu 0. Negative Werte kann es fachlich nicht geben; sie werden
+/// gekappt, statt eine Schwelle zu unterlaufen.
+({int hashtagBeitraege, int meldungen}) badgeKennzahlenAusAntwort(
+  dynamic antwort,
+) {
+  // PostgREST liefert bei `returns jsonb` das Objekt direkt; manche
+  // Client-Fassungen packen es in eine einelementige Liste.
+  final roh = antwort is List
+      ? (antwort.isEmpty ? null : antwort.first)
+      : antwort;
+  if (roh is! Map) return (hashtagBeitraege: 0, meldungen: 0);
+
+  int zahl(String schluessel) {
+    final wert = roh[schluessel];
+    if (wert is num) return wert.toInt() < 0 ? 0 : wert.toInt();
+    if (wert is String) {
+      final geparst = int.tryParse(wert.trim()) ?? 0;
+      return geparst < 0 ? 0 : geparst;
+    }
+    return 0;
+  }
+
+  return (
+    hashtagBeitraege: zahl('hashtag_beitraege'),
+    meldungen: zahl('meldungen'),
+  );
 }
 
 class RouteXpBreakdown {
@@ -117,6 +164,19 @@ class GamificationService {
   static const double minRouteProgressForXp = 0.20;
   static const double minRouteProgressForFullXp = 0.95;
   static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
+
+  /// 2026-08-24 (Aufgabe 3, vucko woertlich): „man soll dafuer auch ein badge
+  /// bekommen wenn man es abgeschlossen hat wie startklar".
+  ///
+  /// Die Kennung steht hier als Literal und nicht als `Badge.…`-Konstante,
+  /// weil der Katalog-Eintrag aus einer anderen Hand kommt. Bis er in
+  /// `Badge.all` steht, verwirft [normalizeBadgeIds] die Kennung STILL — es
+  /// wird also nichts Halbes vergeben und nichts geht kaputt. Sobald der
+  /// Eintrag da ist, greift die Vergabe von selbst, auch rueckwirkend: sie
+  /// haengt am ZUSTAND (Starter-Aufgabe „tutorial") und nicht an einem
+  /// Ereignis. Das ist die Lehre aus dem verlorenen Startklar-Abzeichen vom
+  /// 19.08.
+  static const String onboardingBadgeId = 'badge_58';
 
   @visibleForTesting
   static List<String> normalizeBadgeIds(Iterable<dynamic> badgeIds) {
@@ -916,11 +976,27 @@ class GamificationService {
     // zu den bestehenden — kein zusaetzlicher Wartetakt.
     final fahrzeugZaehler = _countVehicles(userId);
     final gruendungZaehler = _hatCommunityGegruendet();
+    // 2026-08-24 (Aufgabe 4): die zwoelfte Starter-Aufgabe. Ebenfalls parallel.
+    //
+    // 2026-08-24 (badge_59 … badge_70): Aus dem Ja/Nein „hat je einen Hashtag
+    // benutzt" ist eine ZAHL geworden — die Familie Hashtags hat die Stufen
+    // 1/5/20, ein Ja/Nein reicht nur fuer die erste. Dieselbe RPC liefert die
+    // Meldungs-Zahl gleich mit, deshalb bleibt es bei EINEM zusaetzlichen
+    // Netzweg, und der laeuft neben den anderen. Warum serverseitig, steht in
+    // Migration 20260824180000: die Sichtbarkeitsregel von `road_incidents`
+    // blendet abgelaufene Meldungen aus (gemessen: 7 abgesetzt, 2 sichtbar),
+    // und Beitraege mit Raute sind `count(distinct post_id)`, nicht die Anzahl
+    // der Rauten.
+    final kennzahlenZaehler = _ladeBadgeKennzahlen();
     final createdGroupCount = await gruppenZaehler;
     final postZahlen = await postZaehler;
     final savedRouteReferenceCount = await gespeicherteZaehler;
     final fahrzeugAnzahl = await fahrzeugZaehler;
     final communityGegruendet = await gruendungZaehler;
+    final badgeKennzahlen = await kennzahlenZaehler;
+    final hashtagBeitragsAnzahl = badgeKennzahlen.hashtagBeitraege;
+    final meldungsAnzahl = badgeKennzahlen.meldungen;
+    final hashtagBenutzt = hashtagBeitragsAnzahl > 0;
     final routePostCount = postZahlen.mitRoute;
 
     // 4. Badges prüfen
@@ -954,6 +1030,17 @@ class GamificationService {
       gefahreneStile: kz.gefahreneStile,
       rundkurse: kz.rundkurse,
       aNachBFahrten: kz.aNachBFahrten,
+      // 2026-08-24: Diese vier Zeilen fehlten, seit die Familien Garage,
+      // Beitraege, Hashtags und Meldungen angelegt wurden. Ohne sie blieb
+      // jede der zwoelf Stufen auf 0 stehen — die Abzeichen standen dauerhaft
+      // gesperrt in der Sammlung. Zwei der Zahlen lagen hier schon vor
+      // (`fahrzeugAnzahl` fuer die Garage-Aufgabe, `postZahlen.gesamt` fuer
+      // „der erste post"); sie werden bewusst wiederverwendet statt neu
+      // geholt.
+      fahrzeuge: fahrzeugAnzahl,
+      beitraege: postZahlen.gesamt,
+      hashtagBeitraege: hashtagBeitragsAnzahl,
+      meldungen: meldungsAnzahl,
     );
     final currentlyQualifiedBadges = erfuellteBadgeIds(metriken);
 
@@ -1011,9 +1098,29 @@ class GamificationService {
       fahrzeuge: fahrzeugAnzahl,
       abzeichen: abzeichenOhneStartklar,
       gesamtKm: totalKm,
+      hashtagBenutzt: hashtagBenutzt,
+      gespeicherteRouten: savedRouteReferenceCount,
     );
     if (starter.paketVerdient) {
       currentlyQualifiedBadges.add(Badge.starterBadgeId);
+    }
+
+    // 2026-08-24 (Aufgabe 3): badge_58 fuer das abgeschlossene Onboarding.
+    //
+    // BEDINGUNG ist die Starter-Aufgabe „tutorial", und die wird nur beim
+    // ECHTEN Abschluss gesetzt (app_tutorial_overlay.dart, _complete), nicht
+    // beim Ueberspringen. Genau das steht in Vuckos Satz: „wenn man es
+    // abgeschlossen hat". Wer uebersprungen hat, holt es ueber „Tutorial
+    // nochmal ansehen" nach.
+    //
+    // WARUM ERST HIER, NACH `abzeichenOhneStartklar`: Das Abzeichen zaehlt
+    // NICHT fuer die Aufgabe „die ersten drei Abzeichen sammeln" mit — aus
+    // demselben Grund wie badge_16. Beide sind Belohnungen dieser Liste; wer
+    // sie mitzaehlt, haengt die Aufgabe an ihr eigenes Ergebnis. Vuckos
+    // „das anfangsbadge zaehlt dazu" meint badge_15, das jeder ohne Bedingung
+    // bekommt — es bleiben also zwei selbst verdiente Abzeichen zu holen.
+    if (starter.erledigt('tutorial')) {
+      currentlyQualifiedBadges.add(onboardingBadgeId);
     }
 
     // 5. Bisherige Badges laden und neue bestimmen
@@ -1111,6 +1218,10 @@ class GamificationService {
       gefahreneStile: kz.gefahreneStile,
       rundkurse: kz.rundkurse,
       aNachBFahrten: kz.aNachBFahrten,
+      fahrzeuge: fahrzeugAnzahl,
+      beitraege: postZahlen.gesamt,
+      hashtagBeitraege: hashtagBeitragsAnzahl,
+      meldungen: meldungsAnzahl,
     );
   }
 
@@ -1137,8 +1248,14 @@ class GamificationService {
   /// 2026-08-24 (Aufgabe 4.5, vucko): „Auto in die Garage hinzufuegen".
   ///
   /// GEMESSEN am 24.08.: 60 von 183 Profilen haben mindestens ein Fahrzeug in
-  /// `profile_vehicles`. Die Grenze liegt bei 8, weil die Aufgabe nur wissen
-  /// will, ob ueberhaupt eines da ist — die genaue Zahl braucht hier niemand.
+  /// `profile_vehicles`.
+  ///
+  /// 2026-08-24 (badge_59…61 „Garage"): Die Zahl ist jetzt auch eine
+  /// Badge-Schwelle (1/3/5), nicht mehr nur ein Ja/Nein fuer die
+  /// Starter-Aufgabe. Die Grenze 8 liegt ueber der hoechsten Schwelle — dieselbe
+  /// Regel wie beim Gruppen-Zaehler, wo `.limit(2)` genau deshalb einmal die
+  /// Stufen 3 und 10 blockiert hat. Wer eine Stufe ueber 8 anlegt, muss sie
+  /// mit anheben.
   static Future<int> _countVehicles(String userId) async {
     try {
       final rows = await _db
@@ -1196,6 +1313,34 @@ class GamificationService {
     } catch (e) {
       debugPrint('[Gamification] Post-Zähler fehlgeschlagen: $e');
       return (gesamt: 0, mitRoute: 0);
+    }
+  }
+
+  /// 2026-08-24: Beitraege mit Hashtag und abgesetzte Meldungen — die beiden
+  /// Zahlen hinter den Familien Hashtags (badge_65…67) und Meldungen
+  /// (badge_68…70). Fuer die Starter-Aufgabe „benutze einen hashtag" (Aufgabe 4
+  /// vom selben Tag) genuegt davon `hashtagBeitraege > 0`.
+  ///
+  /// EINE RPC statt zweier Tabellen-Abfragen, und zwar aus drei Gruenden
+  /// (ausfuehrlich in Migration 20260824180000):
+  ///  * `road_incidents` zeigt per Sichtbarkeitsregel nur Meldungen, die
+  ///    gerade noch gueltig sind. GEMESSEN am 24.08.: 7 abgesetzt, 2 sichtbar.
+  ///    Ueber den Client waeren zwanzig Meldungen praktisch nie zu erreichen.
+  ///  * Die Hashtag-Familie zaehlt BEITRAEGE mit Raute. `post_hashtags` hat
+  ///    eine Zeile je Raute — ein Beitrag mit fuenf Rauten haette Stufe 5
+  ///    sofort freigeschaltet. `count(distinct post_id)` gehoert in die
+  ///    Datenbank.
+  ///  * `calculateAndSync` laeuft bei jedem Start der Startseite. Ein Aufruf
+  ///    statt zwei ist ein Wartetakt statt zwei.
+  static Future<({int hashtagBeitraege, int meldungen})>
+  _ladeBadgeKennzahlen() async {
+    try {
+      final antwort = await _db.rpc('meine_badge_kennzahlen');
+      return badgeKennzahlenAusAntwort(antwort);
+    } catch (e) {
+      // Faellt still aus, wenn die RPC fehlt (Altbestand ohne Migration).
+      debugPrint('[Gamification] Badge-Kennzahlen fehlgeschlagen: $e');
+      return (hashtagBeitraege: 0, meldungen: 0);
     }
   }
 
