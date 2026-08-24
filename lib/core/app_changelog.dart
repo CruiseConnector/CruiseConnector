@@ -42,6 +42,33 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.21',
+      titel: 'Kein Festhängen mehr, Hashtags zeigen wer mitmacht',
+      punkte: <String>[
+        'Wichtigster Fehler: Der Hinweis "Routing verstehen" konnte sich auf '
+            'großen Bildschirmen nicht mehr schließen lassen. Der Knopf gab '
+            'erst frei, wenn man bis ans Ende gescrollt hatte, und wenn der '
+            'Text ohne Scrollen hineinpasste, ging das nie. Die App wirkte '
+            'dann eingefroren. Behoben, und es gibt jetzt immer ein Kreuz '
+            'zum Schließen.',
+        'Wir haben danach die ganze App durchsucht und fünf weitere Stellen '
+            'gefunden, an denen man festsitzen konnte, darunter die '
+            'Rechtstexte beim ersten Start. Überall gilt jetzt: es führt '
+            'immer ein Weg heraus, auch ohne Netz und ohne Berechtigung.',
+        'Konntest du die Rechtstexte nicht öffnen, weil auf deinem Handy '
+            'kein Browser erlaubt ist, kamst du nicht in die App. Jetzt '
+            'werden drei Wege probiert, und zur Not steht die Adresse zum '
+            'Kopieren direkt im Fenster.',
+        'Bei einem Hashtag siehst du jetzt, wie viele Leute ihn benutzt '
+            'haben. Tippst du die Zahl an, siehst du wer, und wie oft.',
+        'Deine Anordnung der Startseite hängt jetzt an deinem Konto. '
+            'Meldest du dich auf einem neuen Handy an, sind deine Kacheln '
+            'genauso wie vorher.',
+        'Fahrzeugmarken: Golf, Polo und ähnliche Modellnamen im alten '
+            'Profilfeld gehören jetzt zur richtigen Marke.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.20',
       titel: 'Doppel-XP-Woche für alle, Marken sortiert sich, Punkte zeigen was neu ist',
       punkte: <String>[
