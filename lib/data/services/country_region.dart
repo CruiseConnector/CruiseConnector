@@ -119,8 +119,32 @@ class CountryRegion {
         lat <= _austriaNorthLimit(lng)) {
       return 'AT';
     }
+    // 2026-08-25 (vucko, Feld-Kommentar „App meldet in Italien bleiben obwohl
+    // ich derzeit in Kroatien bin"): Kroatien fehlte in dieser Tabelle
+    // vollständig. Gemessen an 36 realen Orten: Pula, Poreč, Rovinj, Umag und
+    // Motovun ergaben 'IT', Zagreb und sieben weitere 'SI', die übrigen 23
+    // (Rijeka, Split, Zadar, Osijek, Dubrovnik …) null. Kein einziger war
+    // richtig. Deshalb VOR den IT- und SI-Boxen prüfen.
+    //
+    // Kroatien ist eine Sichel um Bosnien herum, eine Box geht dafür nicht:
+    // sie würde Sarajevo, Mostar und Podgorica mit einschließen. Daher ein
+    // kontinentaler Teil mit längen-abhängiger Nord- UND Südgrenze plus ein
+    // schmaler dalmatinischer Küstenstreifen. Beides gegen 32 kroatische und
+    // 29 Nachbarorte (BA, ME, RS, HU, SI, IT, AT) geprüft.
+    if (_isCroatiaApprox(lat, lng)) {
+      return 'HR';
+    }
     // Italien (Südtirol/Norditalien) — südlich der Alpen.
-    if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) {
+    //
+    // 2026-08-25: Ostgrenze ergänzt. Die Box reichte bis lng 13.9 und
+    // verschluckte damit die slowenische Küste — Koper (45.548/13.730) und
+    // Piran (45.528/13.568) galten als Italien. Italien endet dort an der
+    // Küste bei etwa lat 45.58; Triest (45.650) und Muggia (45.600) liegen
+    // darüber und bleiben korrekt IT, Grado (lng 13.394) ist unberührt.
+    if (lat < 46.85 &&
+        lng >= 6.6 &&
+        lng <= 13.9 &&
+        !(lng > 13.40 && lat < 45.58)) {
       return 'IT';
     }
     // Slowenien.
@@ -141,6 +165,54 @@ class CountryRegion {
       return 'DE';
     }
     return null;
+  }
+
+  /// 2026-08-25 (vucko): Grobe Kroatien-Erkennung. Der kontinentale Teil
+  /// (Istrien, Kvarner, Lika, Zagreb, Slawonien) liegt zwischen einer
+  /// längen-abhängigen Süd- und Nordgrenze; Dalmatien ist ein schmaler
+  /// Küstenstreifen, der nach Süden enger wird, weil Trebinje (BA) und
+  /// Herceg Novi (ME) dicht an Dubrovnik heranreichen.
+  ///
+  /// Beide Bandtabellen MÜSSEN zeichengleich in `croatiaNorthLimit` /
+  /// `croatiaSouthLimit` der Edge `generate-cruise-route-v2` stehen — sonst
+  /// weist der Server Routen ab, die der Client für inländisch hält.
+  static bool _isCroatiaApprox(double lat, double lng) {
+    if (lng >= 13.45 &&
+        lng <= 19.45 &&
+        lat >= _croatiaSouthLimit(lng) &&
+        lat <= _croatiaNorthLimit(lng)) {
+      return true;
+    }
+    // Dalmatinischer Küstenstreifen Zadar → Dubrovnik.
+    if (lng < 14.80 || lng > 18.45) return false;
+    final mitte = 44.30 - (lng - 14.80) * 0.47;
+    final oben = lng >= 17.60 ? 0.00 : 0.42;
+    return lat >= mitte - 0.35 && lat <= mitte + oben;
+  }
+
+  /// Nordgrenze Kroatiens: gegen Slowenien (West), Ungarn (Nordost).
+  static double _croatiaNorthLimit(double lng) {
+    if (lng < 13.58) return 45.48;
+    if (lng < 14.00) return 45.47;
+    if (lng < 14.60) return 45.50;
+    if (lng < 15.30) return 45.55;
+    if (lng < 15.70) return 45.72;
+    if (lng < 16.20) return 46.05;
+    if (lng < 16.60) return 46.56;
+    if (lng < 17.20) return 46.40;
+    if (lng < 18.90) return 45.95;
+    return 45.70;
+  }
+
+  /// Südgrenze des kontinentalen Teils: gegen Bosnien-Herzegowina.
+  static double _croatiaSouthLimit(double lng) {
+    if (lng < 14.40) return 44.35;
+    if (lng < 15.30) return 44.70;
+    if (lng < 15.75) return 44.30;
+    if (lng < 16.60) return 45.05;
+    if (lng < 17.30) return 45.05;
+    if (lng < 18.20) return 45.05;
+    return 44.85;
   }
 
   static bool _isLiechtensteinApprox(double lat, double lng) {

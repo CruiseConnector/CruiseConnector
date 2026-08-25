@@ -130,13 +130,61 @@ function classifyCountry(lat: number, lng: number): string | null {
       lat <= austriaNorthLimit(lng)) {
     return 'AT';
   }
-  if (lat < 46.85 && lng >= 6.6 && lng <= 13.9) return 'IT';
+  // 2026-08-25 (vucko, Feld-Kommentar aus Kroatien): Kroatien fehlte hier
+  // ebenso wie im Client. Ergebnis: In Nord-/Innerstistrien wurde ein
+  // komplett kroatischer Rundkurs mit `no_inland_route` abgewiesen, weil das
+  // Stueck oestlich von lng 13.9 als Slowenien galt. VOR IT/SI pruefen.
+  if (isCroatiaApprox(lat, lng)) return 'HR';
+  // Ostgrenze fuer IT: die Box verschluckte sonst Koper und Piran (SI).
+  if (lat < 46.85 && lng >= 6.6 && lng <= 13.9 &&
+      !(lng > 13.40 && lat < 45.58)) return 'IT';
   if (lat >= 45.4 && lat <= 46.9 && lng >= 13.4 && lng <= 16.6) return 'SI';
   if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
     if (lat <= austriaNorthLimit(lng)) return 'AT';
   }
   if (lat >= 47.27 && lat <= 55.06 && lng >= 5.87 && lng <= 15.04) return 'DE';
   return null;
+}
+
+// 2026-08-25 (vucko): Grobe Kroatien-Erkennung. Kroatien ist eine Sichel um
+// Bosnien herum — eine Box wuerde Sarajevo, Mostar und Podgorica mit
+// einschliessen. Daher ein kontinentaler Teil mit laengen-abhaengiger Sued-
+// UND Nordgrenze plus ein schmaler dalmatinischer Kuestenstreifen, der nach
+// Sueden enger wird (Trebinje BA und Herceg Novi ME liegen dicht an
+// Dubrovnik). Beide Bandtabellen MUESSEN zeichengleich in
+// `_croatiaNorthLimit` / `_croatiaSouthLimit` von country_region.dart stehen.
+function croatiaNorthLimit(lng: number): number {
+  if (lng < 13.58) return 45.48;
+  if (lng < 14.00) return 45.47;
+  if (lng < 14.60) return 45.50;
+  if (lng < 15.30) return 45.55;
+  if (lng < 15.70) return 45.72;
+  if (lng < 16.20) return 46.05;
+  if (lng < 16.60) return 46.56;
+  if (lng < 17.20) return 46.40;
+  if (lng < 18.90) return 45.95;
+  return 45.70;
+}
+
+function croatiaSouthLimit(lng: number): number {
+  if (lng < 14.40) return 44.35;
+  if (lng < 15.30) return 44.70;
+  if (lng < 15.75) return 44.30;
+  if (lng < 16.60) return 45.05;
+  if (lng < 17.30) return 45.05;
+  if (lng < 18.20) return 45.05;
+  return 44.85;
+}
+
+function isCroatiaApprox(lat: number, lng: number): boolean {
+  if (lng >= 13.45 && lng <= 19.45 &&
+      lat >= croatiaSouthLimit(lng) && lat <= croatiaNorthLimit(lng)) {
+    return true;
+  }
+  if (lng < 14.80 || lng > 18.45) return false;
+  const mitte = 44.30 - (lng - 14.80) * 0.47;
+  const oben = lng >= 17.60 ? 0.00 : 0.42;
+  return lat >= mitte - 0.35 && lat <= mitte + oben;
 }
 
 function isLiechtensteinApprox(lat: number, lng: number): boolean {

@@ -84,7 +84,19 @@ class CruiseNavigationController {
     var targetIndex = maneuver.routeIndex
         .clamp(0, routeCoordinates.length - 1)
         .toInt();
-    if (targetIndex <= currentRouteIndex) {
+    // 2026-08-25 (vucko, Feld-Kommentar „Bei Kreisverkehren meldet die App,
+    // dass man nicht auf der Route ist"): Die Grenze war `<=` und lief damit
+    // gegen `selectActiveGuidanceManeuverIndex`, das erst bei `<` weiterrueckt.
+    // Steht der Puck GENAU auf dem Manoeverpunkt (im Kreisel der Normalfall,
+    // weil der Index dort langsam vorrueckt), zeigte das Banner noch den
+    // Kreisel, waehrend hier schon zum UEBERNAECHSTEN Manoever gemessen wurde
+    // — ein Sprung von 0 auf mehrere hundert Meter. `_overshootMinDistM` in
+    // cruise_mode_page.dart wird aber nur beim WECHSEL des sichtbaren Index
+    // genullt, klebte also bei ~0 und liess `maneuverOvershoot` feuern,
+    // obwohl der Fahrer 0 m neben der Linie war → grundlose Neuberechnung.
+    // Jetzt zeichengleich mit der Banner-Auswahl: bei Gleichheit ist das
+    // Manoever „jetzt", die Distanz also 0.
+    if (targetIndex < currentRouteIndex) {
       var nextIdx = -1;
       for (final m in maneuvers) {
         final mi = m.routeIndex.clamp(0, routeCoordinates.length - 1).toInt();

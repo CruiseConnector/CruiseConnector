@@ -54,7 +54,81 @@ void main() {
       ('Zürich (CH)', 47.377, 8.540, 'CH'),
       ('München (DE)', 48.135, 11.582, 'DE'),
       ('Vaduz (LI)', 47.141, 9.521, 'LI'),
+      // 2026-08-25 (Feld-Kommentar „App meldet in Italien bleiben obwohl ich
+      // derzeit in Kroatien bin"): Kroatien fehlte komplett. Gemessen ergaben
+      // Pula/Poreč/Rovinj/Umag/Motovun 'IT', Zagreb und sieben weitere 'SI',
+      // 23 weitere null — kein einziger Ort war richtig.
+      ('Pula (HR)', 44.867, 13.848, 'HR'),
+      ('Rovinj (HR)', 45.081, 13.639, 'HR'),
+      ('Poreč (HR)', 45.228, 13.594, 'HR'),
+      ('Umag (HR)', 45.436, 13.524, 'HR'),
+      ('Motovun (HR)', 45.336, 13.828, 'HR'),
+      ('Pazin (HR)', 45.240, 13.938, 'HR'),
+      ('Buzet (HR)', 45.410, 14.028, 'HR'),
+      ('Rijeka (HR)', 45.327, 14.443, 'HR'),
+      ('Opatija (HR)', 45.338, 14.305, 'HR'),
+      ('Krk (HR)', 45.026, 14.576, 'HR'),
+      ('Senj (HR)', 44.990, 14.906, 'HR'),
+      ('Delnice (HR)', 45.401, 14.798, 'HR'),
+      ('Gospić (HR)', 44.546, 15.374, 'HR'),
+      ('Zadar (HR)', 44.119, 15.224, 'HR'),
+      ('Knin (HR)', 44.041, 16.199, 'HR'),
+      ('Šibenik (HR)', 43.735, 15.895, 'HR'),
+      ('Split (HR)', 43.508, 16.440, 'HR'),
+      ('Makarska (HR)', 43.297, 17.017, 'HR'),
+      ('Ploče (HR)', 43.055, 17.433, 'HR'),
+      ('Dubrovnik (HR)', 42.650, 18.092, 'HR'),
+      ('Zagreb (HR)', 45.815, 15.978, 'HR'),
+      ('Karlovac (HR)', 45.487, 15.548, 'HR'),
+      ('Samobor (HR)', 45.803, 15.711, 'HR'),
+      ('Sisak (HR)', 45.485, 16.377, 'HR'),
+      ('Varaždin (HR)', 46.306, 16.338, 'HR'),
+      ('Čakovec (HR)', 46.389, 16.434, 'HR'),
+      ('Bjelovar (HR)', 45.898, 16.842, 'HR'),
+      ('Slavonski Brod (HR)', 45.160, 18.016, 'HR'),
+      ('Vinkovci (HR)', 45.288, 18.805, 'HR'),
+      ('Osijek (HR)', 45.555, 18.694, 'HR'),
+      ('Vukovar (HR)', 45.351, 19.001, 'HR'),
+      // Die slowenische Küste galt bisher als Italien — die IT-Box reichte
+      // nach Osten bis lng 13.9.
+      ('Koper (SI)', 45.548, 13.730, 'SI'),
+      ('Piran (SI)', 45.528, 13.568, 'SI'),
+      ('Novo mesto (SI)', 45.804, 15.170, 'SI'),
+      // Italien direkt an der Grenze darf NICHT kippen.
+      ('Triest (IT)', 45.650, 13.771, 'IT'),
+      ('Muggia (IT)', 45.600, 13.767, 'IT'),
+      ('Grado (IT)', 45.677, 13.394, 'IT'),
+      ('Venedig (IT)', 45.440, 12.316, 'IT'),
     ];
+
+    // Kroatien ist eine Sichel um Bosnien herum. Diese Orte liegen INNERHALB
+    // der Umhüllenden und dürfen trotzdem nicht 'HR' ergeben — sonst filtert
+    // „Im Land bleiben" für einen Bosnier auf Kroatien.
+    const nichtKroatien = <(String, double, double)>[
+      ('Sarajevo (BA)', 43.856, 18.413),
+      ('Banja Luka (BA)', 44.772, 17.191),
+      ('Mostar (BA)', 43.343, 17.808),
+      ('Bihać (BA)', 44.815, 15.871),
+      ('Tuzla (BA)', 44.538, 18.676),
+      ('Zenica (BA)', 44.203, 17.907),
+      ('Trebinje (BA)', 42.712, 18.344),
+      ('Podgorica (ME)', 42.441, 19.263),
+      ('Herceg Novi (ME)', 42.453, 18.537),
+      ('Kotor (ME)', 42.424, 18.771),
+      ('Belgrad (RS)', 44.787, 20.449),
+      ('Novi Sad (RS)', 45.255, 19.845),
+      ('Sombor (RS)', 45.774, 19.113),
+      ('Pécs (HU)', 46.073, 18.233),
+      ('Nagykanizsa (HU)', 46.456, 16.997),
+      ('Kaposvár (HU)', 46.359, 17.795),
+      ('Szeged (HU)', 46.253, 20.148),
+    ];
+    for (final (name, lat, lng) in nichtKroatien) {
+      test('$name ist NICHT Kroatien', () {
+        expect(CountryRegion.classify(lat, lng), isNot('HR'),
+            reason: '$name ($lat/$lng)');
+      });
+    }
 
     for (final (name, lat, lng, soll) in orte) {
       test('$name → $soll', () {
@@ -70,8 +144,13 @@ void main() {
     List<String> baender(String quelle, String funktion) {
       final start = quelle.indexOf(funktion);
       expect(start, greaterThan(-1), reason: '$funktion nicht gefunden');
-      final ende = quelle.indexOf('\n}', start);
-      final block = quelle.substring(start, ende);
+      // Blockende = erste Zeile, die nur aus einer schliessenden Klammer
+      // besteht. In Dart ist sie eingerueckt ('\n  }'), in TypeScript nicht
+      // ('\n}'). Mit dem festen '\n}' las die Dart-Seite bis zum KLASSENENDE
+      // und zog damit die Baender der naechsten Funktion mit hinein.
+      final rest = quelle.substring(start);
+      final ende = RegExp(r'\n *\}').firstMatch(rest)!.start;
+      final block = rest.substring(0, ende);
       return RegExp(r'lng < (\d+\.\d+)\) return (\d+\.\d+)')
           .allMatches(block)
           .map((m) => '${m.group(1)}/${m.group(2)}')
@@ -88,5 +167,42 @@ void main() {
     );
     expect(dart, isNotEmpty);
     expect(dart, ts, reason: 'Bandtabellen von Client und Edge weichen ab');
+  });
+
+  test('Client und Edge benutzen dieselben Kroatien-Bandtabellen', () {
+    // 2026-08-25: gleiche Falle wie bei der Südgrenze — läuft die Tabelle
+    // auseinander, hält der Client eine Route für inländisch, die der Server
+    // mit `no_inland_route` abweist.
+    List<String> baender(String quelle, String funktion) {
+      final start = quelle.indexOf(funktion);
+      expect(start, greaterThan(-1), reason: '$funktion nicht gefunden');
+      // Blockende = erste Zeile, die nur aus einer schliessenden Klammer
+      // besteht. In Dart ist sie eingerueckt ('\n  }'), in TypeScript nicht
+      // ('\n}'). Mit dem festen '\n}' las die Dart-Seite bis zum KLASSENENDE
+      // und zog damit die Baender der naechsten Funktion mit hinein.
+      final rest = quelle.substring(start);
+      final ende = RegExp(r'\n *\}').firstMatch(rest)!.start;
+      final block = rest.substring(0, ende);
+      return RegExp(r'lng < (\d+\.\d+)\) return (\d+\.\d+)')
+          .allMatches(block)
+          .map((m) => '${m.group(1)}/${m.group(2)}')
+          .toList();
+    }
+
+    final dartQuelle = File('lib/data/services/country_region.dart')
+        .readAsStringSync();
+    final tsQuelle = File(
+      'supabase/functions/generate-cruise-route-v2/index.ts',
+    ).readAsStringSync();
+
+    final nordDart = baender(dartQuelle, 'static double _croatiaNorthLimit(');
+    final nordTs = baender(tsQuelle, 'function croatiaNorthLimit(');
+    expect(nordDart, isNotEmpty);
+    expect(nordDart, nordTs, reason: 'Nordgrenze weicht ab');
+
+    final suedDart = baender(dartQuelle, 'static double _croatiaSouthLimit(');
+    final suedTs = baender(tsQuelle, 'function croatiaSouthLimit(');
+    expect(suedDart, isNotEmpty);
+    expect(suedDart, suedTs, reason: 'Südgrenze weicht ab');
   });
 }

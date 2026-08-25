@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
+import 'package:cruise_connect/presentation/controllers/cruise_navigation_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -239,6 +240,107 @@ void main() {
       expect(commitBlock.contains('_offRouteSince = null;'), isTrue);
       expect(commitBlock.contains('_renderDistChangedAt = null;'), isTrue);
       expect(commitBlock.contains('_watchdogDrivenM = 0.0;'), isTrue);
+    });
+  });
+
+  // ===================================================================
+  // 2026-08-25 (vucko, Kommentar aus dem Feld: „Bei Kreisverkehren waehrend
+  // der Fahrt meldet die App, dass man nicht auf der Route ist und berechnet
+  // diese dann neu.")
+  //
+  // Der Fix vom 15.08. betraf NUR den Frozen-Progress-Watchdog (Gruppe 3).
+  // Offen blieb der Manoever-Overshoot-Pfad. Er hat einen Bruch:
+  //
+  //   selectActiveGuidanceManeuverIndex  ueberspringt bei  routeIndex <  currentRouteIndex
+  //   calculateDistanceToManeuver        springt weiter bei routeIndex <= currentRouteIndex
+  //
+  // Bei GLEICHHEIT (Puck genau auf dem Manoeverpunkt) zeigt das Banner also
+  // noch den Kreisel, waehrend die Distanz schon zum NAECHSTEN Manoever misst.
+  // `_overshootMinDistM` wird aber nur zurueckgesetzt, wenn sich der SICHTBARE
+  // Index aendert — er bleibt bei ~0 kleben, waehrend die Distanz hochspringt.
+  // Ergebnis: `maneuverOvershoot` = true, obwohl der Fahrer 0 m neben der
+  // Linie faehrt. Das erzwingt off-route und (weil `clearly`) nach 900 ms
+  // eine Neuberechnung.
+  // ===================================================================
+  group('4. Kein Phantom-Overshoot am Kreisel', () {
+    // Kreisel bei Punkt 6, naechstes Manoever erst 34 Punkte spaeter.
+    final coords = _kreisel(ausfahrtDeg: 180, nachher: 12);
+    final man = <RouteManeuver>[
+      _m(6, typ: ManeuverType.roundabout, text: 'Im Kreisverkehr Ausfahrt 3 nehmen'),
+      _m(coords.length - 2, text: 'Ziel'),
+    ];
+    final controller = CruiseNavigationController();
+
+    double? distanz(int currentRouteIndex) => controller.calculateDistanceToManeuver(
+          maneuvers: man,
+          routeCoordinates: coords,
+          currentRouteIndex: currentRouteIndex,
+          activeManeuverIndex: 0,
+          remainingRouteDistanceMeters: 1000,
+          distanceToFinalTargetMeters: 1000,
+          arrivalRadiusMeters: 50,
+          offRouteGapMeters: 0,
+        );
+
+    int? sichtbar(int currentRouteIndex) => selectActiveGuidanceManeuverIndex(
+          maneuvers: man,
+          currentRouteIndex: currentRouteIndex,
+          remainingRouteDistanceMeters: 1000,
+          distanceToFinalTargetMeters: 1000,
+          startIndex: 0,
+          arrivalRadiusMeters: 50,
+        );
+
+    test('Gleichheit: Banner und Distanz meinen dasselbe Manoever', () {
+      // Ein Punkt VOR dem Kreisel: Banner = Kreisel, Distanz klein.
+      expect(sichtbar(5), 0, reason: 'Kreisel ist das aktive Manoever');
+      expect(distanz(5)!, lessThan(35.0), reason: 'gleich am Kreisel');
+
+      // GENAU auf dem Kreiselpunkt: Banner zeigt den Kreisel …
+      expect(sichtbar(6), 0, reason: 'routeIndex == currentRouteIndex bleibt aktiv');
+      // … und die Distanz meint denselben, ist also 0 („jetzt").
+      // Vor dem Fix sprang sie hier auf 369 m — das war der Bruch.
+      expect(distanz(6)!, lessThan(1.0),
+          reason: 'Ziel und Banner muessen dasselbe Manoever meinen');
+    });
+
+    test('Durchfahrt: kein Overshoot, solange der Fahrer auf der Linie ist', () {
+      var overshootManIdx = sichtbar(4);
+      var overshootMin = double.infinity;
+      var overshoot = false;
+      for (var idx = 4; idx <= 10; idx++) {
+        final vis = sichtbar(idx);
+        if (vis != overshootManIdx) {
+          overshootManIdx = vis;
+          overshootMin = double.infinity;
+        }
+        final d = distanz(idx);
+        if (d != null) {
+          if (d < overshootMin) overshootMin = d;
+          if (overshootMin < 35.0 && d > math.max(60.0, overshootMin + 45.0)) {
+            overshoot = true;
+          }
+        }
+      }
+      expect(overshoot, isFalse,
+          reason: 'Kein Phantom-Overshoot beim Durchfahren des Rings');
+    });
+
+    test('Gegenprobe: hinter dem Manoever misst die Distanz wieder voraus', () {
+      // Der Fix darf die echte Erkennung NICHT abschalten. Sobald der Index
+      // wirklich ueber den Manoeverpunkt hinaus ist (verpasster Abbieger),
+      // muessen Banner UND Distanz gemeinsam auf das naechste Manoever
+      // umschalten — dann greift die Overshoot-Erkennung wie vorgesehen.
+      expect(sichtbar(6), 0, reason: 'auf dem Punkt: noch der Kreisel');
+      expect(sichtbar(7), 1, reason: 'dahinter: naechstes Manoever');
+      expect(distanz(7)!, greaterThan(60.0),
+          reason: 'und die Distanz misst zum naechsten, nicht mehr 0');
+      // Entscheidend: beide wechseln beim SELBEN Index. Genau diese
+      // Gleichzeitigkeit hat vorher gefehlt.
+      final wechselBanner = [5, 6, 7, 8].firstWhere((i) => sichtbar(i) != 0);
+      final wechselDistanz = [5, 6, 7, 8].firstWhere((i) => distanz(i)! > 60.0);
+      expect(wechselBanner, wechselDistanz,
+          reason: 'Banner und Distanz muessen zeitgleich umschalten');
     });
   });
 }

@@ -1323,6 +1323,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
     'LI': '🇱🇮 Liechtenstein',
     'IT': '🇮🇹 Italien',
     'SI': '🇸🇮 Slowenien',
+    'HR': '🇭🇷 Kroatien',
   };
 
   // Kurzform fürs Segment-Label „Nur <Land>".
@@ -1333,6 +1334,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
     'LI': 'Liechtenstein',
     'IT': 'Italien',
     'SI': 'Slowenien',
+    'HR': 'Kroatien',
   };
 
   // 2026-05-31 (vucko): Länder-Filter als Toggle (2 Optionen), Design identisch

@@ -15246,14 +15246,41 @@ class _CruiseModePageState extends State<CruiseModePage>
       makingForwardProgress = false;
     }
 
-    // Manöver-Overshoot zählt wie "klar daneben" — aber NUR im breiten
-    // Point-to-Point-Korridor (300-800 m), wo ein verpasster Turn sonst
-    // distanz-technisch unentdeckt bliebe. Bei Rundkursen (50 m Korridor) ist
-    // ein verpasster Turn ohnehin sofort >Korridor → der Overshoot-Zwang löste
-    // dort nur Phantom-Reroutes an Kreisverkehren/Selbstüberlapp aus (Video).
-    if (maneuverOvershoot && !_isRoundTrip) {
+    // Manöver-Overshoot zählt wie "klar daneben". Der ursprüngliche Grund für
+    // die Rundkurs-Ausnahme („nur im breiten Point-to-Point-Korridor von
+    // 300-800 m") stimmt seit dem 12.06. nicht mehr: der A→B-Korridor ist
+    // 45/80/110 m (_currentPointToPointCorridorMeters). Die Ausnahme bleibt
+    // trotzdem, weil sie auf Rundkursen den Selbstüberlapp abfängt — der
+    // eigentliche Schutz sind aber die zwei Bedingungen darunter.
+    //
+    // 2026-08-25 (vucko, Feld-Kommentar „Bei Kreisverkehren waehrend der Fahrt
+    // meldet die App, dass man nicht auf der Route ist und berechnet diese dann
+    // neu"): Der Zwang galt bisher OHNE Blick auf den tatsaechlichen Abstand
+    // zur Linie. Ein Fahrer 0 m neben der Route wurde dadurch zu „off-route"
+    // erklaert, und weil `maneuverOvershoot` zugleich `clearly` setzt, reichten
+    // 900 ms bis zur Neuberechnung. Zwei Bedingungen kommen dazu:
+    //
+    //  * Der Puck muss WIRKLICH von der Linie weg sein. Wer im Korridor faehrt,
+    //    ist per Definition der App auf der Route — dann ist ein Overshoot ein
+    //    Messfehler, kein Verfahren. Die Schranke waechst mit dem Korridor
+    //    (A→B-Variante 2 hat 110 m), hat aber einen Boden von 25 m, damit ein
+    //    echt verpasster Abbieger weiterhin sofort zaehlt: wer 60 m hinter dem
+    //    Manoever ist und geradeaus weiterfaehrt, liegt laengst > 25 m daneben.
+    //  * Im/am Kreisverkehr nie. Dort kreist der Puck um den Manoeverpunkt,
+    //    die Distanz entlang der Route steht fast still und der Index rueckt
+    //    langsam vor — die Signatur, die den Fehlalarm ueberhaupt erzeugt hat.
+    //    Denselben Schutz hat der Frozen-Progress-Watchdog seit dem 15.08.
+    final overshootMindestabstand = math.max(25.0, offRouteCorridor * 0.5);
+    final overshootDarfZwingen =
+        maneuverOvershoot &&
+        !_isRoundTrip &&
+        offRouteDecisionMatch.distanceMeters > overshootMindestabstand &&
+        !_puckNaheKreisverkehr(position);
+    if (overshootDarfZwingen) {
       isOutsideCorridor = true;
       makingForwardProgress = false;
+    } else if (maneuverOvershoot) {
+      maneuverOvershoot = false; // zaehlt auch nicht als „clearly" weiter unten
     }
     // 2026-06-13 (vucko Video Banner-Freeze): Restdistanz/-zeit IMMER pflegen —
     // auch off-route und VOR dem Reroute-Early-Return. Vorher fror „X,X km
