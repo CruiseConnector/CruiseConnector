@@ -42,6 +42,25 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.25',
+      titel: 'Aufgezeichnete Runden wieder fahrbar, Karte zum Zoomen',
+      punkte: <String>[
+        'Runden, die jemand aufgezeichnet hat, liessen sich nicht starten. Es '
+            'kam nur die Meldung, dass die Route nicht geladen werden kann. '
+            'Schuld war eine Lücke in der Aufzeichnung, etwa durch einen '
+            'Tunnel oder weil die App kurz im Hintergrund war. Jede fünfte '
+            'gespeicherte Route war betroffen.',
+        'Das galt überall, nicht nur bei geteilten Runden aus der Community: '
+            'auch auf der Startseite, in den Lesezeichen, bei den '
+            'Lieblingsrouten im Profil und beim Auswählen einer Route für '
+            'eine Gruppenfahrt.',
+        'In der Karte einer Fahrt kannst du jetzt ziehen und zoomen und dir '
+            'ansehen, wie jemand wirklich gefahren ist.',
+        'Beim Höchsttempo stand bei geteilten Fahrten ein Zeichen ohne Wert. '
+            'Solche Kacheln bleiben jetzt einfach weg.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.24',
       titel: 'Kreisverkehre ohne Fehlalarm, Kroatien wird erkannt',
       punkte: <String>[

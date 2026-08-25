@@ -137,7 +137,7 @@ function classifyCountry(lat: number, lng: number): string | null {
   if (isCroatiaApprox(lat, lng)) return 'HR';
   // Ostgrenze fuer IT: die Box verschluckte sonst Koper und Piran (SI).
   if (lat < 46.85 && lng >= 6.6 && lng <= 13.9 &&
-      !(lng > 13.40 && lat < 45.58)) return 'IT';
+      !(lng > 13.40 && lat >= 45.40 && lat < 45.58)) return 'IT';
   if (lat >= 45.4 && lat <= 46.9 && lng >= 13.4 && lng <= 16.6) return 'SI';
   if (lng >= 9.53 && lng <= 17.16 && lat >= 46.37) {
     if (lat <= austriaNorthLimit(lng)) return 'AT';
@@ -157,23 +157,28 @@ function croatiaNorthLimit(lng: number): number {
   if (lng < 13.58) return 45.48;
   if (lng < 14.00) return 45.47;
   if (lng < 14.60) return 45.50;
-  if (lng < 15.30) return 45.55;
-  if (lng < 15.70) return 45.72;
-  if (lng < 16.20) return 46.05;
+  if (lng < 14.80) return 45.45;
+  if (lng < 15.10) return 45.40;
+  if (lng < 15.40) return 45.45;
+  if (lng < 15.70) return 45.88;
+  if (lng < 15.75) return 46.25;
+  if (lng < 16.20) return 46.30;
+  if (lng < 16.30) return 46.35;
   if (lng < 16.60) return 46.56;
   if (lng < 17.20) return 46.40;
-  if (lng < 18.90) return 45.95;
+  if (lng < 18.90) return 45.84;
   return 45.70;
 }
 
 function croatiaSouthLimit(lng: number): number {
   if (lng < 14.40) return 44.35;
+  if (lng < 14.80) return 44.40;
   if (lng < 15.30) return 44.70;
   if (lng < 15.75) return 44.30;
   if (lng < 16.60) return 45.05;
   if (lng < 17.30) return 45.05;
   if (lng < 18.20) return 45.05;
-  return 44.85;
+  return 44.95;
 }
 
 function isCroatiaApprox(lat: number, lng: number): boolean {

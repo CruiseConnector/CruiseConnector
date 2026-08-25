@@ -144,7 +144,7 @@ class CountryRegion {
     if (lat < 46.85 &&
         lng >= 6.6 &&
         lng <= 13.9 &&
-        !(lng > 13.40 && lat < 45.58)) {
+        !(lng > 13.40 && lat >= 45.40 && lat < 45.58)) {
       return 'IT';
     }
     // Slowenien.
@@ -191,28 +191,45 @@ class CountryRegion {
   }
 
   /// Nordgrenze Kroatiens: gegen Slowenien (West), Ungarn (Nordost).
+  ///
+  /// 2026-08-25, zweiter Durchgang: An 421 echten GraphHopper-Rundkursen
+  /// gemessen kippten acht Kandidaten NUR wegen zu grober Baender. Das
+  /// Kolpa-Tal (Metlika, Adlešiči, Vinica, Stari trg, Kostel, Osilnica) galt
+  /// als kroatisch, das kroatische Zagorje (Krapina, Pregrada, Ivanec,
+  /// Lepoglava) dagegen als slowenisch. Jetzt feiner gebändert und an 61
+  /// kroatischen und 59 Nachbarorten geprüft: 60 zu 61 richtig, kein einziger
+  /// Nachbarort falsch. Nicht lösbar bleibt Kumrovec, das nur 1,9 km von
+  /// Bistrica ob Sotli entfernt am anderen Sutla-Ufer liegt; im Zweifel lieber
+  /// ein kroatisches Dorf zu wenig als ein slowenisches zu viel.
   static double _croatiaNorthLimit(double lng) {
     if (lng < 13.58) return 45.48;
     if (lng < 14.00) return 45.47;
     if (lng < 14.60) return 45.50;
-    if (lng < 15.30) return 45.55;
-    if (lng < 15.70) return 45.72;
-    if (lng < 16.20) return 46.05;
+    if (lng < 14.80) return 45.45;
+    if (lng < 15.10) return 45.40;
+    if (lng < 15.40) return 45.45;
+    if (lng < 15.70) return 45.88;
+    if (lng < 15.75) return 46.25;
+    if (lng < 16.20) return 46.30;
+    if (lng < 16.30) return 46.35;
     if (lng < 16.60) return 46.56;
     if (lng < 17.20) return 46.40;
-    if (lng < 18.90) return 45.95;
+    if (lng < 18.90) return 45.84;
     return 45.70;
   }
 
   /// Südgrenze des kontinentalen Teils: gegen Bosnien-Herzegowina.
   static double _croatiaSouthLimit(double lng) {
     if (lng < 14.40) return 44.35;
+    // Kvarner Inseln: Cres, Losinj und Rab reichen weiter nach Sueden als das
+    // Festland. Mit 44.70 fiel Mali Losinj (44.532/14.468) durch das Raster.
+    if (lng < 14.80) return 44.40;
     if (lng < 15.30) return 44.70;
     if (lng < 15.75) return 44.30;
     if (lng < 16.60) return 45.05;
     if (lng < 17.30) return 45.05;
     if (lng < 18.20) return 45.05;
-    return 44.85;
+    return 44.95;
   }
 
   static bool _isLiechtensteinApprox(double lat, double lng) {

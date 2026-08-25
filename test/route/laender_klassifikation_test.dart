@@ -89,6 +89,22 @@ void main() {
       ('Vinkovci (HR)', 45.288, 18.805, 'HR'),
       ('Osijek (HR)', 45.555, 18.694, 'HR'),
       ('Vukovar (HR)', 45.351, 19.001, 'HR'),
+      // 2026-08-25, zweiter Durchgang: an 421 echten Rundkursen zeigte sich,
+      // dass die ersten Bänder das Kolpa-Tal und das Zagorje verwechselten.
+      ('Krapina (HR)', 46.161, 15.876, 'HR'),
+      ('Pregrada (HR)', 46.166, 15.751, 'HR'),
+      ('Hum na Sutli (HR)', 46.148, 15.788, 'HR'),
+      ('Đurmanec (HR)', 46.184, 15.885, 'HR'),
+      ('Ivanec (HR)', 46.223, 16.123, 'HR'),
+      ('Lepoglava (HR)', 46.212, 16.043, 'HR'),
+      ('Ozalj (HR)', 45.612, 15.474, 'HR'),
+      ('Jastrebarsko (HR)', 45.669, 15.647, 'HR'),
+      ('Sveti Martin na Muri (HR)', 46.526, 16.372, 'HR'),
+      ('Kotoriba (HR)', 46.353, 16.816, 'HR'),
+      ('Virovitica (HR)', 45.831, 17.383, 'HR'),
+      ('Beli Manastir (HR)', 45.771, 18.606, 'HR'),
+      ('Ilok (HR)', 45.223, 19.375, 'HR'),
+      ('Koprivnica (HR)', 46.163, 16.828, 'HR'),
       // Die slowenische Küste galt bisher als Italien — die IT-Box reichte
       // nach Osten bis lng 13.9.
       ('Koper (SI)', 45.548, 13.730, 'SI'),
@@ -99,6 +115,20 @@ void main() {
       ('Muggia (IT)', 45.600, 13.767, 'IT'),
       ('Grado (IT)', 45.677, 13.394, 'IT'),
       ('Venedig (IT)', 45.440, 12.316, 'IT'),
+      // 2026-08-25, zweiter Durchgang: Die Ostgrenze der Italien-Box hatte
+      // keine Untergrenze und schnitt einen Streifen quer durch Italien.
+      // Rund 14 000 km² fielen auf „unbekannt".
+      ('Ancona (IT)', 43.616, 13.518, 'IT'),
+      ('Osimo (IT)', 43.486, 13.482, 'IT'),
+      ('Loreto (IT)', 43.440, 13.609, 'IT'),
+      ('Recanati (IT)', 43.404, 13.550, 'IT'),
+      ('Civitanova Marche (IT)', 43.307, 13.723, 'IT'),
+      ('Macerata (IT)', 43.300, 13.453, 'IT'),
+      ('Monfalcone (IT)', 45.805, 13.533, 'IT'),
+      // Kvarner Inseln: reichen weiter nach Süden als das Festland.
+      ('Mali Lošinj (HR)', 44.532, 14.468, 'HR'),
+      ('Cres (HR)', 44.961, 14.408, 'HR'),
+      ('Rab (HR)', 44.757, 14.766, 'HR'),
     ];
 
     // Kroatien ist eine Sichel um Bosnien herum. Diese Orte liegen INNERHALB
@@ -122,6 +152,35 @@ void main() {
       ('Nagykanizsa (HU)', 46.456, 16.997),
       ('Kaposvár (HU)', 46.359, 17.795),
       ('Szeged (HU)', 46.253, 20.148),
+      // Kolpa-Tal: slowenisches Ufer. Diese sechs galten im ersten Durchgang
+      // als kroatisch und liessen echte slowenische Rundkurse durchfallen.
+      ('Metlika (SI)', 45.647, 15.317),
+      ('Adlešiči (SI)', 45.549, 15.336),
+      ('Vinica (SI)', 45.462, 15.257),
+      ('Stari trg ob Kolpi (SI)', 45.427, 15.098),
+      ('Kostel (SI)', 45.507, 14.906),
+      ('Osilnica (SI)', 45.529, 14.696),
+      ('Brežice (SI)', 45.905, 15.594),
+      ('Krško (SI)', 45.959, 15.492),
+      ('Bistrica ob Sotli (SI)', 46.058, 15.663),
+      ('Rogaška Slatina (SI)', 46.235, 15.639),
+      ('Ptuj (SI)', 46.420, 15.869),
+      ('Ormož (SI)', 46.410, 16.152),
+      ('Ljutomer (SI)', 46.519, 16.198),
+      ('Razkrižje (SI)', 46.518, 16.267),
+      ('Središče ob Dravi (SI)', 46.397, 16.276),
+      ('Lendava (SI)', 46.564, 16.452),
+      ('Murska Sobota (SI)', 46.658, 16.166),
+      // Ungarn suedlich der Drau, nur wenige Kilometer von Kroatien entfernt.
+      ('Sellye (HU)', 45.871, 17.847),
+      ('Harkány (HU)', 45.851, 18.234),
+      ('Siklós (HU)', 45.855, 18.298),
+      ('Barcs (HU)', 45.960, 17.459),
+      ('Letenye (HU)', 46.430, 16.723),
+      // Bosnien am anderen Save-Ufer.
+      ('Brčko (BA)', 44.873, 18.810),
+      ('Doboj (BA)', 44.733, 18.087),
+      ('Prijedor (BA)', 44.980, 16.714),
     ];
     for (final (name, lat, lng) in nichtKroatien) {
       test('$name ist NICHT Kroatien', () {
