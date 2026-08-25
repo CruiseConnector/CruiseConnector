@@ -6317,12 +6317,12 @@ class _HomeContentPageState extends State<HomeContentPage>
   }
 
   static double _geometrieLaengeKm(Map<String, dynamic> geometry) {
-    final coords = (geometry['coordinates'] as List?) ?? const [];
+    // 2026-08-25 (vucko): MultiLineString-faehig lesen, sonst warf die
+    // Laengenberechnung bei jeder aufgezeichneten Fahrt mit GPS-Luecke.
+    final coords = SavedRoute.flattenGeometryCoordinates(geometry);
     var meter = 0.0;
     List<double>? vorher;
-    for (final c in coords) {
-      if (c is! List || c.length < 2) continue;
-      final p = [(c[0] as num).toDouble(), (c[1] as num).toDouble()];
+    for (final p in coords) {
       if (vorher != null) {
         meter += geo.Geolocator.distanceBetween(vorher[1], vorher[0], p[1], p[0]);
       }

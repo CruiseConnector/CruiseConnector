@@ -341,6 +341,10 @@ class _RideDetailPageState extends State<RideDetailPage> {
   }
 
   // ── Karten-Hero (echte gefahrene Strecke) ──────────────────────────────────
+  /// Siehe onControllerReady in _buildMapHero: die Kamera wird genau einmal
+  /// auf die Strecke eingepasst, danach gehoert der Zoom dem Nutzer.
+  bool _kartePasst = false;
+
   Widget _buildMapHero(List<List<double>> track, Color accent) {
     final pts = [for (final p in track) ll.LatLng(p[1], p[0])];
     double sumLat = 0, sumLng = 0;
@@ -360,13 +364,29 @@ class _RideDetailPageState extends State<RideDetailPage> {
               initialCenter: center,
               initialZoom: 11,
               rotateGestures: false,
+              // 2026-08-25 (vucko, Feld-Meldung „ich will in der Karte zoomen
+              // koennen und sehen wie er gefahren ist"): Die Karte ist das
+              // erste Kind eines ListView. Ohne eigenen Gesten-Erkenner gewinnt
+              // dessen Zieh-Erkenner die Gesten-Arena, und die Karte bekam nur
+              // Tipps — deshalb reagierte das Attributionszeichen, aber weder
+              // Ziehen noch Zwei-Finger-Zoom. Derselbe Fall war in
+              // create_group_page.dart schon einmal so geloest.
+              // Folge: ueber der Karte scrollt die Seite nicht mehr per
+              // Wischen. Das ist gewollt, gescrollt wird unter der Karte.
+              eagerGestures: true,
               lines: [
                 CruiseMapLine(points: pts, color: accent, width: 6),
               ],
-              onControllerReady: (c) => c.fitBounds(
-                pts,
-                padding: const EdgeInsets.all(46),
-              ),
+              onControllerReady: (c) {
+                // NUR EINMAL einpassen. onControllerReady haengt am Ende von
+                // _onStyleLoaded, und das feuert auf iOS mehrfach. Ohne diese
+                // Sperre schnappt die Kamera nach einem Style-Nachladen in die
+                // Uebersicht zurueck und wirft den Nutzer aus seinem Zoom.
+                // Bisher fiel das nicht auf, weil niemand zoomen konnte.
+                if (_kartePasst) return;
+                _kartePasst = true;
+                c.fitBounds(pts, padding: const EdgeInsets.all(46));
+              },
             ),
             // Lese-Schutz oben/unten für Pille + Titel.
             IgnorePointer(
@@ -637,27 +657,29 @@ class _RideDetailPageState extends State<RideDetailPage> {
     final tiles = <Widget>[
       _statTile('Distanz', _formatDistance(_s.distanceKm), Icons.map_rounded, accent),
       _statTile('Dauer', _formatDuration(_s.durationSeconds), Icons.timer_rounded, accent),
-      _statTile(
-        'Höchsttempo',
-        topSpeed != null && topSpeed > 0
-            ? '${topSpeed.toStringAsFixed(0)} km/h'
-            : '—',
-        Icons.speed_rounded,
-        accent,
-      ),
-      _statTile(
-        'Ø Tempo',
-        avg != null && avg > 0 ? '${avg.toStringAsFixed(0)} km/h' : '—',
-        Icons.trending_up_rounded,
-        accent,
-      ),
+      // 2026-08-25 (vucko): Fehlt ein Wert, wird die Kachel WEGGELASSEN statt
+      // einen Gedankenstrich zu zeigen. Zwei Gruende: in Nutzertexten kommen
+      // keine Striche vor, und eine leere Kachel behauptet, es gaebe hier eine
+      // Angabe. Beim Hoechsttempo ist genau das der Fall — es steht in
+      // `user_drive_sessions`, die Routentabelle hat gar keine Spalte dafuer,
+      // also ist der Wert bei einer geteilten fremden Route immer null.
+      if (topSpeed != null && topSpeed > 0)
+        _statTile(
+          'Höchsttempo',
+          '${topSpeed.toStringAsFixed(0)} km/h',
+          Icons.speed_rounded,
+          accent,
+        ),
+      if (avg != null && avg > 0)
+        _statTile(
+          'Ø Tempo',
+          '${avg.toStringAsFixed(0)} km/h',
+          Icons.trending_up_rounded,
+          accent,
+        ),
       _statTile('Modus', _modusLabel, Icons.tune_rounded, accent),
-      _statTile(
-        'Kurven',
-        curves != null ? '$curves' : '—',
-        Icons.moving_rounded,
-        accent,
-      ),
+      if (curves != null)
+        _statTile('Kurven', '$curves', Icons.moving_rounded, accent),
       _statTile('XP', '${_s.xpAwarded}', Icons.bolt_rounded, accent),
     ];
     return LayoutBuilder(

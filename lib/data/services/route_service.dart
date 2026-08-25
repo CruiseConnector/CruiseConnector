@@ -30,6 +30,7 @@ import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/data/services/route_variant.dart';
 import 'package:cruise_connect/data/services/seen_route_registry.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
 
 /// Top-level Funktion für Isolate-basiertes JSON-Parsing.
 Map<String, dynamic> _jsonDecodeIsolate(String data) =>
@@ -9922,12 +9923,9 @@ class RouteService {
 
   /// Extrahiert Koordinaten-Liste aus einem GeoJSON-Geometry-Objekt.
   List<List<double>> extractCoordinates(Map<String, dynamic> geometry) {
-    final raw = (geometry['coordinates'] as List?) ?? const [];
-    return raw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
+    // 2026-08-25 (vucko): MultiLineString-faehig. Aufgezeichnete Fahrten mit
+    // GPS-Luecke werden so gespeichert (driven_track_recorder).
+    return SavedRoute.flattenGeometryCoordinates(geometry);
   }
 
   // ────────────────────── Maneuver Extraction ────────────────────────────────

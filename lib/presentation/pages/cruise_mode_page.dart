@@ -4760,12 +4760,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   bool _darfAutomatischWeiterfahren(SavedRoute route) {
     final pos = _userLocation;
     if (pos == null) return false;
-    final coordsRaw = (route.geometry['coordinates'] as List?) ?? const [];
-    final coords = coordsRaw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
+    // 2026-08-25: dritte Fundstelle desselben Fehlers (siehe _loadSavedRoute).
+    final coords = route.flatCoordinates;
     if (coords.length < 2) return false;
     final match = findNearestInWindow(
       position: pos,
@@ -14056,12 +14052,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
 
     try {
-      final coordsRaw = (geometry['coordinates'] as List?) ?? [];
-      final coordinates = coordsRaw
-          .whereType<List>()
-          .where((c) => c.length >= 2)
-          .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-          .toList();
+      // 2026-08-25 (vucko, Feld-Meldung „Route konnte nicht geladen werden"):
+      // Diese Handarbeit konnte nur einen LineString. Eine aufgezeichnete
+      // Fahrt mit GPS-Luecke (Tunnel, App im Hintergrund) wird aber als
+      // MultiLineString gespeichert — dann ist `c` ein ganzes SEGMENT und
+      // `c[0]` selbst eine Liste. Der Cast `as num` warf einen TypeError,
+      // der Sammel-catch machte daraus die nichtssagende Meldung.
+      // Gemessen: 51 von 252 Routen sind MultiLineString, und die einzige
+      // ueber einen Beitrag geteilte Route war eine davon.
+      // `flattenGeometryCoordinates` kann beides und wird vom Rest der App
+      // laengst benutzt.
+      final coordinates = SavedRoute.flattenGeometryCoordinates(geometry);
 
       if (coordinates.length < 2) {
         _stopRouteLoadingUi(generationId: generationId);
@@ -14160,7 +14161,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       CruiseModePage.isFullscreen.value = false;
 
       await _drawRoute(preparedPreviewResult.geometry, animateRouteDraw: true);
-    } catch (e) {
+    } catch (e, stapel) {
+      // 2026-08-25 (vucko): Die Ursache wurde bisher NIRGENDS festgehalten —
+      // nicht auf dem Geraet, nicht im Dashboard. An die Telemetrie geht nur
+      // der Anzeigetext, und Crashlytics sieht nur unbehandelte Fehler. Der
+      // MultiLineString-Fehler war deshalb ohne Quelltext-Analyse nicht
+      // auffindbar. Mindestens ins Geraeteprotokoll gehoert er.
+      debugPrint('[CruiseMode] Geladene Route fehlgeschlagen: $e\n$stapel');
       if (!_isRouteGenerationCancelled(generationId)) {
         _stopRouteLoadingUi(generationId: generationId);
         _restoreGeneratedRouteFailureUi(
@@ -14293,12 +14300,9 @@ class _CruiseModePageState extends State<CruiseModePage>
     bool animateCamera = true,
     bool animateRouteDraw = false,
   }) async {
-    final coordinatesRaw = (geometry['coordinates'] as List?) ?? [];
-    final activeCoordinates = coordinatesRaw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
+    // 2026-08-25: zweite Fundstelle desselben Fehlers (siehe _loadSavedRoute).
+    // Sie wurde nie erreicht, weil die erste vorher warf.
+    final activeCoordinates = SavedRoute.flattenGeometryCoordinates(geometry);
 
     debugPrint(
       '[CruiseMode] _drawRoute: ${activeCoordinates.length} Koordinaten, '

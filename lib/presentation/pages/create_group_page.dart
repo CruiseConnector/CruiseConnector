@@ -571,12 +571,9 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
 
   RouteResult? _savedRouteToResult(SavedRoute route) {
     final geometry = route.geometry;
-    final coordsRaw = (geometry['coordinates'] as List?) ?? const [];
-    final coordinates = coordsRaw
-        .whereType<List>()
-        .where((c) => c.length >= 2)
-        .map((c) => [(c[0] as num).toDouble(), (c[1] as num).toDouble()])
-        .toList();
+    // 2026-08-25 (vucko): MultiLineString-faehig lesen — sonst laesst sich
+    // eine aufgezeichnete Fahrt mit GPS-Luecke nicht als Gruppenroute waehlen.
+    final coordinates = route.flatCoordinates;
     if (coordinates.length < 2) return null;
     return RouteResult(
       geoJson: json.encode(geometry),

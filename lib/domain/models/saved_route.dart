@@ -108,7 +108,7 @@ class SavedRoute {
   /// 2026-06-25 (vucko Routen-Detail-Page): flache [lng,lat]-Koordinatenliste
   /// der Route — für die Karten-Darstellung in der Detailseite.
   List<List<double>> get flatCoordinates =>
-      _flattenGeometryCoordinates(geometry);
+      flattenGeometryCoordinates(geometry);
 
   bool get isDrivenSession => (drivenKm ?? 0) > 0;
 
@@ -153,7 +153,7 @@ class SavedRoute {
   }
 
   String get routeSignature {
-    final coordinates = _flattenGeometryCoordinates(geometry);
+    final coordinates = flattenGeometryCoordinates(geometry);
     if (coordinates.isEmpty) {
       return '$routeType|$style|${distanceKm.toStringAsFixed(1)}';
     }
@@ -175,7 +175,12 @@ class SavedRoute {
     return '$routeType|$style|${distanceKm.toStringAsFixed(1)}|${samples.join("|")}';
   }
 
-  static List<List<double>> _flattenGeometryCoordinates(
+  /// 2026-08-25 (vucko, Feld-Meldung „Route konnte nicht geladen werden"):
+  /// Oeffentlich, weil cruise_mode_page.dart dieselbe Abflachung an drei
+  /// Stellen braucht und sie dort haendisch — und falsch — nachgebaut war.
+  /// Eine aufgezeichnete Fahrt mit GPS-Luecke wird als MultiLineString
+  /// gespeichert; die Nachbauten lasen dann ein ganzes Segment als Punkt.
+  static List<List<double>> flattenGeometryCoordinates(
     Map<String, dynamic> geometry,
   ) {
     final raw = geometry['coordinates'];
