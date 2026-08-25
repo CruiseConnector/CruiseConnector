@@ -42,6 +42,35 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.23',
+      titel: 'Umlaute im Namen, Abzeichen nebeneinander, Regionen aus deinem Land',
+      punkte: <String>[
+        'Dein Benutzername darf jetzt ä, ö, ü und ß enthalten. Vorher hat '
+            'das Eingabefeld diese Zeichen schon beim Tippen verschluckt.',
+        'Damit sich niemand als jemand anders ausgeben kann, gelten '
+            '"müller" und "mueller" als derselbe Name. Ist einer vergeben, '
+            'ist der andere belegt.',
+        'Wer sich über Google oder Apple angemeldet hat und dessen Name '
+            'schon vergeben war, bekam bisher gar kein Profil. Das ist '
+            'behoben.',
+        'Deine Abzeichen standen wegen eines Rechenfehlers untereinander '
+            'statt nebeneinander. Jetzt passen drei in eine Reihe, und die '
+            'Sammlung ist beim Aufklappen weniger als halb so lang.',
+        'Die Stufe eines Abzeichens ist besser zu erkennen: das Symbol hebt '
+            'sich deutlicher vom Hintergrund ab.',
+        'Beim Wählen einer Region siehst du nur noch die aus deinem Land. '
+            'Bist du in Deutschland, tauchen keine österreichischen '
+            'Bundesländer mehr auf.',
+        'Als Admin kannst du Fahrzeugart und Region deiner Community jetzt '
+            'auch nachträglich ändern, nicht mehr nur beim Erstellen.',
+        'Das Abzeichen fürs Onboarding gab es bisher schon für die kurze '
+            'Tour. Jetzt bekommst du es erst, wenn du alle zwölf '
+            'Starter-Aufgaben erledigt hast.',
+        'Die Starter-Karte bleibt sichtbar, bis wirklich alles erledigt ist, '
+            'und zeigt dir deinen Fortschritt.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.22',
       titel: 'Beitreten nur noch bewusst, Abzeichen aufgeräumt, Meldung am Nachmittag',
       punkte: <String>[
