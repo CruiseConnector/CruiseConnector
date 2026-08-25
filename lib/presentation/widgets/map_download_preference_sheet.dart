@@ -129,7 +129,7 @@ class _MapDownloadPreferenceSheetState
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Cruise Connector kann die DACH-Karte automatisch im Hintergrund laden. Die Datei ist mehrere GB groß.',
+                              'Cruise Connector kann die Karte für DACH automatisch im Hintergrund laden. Die Datei ist mehrere GB groß.',
                               style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.70),
                                 fontSize: 14,

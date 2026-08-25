@@ -540,7 +540,7 @@ class OfflineMapService {
     final directory = await _resolveTileCacheDirectory();
     if (directory == null) {
       MapCacheStatus.instance.markFailed(
-        error: 'Cache-Verzeichnis nicht verfügbar',
+        error: 'Kein Speicherort für die Karte verfügbar',
       );
       return const OfflineMapCacheReport(
         requestedTiles: 0,

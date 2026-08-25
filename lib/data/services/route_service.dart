@@ -3150,7 +3150,7 @@ class RouteService {
     if (waypoints.isEmpty) {
       return failure(
         'too_few_waypoints',
-        'Setze mindestens einen Stopp für diese Rundkurs-Planung.',
+        'Setze mindestens einen Stopp für diesen Rundkurs.',
         'Waypoint required-stops mode requires at least one waypoint.',
       );
     }
@@ -3160,7 +3160,7 @@ class RouteService {
     if (waypoints.length > 8) {
       return failure(
         'too_many_waypoints',
-        'Bitte nutze maximal 8 Stopps für eine einzelne Route. Für mehr Stopps nutze den Trip-Modus.',
+        'Bitte nutze maximal 8 Stopps für eine einzelne Route. Für mehr Stopps nutze den Tripmodus.',
         'Waypoint required-stops mode supports at most 8 waypoints.',
       );
     }
@@ -3548,7 +3548,7 @@ class RouteService {
       const Duration(seconds: 12),
       onTimeout: () => throw const RouteServiceException(
         type: RouteErrorType.network,
-        userMessage: 'Rueckweg dauert zu lange.',
+        userMessage: 'Der Rückweg dauert zu lange.',
         debugMessage: 'return_leg_timeout_12s',
       ),
     );
@@ -4217,7 +4217,7 @@ class RouteService {
       throw RouteServiceException(
         type: RouteErrorType.emptyResponse,
         userMessage:
-            'Der Routing-Dienst hat keine Daten geliefert. Bitte versuche es erneut.',
+            'Die Routenberechnung hat keine Daten geliefert. Bitte versuche es erneut.',
         debugMessage: 'Empty response body from routing function.',
         statusCode: statusCode,
       );
@@ -4239,7 +4239,7 @@ class RouteService {
         throw RouteServiceException(
           type: RouteErrorType.parsing,
           userMessage:
-              'Die Antwort des Routing-Dienstes konnte nicht verarbeitet werden.',
+              'Die Antwort der Routenberechnung konnte nicht verarbeitet werden.',
           debugMessage: 'Invalid JSON response: $e',
           statusCode: statusCode,
           stackTrace: stack,
@@ -4251,7 +4251,7 @@ class RouteService {
       throw RouteServiceException(
         type: RouteErrorType.parsing,
         userMessage:
-            'Der Routing-Dienst hat ein ungültiges Antwortformat gesendet.',
+            'Die Routenberechnung hat ein ungültiges Antwortformat gesendet.',
         debugMessage: 'Unexpected response type: ${data.runtimeType}',
         statusCode: statusCode,
       );
@@ -9324,7 +9324,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.network,
         userMessage:
-            'Keine Verbindung zum Routing-Dienst. Bitte Internetverbindung prüfen.',
+            'Keine Verbindung zur Routenberechnung. Bitte Internetverbindung prüfen.',
         debugMessage: raw,
         statusCode: statusCode,
         stackTrace: stack,
@@ -9375,7 +9375,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.auth,
         userMessage:
-            'Routing-Anfrage wurde abgelehnt. Bitte erneut anmelden und nochmals versuchen.',
+            'Die Anfrage wurde abgelehnt. Bitte erneut anmelden und nochmals versuchen.',
         debugMessage:
             'Auth error (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -9390,7 +9390,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.rateLimit,
         userMessage:
-            'Zu viele Routing-Anfragen in kurzer Zeit. Bitte kurz warten und erneut versuchen.',
+            'Zu viele Anfragen in kurzer Zeit. Bitte kurz warten und erneut versuchen.',
         debugMessage:
             'Rate limit (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -9407,7 +9407,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.workerLimit,
         userMessage:
-            'Der Routing-Dienst ist gerade stark ausgelastet. Bitte ${retryAfterSec ?? 2} Sekunden warten und erneut versuchen.',
+            'Die Routenberechnung ist gerade stark ausgelastet. Bitte ${retryAfterSec ?? 2} Sekunden warten und erneut versuchen.',
         debugMessage:
             'Worker limit (status=$statusCode, reason=$reasonPhrase): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -9496,7 +9496,7 @@ class RouteService {
       return RouteServiceException(
         type: RouteErrorType.noRoute,
         userMessage:
-            'Wir berechnen eine bessere Route. Das kann bei dieser Einstellung 1-2 Minuten dauern.',
+            'Wir berechnen eine bessere Route. Das kann bei dieser Einstellung 1 bis 2 Minuten dauern.',
         debugMessage:
             'Persistent round-trip search in progress (status=$statusCode): $errorMessage, details=$details',
         statusCode: statusCode,
@@ -9581,7 +9581,7 @@ class RouteService {
         lower.contains('destination') ||
         lower.contains('startlocation')) {
       final userMessage = routeType == 'ROUND_TRIP'
-          ? 'Rundkurs-Parameter sind ungültig. Bitte Länge, Stil oder Standort prüfen.'
+          ? 'Die Angaben für den Rundkurs sind ungültig. Bitte Länge, Stil oder Standort prüfen.'
           : 'Start, Ziel oder Routenparameter sind ungültig. Bitte Eingaben prüfen.';
       return RouteServiceException(
         type: RouteErrorType.validation,
@@ -9630,7 +9630,7 @@ class RouteService {
     final realBudgetPaused = _edgeMetaIndicatesRealBudgetPause(edgeMeta);
     if (edgeMeta['search_in_progress'] == true ||
         edgeMeta['response_code']?.toString() == 'search_in_progress') {
-      return 'Wir berechnen eine bessere Route. Das kann bei dieser Einstellung 1-2 Minuten dauern.';
+      return 'Wir berechnen eine bessere Route. Das kann bei dieser Einstellung 1 bis 2 Minuten dauern.';
     }
     if (edgeMeta['response_code']?.toString() == 'search_session_no_route') {
       return 'Wir haben mehrere Varianten geprüft, aber gerade keine sichere Route gefunden. Wir versuchen es im Hintergrund weiter.';

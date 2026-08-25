@@ -50,7 +50,7 @@ void main() {
       await tester.tap(find.text('Weiter'));
       await tester.pumpAndSettle();
       expect(find.text('Deine Startseite'), findsWidgets);
-      expect(find.text('Dein Starter-Paket'), findsOneWidget);
+      expect(find.text('Dein Starterpaket'), findsOneWidget);
       await expectLater(
         find.byType(MaterialApp),
         matchesGoldenFile('goldens/app_tutorial_home_start_centered.png'),

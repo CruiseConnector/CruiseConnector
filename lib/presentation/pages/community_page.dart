@@ -3154,7 +3154,7 @@ class _CommunityPageState extends State<CommunityPage>
                           // den Hashtag jetzt mit. Ein Feature, von dem
                           // niemand weiss, ist keins.
                           hintText:
-                              'Benutzer, #Hashtag oder Gruppen-Code '
+                              'Benutzer, #Hashtag oder Code der Gruppe '
                               '(CC-XXXXXX)',
                           hintStyle: const TextStyle(color: Colors.grey),
                           prefixIcon: const Icon(
@@ -3188,7 +3188,7 @@ class _CommunityPageState extends State<CommunityPage>
                                 child: Text(
                                   _searchController.text.isEmpty
                                       ? 'Suche nach Benutzernamen, einem '
-                                            '#Hashtag oder einem Gruppen-Code'
+                                            '#Hashtag oder dem Code einer Gruppe'
                                       : 'Keine Ergebnisse',
                                   textAlign: TextAlign.center,
                                   style: const TextStyle(color: Colors.grey),
@@ -3475,7 +3475,7 @@ class _CommunityPageState extends State<CommunityPage>
                   await SocialService.requestJoinGroup(group['id'] as String);
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Beitritts-Anfrage gesendet')),
+                    const SnackBar(content: Text('Anfrage zum Beitritt gesendet')),
                   );
                   setState(() {});
                 },

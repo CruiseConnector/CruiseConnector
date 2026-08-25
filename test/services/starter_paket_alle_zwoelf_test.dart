@@ -113,6 +113,13 @@ void main() {
         () async {
       SharedPreferences.setMockInitialValues({
         'starter_aufgaben_erledigt_v1': jsonEncode(vuckosZehn),
+        // 2026-08-25: Der Zaehler steht auf „schon gelaufen". Ohne ihn wuerde
+        // die einmalige Ruecksetzung (vucko: „jeder soll die aufgaben alle
+        // nochmal machen") hier zuschlagen und vier Aufgaben entfernen — der
+        // Fall misst aber den GERAETEWECHSEL, nicht die Ruecksetzung.
+        // Deren eigene Faelle stehen in starter_paket_serverabgleich_test.dart.
+        'starter_aufgaben_ruecksetz_generation':
+            StarterAufgabenService.ruecksetzGeneration,
       });
       dienst.resetForTests();
 
@@ -144,7 +151,7 @@ void main() {
       final quelle =
           File('lib/data/services/gamification_service.dart').readAsStringSync();
       final vergabe =
-          quelle.indexOf('currentlyQualifiedBadges.add(onboardingBadgeId)');
+          quelle.indexOf('currentlyQualifiedBadges.add(alleAufgabenBadgeId)');
       expect(vergabe, greaterThan(0));
       final bedingung =
           quelle.substring(quelle.lastIndexOf('if (', vergabe), vergabe);
@@ -224,7 +231,11 @@ void main() {
         find.byKey(const ValueKey('starter_aufgabe_gruppenfahrt')),
         findsOneWidget,
       );
-      expect(find.textContaining('Boost geschafft'), findsOneWidget);
+      // 2026-08-25 (Gliederung): Hier stand „Boost geschafft" und „2 Schritte"
+      // aus dem Erklaerabsatz unter dem Balken. Den Absatz gibt es nicht mehr
+      // — er war 112 von 2165 Punkten Kartenhoehe und nannte zwei Schwellen
+      // und zwei Abzeichen in einem Satz. Die Restzahl steht jetzt am
+      // Belohnungsblock, dort wo auch steht, wofuer man sie sammelt.
       expect(find.textContaining('2 Schritte'), findsOneWidget);
     });
 
@@ -254,15 +265,20 @@ void main() {
       );
     });
 
-    testWidgets('frischer Nutzer: 0/12 und der Weg zum Boost', (tester) async {
+    testWidgets('frischer Nutzer: 0/12 und der Weg zur Belohnung',
+        (tester) async {
       geraetestand(const []);
       await zeige(tester);
       expect(find.text('0/12'), findsOneWidget);
-      expect(find.textContaining('8 Schritte'), findsOneWidget);
-      expect(find.textContaining('Startklar-Abzeichen'), findsOneWidget);
-      // Die Boost-Marke auf dem Balken zeigt die zweite Zahl, ohne dass ein
-      // zweiter Zaehler danebensteht.
-      expect(find.text('Boost'), findsOneWidget);
+      // 2026-08-25 (Gliederung): Hier standen „8 Schritte" (die
+      // Boost-Schwelle), „Startklar-Abzeichen" (im Fliesstext) und die
+      // „Boost"-Marke auf dem Balken. Alle drei sind weg, weil sie ZWEI Ziele
+      // nebeneinander zeigten — genau die Verwechslung, aus der der Auftrag
+      // entstand. Es gibt jetzt ein Ziel: die ganze Liste. Der Rest steht als
+      // Zahl am Belohnungsblock, die Belohnung selbst daneben als Pillen.
+      expect(find.textContaining('12 Schritte'), findsOneWidget);
+      expect(find.textContaining('Startklar'), findsWidgets);
+      expect(find.text('Boost'), findsNothing);
     });
   });
 

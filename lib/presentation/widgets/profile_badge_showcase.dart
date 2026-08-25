@@ -570,7 +570,7 @@ class _ProfileBadgeStickerEditorState extends State<ProfileBadgeStickerEditor> {
     if (emptySlot < 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Maximal 5 Badge-Sticker möglich.'),
+          content: Text('Höchstens 5 Sticker möglich.'),
           backgroundColor: Color(0xFF1C1F26),
         ),
       );
@@ -732,7 +732,7 @@ class _ProfileBadgeStickerEditorState extends State<ProfileBadgeStickerEditor> {
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
-                  'Badge-Sticker',
+                  'Abzeichen als Sticker',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 21,
@@ -773,7 +773,7 @@ class _ProfileBadgeStickerEditorState extends State<ProfileBadgeStickerEditor> {
           ] else ...[
             const SizedBox(height: 12),
             const Text(
-              'Tippe einen freien Punkt in der Profil-Vorschau. Tippe ein Badge an, um es zu verschieben oder zu entfernen.',
+              'Tippe einen freien Punkt in der Vorschau deines Profils. Tippe ein Abzeichen an, um es zu verschieben oder zu entfernen.',
               style: TextStyle(
                 color: Color(0xFFA7B0C1),
                 fontSize: 13,

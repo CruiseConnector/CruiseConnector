@@ -323,7 +323,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
                 Center(
                   child: Text(
                     _istEigeneMeldung
-                        ? 'Deine Meldung — verschwindet automatisch'
+                        ? 'Deine Meldung verschwindet automatisch'
                         : 'Verschwindet automatisch',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.35),

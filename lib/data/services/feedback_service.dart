@@ -125,7 +125,7 @@ class FeedbackService {
         // entscheiden, ob er es ohne abschickt.
         throw const FeedbackFehler(
           'Das Foto konnte nicht hochgeladen werden. Schick die Rueckmeldung '
-          'gern ohne Foto ab — der Text hilft uns schon weiter.',
+          'gern ohne Foto ab. Der Text hilft uns schon weiter.',
         );
       }
     }
@@ -147,7 +147,7 @@ class FeedbackService {
       if (e.message.contains('Zu viele Rueckmeldungen')) {
         throw const FeedbackFehler(
           'Du hast uns gerade schon mehrfach geschrieben. Bitte versuch es in '
-          'einer Stunde noch einmal — wir lesen alles.',
+          'einer Stunde noch einmal. Wir lesen alles.',
         );
       }
       throw FeedbackFehler('Konnte nicht gesendet werden: ${e.message}');

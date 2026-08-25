@@ -25,7 +25,7 @@ class NavigationAndroidNotificationService {
     'cruise_navigation',
     'Navigation aktiv',
     description:
-        'Laufende Live-Vorschau der Strecke mit Manöver, Distanz und ETA.',
+        'Zeigt deine Strecke laufend mit Manöver, Distanz und Ankunftszeit.',
     // Bewusst LOW: sichtbar auf Sperrbildschirm/Shade, aber kein Ton/Vibration
     // bei jedem Meter-Update (sonst nervt es bei jeder Aktualisierung).
     importance: Importance.low,

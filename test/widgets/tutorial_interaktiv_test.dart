@@ -71,7 +71,7 @@ void main() {
       // nennt die Starter-Aufgabe als NOCH offen — die Attrappe loest keine
       // echte Suche aus.
       expect(find.textContaining('Beispielroute'), findsOneWidget);
-      expect(find.textContaining('Starter-Aufgabe'), findsOneWidget);
+      expect(find.textContaining('Aufgabe im Starterpaket'), findsOneWidget);
       expect(weiterButton(tester).onPressed, isNotNull);
     });
   });
@@ -98,7 +98,7 @@ void main() {
       // 2026-08-19: hiess frueher „Gemerkt! Findest du ab jetzt in deinen
       // Favoriten." — es wird aber nichts gespeichert.
       expect(find.textContaining('Übung'), findsOneWidget);
-      expect(find.textContaining('Starter-Aufgabe'), findsOneWidget);
+      expect(find.textContaining('Aufgabe im Starterpaket'), findsOneWidget);
       expect(find.byIcon(CupertinoIcons.star_fill), findsWidgets);
       expect(weiterButton(tester).onPressed, isNotNull);
     });

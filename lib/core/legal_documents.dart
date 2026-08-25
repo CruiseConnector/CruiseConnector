@@ -56,25 +56,25 @@ class LegalDocuments {
   );
 
   static const legalOverview = LegalDocument(
-    title: 'Legal-Uebersicht',
+    title: 'Rechtliches im Überblick',
     url: '$baseUrl/legal',
     deepLinkPath: '',
   );
 
   static const communityGuidelines = LegalDocument(
-    title: 'Community-Regeln',
+    title: 'Regeln der Community',
     url: '$baseUrl/community-guidelines',
     deepLinkPath: '/community-guidelines',
   );
 
   static const eventRules = LegalDocument(
-    title: 'Event- und Gruppenfahrt-Regeln',
+    title: 'Regeln für Events und Gruppenfahrten',
     url: '$baseUrl/event-rules',
     deepLinkPath: '/event-rules',
   );
 
   static const thirdPartyNotices = LegalDocument(
-    title: 'Drittanbieter-Hinweise',
+    title: 'Hinweise zu Drittanbietern',
     url: '$baseUrl/third-party-notices',
     deepLinkPath: '/third-party-notices',
   );

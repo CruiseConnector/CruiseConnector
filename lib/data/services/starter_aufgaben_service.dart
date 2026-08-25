@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Eine Aufgabe des Starter-Pakets.
@@ -25,10 +26,27 @@ class StarterAufgabe {
 /// viele XP bekommt — und der Timer wirklich nur eine Woche läuft."
 ///
 /// ABLAUF: Zwölf Aufgaben, von denen [aufgabenFuerBoost] genügen. Ist die
-/// Schwelle erreicht, gibt es einmalig das Startklar-Badge, und die
-/// Doppel-XP-Woche beginnt — exakt sieben Tage ab diesem Moment, danach
+/// Schwelle erreicht, fällt die GANZE Belohnung auf einmal — an genau einer
+/// Bedingung, nämlich [paketVerdient]:
+///
+///   * das Abzeichen „Startklar" (`Badge.starterBadgeId`, badge_16),
+///   * 1000 XP (`GamificationService.starterPaketBonusXp`),
+///   * und sieben Tage doppelte XP.
+///
+/// 2026-08-25 (vucko wörtlich): „man soll sehen man bekommt ein badge 1000 XP
+/// + noch einen 2 fach boost der 7 Tage lang aktiv ist". Eine Belohnung für
+/// eine Sache. Die 1000 XP fehlten bis heute komplett — gemessen war
+/// `profiles.total_xp` bei allen 202 Profilen auf die Einheit genau die Summe
+/// der gefahrenen XP.
+///
+/// Die Doppel-XP-Woche läuft exakt sieben Tage ab diesem Moment, danach
 /// schaltet sich der Bonus von selbst ab. Der Endzeitpunkt wird EINMAL
 /// gespeichert und nie neu angesetzt; ein App-Neustart verlängert nichts.
+///
+/// Das Abzeichen für ALLE zwölf (`Badge.alleAufgabenBadgeId`, badge_58) ist
+/// KEIN Teil dieser Belohnung: kein XP, keine Bonuswoche. Es ist ein reines
+/// Sammler-Abzeichen und gibt den letzten vier Aufgaben ein Ziel. Warum die
+/// Belohnung nicht bei zwölf hängt, steht bei [aufgabenFuerBoost].
 ///
 /// Die Erfüllung wird an den echten Stellen gemeldet (Route gesucht, Favorit
 /// gespeichert, Community geöffnet, Tutorial beendet). Alles, was einen
@@ -43,6 +61,34 @@ class StarterAufgabenService extends ChangeNotifier {
   static const _kErledigt = 'starter_aufgaben_erledigt_v1';
   static const _kBonusEnde = 'starter_bonus_ende_v1';
   static const _kPaketVergeben = 'starter_paket_vergeben_v1';
+
+  /// 2026-08-25 (vucko): „jeder soll die aufgaben alle nochmal machen".
+  ///
+  /// Zahl hochzaehlen loest die Ruecksetzung GENAU EIN MAL aus, danach nie
+  /// wieder. Dasselbe Muster wie [AppTutorialService.ruecksetzGeneration].
+  ///
+  /// WARUM KEINE MIGRATION: Gemessen am 25.08. haben 200 von 202 Profilen
+  /// eine LEERE `starter_aufgaben` — dort gibt es nichts zurueckzusetzen.
+  /// Ein UPDATE auf der Datenbank waere fuer fast alle wirkungslos gewesen
+  /// und haette trotzdem so ausgesehen, als taete es etwas.
+  static const int ruecksetzGeneration = 1;
+  static const String _kRuecksetzGeneration =
+      'starter_aufgaben_ruecksetz_generation';
+
+  /// Die einzigen vier Aufgaben, die eine Ruecksetzung ueberhaupt UEBERLEBT.
+  ///
+  /// Die anderen acht leiten sich aus dem Serverzustand ab (Kilometer,
+  /// Abzeichen, Fahrzeug, Post, Hashtag, gefahrene Runde, Gruppenfahrt,
+  /// gespeicherte Route). Sie zu loeschen waere ein Flackern ohne Wirkung:
+  /// `synchronisiereAusKennzahlen` setzt sie beim naechsten Atemzug wieder.
+  /// Schlimmer noch, es waere unehrlich — wer 500 km gefahren ist, HAT
+  /// „Die ersten 50 Kilometer fahren" erledigt.
+  static const Set<String> _ruecksetzbareAufgaben = {
+    'tutorial',
+    'route',
+    'favorit',
+    'community',
+  };
 
   /// Spalten auf `profiles`, in denen derselbe Zustand serverseitig liegt
   /// (Migration 20260819120000). Siehe [synchronisiereMitProfil].
@@ -228,6 +274,30 @@ class StarterAufgabenService extends ChangeNotifier {
   /// die Schwelle wieder anzuheben, waere derselbe Fehler mit einer anderen
   /// Zahl. Die Hashtag-Aufgabe kommt als ZIEL dazu, nicht als Sperre — genau
   /// wie die 50 Kilometer und die drei Abzeichen.
+  ///
+  /// 2026-08-25, DRITTE ENTSCHEIDUNG: Acht bleibt, und ab heute faellt hier
+  /// die GANZE Belohnung — Abzeichen, 1000 XP und Bonuswoche gemeinsam.
+  ///
+  /// Geprueft wurde ausdruecklich, ob stattdessen zwoelf die eine Schwelle
+  /// werden soll (Vucko: „jeder soll die aufgaben alle nochmal machen").
+  /// GEMESSEN am 25.08. ueber alle 202 Profile, gezaehlt nur die acht
+  /// serverseitig ableitbaren Aufgaben:
+  ///
+  ///   ein Beitrag             9      eine gespeicherte Route   19
+  ///   ein Hashtag             0      drei Abzeichen             6
+  ///   eine beendete Fahrt    18      fuenfzig Kilometer         9
+  ///   eine Gruppenfahrt       1      ein Auto in der Garage    66
+  ///   ---------------------------------------------------------------
+  ///   alle acht zusammen      0
+  ///
+  /// Null. Und „ein Hashtag" hat in der ganzen Geschichte der App NIEMAND
+  /// benutzt. Eine Belohnung bei zwoelf waere heute fuer keinen einzigen
+  /// Nutzer erreichbar — dieselbe Falle wie am 24.08., nur mit einer anderen
+  /// Zahl. Sie wird nicht wiederholt.
+  ///
+  /// Die letzten vier Aufgaben bleiben trotzdem stehen und behalten ein Ziel:
+  /// das Sammler-Abzeichen `Badge.alleAufgabenBadgeId` bei zwoelf. Es traegt
+  /// aber keine XP und keine Bonuswoche.
   static const int aufgabenFuerBoost = 8;
 
   static final Set<String> _gueltigeIds = aufgaben.map((a) => a.id).toSet();
@@ -296,6 +366,11 @@ class StarterAufgabenService extends ChangeNotifier {
   /// Badge-Vergabe in `GamificationService.calculateAndSync` fragt ihn bei
   /// JEDEM Sync ab und haengt das Abzeichen an, wenn es fehlt. Damit kommt es
   /// auch Wochen spaeter noch an.
+  ///
+  /// 2026-08-25: An DIESER Bedingung haengt die vollstaendige Belohnung —
+  /// badge_16 „Startklar", 1000 XP (`GamificationService.starterPaketBonusXp`)
+  /// und die Doppel-XP-Woche. Wer hier etwas aufteilt, hat wieder zwei
+  /// Belohnungen fuer dieselbe Sache.
   bool get paketVerdient => _paketVergeben || boostErreicht;
 
   /// Läuft die Doppel-XP-Woche gerade?
@@ -347,6 +422,41 @@ class StarterAufgabenService extends ChangeNotifier {
   /// App ist der Wert immer null und die Zeile kostet nichts.
   @visibleForTesting
   Future<void> Function()? ladeBremseFuerTests;
+
+  /// Nimmt die vier Ereignis-Aufgaben GENAU EIN MAL zurueck, siehe
+  /// [ruecksetzGeneration]. Gibt true zurueck, wenn dabei etwas entfernt
+  /// wurde — der Aufrufer muss dann speichern und hochladen.
+  ///
+  /// `_paketVergeben` und `_bonusEnde` bleiben ABSICHTLICH unangetastet: Wer
+  /// die Bonuswoche schon hat, soll sie behalten. Wuerde man sie mit
+  /// zuruecknehmen, liefe hier ein Countdown fuer eine zweite Woche, die der
+  /// Waechter `trg_guard_starter_bonus_ende` serverseitig gar nicht vergibt —
+  /// die Anzeige waere gelogen.
+  /// Die Abzeichen bleiben ohnehin, `profiles.badges` ist append-only.
+  Future<bool> _stelleEinmaligeRuecksetzungSicher() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final schluessel = NutzerPrefsSchluessel.fuer(_kRuecksetzGeneration);
+      final schonGelaufen = p.getInt(schluessel) ?? 0;
+      if (schonGelaufen >= ruecksetzGeneration) return false;
+
+      final vorher = _erledigt.length;
+      _erledigt.removeAll(_ruecksetzbareAufgaben);
+      await p.setInt(schluessel, ruecksetzGeneration);
+
+      final entfernt = vorher - _erledigt.length;
+      if (entfernt > 0) {
+        debugPrint('[Starter] Einmalige Ruecksetzung: $entfernt Aufgaben.');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      // Kein Speicher, kein Drama: dann laeuft die Ruecksetzung beim
+      // naechsten Start. Sie darf den Abgleich auf keinen Fall abbrechen.
+      debugPrint('[Starter] Ruecksetzung fehlgeschlagen: $e');
+      return false;
+    }
+  }
 
   Future<void> _ladeWirklich() async {
     final bremse = ladeBremseFuerTests;
@@ -548,6 +658,17 @@ class StarterAufgabenService extends ChangeNotifier {
     final vorherAlle = alleAufgabenErledigt;
     _erledigt.addAll(serverErledigt);
     if (_erledigt.length != vorher) geaendert = true;
+
+    // 2026-08-25 (vucko): „jeder soll die aufgaben alle nochmal machen".
+    //
+    // MUSS HIER STEHEN, nach der Vereinigung und vor dem Hochladen. Weiter
+    // oben waere sie wirkungslos: `addAll(serverErledigt)` holt die Haken
+    // eine Zeile spaeter zurueck. Weiter unten kaeme sie zu spaet fuers
+    // Hochladen, und der Server behielte den alten Stand.
+    // Danach schreibt der vorhandene `hoch[spalteAufgaben]`-Zweig den
+    // bereinigten Stand von selbst hoch — der Client korrigiert den Server,
+    // genau beim ersten Start dieses Builds.
+    if (await _stelleEinmaligeRuecksetzungSicher()) geaendert = true;
 
     if (serverEnde != null) {
       // 2026-08-24 (Aufgabe 4.1): Die zweite Bedingung („nur wenn das lokale

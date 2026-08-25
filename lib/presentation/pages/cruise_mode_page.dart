@@ -4629,8 +4629,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// fortgesetzte Fahrt wie ein Neuanfang bei null.
   String _fortsetzenMeldung() {
     final text = _zwischenstandText();
-    if (text == null) return 'Fahrt fortgesetzt — gute Weiterfahrt!';
-    return 'Fahrt fortgesetzt — $text zaehlen mit.';
+    if (text == null) return 'Fahrt fortgesetzt. Gute Weiterfahrt!';
+    return 'Fahrt fortgesetzt. $text zählen mit.';
   }
 
   String? _zwischenstandText() {
@@ -4749,7 +4749,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (text != null && mounted && !_disposed) {
       TopToast.show(
         context,
-        message: 'Weiter wie gehabt — $text zaehlen mit.',
+        message: 'Weiter wie gehabt. $text zählen mit.',
         icon: Icons.play_arrow_rounded,
         duration: const Duration(milliseconds: 3200),
       );
@@ -5608,7 +5608,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Hard-Cap auf 8 für sehr explorative User (mehr ist nicht sinnvoll).
     if (_roundTripWaypoints.length >= 8) {
       _showError(
-        'Max 8 Stopps technisch möglich. Aktiviere Trip-Modus für 5, sonst max 3.',
+        'Max 8 Stopps technisch möglich. Aktiviere den Tripmodus für 5, sonst max 3.',
         isCritical: false,
       );
       return;
@@ -5661,7 +5661,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Tipp: Trip-Modus',
+                      'Tipp: Tripmodus',
                       style: TextStyle(
                         color: AppAccentColors.accent,
                         fontSize: 18,
@@ -5673,7 +5673,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               ),
               const SizedBox(height: 16),
               const Text(
-                'Du planst eine Route mit Stopps. Hier dein Cheat-Sheet:',
+                'Du planst eine Route mit Stopps. Das Wichtigste in Kürze:',
                 style: TextStyle(color: Colors.white70, fontSize: 14),
               ),
               const SizedBox(height: 14),
@@ -5685,13 +5685,13 @@ class _CruiseModePageState extends State<CruiseModePage>
               const SizedBox(height: 10),
               _tutorialBullet(
                 '🗺️',
-                'Trip-Modus',
-                'Bis zu 5 Stopps, mit Pause/Resume, perfekt für Mehrtages-Touren',
+                'Tripmodus',
+                'Bis zu 5 Stopps, mit Pause und Fortsetzen, perfekt für mehrtägige Touren',
               ),
               const SizedBox(height: 10),
               _tutorialBullet(
                 '💾',
-                'Auto-Save',
+                'Automatisch gespeichert',
                 'Trip wird gespeichert, du kannst später im Homescreen weitermachen',
               ),
               const SizedBox(height: 20),
@@ -5710,7 +5710,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     ),
                   ),
                   child: const Text(
-                    'Trip-Modus aktivieren (5 Stopps)',
+                    'Tripmodus aktivieren (5 Stopps)',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 15,
@@ -5798,7 +5798,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                       ),
                     ),
                     child: const Text(
-                      'Trip-Modus aktivieren',
+                      'Tripmodus aktivieren',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 14,
@@ -7973,7 +7973,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     if (_gpsWeak)
                       _buildStatusPill(
                         Icons.satellite_alt_rounded,
-                        'GPS-Signal schwach',
+                        'GPS schwach',
                       ),
                     if (_gpsWeak && _offline) const SizedBox(height: 8),
                     if (_offline)
@@ -8142,7 +8142,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       button: true,
       label: widget.groupId != null
           ? 'Zurück zur Gruppe'
-          : 'Zurück zum Strecken-Setup',
+          : 'Zurück zur Streckenplanung',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -8167,7 +8167,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       button: true,
       label: widget.groupId != null
           ? 'Zurück zur Gruppe'
-          : 'Zurück zum Strecken-Setup',
+          : 'Zurück zur Streckenplanung',
       child: Container(
         width: 46,
         height: 46,
@@ -9108,7 +9108,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                     _isRecordingMode
                         ? 'Aufzeichnung starten'
                         : _isWaypointPlanning
-                        ? 'Wegpunkt-Route suchen'
+                        ? 'Route mit Stopps suchen'
                         : _isRoundTrip
                         ? 'Rundkurs suchen'
                         : 'Route berechnen',
@@ -9290,7 +9290,7 @@ class _CruiseModePageState extends State<CruiseModePage>
                   TopToast.show(
                     context,
                     message: enabled
-                        ? 'Trip-Modus aktiv · bis 5 Stopps, beliebig weit'
+                        ? 'Tripmodus aktiv · bis 5 Stopps, beliebig weit'
                         : 'Standard · bis 3 Stopps für schnelle Rundkurse',
                     icon: enabled
                         ? Icons.compass_calibration
@@ -9738,7 +9738,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final openSettings = await _showLocationPermissionDialog(
         title: 'Standort blockiert',
         message:
-            'Bitte erlaube Cruise Connector den Standortzugriff in den App-Einstellungen.',
+            'Bitte erlaube Cruise Connector den Standortzugriff in den Einstellungen der App.',
         confirmLabel: 'Einstellungen öffnen',
       );
       if (openSettings) {
@@ -9893,7 +9893,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final msg = e.toString().toLowerCase();
       if (msg.contains('denied') || msg.contains('permission')) {
         throw Exception(
-          'Bitte erlaube den Standortzugriff in deinen Browser-/Geräteeinstellungen und lade die Seite neu.',
+          'Bitte erlaube den Standortzugriff in deinem Browser oder in den Einstellungen des Geräts und lade die Seite neu.',
         );
       }
       rethrow;
@@ -10119,8 +10119,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         _roundTripWaypoints.length > _currentMaxWaypoints) {
       final extra = _roundTripWaypoints.length - _currentMaxWaypoints;
       final hint = _tripModeEnabled
-          ? 'Im Trip-Modus max 5 Stopps. Du hast $extra zu viel.'
-          : 'Im Standard max 3 Stopps. Aktiviere Trip-Modus für bis zu 5, oder entferne $extra Stopp${extra > 1 ? "s" : ""}.';
+          ? 'Im Tripmodus max 5 Stopps. Du hast $extra zu viel.'
+          : 'Im Standard max 3 Stopps. Aktiviere den Tripmodus für bis zu 5, oder entferne $extra Stopp${extra > 1 ? "s" : ""}.';
       _showWaypointLimitDialog(hint);
       return;
     }
@@ -10188,8 +10188,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           (waypointSnapshot.isEmpty ||
               waypointSnapshot.length > _currentMaxWaypoints)) {
         final tooManyMsg = _tripModeEnabled
-            ? 'Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp.'
-            : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Aktiviere Trip-Modus oben für bis zu 5.';
+            ? 'Im Tripmodus max $_currentMaxWaypoints Stopps. Entferne einen Stopp.'
+            : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Aktiviere oben den Tripmodus für bis zu 5.';
         _restoreGeneratedRouteFailureUi(
           previousUiState,
           waypointSnapshot.isEmpty
@@ -11960,8 +11960,8 @@ class _CruiseModePageState extends State<CruiseModePage>
     // Limit kennen (3 Standard, 5 Trip-Modus). Vorher fest "drei" verdrahtet,
     // was im Trip-Modus mit 5 Stopps fälschlich getriggert wurde.
     final tooManyMsg = _tripModeEnabled
-        ? 'Im Trip-Modus max $_currentMaxWaypoints Stopps. Entferne einen Stopp und versuche es erneut.'
-        : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Tippe oben auf "Trip-Modus" für bis zu 5 Stopps.';
+        ? 'Im Tripmodus max $_currentMaxWaypoints Stopps. Entferne einen Stopp und versuche es erneut.'
+        : 'Standard erlaubt max $_currentMaxWaypoints Stopps. Tippe oben auf "Tripmodus" für bis zu 5 Stopps.';
     final message = switch (code) {
       'waypoint_too_far' =>
         'Wir konnten die Stopps noch nicht sauber an Straßen anbinden. Setze einen Stopp näher an eine Straße oder lass neue Stopps vorschlagen.',
@@ -12361,7 +12361,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
         content: Text(
-          'Die Tour wird beendet und aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert.',
+          'Die Tour wird beendet und verschwindet aus der Liste zum Fortsetzen. Deine gefahrenen Strecken bleiben unverändert.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
         ),
         actions: [
@@ -12699,7 +12699,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (mounted && !_disposed) {
       TopToast.show(
         context,
-        message: 'Aufzeichnung läuft — gute Fahrt!',
+        message: 'Aufzeichnung läuft. Gute Fahrt!',
         icon: Icons.fiber_manual_record_rounded,
         duration: const Duration(milliseconds: 2400),
       );
@@ -12718,7 +12718,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!drivenSnap.hasDrawableTrack) {
       TopToast.show(
         context,
-        message: 'Zu wenig aufgezeichnet — keine Strecke gespeichert.',
+        message: 'Zu wenig aufgezeichnet. Es wurde keine Strecke gespeichert.',
         icon: Icons.info_outline_rounded,
         duration: const Duration(milliseconds: 3000),
       );
@@ -13015,7 +13015,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         message: (geladen && !geschlossen)
             ? 'Du wirst zuerst zum Startpunkt der Route geführt. '
                   'So fährst du die Strecke komplett.'
-            : 'Anfahrts-Abschnitt aktiv. Danach geht es auf die gespeicherte Route.',
+            : 'Die Anfahrt läuft. Danach geht es auf die gespeicherte Route.',
         icon: Icons.route_rounded,
         // 2026-06-24 (vucko Video): bei aktiver Navigation UNTER das Manöver-
         // Banner, damit es z.B. eine Kreisverkehr-Ansage nicht verdeckt.
@@ -13519,14 +13519,14 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   String _rerouteFailureUserMessage(List<String> causes) {
     if (causes.any((c) => c.startsWith('start_offset'))) {
-      return 'Reroute verworfen: Server-Route startete zu weit entfernt. Folge der Linie, der nächste Versuch kommt automatisch.';
+      return 'Neuberechnung verworfen: Die Route vom Server startete zu weit entfernt. Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     final last = causes.isNotEmpty ? causes.last : '';
     if (last.startsWith('timeout') || last.startsWith('network')) {
       return 'Reroute gerade nicht möglich (Netz/Server). Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     if (last.startsWith('edge_error')) {
-      return 'Reroute-Server meldet einen Fehler. Folge der Linie, der nächste Versuch kommt automatisch.';
+      return 'Der Server meldet bei der Neuberechnung einen Fehler. Folge der Linie, der nächste Versuch kommt automatisch.';
     }
     if (last.startsWith('no_route') || last == 'no_candidate') {
       return 'Keine Anschlussroute gefunden. Folge der Linie, wende erst bei sicherer Möglichkeit.';
@@ -16800,7 +16800,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (lat == null || lng == null) {
       TopToast.show(
         context,
-        message: 'Keine GPS-Position, bitte gleich nochmal versuchen.',
+        message: 'Noch keine Position vom GPS, bitte gleich nochmal versuchen.',
         isError: true,
       );
       return;
@@ -21290,7 +21290,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         ));
       }
       final title = waypoints.length >= 2
-          ? '${waypoints.length}-Stop Tour'
+          ? 'Tour mit ${waypoints.length} Stopps'
           : 'Tour';
       final tripId = await TripService.instance.createTrip(
         title: title,
@@ -21580,7 +21580,7 @@ class _SegmentedTabs extends StatelessWidget {
                 onTap: () => onSelect(false),
               ),
               _SegTab(
-                label: 'Trip-Modus',
+                label: 'Tripmodus',
                 icon: CupertinoIcons.map_pin_ellipse,
                 width: tabWidth,
                 height: tabHeight + 4,

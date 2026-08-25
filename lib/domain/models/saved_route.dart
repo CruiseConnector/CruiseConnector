@@ -347,7 +347,7 @@ class SavedRoute {
       final suffix = ratingCount == 1 ? 'Bewertung' : 'Bewertungen';
       return '$scoreText · $ratingCount $suffix';
     }
-    return '$scoreText Route-Score';
+    return '$scoreText Punkte';
   }
 
   String? get ratingTrustLabel {

@@ -274,7 +274,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       return false;
     } on TimeoutException {
       _showError(
-        'Der @-Name konnte gerade nicht gespeichert werden. Prüfe deine '
+        'Dein Nutzername konnte gerade nicht gespeichert werden. Prüfe deine '
         'Verbindung und tippe nochmal auf „Weiter".',
       );
       return false;
@@ -451,7 +451,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   Future<bool> _verifyCode() async {
     final code = _codeCtrl.text.trim();
     if (code.length < 6) {
-      setState(() => _codeErr = 'Bitte gib den 6-stelligen Code ein.');
+      setState(() => _codeErr = 'Bitte gib den sechsstelligen Code ein.');
       return false;
     }
     setState(() {
@@ -1049,13 +1049,13 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             accent,
             Icons.groups_rounded,
             'Cruise mit Freunden',
-            'Live-Standort, Gruppen-Navigation, gemeinsam fahren.',
+            'Standort live sehen, gemeinsam navigieren, zusammen fahren.',
           ),
           _welcomePoint(
             accent,
             Icons.emoji_events_rounded,
             'Sammle XP & teile Fahrten',
-            'Streaks, Statistiken und Story-Sharing.',
+            'Streaks, Statistiken und Fahrten als Story teilen.',
           ),
         ],
       ),
@@ -1117,7 +1117,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _fieldLabel('E-Mail Adresse'),
+          _fieldLabel('E-Mail-Adresse'),
           TextField(
             controller: _emailCtrl,
             keyboardType: TextInputType.emailAddress,
@@ -1219,12 +1219,12 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       icon: Icons.mark_email_read_rounded,
       title: 'Bestätige deine E-Mail',
       subtitle:
-          'Wir haben dir einen 6-stelligen Code an $_pendingEmail geschickt. '
+          'Wir haben dir einen sechsstelligen Code an $_pendingEmail geschickt. '
           'Gib ihn hier ein, du bleibst angemeldet und machst direkt weiter.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _fieldLabel('6-stelliger Code'),
+          _fieldLabel('Sechsstelliger Code'),
           TextField(
             controller: _codeCtrl,
             keyboardType: TextInputType.number,
@@ -1264,7 +1264,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
               SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Keine Mail erhalten? Sieh auch im Spam-Ordner nach.',
+                  'Keine Mail erhalten? Sieh auch im Spamordner nach.',
                   style: TextStyle(color: _muted, fontSize: 12.5, height: 1.35),
                 ),
               ),
@@ -1346,10 +1346,10 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     return _stepShell(
       accent: accent,
       icon: Icons.tag_rounded,
-      title: 'Wähl deinen @-Namen',
+      title: 'Wähl deinen Nutzernamen',
       subtitle:
-          'Dein eindeutiger Handle, daran finden dich andere. 3 bis 20 Zeichen, '
-          'Buchstaben (auch ä ö ü ß), Zahlen und _.',
+          'Er ist einmalig, daran finden dich andere. 3 bis 20 Zeichen, '
+          'Buchstaben (auch ä ö ü ß), Zahlen und Unterstrich.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1487,8 +1487,8 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       icon: Icons.badge_rounded,
       title: 'Wie sollen dich\nandere sehen?',
       subtitle:
-          'Dein Anzeigename ohne @. Den kannst du jederzeit ändern, der '
-          '@-Name bleibt fest.',
+          'Dein Anzeigename ohne @. Den kannst du jederzeit ändern, dein '
+          'Nutzername bleibt fest.',
       child: TextField(
         controller: _displayCtrl,
         textCapitalization: TextCapitalization.words,
@@ -1804,7 +1804,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             const Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'Folge ein paar Leuten — dann ist die Community von Anfang an '
+                'Folge ein paar Leuten. Dann ist die Community von Anfang an '
                 'lebendig.',
                 style: TextStyle(color: _muted, fontSize: 13, height: 1.35),
               ),

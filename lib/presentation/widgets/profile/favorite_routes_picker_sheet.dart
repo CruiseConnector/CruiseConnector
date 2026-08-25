@@ -240,7 +240,7 @@ class _FavoriteRoutesPickerSheetState extends State<FavoriteRoutesPickerSheet> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Fahr eine Route und speichere sie — danach kannst du sie hier '
+              'Fahr eine Route und speichere sie. Danach kannst du sie hier '
               'an dein Profil pinnen.',
               textAlign: TextAlign.center,
               style: TextStyle(

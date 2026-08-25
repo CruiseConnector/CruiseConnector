@@ -183,7 +183,7 @@ void main() {
     final alles = '${lauf.titel.join(' | ')} || ${lauf.koerper.join(' | ')}';
 
     // Startseite: Starter-Paket UND Fortschritts-Kacheln.
-    expect(alles, contains('Starter-Paket'));
+    expect(alles, contains('Starterpaket'));
     expect(alles, contains('Kacheln'));
     // Was nach der Fahrt passiert.
     expect(alles, contains('Fahrt beenden'));
@@ -226,7 +226,7 @@ void main() {
     expect(alles, contains('Beispielroute'));
     // Und der Hinweis, wo die Aufgabe wirklich abgehakt wird.
     expect(
-      RegExp('Starter-Aufgabe').allMatches(alles).length,
+      RegExp('Aufgabe im Starterpaket').allMatches(alles).length,
       greaterThanOrEqualTo(2),
       reason: 'beide Attrappen muessen es sagen, nicht nur eine',
     );

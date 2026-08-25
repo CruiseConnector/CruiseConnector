@@ -42,8 +42,25 @@ void main() {
     };
   }
 
+  /// 2026-08-25: Seit der einmaligen Ruecksetzung (vucko: „jeder soll die
+  /// aufgaben alle nochmal machen") nimmt `synchronisiereMitProfil` beim
+  /// ALLERERSTEN Lauf die vier Ereignis-Aufgaben zurueck. In einem Test
+  /// beginnt der Geraetespeicher immer leer, der Rücksetzer wuerde also in
+  /// JEDEM Fall feuern und die Faelle hier messen etwas anderes als gemeint.
+  ///
+  /// Die Faelle in dieser Datei pruefen den ABGLEICH, nicht die Ruecksetzung.
+  /// Deshalb steht der Zaehler auf „schon gelaufen". Der Ruecksetzer hat
+  /// seine eigene Gruppe ganz unten.
+  Map<String, Object> mitRuecksetzungErledigt([
+    Map<String, Object> weitere = const {},
+  ]) => {
+    'starter_aufgaben_ruecksetz_generation':
+        StarterAufgabenService.ruecksetzGeneration,
+    ...weitere,
+  };
+
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt());
     dienst.resetForTests();
     serverProfil = <String, dynamic>{
       StarterAufgabenService.spalteAufgaben: <String>[],
@@ -58,9 +75,9 @@ void main() {
       'tutorial',
       'community',
     ];
-    SharedPreferences.setMockInitialValues({
+    SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt({
       'starter_aufgaben_erledigt_v1': '["route","favorit"]',
-    });
+    }));
     await dienst.load();
     await dienst.synchronisiereMitProfil();
 
@@ -121,11 +138,11 @@ void main() {
 
   test('alles erledigt, Server kennt noch nichts: Woche startet und wandert '
       'hoch', () async {
-    SharedPreferences.setMockInitialValues({
+    SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt({
       'starter_aufgaben_erledigt_v1':
           '["tutorial","route","favorit","speichern","community","runde",'
           '"post","gruppenfahrt"]',
-    });
+    }));
     await dienst.load();
     expect(dienst.boostErreicht, isTrue);
     expect(dienst.bonusEnde, isNull);
@@ -152,9 +169,9 @@ void main() {
 
   test('ein Serverfehler beim Lesen laesst den Geraetestand unberuehrt', () async {
     dienst.profilLeserFuerTests = () async => throw StateError('kein Netz');
-    SharedPreferences.setMockInitialValues({
+    SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt({
       'starter_aufgaben_erledigt_v1': '["route","favorit"]',
-    });
+    }));
     await dienst.load();
     await dienst.synchronisiereMitProfil();
     expect(dienst.erledigtAnzahl, 2);
@@ -227,10 +244,10 @@ void main() {
     // statt der Bonuswoche.
     test('Wettlauf auf der Startseite: der Server gewinnt', () async {
       setzeMigrationsZustand();
-      SharedPreferences.setMockInitialValues({
+      SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt({
         'starter_aufgaben_erledigt_v1': '["tutorial"]',
         'starter_paket_vergeben_v1': false,
-      });
+      }));
 
       // Der Wettlauf haengt davon ab, WER zuerst fertig ist. In der App ist
       // das der Geraetespeicher oder das Netz, je nach Tag. Damit der Test
@@ -267,10 +284,10 @@ void main() {
           .toIso8601String();
       // Der Geraetespeicher kennt dasselbe Ende, hat aber das Flag verloren
       // (App waehrend des Speicherns beendet).
-      SharedPreferences.setMockInitialValues({
+      SharedPreferences.setMockInitialValues(mitRuecksetzungErledigt({
         'starter_bonus_ende_v1': ende.toIso8601String(),
         'starter_paket_vergeben_v1': false,
-      });
+      }));
 
       await dienst.load();
       await dienst.synchronisiereMitProfil();
@@ -283,6 +300,93 @@ void main() {
             'ohne das faellt spaeter das Startklar-Abzeichen weg',
       );
       expect(dienst.paketVerdient, isTrue);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 2026-08-25: Die einmalige Ruecksetzung
+  // ------------------------------------------------------------------
+  //
+  // vucko am 25.08.: „jeder soll die aufgaben alle nochmal machen".
+  //
+  // GEMESSEN vorher: 200 von 202 Profilen haben eine LEERE Aufgabenliste —
+  // dort gibt es nichts zurueckzusetzen. Deshalb steht das hier im Client
+  // und nicht als Migration: eine Datenbank-Aenderung waere fuer fast alle
+  // wirkungslos gewesen und haette trotzdem so ausgesehen, als taete sie was.
+  group('Die einmalige Ruecksetzung', () {
+    test('nimmt die vier Ereignis-Aufgaben zurueck, die anderen NICHT', () async {
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>[
+        // ruecksetzbar
+        'tutorial', 'route', 'favorit', 'community',
+        // aus dem Serverzustand abgeleitet, muss bleiben
+        'garage', 'runde', 'post', 'km50',
+      ];
+      SharedPreferences.setMockInitialValues({}); // Zaehler NICHT gesetzt
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+
+      for (final id in ['tutorial', 'route', 'favorit', 'community']) {
+        expect(dienst.erledigt(id), isFalse,
+            reason: '$id haengt an einem Ereignis und muss zurueckgesetzt sein');
+      }
+      for (final id in ['garage', 'runde', 'post', 'km50']) {
+        expect(dienst.erledigt(id), isTrue,
+            reason: '$id kommt aus dem Serverzustand — ein Reset waere '
+                'entweder wirkungslos oder wuerde echte Leistung wegnehmen');
+      }
+    });
+
+    test('der bereinigte Stand wandert zum Server hoch', () async {
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>[
+        'tutorial', 'route', 'garage',
+      ];
+      SharedPreferences.setMockInitialValues({});
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+
+      expect(
+        (serverProfil[StarterAufgabenService.spalteAufgaben] as List).toSet(),
+        {'garage'},
+        reason: 'ohne das Hochschreiben holt der Server die Haken beim '
+            'naechsten Start sofort zurueck',
+      );
+    });
+
+    test('laeuft GENAU EIN MAL, nicht bei jedem Start', () async {
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>['tutorial'];
+      SharedPreferences.setMockInitialValues({});
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+      expect(dienst.erledigt('tutorial'), isFalse);
+
+      // Zweiter Start: der Nutzer hat das Tutorial inzwischen wieder gemacht.
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>['tutorial'];
+      dienst.resetForTests();
+      // resetForTests() haengt auch die Test-Server-Attrappe ab (Zeile 788).
+      // Ohne das Wiederanhaengen liefe der zweite Abgleich ins Leere und der
+      // Test waere gruen, ohne irgendetwas zu messen.
+      haengeServerAn();
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+      expect(dienst.erledigt('tutorial'), isTrue,
+          reason: 'ein zweites Zuruecksetzen waere eine Endlosschleife');
+    });
+
+    test('die laufende Bonuswoche wird NICHT mitgerissen', () async {
+      final ende = DateTime.now().add(const Duration(days: 4));
+      serverProfil[StarterAufgabenService.spalteBonusEnde] =
+          ende.toUtc().toIso8601String();
+      serverProfil[StarterAufgabenService.spalteAufgaben] = <String>[
+        'tutorial', 'route', 'favorit', 'community',
+      ];
+      SharedPreferences.setMockInitialValues({});
+      await dienst.load();
+      await dienst.synchronisiereMitProfil();
+
+      expect(dienst.doppelXpAktiv, isTrue,
+          reason: 'wer die Woche hat, behaelt sie — sonst liefe ein Countdown '
+              'fuer eine zweite Woche, die der Server gar nicht vergibt');
+      expect(dienst.bonusEnde!.difference(ende).inSeconds.abs(), lessThan(2));
     });
   });
 }

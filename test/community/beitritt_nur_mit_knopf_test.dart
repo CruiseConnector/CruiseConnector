@@ -374,7 +374,7 @@ void main() {
 
     test('privat: der Satz des Dienstes bleibt stehen', () {
       const satz =
-          'Diese Community ist privat. Nutze den Invite-Code vom Leader.';
+          'Diese Community ist privat. Nutze den Einladungscode vom Leader.';
       expect(beitrittsFehlerText(satz), satz);
     });
 

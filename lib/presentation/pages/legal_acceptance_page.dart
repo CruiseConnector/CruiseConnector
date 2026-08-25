@@ -193,7 +193,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
       if (!mounted) return;
       setState(
         () => _error =
-            'Bestätigung konnte nicht gespeichert werden — vermutlich fehlt '
+            'Bestätigung konnte nicht gespeichert werden, vermutlich fehlt '
             'gerade die Verbindung. Sie ist gemerkt: bitte erneut versuchen '
             'oder die App später noch einmal starten.',
       );
@@ -293,7 +293,7 @@ class _LegalAcceptancePageState extends State<LegalAcceptancePage> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'AGB und Datenschutz werden getrennt behandelt. Es gibt keine Newsletter- oder Marketing-Einwilligung in diesem Schritt.',
+                    'AGB und Datenschutz werden getrennt behandelt. In diesem Schritt stimmst du weder einem Newsletter noch Werbung zu.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: _legalTextMuted,
@@ -534,9 +534,9 @@ class _LinkFallback extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Auf diesem Gerät lässt sich kein Browser öffnen — zum Beispiel '
-            'weil Bildschirmzeit oder eine Geräteverwaltung Web-Inhalte '
-            'sperrt. Du kommst hier trotzdem weiter:',
+            'Auf diesem Gerät lässt sich kein Browser öffnen, zum Beispiel '
+            'weil Bildschirmzeit oder eine Geräteverwaltung Inhalte aus dem '
+            'Netz sperrt. Du kommst hier trotzdem weiter:',
             style: TextStyle(
               color: _legalTextMuted,
               fontSize: 12.5,
@@ -567,7 +567,7 @@ class _LinkFallback extends StatelessWidget {
                 TextButton.icon(
                   onPressed: onConfirmLink,
                   icon: const Icon(Icons.check_rounded, size: 16),
-                  label: const Text('Adresse notiert — Häkchen freigeben'),
+                  label: const Text('Adresse notiert, Häkchen freigeben'),
                   style: TextButton.styleFrom(foregroundColor: accent),
                 )
               else

@@ -25,7 +25,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get languageEnglish => 'English';
 
   @override
-  String get languageSystemHint => 'Vorgeschlagen nach deiner Geräte-Sprache';
+  String get languageSystemHint => 'Vorgeschlagen nach der Sprache deines Geräts';
 
   @override
   String get settingsLanguage => 'Sprache';
@@ -59,7 +59,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String loginVerificationResent(String email) {
-    return 'Bestätigungs-E-Mail an $email erneut gesendet.';
+    return 'Bestätigungsmail an $email erneut gesendet.';
   }
 
   @override
@@ -87,7 +87,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get authSignIn => 'Anmelden';
 
   @override
-  String get authEmailLabel => 'E-Mail Adresse';
+  String get authEmailLabel => 'E-Mail-Adresse';
 
   @override
   String get authEmailHint => 'deine@email.de';
@@ -191,19 +191,19 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get resetPasswordEnterEmail =>
-      'Gib deine E-Mail-Adresse ein. Wir schicken dir einen 6-stelligen Code, mit dem du ein neues Passwort setzt.';
+      'Gib deine E-Mail-Adresse ein. Wir schicken dir einen sechsstelligen Code, mit dem du ein neues Passwort setzt.';
 
   @override
   String get resetPasswordCodeStepTitle => 'Code eingeben';
 
   @override
   String resetPasswordCodeStepSubtitle(String email) {
-    return 'Falls ein Konto mit $email existiert, haben wir dir einen 6-stelligen Code geschickt.';
+    return 'Falls ein Konto mit $email existiert, haben wir dir einen sechsstelligen Code geschickt.';
   }
 
   @override
   String resetPasswordNewStepSubtitle(int min) {
-    return 'Wähl ein neues Passwort — mindestens $min Zeichen.';
+    return 'Wähl ein neues Passwort mit mindestens $min Zeichen.';
   }
 
   @override
@@ -217,11 +217,11 @@ class AppLocalizationsDe extends AppLocalizations {
   String get resetPasswordSendCode => 'Code senden';
 
   @override
-  String get resetPasswordCodeLabel => '6-stelliger Code';
+  String get resetPasswordCodeLabel => 'sechsstelliger Code';
 
   @override
   String get resetPasswordSpamHint =>
-      'Keine Mail erhalten? Sieh auch im Spam-Ordner nach.';
+      'Keine Mail erhalten? Sieh auch im Spamordner nach.';
 
   @override
   String get resetPasswordResend => 'Code erneut senden';
@@ -258,7 +258,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get resetPasswordErrorCodeMissing =>
-      'Bitte gib den 6-stelligen Code ein.';
+      'Bitte gib den sechsstelligen Code ein.';
 
   @override
   String get resetPasswordErrorCodeInvalid => 'Code ungültig oder abgelaufen.';

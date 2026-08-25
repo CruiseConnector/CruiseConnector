@@ -145,7 +145,7 @@ class _PostAuthGateState extends State<PostAuthGate> {
             zeigeAusweg: _zeigeAusweg,
             meldetAb: _meldetAb,
             hinweis:
-                'Das dauert länger als sonst. Prüfe deine Verbindung — oder '
+                'Das dauert länger als sonst. Prüfe deine Verbindung, oder '
                 'geh einfach weiter, wir holen das später nach.',
             erneutVersuchen: _erneutVersuchen,
             trotzdemZurApp: _trotzdemZurApp,

@@ -323,7 +323,7 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
             style: TextStyle(color: Colors.white),
           ),
           content: Text(
-            'Wenn du "${route.name ?? route.style}" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts.',
+            'Wenn du "${route.name ?? route.style}" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive der Posts in Communities und in deren Chats.',
             style: const TextStyle(color: Colors.grey),
           ),
           actions: [

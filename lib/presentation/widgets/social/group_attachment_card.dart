@@ -133,7 +133,7 @@ class _GroupAttachmentCardState extends State<GroupAttachmentCard> {
           _hasPendingRequest = true;
           _busy = false;
         });
-        _showSnack('Beitritts-Anfrage gesendet.');
+        _showSnack('Anfrage zum Beitritt gesendet.');
       }
     } catch (e) {
       if (!mounted) return;

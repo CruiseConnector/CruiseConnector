@@ -210,7 +210,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
           // das Foto wirklich gesichert wurde (oder eben nicht).
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(ok ? 'Foto gespeichert ✓' : 'Foto-Speichern fehlgeschlagen'),
+              content: Text(ok ? 'Foto gespeichert ✓' : 'Foto konnte nicht gespeichert werden'),
               backgroundColor: const Color(0xFF1C1F26),
               duration: const Duration(seconds: 2),
             ),
@@ -222,7 +222,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
         // versuchen muss (kein „verschwundenes" Foto).
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Foto-Upload fehlgeschlagen, bitte erneut versuchen.'),
+            content: Text('Foto konnte nicht hochgeladen werden, bitte erneut versuchen.'),
             backgroundColor: Color(0xFF1C1F26),
             duration: Duration(seconds: 3),
           ),
@@ -638,7 +638,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
       _statTile('Distanz', _formatDistance(_s.distanceKm), Icons.map_rounded, accent),
       _statTile('Dauer', _formatDuration(_s.durationSeconds), Icons.timer_rounded, accent),
       _statTile(
-        'Top-Speed',
+        'Höchsttempo',
         topSpeed != null && topSpeed > 0
             ? '${topSpeed.toStringAsFixed(0)} km/h'
             : '—',
@@ -737,7 +737,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
               Icon(Icons.emoji_events_rounded, color: accent, size: 18),
               const SizedBox(width: 8),
               const Text(
-                'Gruppen-Rangliste',
+                'Rangliste der Gruppe',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 15,
@@ -772,7 +772,7 @@ class _RideDetailPageState extends State<RideDetailPage> {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 14),
               child: Text(
-                'Noch keine Ranglisten-Daten für diese Gruppe.',
+                'Für diese Gruppe gibt es noch keine Rangliste.',
                 style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
               ),
             )

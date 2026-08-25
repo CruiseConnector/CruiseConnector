@@ -505,7 +505,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
         actions: [
           if (_group != null)
             IconButton(
-              tooltip: 'Gruppen-Chat',
+              tooltip: 'Chat der Gruppe',
               onPressed: _openChat,
               icon: const Icon(
                 Icons.chat_bubble_outline_rounded,
@@ -746,7 +746,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Gruppen-Chat',
+                    'Chat der Gruppe',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -799,7 +799,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               Icon(Icons.emoji_events, color: AppAccentColors.accent, size: 20),
               const SizedBox(width: 8),
               const Text(
-                'Gruppen-Rangliste',
+                'Rangliste der Gruppe',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -812,7 +812,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
           const Padding(
             padding: EdgeInsets.only(left: 28),
             child: Text(
-              'Eure gefahrene Strecke & Top-Speed',
+              'Eure gefahrene Strecke und die höchste Geschwindigkeit',
               style: TextStyle(color: Colors.white38, fontSize: 12),
             ),
           ),
@@ -992,7 +992,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Gruppen-Code',
+                  'Code der Gruppe',
                   style: TextStyle(color: Colors.grey, fontSize: 12),
                 ),
                 const SizedBox(height: 2),
@@ -1125,7 +1125,7 @@ class _GroupLobbyPageState extends State<GroupLobbyPage> {
               const Icon(Icons.how_to_reg, color: Colors.orange, size: 20),
               const SizedBox(width: 8),
               Text(
-                'Offene Beitritts-Anfragen (${_pendingRequests.length})',
+                'Offene Anfragen zum Beitritt (${_pendingRequests.length})',
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,

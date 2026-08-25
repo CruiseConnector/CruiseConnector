@@ -29,7 +29,7 @@ Future<void> showAccentColorPicker(BuildContext context) {
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    'Aendert Buttons, Tabs, Icons und aktive App-Elemente.',
+                    'Ändert Knöpfe, Reiter, Symbole und aktive Elemente der App.',
                     style: TextStyle(color: Color(0xFFA0AEC0), fontSize: 13),
                   ),
                   const SizedBox(height: 18),

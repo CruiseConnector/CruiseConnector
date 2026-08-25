@@ -331,15 +331,15 @@ function renderPush(
       };
     case 'group_invite':
       return {
-        title: 'Gruppen-Einladung',
+        title: 'Einladung zur Gruppe',
         body: `${name} lädt dich zu ${
           (payload.group_name as string) ?? 'einer Gruppe'
         } ein`,
       };
     case 'group_ride_started':
       return {
-        title: 'Gruppen-Ride gestartet',
-        body: `${name} fährt jetzt los — schließ dich an`,
+        title: 'Die Gruppe fährt los',
+        body: `${name} fährt jetzt los, schließ dich an`,
       };
     case 'group_public_created':
       return {

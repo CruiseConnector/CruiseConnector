@@ -267,7 +267,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
           SocialService.deleteCommunityAsset(publicUrl: vorherigeUrl),
         );
       }
-      _showMessage('Community-Bild gespeichert.');
+      _showMessage('Das Bild der Community ist gespeichert.');
     } catch (e) {
       debugPrintCommunity('Bild-Upload fehlgeschlagen: $e');
       _showError(e, fallback: CommunityImageRules.hochladenFehlgeschlagen);
@@ -291,7 +291,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
         _community = {...?_community, 'avatar_url': null};
         _changed = true;
       });
-      _showMessage('Community-Bild entfernt.');
+      _showMessage('Das Bild der Community ist entfernt.');
     } catch (e) {
       _showError(e, fallback: 'Bild konnte nicht entfernt werden.');
     } finally {
@@ -352,7 +352,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
       aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
       uiSettings: [
         AndroidUiSettings(
-          toolbarTitle: 'Community-Bild zuschneiden',
+          toolbarTitle: 'Bild zuschneiden',
           toolbarColor: const Color(0xFF0B0E14),
           toolbarWidgetColor: Colors.white,
           activeControlsWidgetColor: AppAccentColors.accent,
@@ -363,7 +363,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
           aspectRatioPresets: const [CropAspectRatioPreset.square],
         ),
         IOSUiSettings(
-          title: 'Community-Bild zuschneiden',
+          title: 'Bild zuschneiden',
           aspectRatioLockEnabled: true,
           resetAspectRatioEnabled: false,
           cropStyle: CropStyle.rectangle,
@@ -796,7 +796,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
           backgroundColor: const Color(0xFF0B0E14),
           foregroundColor: Colors.white,
           title: const Text(
-            'Community-Einstellungen',
+            'Einstellungen der Community',
             style: TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
@@ -897,7 +897,7 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
   Widget _buildImageSection() {
     final hasImage = CommunityChatService.avatarUrl(_community) != null;
     return _buildCard(
-      title: 'Community-Bild',
+      title: 'Bild der Community',
       subtitle:
           'Das Bild steht auf der Kachel in der Übersicht und oben im Chat. '
           'Erlaubt sind JPG, PNG und WEBP bis 5 MB.',
@@ -1594,10 +1594,10 @@ class CommunityImageRules {
       'Hochladen fehlgeschlagen. Prüfe deine Verbindung und versuche es noch einmal.';
 
   static const String keinKameraZugriff =
-      'Kein Kamera-Zugriff. Bitte erlaube ihn in den Einstellungen.';
+      'Kein Zugriff auf die Kamera. Bitte erlaube ihn in den Einstellungen.';
 
   static const String keinGalerieZugriff =
-      'Kein Galerie-Zugriff. Bitte erlaube ihn in den Einstellungen.';
+      'Kein Zugriff auf die Galerie. Bitte erlaube ihn in den Einstellungen.';
 
   /// Liefert null, wenn das Bild in Ordnung ist, sonst den Satz für den Nutzer.
   static String? fehlerFuer({

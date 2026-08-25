@@ -78,7 +78,7 @@ void main() {
       expect(find.text('120 XP'), findsOneWidget);
       expect(find.text('×2,30'), findsOneWidget);
       expect(
-        find.text('2,00 Doppel-XP-Woche + 0,30 für 3 Tage Streak'),
+        find.text('2,00 für doppelte XP + 0,30 für 3 Tage Streak'),
         findsOneWidget,
       );
     });
@@ -103,7 +103,8 @@ void main() {
       expect(find.text('= 156 XP'), findsOneWidget);
       expect(find.text('×1,30'), findsOneWidget);
       expect(find.text('3 Tage Streak · 0,30 extra'), findsOneWidget);
-      expect(find.textContaining('Doppel-XP'), findsNothing);
+      expect(find.textContaining('doppelte XP'), findsNothing);
+      expect(find.textContaining('Doppelte XP'), findsNothing);
     });
 
     testWidgets('Ohne Streak und ohne Bonus bleibt die Rechnung weg', (
@@ -390,24 +391,24 @@ void main() {
     test('Restlaufzeit nennt immer die sieben Tage', () {
       expect(
         bonusLaufzeitText(const Duration(days: 6, hours: 3)),
-        'Doppel-XP-Woche · noch 6 Tage 3 Stunden von sieben Tagen',
+        'Doppelte XP · noch 6 Tage 3 Stunden von sieben Tagen',
       );
       expect(
         bonusLaufzeitText(const Duration(days: 1, hours: 1)),
-        'Doppel-XP-Woche · noch 1 Tag 1 Stunde von sieben Tagen',
+        'Doppelte XP · noch 1 Tag 1 Stunde von sieben Tagen',
       );
       expect(
         bonusLaufzeitText(const Duration(hours: 2, minutes: 5)),
-        'Doppel-XP-Woche · noch 2 Stunden 5 Minuten von sieben Tagen',
+        'Doppelte XP · noch 2 Stunden 5 Minuten von sieben Tagen',
       );
-      expect(bonusLaufzeitText(null), 'Doppel-XP-Woche · sieben Tage lang');
+      expect(bonusLaufzeitText(null), 'Doppelte XP · sieben Tage lang');
       expect(
         bonusLaufzeitText(Duration.zero),
-        'Doppel-XP-Woche · sieben Tage lang',
+        'Doppelte XP · sieben Tage lang',
       );
     });
 
-    test('kein Gedankenstrich in den Nutzertexten', () {
+    test('kein Gedanken- und kein Bindestrich in den Nutzertexten', () {
       final texte = [
         bonusLaufzeitText(const Duration(days: 6, hours: 3)),
         bonusLaufzeitText(null),
@@ -417,6 +418,9 @@ void main() {
       for (final t in texte) {
         expect(t.contains('—'), isFalse, reason: 'Gedankenstrich in "$t"');
         expect(t.contains('–'), isFalse, reason: 'Gedankenstrich in "$t"');
+        // 2026-08-25 (vucko): Auch der einfache Bindestrich ist unerwuenscht.
+        // Frueher stand hier „Doppel-XP-Woche"; der Satz ist umgeschrieben.
+        expect(t.contains('-'), isFalse, reason: 'Bindestrich in "$t"');
       }
     });
 

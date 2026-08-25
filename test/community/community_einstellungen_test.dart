@@ -466,7 +466,7 @@ void main() {
         'lib/presentation/pages/community_settings_page.dart',
       ).readAsStringSync();
       for (final punkt in [
-        'Community-Bild',
+        'Bild der Community',
         'Name und Beschreibung',
         'Wer darf schreiben',
         'Sichtbarkeit',
@@ -550,11 +550,11 @@ void main() {
 
     test('ein eigener deutscher Satz bleibt stehen', () {
       const fehler = CommunityChatServiceException(
-        'Nur Admins können das Community-Bild ändern.',
+        'Nur Admins können das Bild der Community ändern.',
       );
       expect(
         CommunitySettingsTexte.lesbarerFehler(fehler, 'Ersatz'),
-        'Nur Admins können das Community-Bild ändern.',
+        'Nur Admins können das Bild der Community ändern.',
       );
     });
   });

@@ -304,7 +304,7 @@ class AppNotification {
         );
       case 'comment':
         return (
-          pick(const ['Neuer Kommentar', 'Comment-Drop']),
+          pick(const ['Neuer Kommentar', 'Frisch kommentiert']),
           pick([
             '$name hat kommentiert',
             '$name antwortet auf deinen Post',
@@ -315,12 +315,12 @@ class AppNotification {
         return (
           pick(const [
             'Freundschaftsanfrage',
-            'Cruise-Buddy-Anfrage',
+            'Anfrage zum Mitcruisen',
             'Neuer Kontakt',
           ]),
           pick([
             '$name möchte mit dir cruisen',
-            '$name will dein Cruise-Buddy werden',
+            '$name sucht jemanden zum Cruisen',
             '$name will mit dir Touren teilen',
           ]),
         );
@@ -328,9 +328,9 @@ class AppNotification {
         final group = payload['group_name'] as String? ?? 'einer Gruppe';
         return (
           pick(const [
-            'Gruppen-Einladung',
+            'Einladung zur Gruppe',
             'Du wurdest eingeladen',
-            'Ride-Crew sucht dich',
+            'Eine Crew sucht dich',
           ]),
           pick([
             '$name lädt dich zu $group ein',
@@ -341,7 +341,7 @@ class AppNotification {
       case 'group_ride_started':
         return (
           pick(const [
-            'Gruppen-Ride gestartet',
+            'Die Gruppe fährt los',
             'Crew rollt los',
             'Die Tour läuft',
           ]),
@@ -353,7 +353,7 @@ class AppNotification {
         );
       case 'group_public_created':
         return (
-          pick(const ['Neue Gruppe', 'Frische Ride-Crew', 'Neue öffentliche Tour']),
+          pick(const ['Neue Gruppe', 'Frische Crew', 'Neue öffentliche Tour']),
           pick([
             '$name hat eine öffentliche Gruppe erstellt',
             '$name eröffnet eine neue Crew',
@@ -392,7 +392,7 @@ class AppNotification {
           pick([
             'Dein gestarteter Trip wartet auf Fortsetzung',
             'Letzter Stopp erreicht, bereit für den nächsten?',
-            'Deine Multi-Stop-Tour pausiert, knack sie heute',
+            'Deine Tour mit Stopps pausiert, knack sie heute',
           ]),
         );
       default:

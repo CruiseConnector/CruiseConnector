@@ -711,7 +711,7 @@ class _HomeContentPageState extends State<HomeContentPage>
     _HomeWidgetMeta(
       id: _HomeWidgetId.todayRoute,
       title: 'Heute für dich',
-      subtitle: 'Route, Trip-Fortsetzung und Fahren-CTA',
+      subtitle: 'Route, offene Tour und der Knopf zum Fahren',
       icon: Icons.explore_rounded,
       defaultSize: _DashboardWidgetSize.large,
       canBeSmall: false,
@@ -747,7 +747,7 @@ class _HomeContentPageState extends State<HomeContentPage>
     _HomeWidgetMeta(
       id: _HomeWidgetId.streak,
       title: 'Streak',
-      subtitle: 'XP-Multiplikator für heute',
+      subtitle: 'Dein Multiplikator für heute',
       icon: Icons.local_fire_department_rounded,
       defaultSize: _DashboardWidgetSize.large,
       canBeSmall: false,
@@ -784,7 +784,7 @@ class _HomeContentPageState extends State<HomeContentPage>
     ),
     _HomeWidgetMeta(
       id: _HomeWidgetId.badgeHunt,
-      title: 'Badge-Jagd',
+      title: 'Abzeichenjagd',
       subtitle: 'Wähle ein Badge, das du aktiv jagen willst',
       icon: Icons.emoji_events_rounded,
       defaultSize: _DashboardWidgetSize.small,
@@ -1817,7 +1817,7 @@ class _HomeContentPageState extends State<HomeContentPage>
     if (ids.length == 2) {
       return '${_metaFor(ids.first).title} + ${_metaFor(ids.last).title}';
     }
-    return 'Widget-Gruppe';
+    return 'Kachelgruppe';
   }
 
   void _disposeFolderController(String key) {
@@ -2833,7 +2833,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Die Home ist deine Live-Vorschau. Ziehe Kacheln links auf ein Widget zum Verschieben oder rechts auf ein passendes Widget, um es in einen Ordner oder ein Carousel zu legen. Community gibt es jetzt als Kontakte, Gruppen und Events einzeln.',
+                            'Die Startseite zeigt dir jede Änderung sofort. Ziehe Kacheln links auf ein Widget zum Verschieben oder rechts auf ein passendes Widget, um es in einen Ordner oder ein Carousel zu legen. Community gibt es jetzt als Kontakte, Gruppen und Events einzeln.',
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.58),
                               fontSize: 12,
@@ -2876,7 +2876,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                           ),
                           const SizedBox(height: 20),
                           const Text(
-                            'Widget-Bibliothek',
+                            'Alle Kacheln',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 13,
@@ -3489,7 +3489,7 @@ class _HomeContentPageState extends State<HomeContentPage>
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Live-Vorschau: links verschiebt, rechts fügt hinzu.',
+                'Vorschau: links verschiebt, rechts fügt hinzu.',
                 maxLines: 3,
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.68),
@@ -5414,7 +5414,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const Spacer(),
                   const Text(
-                    'Badge-Jagd',
+                    'Abzeichenjagd',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 17,
@@ -5423,7 +5423,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Alle bekannten Badge-Ziele sind geschafft.',
+                    'Alle bekannten Ziele sind geschafft.',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.62),
                       fontSize: 12,
@@ -5456,7 +5456,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Badge-Jagd',
+                              'Abzeichenjagd',
                               style: TextStyle(
                                 color: Color(0xFFA0AEC0),
                                 fontSize: 11,
@@ -5814,7 +5814,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                 ),
                 const SizedBox(height: 18),
                 const Text(
-                  'Badge-Jagd wählen',
+                  'Abzeichenjagd wählen',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -6395,7 +6395,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         : AppAccentColors.accent;
     final statusLabel = isPaused ? 'Tour pausiert' : 'Tour aktiv';
     final statusSubtitle = _tripStatusSubtitle(trip);
-    final title = trip.title.isEmpty ? 'Multi-Stop Tour' : trip.title;
+    final title = trip.title.isEmpty ? 'Tour mit Stopps' : trip.title;
     // Distanz nur zeigen wenn > 0 (sonst irreführend "0 km")
     final km = trip.totalDistanceKm;
     final metricsLine = km > 0
@@ -6616,7 +6616,7 @@ class _HomeContentPageState extends State<HomeContentPage>
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
         content: Text(
-          'Die Tour wird aus dem Fortsetzen-Bereich entfernt. Deine gefahrenen Strecken bleiben unverändert.',
+          'Die Tour wird aus der Liste zum Fortsetzen entfernt. Deine gefahrenen Strecken bleiben unverändert.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.72)),
         ),
         actions: [
@@ -7042,7 +7042,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Sobald eine Empfehlung verfügbar ist, erscheint sie hier als kompakte Featured-Route.',
+                    'Sobald es eine Empfehlung gibt, erscheint sie hier als kompakte Karte.',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.68),
                       fontSize: 14,

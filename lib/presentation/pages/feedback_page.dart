@@ -213,8 +213,8 @@ class _FeedbackPageState extends State<FeedbackPage> {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Wir schicken App-Version und Geraetetyp mit, damit wir den '
-              'Fehler nachstellen koennen.',
+              'Wir schicken die Version der App und deinen Gerätetyp mit, damit '
+              'wir den Fehler nachstellen können.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white38, fontSize: 12),
             ),

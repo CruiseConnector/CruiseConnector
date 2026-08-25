@@ -750,13 +750,16 @@ class CommunityChatService {
     if (cleanName.isEmpty ||
         cleanName.length > AppInputLimits.communityNameMaxLength) {
       throw const CommunityChatServiceException(
-        'Community-Name ist ungültig.',
+        'Gib der Community einen Namen mit höchstens '
+        '${AppInputLimits.communityNameMaxLength} Zeichen.',
       );
     }
     if ((cleanDescription?.length ?? 0) >
         AppInputLimits.communityDescriptionMaxLength) {
       throw const CommunityChatServiceException(
-        'Community-Beschreibung ist zu lang.',
+        'Die Beschreibung darf höchstens '
+        '${AppInputLimits.communityDescriptionMaxLength} Zeichen haben. '
+        'Bitte kürze sie.',
       );
     }
 
@@ -829,7 +832,7 @@ class CommunityChatService {
       if (e.code == '23505') return;
       if (e.code == '42501') {
         throw const CommunityChatServiceException(
-          'Diese Community ist privat. Nutze den Invite-Code vom Leader.',
+          'Diese Community ist privat. Nutze den Einladungscode vom Leader.',
         );
       }
       throw CommunityChatServiceException(e.message);
@@ -1288,12 +1291,17 @@ class CommunityChatService {
     final cleanDescription = description?.trim();
     if (cleanName.isEmpty ||
         cleanName.length > AppInputLimits.communityNameMaxLength) {
-      throw const CommunityChatServiceException('Community-Name ist ungültig.');
+      throw const CommunityChatServiceException(
+        'Gib der Community einen Namen mit höchstens '
+        '${AppInputLimits.communityNameMaxLength} Zeichen.',
+      );
     }
     if ((cleanDescription?.length ?? 0) >
         AppInputLimits.communityDescriptionMaxLength) {
       throw const CommunityChatServiceException(
-        'Community-Beschreibung ist zu lang.',
+        'Die Beschreibung darf höchstens '
+        '${AppInputLimits.communityDescriptionMaxLength} Zeichen haben. '
+        'Bitte kürze sie.',
       );
     }
 
@@ -1332,14 +1340,14 @@ class CommunityChatService {
           .select('id');
       if ((rows as List).isEmpty) {
         throw const CommunityChatServiceException(
-          'Nur Admins können das Community-Bild ändern.',
+          'Nur Admins können das Bild der Community ändern.',
         );
       }
     } on PostgrestException catch (e) {
       // Eine alte Datenbank ohne die Spalte darf keine rohe Ausnahme zeigen.
       if (_isMissingColumn(e)) {
         throw const CommunityChatServiceException(
-          'Community-Bilder sind in der Datenbank noch nicht aktiv.',
+          'Bilder für Communitys sind in der Datenbank noch nicht aktiv.',
         );
       }
       throw CommunityChatServiceException(e.message);
@@ -1464,7 +1472,7 @@ class CommunityChatService {
       } on PostgrestException catch (e) {
         if (_isMissingColumn(e) && routeAttachment != null) {
           throw const CommunityChatServiceException(
-            'Routen-Anhänge sind in Supabase noch nicht aktiv.',
+            'Angehängte Routen sind in Supabase noch nicht aktiv.',
           );
         }
         if (e.code == '23505') {
@@ -1565,7 +1573,7 @@ class CommunityChatService {
     } on PostgrestException catch (e) {
       if (_isMissingColumn(e) || e.message.contains('function')) {
         throw const CommunityChatServiceException(
-          'Pin-Funktion ist in der Datenbank noch nicht aktiv.',
+          'Das Anpinnen ist in der Datenbank noch nicht aktiv.',
         );
       }
       throw CommunityChatServiceException(e.message);

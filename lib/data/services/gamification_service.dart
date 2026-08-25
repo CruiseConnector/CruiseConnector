@@ -176,7 +176,16 @@ class GamificationService {
   /// haengt am ZUSTAND (Starter-Aufgabe „tutorial") und nicht an einem
   /// Ereignis. Das ist die Lehre aus dem verlorenen Startklar-Abzeichen vom
   /// 19.08.
-  static const String onboardingBadgeId = 'badge_58';
+  ///
+  /// 2026-08-25: Umbenannt von `onboardingBadgeId`. Der alte Name behauptete,
+  /// das sei das Abzeichen fuer das abgeschlossene Onboarding — das ist seit
+  /// heute [Badge.starterBadgeId] „Startklar", zusammen mit 1000 XP und der
+  /// Doppel-XP-Woche. Hier haengt das reine Sammler-Abzeichen fuer ALLE zwoelf
+  /// Aufgaben, ohne XP und ohne Bonuswoche. Der alte Name bleibt als Alias.
+  static const String alleAufgabenBadgeId = 'badge_58';
+
+  /// Alter Name von [alleAufgabenBadgeId]. Siehe dort, warum er gelogen hat.
+  static const String onboardingBadgeId = alleAufgabenBadgeId;
 
   @visibleForTesting
   static List<String> normalizeBadgeIds(Iterable<dynamic> badgeIds) {
@@ -341,6 +350,59 @@ class GamificationService {
 
   /// Basis des Multiplikators WAEHREND der Doppel-XP-Woche (Starter-Paket).
   static const double basisMitDoppelXp = 2.0;
+
+  /// 2026-08-25 (vucko woertlich): „man soll sehen man bekommt ein badge
+  /// 1000 XP + noch einen 2 fach boost der 7 Tage lang aktiv ist".
+  ///
+  /// GEMESSEN am 25.08. in der Produktivdatenbank, bevor diese Zeile
+  /// entstanden ist: `profiles.total_xp` war bei JEDEM der 202 Profile auf die
+  /// Einheit genau die Summe von `user_drive_sessions.xp_awarded` — Differenz
+  /// null, ohne eine einzige Ausnahme. Die 1000 XP gab es also nirgends. Sie
+  /// waren auf der Karte versprochen und wurden nie gebucht.
+  ///
+  /// DIE EINZIGE STELLE, an der diese Zahl steht. Die Karte liest sie hier,
+  /// damit Anzeige und Gutschrift nicht auseinanderlaufen koennen.
+  static const int starterPaketBonusXp = 1000;
+
+  /// Die Gesamt-XP eines Nutzers: gefahrene XP plus der einmalige
+  /// Starter-Bonus.
+  ///
+  /// WARUM DAS EINE REINE FUNKTION IST UND KEINE BUCHUNG:
+  /// `profiles.total_xp` wird bei JEDEM Sync neu aus den Fahrten berechnet und
+  /// ueberschrieben (siehe [calculateAndSync]). Ein einmal addiertes „+1000"
+  /// waere beim naechsten Sync wieder weg — und ein Zaehler, der bei jedem
+  /// Sync 1000 addiert, waere in einer Woche bei 100.000. Deshalb ist der
+  /// Bonus ein ZUSTAND und kein Ereignis, genau wie das Startklar-Abzeichen
+  /// seit dem 19.08.: Er ergibt sich aus `paketVerdient` und wird bei jeder
+  /// Berechnung neu dazugerechnet. Zweimal ausgefuehrt kommt zweimal dasselbe
+  /// heraus.
+  ///
+  /// WIRD DER BONUS MIT DEM MULTIPLIKATOR VERRECHNET? NEIN. Drei Gruende, und
+  /// alle drei zaehlen:
+  ///
+  ///  1. Der Multiplikator gehoert zur Strecke. Er sitzt in
+  ///     [calculateRouteXp] und ist in `user_drive_sessions.xp_awarded`
+  ///     eingefroren, sobald eine Fahrt gebucht wird. Der Starter-Bonus ist
+  ///     keine Fahrt und hat keine Strecke.
+  ///  2. Die Karte verspricht „1000 XP". Mit Multiplikator waeren es je nach
+  ///     Serie 2000 bis 3000 — die Anzeige waere gelogen.
+  ///  3. Und der wichtigste: Die Verdopplung darf an GENAU EINER Stelle
+  ///     passieren, naemlich in der Basis des Streak-Multiplikators
+  ///     ([basisMitDoppelXp]). Am 19.08. hat eine zweite Stelle aus 2300 XP
+  ///     einmal 2600 gemacht. Ein Bonus, der zusaetzlich verdoppelt wuerde,
+  ///     waere genau dieselbe Falle mit einer anderen Zahl. Die beiden
+  ///     Waechter in `test/services/streak_multiplikator_test.dart` bleiben
+  ///     deshalb unangetastet gueltig.
+  ///
+  /// [paketVerdient] ist `StarterAufgabenService.paketVerdient`, also dieselbe
+  /// Bedingung, an der auch das Startklar-Abzeichen und die Doppel-XP-Woche
+  /// haengen: EINE Belohnung fuer EINE Sache.
+  @visibleForTesting
+  static int gesamtXpMitStarterBonus({
+    required int fahrtenXp,
+    required bool paketVerdient,
+  }) =>
+      math.max(0, fahrtenXp) + (paketVerdient ? starterPaketBonusXp : 0);
 
   /// Zuwachs je Tag der laufenden Serie.
   static const double proStreakTag = 0.1;
@@ -954,15 +1016,30 @@ class GamificationService {
     final totals = summarizeDriveSessions(sessions);
     final totalKm = totals.totalDistanceKm;
     final totalSecs = totals.totalSeconds;
-    final totalXp = totals.totalXp;
+    // 2026-08-25: Hier stand `final totalXp = totals.totalXp;`. Die Summe der
+    // Fahrten ist seit heute nicht mehr die ganze Wahrheit — der einmalige
+    // Starter-Bonus kommt dazu. Er kann aber erst weiter unten feststehen,
+    // weil er am Stand der Starter-Aufgaben haengt, und der wird erst nach den
+    // Badge-Kennzahlen abgeglichen. Deshalb der Zwischenname.
+    final fahrtenXp = totals.totalXp;
     final totalRoutes = totals.totalRoutes;
     final completedSessions = sessions
         .where((session) => session.completedAtEnd)
         .toList();
     final completedGroupRides = completedGroupRideCount(sessions);
 
-    // 3. Level aus XP berechnen
-    final level = UserLevel.fromXp(totalXp.toDouble());
+    // 3. Level aus XP berechnen — vorlaeufig, ohne den Starter-Bonus.
+    //
+    // Die Reihenfolge ist ein echter Ringschluss und laesst sich nicht
+    // aufloesen: Level → Badge-Kennzahlen → erfuellte Abzeichen → die Aufgabe
+    // „drei Abzeichen sammeln" → `paketVerdient` → Starter-Bonus → Level. Er
+    // wird an der duennsten Stelle aufgetrennt: die Badge-Schwellen rechnen
+    // mit dem Level OHNE Bonus, und sobald der Bonus feststeht, wird das Level
+    // neu bestimmt und die Level-Abzeichen werden noch einmal geprueft (siehe
+    // unten). Was dabei trotzdem eine Runde spaeter faellt, faellt beim
+    // naechsten Sync — die Vergabe haengt ueberall am ZUSTAND, nie an einem
+    // Ereignis.
+    final levelOhneBonus = UserLevel.fromXp(fahrtenXp.toDouble());
 
     // 2026-08-19 (vucko, Starter-Aufgabe „der erste post"): Der Zaehler lief
     // hier bisher nur ueber Posts MIT geteilter Route (badge_09). Fuer die
@@ -1013,7 +1090,7 @@ class GamificationService {
               .map((s) => s.distanceKm)
               .reduce((a, b) => a > b ? a : b);
     final metriken = badgeMetriken(
-      level: level.level,
+      level: levelOhneBonus.level,
       totalKm: totalKm,
       totalHours: totalSecs / 3600,
       completedRides: completedSessions.length,
@@ -1135,7 +1212,41 @@ class GamificationService {
     // gesetzt (app_tutorial_overlay.dart, _complete), nicht beim
     // Ueberspringen.
     if (starter.alleAufgabenErledigt) {
-      currentlyQualifiedBadges.add(onboardingBadgeId);
+      currentlyQualifiedBadges.add(alleAufgabenBadgeId);
+    }
+
+    // 4b. Der Starter-Bonus von 1000 XP.
+    //
+    // 2026-08-25 (vucko woertlich): „man soll sehen man bekommt ein badge
+    // 1000 XP + noch einen 2 fach boost der 7 Tage lang aktiv ist."
+    //
+    // GEMESSEN am 25.08., bevor diese Zeilen entstanden sind: `total_xp` war
+    // bei allen 202 Profilen exakt die Summe der `xp_awarded` ihrer Fahrten,
+    // Differenz null. Die 1000 XP standen auf der Karte und wurden nie
+    // gebucht.
+    //
+    // Sie haengen an DERSELBEN Bedingung wie das Startklar-Abzeichen zwei
+    // Zeilen weiter oben (`starter.paketVerdient`) und wie die
+    // Doppel-XP-Woche: ein Abzeichen, 1000 XP und sieben Tage doppelte XP
+    // sind EINE Belohnung fuer EINE Sache und fallen gemeinsam.
+    //
+    // Warum als Zustand und nicht als Buchung, und warum OHNE Multiplikator:
+    // siehe [gesamtXpMitStarterBonus].
+    final totalXp = gesamtXpMitStarterBonus(
+      fahrtenXp: fahrtenXp,
+      paketVerdient: starter.paketVerdient,
+    );
+    final level = UserLevel.fromXp(totalXp.toDouble());
+    if (level.level != levelOhneBonus.level) {
+      // Der Bonus hat das Level gehoben. Ohne diese Zeilen bliebe ein
+      // Level-Abzeichen bis zum naechsten Sync gesperrt, obwohl das Profil
+      // die Schwelle schon traegt.
+      currentlyQualifiedBadges.addAll(
+        erfuellteBadgeIds({
+          ...metriken,
+          BadgeMetrik.level: level.level.toDouble(),
+        }),
+      );
     }
 
     // 5. Bisherige Badges laden und neue bestimmen

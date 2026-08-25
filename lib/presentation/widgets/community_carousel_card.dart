@@ -884,7 +884,7 @@ class EventsComingSoonSlide extends StatelessWidget {
       return const _CompactEmptySlide(
         icon: Icons.event_outlined,
         title: 'Events',
-        text: 'Event-Planung folgt bald.',
+        text: 'Events planen folgt bald.',
       );
     }
     return Container(

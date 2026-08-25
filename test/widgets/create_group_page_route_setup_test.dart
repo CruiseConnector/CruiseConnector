@@ -29,7 +29,7 @@ void main() {
     expect(find.text('A nach B'), findsOneWidget);
     expect(find.text('Zufall'), findsOneWidget);
     expect(find.text('Wegpunkte'), findsOneWidget);
-    expect(find.text('Gruppen-Details'), findsOneWidget);
+    expect(find.text('Details zur Gruppe'), findsOneWidget);
 
     final createButton = tester.widget<ElevatedButton>(
       find.widgetWithText(ElevatedButton, 'Erstellen'),

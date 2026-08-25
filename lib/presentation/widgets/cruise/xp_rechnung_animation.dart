@@ -470,10 +470,10 @@ String grundText({
   final streakAnteil = (multiplikator - basis).clamp(0.0, double.infinity);
   final tageText = '$streakTage ${streakTage == 1 ? 'Tag' : 'Tage'} Streak';
   if (doppelXpAktiv && streakTage > 0) {
-    return '${multiplikatorText(basis)} Doppel-XP-Woche '
+    return '${multiplikatorText(basis)} für doppelte XP '
         '+ ${multiplikatorText(streakAnteil)} für $tageText';
   }
-  if (doppelXpAktiv) return 'Doppel-XP-Woche läuft';
+  if (doppelXpAktiv) return 'Doppelte XP diese Woche';
   return '$tageText · ${multiplikatorText(streakAnteil)} extra';
 }
 
@@ -485,7 +485,7 @@ String grundText({
 /// ohne Gedankenstrich.
 String bonusLaufzeitText(Duration? rest) {
   if (rest == null || rest <= Duration.zero) {
-    return 'Doppel-XP-Woche · sieben Tage lang';
+    return 'Doppelte XP · sieben Tage lang';
   }
   final tage = rest.inDays;
   final stunden = rest.inHours % 24;
@@ -500,7 +500,7 @@ String bonusLaufzeitText(Duration? rest) {
   } else {
     menge = '$minuten ${minuten == 1 ? 'Minute' : 'Minuten'}';
   }
-  return 'Doppel-XP-Woche · noch $menge von sieben Tagen';
+  return 'Doppelte XP · noch $menge von sieben Tagen';
 }
 
 /// Wie viel der sieben Tage schon verbraucht sind, 0 bis 1. Ohne bekannte

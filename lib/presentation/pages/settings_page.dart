@@ -105,8 +105,8 @@ class _SettingsPageState extends State<SettingsPage> {
         content: Text(
           newValue
               ? 'Wenn dein Konto privat ist, können nur deine Follower deine Posts sehen. '
-                    'Deine Posts erscheinen nicht mehr im Entdecken-Bereich für andere User.'
-              : 'Wenn dein Konto öffentlich ist, kann jeder deine Posts im Entdecken-Bereich sehen.',
+                    'Für alle anderen tauchen sie unter Entdecken nicht mehr auf.'
+              : 'Wenn dein Konto öffentlich ist, kann jeder deine Posts unter Entdecken sehen.',
           style: const TextStyle(color: Colors.grey, height: 1.4),
         ),
         actions: [
@@ -186,9 +186,9 @@ class _SettingsPageState extends State<SettingsPage> {
           style: TextStyle(color: Colors.white),
         ),
         content: Text(
-          'Dadurch werden dein Profil, deine Routen, Posts, Gruppen-Daten, '
-          'Fahrzeuge, Medien und lokale App-Daten entfernt. Diese Aktion kann '
-          'nicht rückgängig gemacht werden.',
+          'Dadurch werden dein Profil, deine Routen, Posts, deine Daten aus '
+          'Gruppen, Fahrzeuge, Medien und alles, was die App auf dem Gerät '
+          'gespeichert hat, entfernt. Das lässt sich nicht rückgängig machen.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.72),
             height: 1.35,
@@ -413,13 +413,14 @@ class _SettingsPageState extends State<SettingsPage> {
       return 'Supabase ist gerade nicht erreichbar. Verbindung prüfen.';
     }
     if (lower.contains('foreign key') || lower.contains('violates')) {
-      return 'Datenbank-Verknüpfung blockiert. Migration bitte nochmal ausführen.';
+      return 'Ein Eintrag in der Datenbank blockiert das Löschen. Führe die '
+          'Migration bitte nochmal aus.';
     }
     if (lower.contains('permission denied') || lower.contains('42501')) {
-      return 'RPC-Rechte fehlen. Migration bitte nochmal ausführen.';
+      return 'Die nötigen Rechte fehlen. Führe die Migration bitte nochmal aus.';
     }
     if (lower.contains('delete_current_user')) {
-      return 'Account-Löschfunktion ist noch nicht in Supabase deployed.';
+      return 'Das Löschen von Konten ist in Supabase noch nicht aktiv.';
     }
     return 'Konto konnte nicht gelöscht werden. Bitte erneut versuchen.';
   }
@@ -481,7 +482,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 const SizedBox(height: 24),
 
-                _buildSectionHeader('APP-EINSTELLUNGEN'),
+                _buildSectionHeader('ALLGEMEIN'),
                 _buildSectionContainer([
                   // 2026-08-03 (vucko Sprachumschaltung): Sprache ganz oben —
                   // wer die App in der falschen Sprache erwischt, sucht hier.
@@ -517,7 +518,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildSwitchTile(
-                    'Push-Benachrichtigungen',
+                    'Benachrichtigungen aufs Handy',
                     _pushNotifications,
                     (val) => setState(() => _pushNotifications = val),
                   ),
@@ -531,7 +532,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   AnimatedBuilder(
                     animation: VoiceSettingsService.instance,
                     builder: (context, _) => _buildSwitchTile(
-                      'Sprach-Navigation (Ansagen)',
+                      'Ansagen beim Navigieren',
                       VoiceSettingsService.instance.isEnabled,
                       (val) {
                         unawaited(
@@ -545,7 +546,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile(
-                    'Sicherheits- & Routing-Hinweise',
+                    'Hinweise zu Sicherheit und Routen',
                     Icons.shield_outlined,
                     subtitle:
                         'Haftung, Routenmodi, Wegpunkte und Sicherheit nachlesen',
@@ -554,7 +555,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(color: Colors.white10, height: 1),
                   _buildNavTile(
-                    'Gruppenfahrt-Hinweise',
+                    'Hinweise zur Gruppenfahrt',
                     Icons.groups_2_outlined,
                     subtitle:
                         'Keine Veranstaltung, Verantwortung und sichere Gruppenregeln',
@@ -577,13 +578,13 @@ class _SettingsPageState extends State<SettingsPage> {
                 // 2026-08-09 (vucko): „Feedback-Funktion in den Einstellungen
                 // mit einem vorgefertigten Layout und der Moeglichkeit, ein
                 // Foto anzuhaengen" — plus der Update-Log zum Nachlesen.
-                _buildSectionHeader('RUECKMELDUNG & NEUERUNGEN'),
+                _buildSectionHeader('RÜCKMELDUNG & NEUERUNGEN'),
                 _buildSectionContainer([
                   _buildNavTile(
                     'Uns schreiben',
                     Icons.chat_bubble_outline,
                     subtitle:
-                        'Fehler melden, Idee schicken oder Lob dalassen — mit Foto',
+                        'Fehler melden, Idee schicken oder Lob dalassen, gern mit Foto',
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute<void>(
@@ -595,7 +596,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   _buildNavTile(
                     'Was ist neu?',
                     Icons.auto_awesome_outlined,
-                    subtitle: 'Die Aenderungen dieser Version nachlesen',
+                    subtitle: 'Die Änderungen dieser Version nachlesen',
                     onTap: () => showChangelogAusEinstellungen(context),
                   ),
                 ]),
@@ -667,7 +668,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
-                            '🔧  Motorrad-Werkstätten',
+                            '🔧  Werkstätten für Motorräder',
                             s.repair,
                             (v) => s.setRepair(v),
                           ),
@@ -718,13 +719,13 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
-                            'Gruppen-Einladungen',
+                            'Einladungen in Gruppen',
                             s.groupInvites,
                             (v) => s.setGroupInvites(v),
                           ),
                           const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
-                            'Strecken- & Wetter-Empfehlungen',
+                            'Empfehlungen zu Strecke und Wetter',
                             s.dailyWeather,
                             (v) => s.setDailyWeather(v),
                           ),
@@ -738,7 +739,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
                 // 2026-05-28 (vucko Task #64): DACH-Offline-Karte Status +
                 // manuelles Re-Download / Cache löschen.
-                _buildSectionHeader('OFFLINE-KARTE (DACH)'),
+                _buildSectionHeader('KARTE OHNE NETZ (DACH)'),
                 _buildSectionContainer([
                   _buildNavTile(
                     'Automatischer Download',
@@ -924,7 +925,7 @@ class _SettingsPageState extends State<SettingsPage> {
         iconColor = Colors.grey;
         iconData = Icons.cloud_outlined;
         title = 'DACH noch nicht geladen';
-        subtitle = 'Karte (~30 MB) für Offline-Cruising vorbereiten';
+        subtitle = 'Karte (~30 MB) für Fahrten ohne Netz vorbereiten';
     }
 
     return Padding(
@@ -1057,7 +1058,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     TopToast.show(
       context,
-      message: 'DACH-Karte wird im Hintergrund geladen…',
+      message: 'Die Karte für DACH wird im Hintergrund geladen…',
       icon: Icons.cloud_download_rounded,
       duration: const Duration(seconds: 3),
     );
@@ -1071,7 +1072,7 @@ class _SettingsPageState extends State<SettingsPage> {
           if (!mounted) return;
           TopToast.show(
             context,
-            message: 'DACH-Karte ist jetzt offline verfügbar 🗺️',
+            message: 'Die Karte für DACH ist jetzt ohne Netz verfügbar 🗺️',
             icon: Icons.cloud_done_rounded,
             duration: const Duration(seconds: 4),
           );
@@ -1120,11 +1121,11 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1C1F26),
         title: const Text(
-          'DACH-Cache löschen?',
+          'Gespeicherte Karte für DACH löschen?',
           style: TextStyle(color: Colors.white),
         ),
         content: Text(
-          'Die Übersichts-Karte muss beim nächsten Cruise-Start neu geladen werden.',
+          'Die Übersicht muss beim nächsten Start einer Fahrt neu geladen werden.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
         ),
         actions: [

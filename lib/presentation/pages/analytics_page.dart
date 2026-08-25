@@ -1287,7 +1287,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                       ),
                       const SizedBox(height: 22),
                       const Text(
-                        'Badge-Meilensteine',
+                        'Meilensteine',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 17,

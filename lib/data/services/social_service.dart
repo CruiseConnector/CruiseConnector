@@ -88,20 +88,20 @@ class UsernameChangeException implements Exception {
   String get message {
     switch (reason) {
       case 'taken':
-        return 'Dieser @-Name ist bereits vergeben.';
+        return 'Dieser Name ist bereits vergeben.';
       case 'reserved':
-        return 'Dieser @-Name ist reserviert.';
+        return 'Dieser Name ist reserviert.';
       case 'invalid_format':
-        return '@-Name: 3–20 Zeichen, nur Buchstaben, Zahlen und _ '
-            '(kein __, nicht mit _ beginnen/enden).';
+        return 'Der Name braucht 3 bis 20 Zeichen, nur Buchstaben, Zahlen '
+            'und _ (kein __, und nicht mit _ beginnen oder enden).';
       case 'too_soon':
         final d = daysRemaining ?? 30;
-        return 'Du kannst deinen @-Namen erst in $d '
+        return 'Du kannst deinen Namen erst in $d '
             '${d == 1 ? 'Tag' : 'Tagen'} wieder ändern.';
       case 'not_authenticated':
         return 'Bitte melde dich an.';
       default:
-        return 'Der @-Name konnte nicht geändert werden.';
+        return 'Der Name konnte nicht geändert werden.';
     }
   }
 
@@ -1657,7 +1657,7 @@ class SocialService {
         .eq('status', 'pending')
         .select('id');
     if ((rows as List).isEmpty) {
-      throw StateError('Follow-Anfrage konnte nicht angenommen werden.');
+      throw StateError('Die Anfrage konnte nicht angenommen werden.');
     }
     try {
       await _db.from('notifications').insert({
@@ -1683,7 +1683,7 @@ class SocialService {
         .eq('status', 'pending')
         .select('id');
     if ((rows as List).isEmpty) {
-      throw StateError('Follow-Anfrage konnte nicht abgelehnt werden.');
+      throw StateError('Die Anfrage konnte nicht abgelehnt werden.');
     }
   }
 
@@ -3273,7 +3273,7 @@ class SocialService {
     if (bioTitle != null) {
       final cleaned = bioTitle.trim();
       if (cleaned.length > AppInputLimits.bioTitleMaxLength) {
-        throw const SocialServiceException('Bio-Überschrift ist zu lang.');
+        throw const SocialServiceException('Die Überschrift deiner Bio ist zu lang.');
       }
       patch['bio_title'] = cleaned.isEmpty ? null : cleaned;
     }

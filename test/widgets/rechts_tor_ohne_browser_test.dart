@@ -69,7 +69,7 @@ void main() {
         expect(find.text(LegalDocuments.terms.url), findsOneWidget);
         expect(find.text(LegalDocuments.privacy.url), findsOneWidget);
         expect(
-          find.text('Adresse notiert — Häkchen freigeben'),
+          find.text('Adresse notiert, Häkchen freigeben'),
           findsNWidgets(2),
           reason:
               'Ohne Ersatzweg bleibt das Haekchen fuer immer gesperrt — genau '
@@ -77,9 +77,9 @@ void main() {
         );
 
         // Der Nutzer bestaetigt den Ersatzweg und setzt beide Haekchen.
-        await tester.tap(find.text('Adresse notiert — Häkchen freigeben').first);
+        await tester.tap(find.text('Adresse notiert, Häkchen freigeben').first);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Adresse notiert — Häkchen freigeben').first);
+        await tester.tap(find.text('Adresse notiert, Häkchen freigeben').first);
         await tester.pumpAndSettle();
 
         expect(
@@ -145,9 +145,9 @@ void main() {
       await _pumpeTorMitUnterseite(tester);
       await _tippeLesen(tester, 0);
       await _tippeLesen(tester, 1);
-      await tester.tap(find.text('Adresse notiert — Häkchen freigeben').first);
+      await tester.tap(find.text('Adresse notiert, Häkchen freigeben').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Adresse notiert — Häkchen freigeben').first);
+      await tester.tap(find.text('Adresse notiert, Häkchen freigeben').first);
       await tester.pumpAndSettle();
       await _setzeHaekchen(tester, 0);
       await _setzeHaekchen(tester, 1);
@@ -184,7 +184,7 @@ void main() {
       await _tippeLesen(tester, 1);
 
       expect(find.text(LegalDocuments.terms.url), findsNothing);
-      expect(find.text('Adresse notiert — Häkchen freigeben'), findsNothing);
+      expect(find.text('Adresse notiert, Häkchen freigeben'), findsNothing);
       expect(_gesperrteHaekchen(tester), 0);
     });
 

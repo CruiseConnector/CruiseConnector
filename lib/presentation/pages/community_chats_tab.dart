@@ -786,7 +786,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
             textCapitalization: TextCapitalization.characters,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: 'Community suchen — Name oder Code',
+              hintText: 'Community suchen, nach Name oder Code',
               hintStyle: const TextStyle(color: Colors.grey),
               counterText: '',
               prefixIcon: const Icon(Icons.search, color: Colors.grey),

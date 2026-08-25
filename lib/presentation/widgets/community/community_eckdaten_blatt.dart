@@ -275,8 +275,8 @@ class CommunityEckdatenBlatt extends StatelessWidget {
               _angabe(
                 _istOeffentlich ? Icons.public : Icons.lock_outline,
                 _istOeffentlich
-                    ? 'Öffentlich — jeder findet und liest diese Community.'
-                    : 'Privat — nur mit Einladung oder nach Anfrage.',
+                    ? 'Öffentlich, jeder findet und liest diese Community.'
+                    : 'Privat, nur mit Einladung oder nach Anfrage.',
               ),
               const SizedBox(height: 9),
               _angabe(

@@ -393,7 +393,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
           _shareCardKey.currentContext?.findRenderObject()
               as RenderRepaintBoundary?;
       if (boundary == null) {
-        throw Exception('Share-Card nicht verfügbar');
+        throw Exception('Die Karte zum Teilen ist nicht verfügbar');
       }
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -401,7 +401,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
       // dem Byte-Export sofort freigeben, sonst Speicher-Spitze beim Teilen.
       image.dispose();
       if (byteData == null) {
-        throw Exception('PNG-Export fehlgeschlagen');
+        throw Exception('Das Bild konnte nicht erzeugt werden');
       }
 
       final pngBytes = byteData.buffer.asUint8List();
@@ -808,7 +808,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
               Expanded(
                 child: _StatTile(
                   value: '${widget.topSpeedKmh.round()} km/h',
-                  label: 'Top-Speed',
+                  label: 'Höchsttempo',
                   exportMode: _isExportMode,
                 ),
               ),
@@ -817,7 +817,7 @@ class _CruiseCompletionDialogState extends State<CruiseCompletionDialog>
                 child: _StatTile(
                   value: widget.avgSpeedKmh > 0
                       ? '${widget.avgSpeedKmh.round()} km/h'
-                      : '—',
+                      : '…',
                   label: 'Ø Tempo',
                   exportMode: _isExportMode,
                 ),

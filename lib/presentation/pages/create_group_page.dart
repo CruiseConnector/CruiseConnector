@@ -152,7 +152,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     }
     if (perm == geo.LocationPermission.denied ||
         perm == geo.LocationPermission.deniedForever) {
-      throw Exception('Standort-Berechtigung fehlt.');
+      throw Exception('Die Berechtigung für den Standort fehlt.');
     }
     return geo.Geolocator.getCurrentPosition(
       locationSettings: const geo.LocationSettings(
@@ -198,7 +198,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
         _showError(
           waypointSnapshot.isEmpty
               ? 'Setze mindestens einen Stopp oder lass Stopps vorschlagen.'
-              : 'Bitte nutze maximal 5 Stopps (Trip-Modus).',
+              : 'Im Trip sind höchstens 5 Stopps möglich.',
         );
         return;
       }
@@ -633,7 +633,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     for (var poll = 0; poll < 30; poll += 1) {
       if (!_isCurrentGeneration(generationId)) return null;
       if (mounted) {
-        setState(() => _routeStatusText = 'Wir prüfen Live-Varianten');
+        setState(() => _routeStatusText = 'Wir prüfen mehrere Varianten');
       }
       await Future.delayed(const Duration(seconds: 4));
       if (!_isCurrentGeneration(generationId)) return null;
@@ -815,7 +815,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
     final acceptedSafety = await showGroupSafetyNoticeSheet(context);
     if (!acceptedSafety) {
       _showError(
-        'Ohne Bestätigung der Gruppenfahrt-Hinweise können wir keine Gruppe '
+        'Ohne Bestätigung der Hinweise zur Gruppenfahrt können wir keine Gruppe '
         'anlegen. Du findest sie jederzeit unter Einstellungen.',
       );
       return;
@@ -1460,7 +1460,7 @@ class _CreateGroupPageState extends State<CreateGroupPage> {
                       ],
                       const SizedBox(height: 40),
                       const Text(
-                        'Gruppen-Details',
+                        'Details zur Gruppe',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 18,

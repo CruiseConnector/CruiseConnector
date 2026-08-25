@@ -64,10 +64,10 @@ class AppChangelog {
         'Als Admin kannst du Fahrzeugart und Region deiner Community jetzt '
             'auch nachträglich ändern, nicht mehr nur beim Erstellen.',
         'Das Abzeichen fürs Onboarding gab es bisher schon für die kurze '
-            'Tour. Jetzt bekommst du es erst, wenn du alle zwölf '
-            'Starter-Aufgaben erledigt hast.',
-        'Die Starter-Karte bleibt sichtbar, bis wirklich alles erledigt ist, '
-            'und zeigt dir deinen Fortschritt.',
+            'Tour. Jetzt bekommst du es erst, wenn du alle zwölf Aufgaben '
+            'zum Start erledigt hast.',
+        'Die Karte mit deinen ersten Aufgaben bleibt sichtbar, bis wirklich '
+            'alles erledigt ist, und zeigt dir deinen Fortschritt.',
       ],
     ),
     ChangelogEintrag(
@@ -87,12 +87,12 @@ class AppChangelog {
         'Beiträge mit der Einstellung "Nur Follower" erreichen jetzt wirklich '
             'alle deine Follower, auch die, denen du selbst nicht folgst. '
             'Vorher blieben sie bei einseitiger Folge unsichtbar.',
-        'Deine Abzeichen-Sammlung war endlos lang. Jetzt sind die Familien '
+        'Deine Sammlung an Abzeichen war endlos lang. Jetzt sind die Familien '
             'zugeklappt, und du siehst auf einen Blick, woran du gerade bist.',
         'Die Stufe eines Abzeichens erkennst du jetzt auch an der Füllung, '
             'nicht nur am Rand. Dazu zwölf neue Abzeichen für Garage, '
             'Beiträge, Hashtags und Meldungen.',
-        'Nachrichten im Community-Chat kannst du sechs Stunden lang '
+        'Nachrichten im Chat einer Community kannst du sechs Stunden lang '
             'bearbeiten und wahlweise für alle oder nur für dich löschen.',
         'Die tägliche Meldung zum Wetter kommt jetzt am Nachmittag statt um '
             'acht Uhr früh, jeden Tag zu einer anderen Zeit und mit einem '
@@ -130,16 +130,16 @@ class AppChangelog {
     ),
     ChangelogEintrag(
       version: '1.5.20',
-      titel: 'Doppel-XP-Woche für alle, Marken sortiert sich, Punkte zeigen was neu ist',
+      titel: 'Doppelte XP für alle, Marken sortiert sich, Punkte zeigen was neu ist',
       punkte: <String>[
-        'Die Doppel-XP-Woche war bisher für niemanden erreichbar: sie '
+        'Die Woche mit doppelten XP war bisher für niemanden erreichbar: sie '
             'verlangte eine abgeschlossene Gruppenfahrt, und die hatte in der '
             'ganzen Geschichte der App noch nie jemand geschafft. Jetzt '
             'genügt es, eine Gruppenfahrt zu erstellen.',
-        'Die Startklar-Liste hat drei neue Aufgaben: ein Auto in die Garage '
+        'Die Liste für den Start hat drei neue Aufgaben: ein Auto in die Garage '
             'stellen, drei Abzeichen sammeln und die ersten fünfzig Kilometer '
             'fahren. Acht von elf reichen für die Bonuswoche.',
-        'Nach der Fahrt zeigt die XP-Rechnung jetzt auch, wie lange deine '
+        'Nach der Fahrt siehst du bei deinen XP jetzt auch, wie lange deine '
             'Bonuswoche noch läuft und auf welchen Multiplikator du morgen '
             'kommst.',
         'Fahrzeugmarken werden zusammengefasst: BMW, Bmw und bmw sind jetzt '
@@ -148,15 +148,15 @@ class AppChangelog {
             'Community. Tippst du eine an, siehst du, wer welches Fahrzeug '
             'fährt. Umschaltbar zwischen Autos, Motorrädern und allen.',
         'Kleine Punkte zeigen dir jetzt, wo etwas Neues passiert ist: am '
-            'Community-Symbol, an den einzelnen Reitern und an der jeweiligen '
-            'Community. Der Punkt verschwindet erst, wenn du wirklich dort '
+            'Symbol für Communities, an den einzelnen Reitern und an der '
+            'jeweiligen Community. Der Punkt verschwindet erst, wenn du dort '
             'warst, und er merkt sich das über Geräte hinweg.',
         'Communities, die jünger als eine Woche sind, tragen jetzt den '
             'Hinweis "Vor kurzem erstellt". In der Community selbst siehst '
             'du das Gründungsdatum.',
         'Hashtags: Schreibst du ein Wort mit Raute in einen Beitrag, kannst '
             'du danach suchen und findest alles dazu.',
-        'Der Umkreis-Filter bei den Gruppenfahrten merkt sich deine '
+        'Der Filter nach Umkreis bei den Gruppenfahrten merkt sich deine '
             'Einstellung und filtert jetzt schon auf dem Server. Vorher '
             'konnten nahe Gruppen herausfallen, bevor der Filter überhaupt '
             'griff.',
@@ -181,7 +181,7 @@ class AppChangelog {
             'statt nur "zu einer Gruppe".',
         'Communities haben jetzt ein Bild. Jeder Admin kann es setzen, '
             'ändern und wieder entfernen.',
-        'Neue Community-Einstellungen an einer Stelle: Bild, Name, '
+        'Alle Einstellungen deiner Community an einer Stelle: Bild, Name, '
             'Beschreibung, wer schreiben darf, öffentlich oder privat, '
             'Einladungscode und Mitglieder. Erreichbar über das Menü in der '
             'Übersicht und im Chat.',
@@ -217,7 +217,7 @@ class AppChangelog {
     ),
     ChangelogEintrag(
       version: '1.5.17',
-      titel: 'Streak verzeiht einen Tag, XP-Rechnung sichtbar, Abzeichen in Farbe',
+      titel: 'Streak verzeiht einen Tag, XP werden nachvollziehbar, Abzeichen in Farbe',
       punkte: <String>[
         'Vergisst du einen Tag zu fahren, ist deine Serie nicht sofort weg. '
             'Erst zwei Tage Pause setzen sie zurück.',
@@ -235,8 +235,8 @@ class AppChangelog {
             'nächstes dran ist.',
         'Das Tutorial erklärt jetzt die ganze App, auch Chats, Auswertung, '
             'Profil und Garage sowie das, was nach der Fahrt passiert.',
-        'Das Startklar-Abzeichen kommt nachträglich an, wenn du die '
-            'Starter-Aufgaben erledigt hast. Dazu drei neue Aufgaben: dein '
+        'Das Abzeichen Startklar kommt nachträglich an, wenn du die ersten '
+            'Aufgaben erledigt hast. Dazu drei neue Aufgaben: dein '
             'erster Beitrag, deine erste abgeschlossene Gruppenfahrt und '
             'deine erste gefahrene Runde.',
       ],
@@ -255,8 +255,8 @@ class AppChangelog {
             'zurück und probiert das mehrfach. Erst wenn das nicht klappt, '
             'geht es direkt zum Ziel. Dein gewählter Umweg bleibt dabei '
             'erhalten, auch bei Fahrten mit Zwischenstopps.',
-        'Kommst du nach einem App-Wechsel oder einem Neustart zurück, läuft '
-            'die Fahrt ohne Antippen weiter. Gruppenfahrten, Touren mit '
+        'Kommst du nach einem Wechsel in eine andere App oder einem Neustart '
+            'zurück, läuft die Fahrt ohne Antippen weiter. Gruppenfahrten, Touren mit '
             'Stopps und Aufzeichnungen werden jetzt ebenfalls gesichert, '
             'samt Höchstgeschwindigkeit.',
         'Beim Erstellen einer Gruppe bleiben Rundkurs und A nach B sichtbar. '
@@ -291,9 +291,9 @@ class AppChangelog {
             'Abbiegehinweise.',
         'Weniger unnötige Neuberechnungen, zum Beispiel nach einem Halt an '
             'der Ampel oder im Kreisverkehr.',
-        'Die Starter-Aufgaben sind antippbar: Die App bringt dich hin und '
-            'zeigt dir an Ort und Stelle, was zu tun ist. Das Strecken-Setup '
-            'erklärt sich auf Wunsch Schritt für Schritt.',
+        'Deine ersten Aufgaben sind antippbar: Die App bringt dich hin und '
+            'zeigt dir an Ort und Stelle, was zu tun ist. Das Einrichten der '
+            'Strecke erklärt sich auf Wunsch Schritt für Schritt.',
         'Vierzehn neue Abzeichen, vom Frühstarter bis zur Community-Stimme. '
             'Gesperrte zeigen, was fehlt, zum Beispiel 274 von 1000 km.',
         'Neu auf der Startseite: die Rangliste mit den Top 3 und deiner '
@@ -316,8 +316,8 @@ class AppChangelog {
         'Adressen lassen sich jetzt speichern und stehen bei der Zielsuche '
             'als Schnellzugriff bereit.',
         'Neu für alle: Das kurze Tutorial zum Mitmachen startet einmal '
-            'automatisch. Danach warten die Starter-Aufgaben mit dem '
-            'Startklar-Abzeichen und einer Woche doppelter XP.',
+            'automatisch. Danach warten die ersten Aufgaben mit dem '
+            'Abzeichen Startklar und einer Woche doppelter XP.',
         'Sieben neue Abzeichen, vom Stammfahrer bis zum Vielfahrer. Antippen '
             'zeigt jetzt zu jedem eine kurze Beschreibung.',
         'Neues Tutorial: kurz, animiert und zum Mitmachen. Wer es abschließt, '

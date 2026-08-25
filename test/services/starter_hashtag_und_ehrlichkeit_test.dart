@@ -161,7 +161,7 @@ void main() {
       ).readAsStringSync();
 
       final zaehlung = quelle.indexOf('final abzeichenOhneStartklar');
-      final vergabe = quelle.indexOf('currentlyQualifiedBadges.add(onboardingBadgeId)');
+      final vergabe = quelle.indexOf('currentlyQualifiedBadges.add(alleAufgabenBadgeId)');
       expect(zaehlung, greaterThan(0), reason: 'Zaehlung nicht gefunden');
       expect(vergabe, greaterThan(0), reason: 'badge_58 wird nicht vergeben');
       expect(
@@ -186,7 +186,7 @@ void main() {
         quelle.lastIndexOf('if (', vergabe),
         vergabe,
       );
-      expect(zeile.trim(), 'currentlyQualifiedBadges.add(onboardingBadgeId);');
+      expect(zeile.trim(), 'currentlyQualifiedBadges.add(alleAufgabenBadgeId);');
       expect(bedingung, contains('starter.alleAufgabenErledigt'));
       expect(
         bedingung,
@@ -222,8 +222,15 @@ void main() {
     /// verwirft unbekannte Kennungen still). Genau deshalb waere ein
     /// Auseinanderlaufen unsichtbar — diese Zeile macht es laut.
     test('vergebene und katalogisierte Kennung sind dieselbe', () {
-      expect(GamificationService.onboardingBadgeId, Badge.onboardingBadgeId);
+      expect(
+        GamificationService.alleAufgabenBadgeId,
+        Badge.alleAufgabenBadgeId,
+      );
+      expect(GamificationService.alleAufgabenBadgeId, 'badge_58');
+      // 2026-08-25: Die alten Namen bleiben als Alias und muessen dasselbe
+      // meinen, solange die Startseiten-Karte sie noch liest.
       expect(GamificationService.onboardingBadgeId, 'badge_58');
+      expect(Badge.onboardingBadgeId, 'badge_58');
     });
   });
 }

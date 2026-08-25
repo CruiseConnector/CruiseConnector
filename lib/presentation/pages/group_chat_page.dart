@@ -23,7 +23,7 @@ class GroupChatPage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              groupName?.trim().isNotEmpty == true ? groupName! : 'Gruppen-Chat',
+              groupName?.trim().isNotEmpty == true ? groupName! : 'Chat der Gruppe',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -32,7 +32,7 @@ class GroupChatPage extends StatelessWidget {
               ),
             ),
             const Text(
-              'Gruppen-Chat',
+              'Chat der Gruppe',
               style: TextStyle(color: Colors.white54, fontSize: 12),
             ),
           ],

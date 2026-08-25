@@ -347,7 +347,7 @@ class AuthService {
             defaultTargetPlatform == TargetPlatform.macOS);
     if (!isApplePlatform || !await SignInWithApple.isAvailable()) {
       throw const AuthException(
-        'Apple-Verbinden ist auf diesem Gerät nicht verfügbar.',
+        'Apple lässt sich auf diesem Gerät nicht verknüpfen.',
       );
     }
     final rawNonce = _db.auth.generateRawNonce();
@@ -372,7 +372,7 @@ class AuthService {
       await _saveAppleDisplayName(credential);
     } on SignInWithAppleAuthorizationException catch (e) {
       if (e.code == AuthorizationErrorCode.canceled) {
-        throw const AuthException('Apple-Verbinden abgebrochen.');
+        throw const AuthException('Verknüpfen mit Apple abgebrochen.');
       }
       throw AuthException(e.message);
     }
@@ -385,7 +385,7 @@ class AuthService {
     final onIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     if (webClientId.isEmpty || (onIos && iosClientId.isEmpty)) {
       throw const AuthException(
-        'Google-Verbinden ist noch nicht konfiguriert (iOS-Client-ID fehlt).',
+        'Google lässt sich noch nicht verknüpfen, die Kennung für iOS fehlt.',
       );
     }
     final googleRawNonce = await _ensureGoogleInitialized();
@@ -406,9 +406,9 @@ class AuthService {
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled ||
           e.code == GoogleSignInExceptionCode.interrupted) {
-        throw const AuthException('Google-Verbinden abgebrochen.');
+        throw const AuthException('Verknüpfen mit Google abgebrochen.');
       }
-      throw AuthException(e.description ?? 'Google-Verbinden fehlgeschlagen.');
+      throw AuthException(e.description ?? 'Verknüpfen mit Google fehlgeschlagen.');
     }
   }
 

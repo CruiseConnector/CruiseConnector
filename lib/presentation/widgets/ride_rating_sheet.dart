@@ -109,7 +109,7 @@ class _RideRatingSheetState extends State<_RideRatingSheet> {
       _sendet = false;
       _storeLinkAnbieten = true;
       _dankeText =
-          'Danke dir. Das hilft uns wirklich weiter — jede Bewertung macht '
+          'Danke dir. Das hilft uns wirklich weiter, jede Bewertung macht '
           'Cruise Connector für andere Autofahrer sichtbarer.';
       _schritt = _Schritt.danke;
     });
@@ -334,7 +334,7 @@ class _RideRatingSheetState extends State<_RideRatingSheet> {
         const SizedBox(height: 10),
         Text(
           'Das geht direkt an uns und nicht in den App Store. Schreib ruhig '
-          'ehrlich, was gestört hat — daraus wird die nächste Version gebaut.',
+          'ehrlich, was gestört hat. Daraus wird die nächste Version gebaut.',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.7),

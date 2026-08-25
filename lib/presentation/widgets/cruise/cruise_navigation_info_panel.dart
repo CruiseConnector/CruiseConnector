@@ -143,7 +143,7 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
   }
 
   static String _formatDuration(double? durationSeconds) {
-    if (durationSeconds == null || durationSeconds <= 0) return '--';
+    if (durationSeconds == null || durationSeconds <= 0) return '…';
     final totalMinutes = (durationSeconds / 60).round();
     final hours = totalMinutes ~/ 60;
     final minutes = totalMinutes % 60;
@@ -152,14 +152,14 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
   }
 
   static String _formatEta(double? durationSeconds) {
-    if (durationSeconds == null || durationSeconds <= 0) return 'Ankunft: --';
+    if (durationSeconds == null || durationSeconds <= 0) return 'Ankunft: …';
     final now = DateTime.now();
     final eta = now.add(Duration(seconds: durationSeconds.round()));
     return 'Ankunft: ${eta.hour.toString().padLeft(2, '0')}:${eta.minute.toString().padLeft(2, '0')}';
   }
 
   static String _formatDistanceKm(double? rawDistance) {
-    if (rawDistance == null || rawDistance <= 0) return '-- km';
+    if (rawDistance == null || rawDistance <= 0) return '… km';
     // 2026-06-13 (vucko J2): Gleiche Google-Style-Stufung wie das Manöver-Banner
     // (rawDistance ist immer in Metern).
     return formatNavDistance(rawDistance);

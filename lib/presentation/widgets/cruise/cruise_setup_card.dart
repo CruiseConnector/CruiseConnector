@@ -230,7 +230,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
     'zufall':
         'Zufall: Wir wählen den Rundkurs spontan, meist mit den kurvigsten Straßen rund um deinen Standort. Schnellste Option.',
     'wegpunkte':
-        'Wegpunkte: Du tippst auf der Karte deine Stopps. Trip-Modus erlaubt bis 5 Stopps, perfekt für mehrtägige Touren mit Pause/Resume.',
+        'Wegpunkte: Du tippst auf der Karte deine Stopps. Der Tripmodus erlaubt bis 5 Stopps, perfekt für mehrtägige Touren mit Pause und Fortsetzen.',
     // 2026-08-03 (vucko Route-Aufzeichnen): dritter Planungs-Typ, keine
     // Berechnung — die Strecke entsteht beim Fahren.
     'aufzeichnen':
@@ -357,7 +357,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             children: [
               const Expanded(
                 child: Text(
-                  'Strecken-Setup',
+                  'Streckenplanung',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
@@ -372,7 +372,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
               if (widget.onHilfe != null)
                 Semantics(
                   button: true,
-                  label: 'Erklärung zum Strecken-Setup',
+                  label: 'Erklärung zur Streckenplanung',
                   child: InkWell(
                     key: _zielKey(TutorialZielRegistry.cruiseSetupHilfe),
                     onTap: widget.onHilfe,
@@ -397,7 +397,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
           ),
           const SizedBox(height: 24),
           const Text(
-            'Routen-Modus',
+            'Routenmodus',
             style: TextStyle(
               color: Colors.grey,
               fontSize: 14,
@@ -547,7 +547,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
       children: [
         const SizedBox(height: 12),
         const Text(
-          'Planungs-Typ',
+          'Planungstyp',
           style: TextStyle(
             color: Colors.grey,
             fontSize: 14,
@@ -692,7 +692,7 @@ class _CruiseSetupCardState extends State<CruiseSetupCard>
             const SizedBox(height: 8),
             const Text(
               'Keine Vorausplanung: Du startest die Aufzeichnung und fährst los. '
-              'Am Ende drückst du „Aufzeichnung beenden" — danach kannst du die '
+              'Am Ende drückst du „Aufzeichnung beenden". Danach kannst du die '
               'Strecke bewerten, speichern und veröffentlichen.',
               style: TextStyle(
                 color: Colors.white38,

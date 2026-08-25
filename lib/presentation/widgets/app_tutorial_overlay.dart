@@ -120,7 +120,7 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       icon: CupertinoIcons.house_fill,
       title: 'Deine Startseite',
       body:
-          'Hier landest du bei jedem Start. Oben wartet dein Starter-Paket '
+          'Hier landest du bei jedem Start. Oben wartet dein Starterpaket '
           'mit fünf kleinen Aufgaben, die dir eine Woche doppelte XP '
           'freischalten. Darunter zeigen die Kacheln Level, XP, Kilometer, '
           'Streak und deine Woche. Welche Kacheln du siehst, bestimmst du '
@@ -159,9 +159,9 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       body:
           'Unterwegs sagt dir das Banner oben jede Abbiegung an. Am Ende '
           'tippst du auf „Fahrt beenden": Du siehst Distanz, Dauer, Kurven '
-          'und Top-Speed, kannst ein Foto anhängen und die Fahrt benennen. '
-          'Erst mit „Speichern" wandern Kilometer, XP und Streak in dein '
-          'Profil.',
+          'und Höchstgeschwindigkeit, kannst ein Foto anhängen und die Fahrt '
+          'benennen. Erst mit „Speichern" wandern Kilometer, XP und Streak in '
+          'dein Profil.',
       cta: 'Vorschau',
       target: _TutorialTarget.none,
       kind: _StepKind.afterRide,
@@ -222,8 +222,8 @@ class _AppTutorialOverlayState extends State<AppTutorialOverlay> {
       title: 'Analytics',
       body:
           'Dein Fortschritt in Zahlen: Level und XP, Fahrten, Distanz und '
-          'Fahrzeit, deine Streak, die Badge-Meilensteine und die Rangliste '
-          'für Woche und Monat.',
+          'Fahrzeit, deine Streak, die Meilensteine deiner Badges und die '
+          'Rangliste für Woche und Monat.',
       cta: 'Analytics',
       target: _TutorialTarget.analytics,
       kind: _StepKind.analytics,
@@ -850,7 +850,7 @@ class _HomeStartAnimation extends StatelessWidget {
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
-                    'Dein Starter-Paket',
+                    'Dein Starterpaket',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 13,
@@ -1372,7 +1372,8 @@ class _FavoriteActionCardState extends State<_FavoriteActionCard> {
                     child: Text(
                       'So sieht ein gemerkter Ort aus. Das war eine Übung: '
                       'Deinen ersten echten Favoriten setzt du in der '
-                      'Zielsuche, dann hakt sich auch die Starter-Aufgabe ab.',
+                      'Zielsuche, dann hakt sich auch die Aufgabe im '
+                      'Starterpaket ab.',
                       maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1576,7 +1577,7 @@ class _RouteSearchActionCardState extends State<_RouteSearchActionCard> {
                     child: Text(
                       'Beispielroute: 42 km, 87 Kurven. Deine echte Suche '
                       'startest du gleich selbst im Cruise Mode, dann zählt '
-                      'auch die Starter-Aufgabe.',
+                      'auch die Aufgabe im Starterpaket.',
                       maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

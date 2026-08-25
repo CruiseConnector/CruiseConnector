@@ -190,7 +190,7 @@ class _NotificationPermissionNoticeSheetState
                                     ),
                                     const SizedBox(height: 10),
                                     Text(
-                                      'Wir schicken dir nur wichtige Hinweise wie Gruppen-Updates, neue Follower, Antworten und Routen-Erinnerungen.',
+                                      'Wir schicken dir nur wichtige Hinweise wie Neues aus deinen Gruppen, neue Follower, Antworten und Erinnerungen an deine Routen.',
                                       style: TextStyle(
                                         color: Colors.white.withValues(
                                           alpha: 0.72,

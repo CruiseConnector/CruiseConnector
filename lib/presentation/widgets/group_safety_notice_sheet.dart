@@ -305,7 +305,7 @@ class _GroupSafetyNoticeSheetState extends State<GroupSafetyNoticeSheet> {
                                         Text(
                                           _readToBottom
                                               ? 'Setze den Haken und bestätige. Danach erscheint dieser Hinweis nicht mehr automatisch. Schließt du mit ✕, entsteht keine Gruppe und der Hinweis kommt wieder.'
-                                              : 'Scrolle bis zum Ende und setze den Haken. Mit ✕ oben kommst du jederzeit heraus — dann entsteht keine Gruppe.',
+                                              : 'Scrolle bis zum Ende und setze den Haken. Mit ✕ oben kommst du jederzeit heraus, dann entsteht keine Gruppe.',
                                           style: TextStyle(
                                             color: Colors.white.withValues(
                                               alpha: 0.56,
@@ -402,7 +402,7 @@ class _Header extends StatelessWidget {
             const SizedBox(width: 12),
             const Expanded(
               child: Text(
-                'Gruppenfahrt-Hinweis',
+                'Hinweis zur Gruppenfahrt',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,

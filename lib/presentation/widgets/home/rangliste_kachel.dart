@@ -256,7 +256,7 @@ class _RanglisteKachelState extends State<RanglisteKachel> {
               Expanded(
                 child: Text(
                   ich == null
-                      ? 'Du bist noch nicht dabei — fahr eine Runde und steig ein.'
+                      ? 'Du bist noch nicht dabei. Fahr eine Runde und steig ein.'
                       : 'Du: Platz ${ich.rang}'
                             '${ich.sessionCount > 0 ? ' · ${ich.sessionCount} ${ich.sessionCount == 1 ? 'Fahrt' : 'Fahrten'}' : ''}',
                   maxLines: 1,

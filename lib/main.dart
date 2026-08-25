@@ -379,7 +379,7 @@ class _MyAppState extends State<MyApp> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Auth-Link empfangen. Falls du nicht eingeloggt bist, bitte erneut versuchen.',
+            'Anmeldelink empfangen. Falls du nicht eingeloggt bist, bitte erneut versuchen.',
           ),
         ),
       );

@@ -9,7 +9,7 @@
   "languageChoiceContinue": "Weiter",
   "languageGerman": "Deutsch",
   "languageEnglish": "English",
-  "languageSystemHint": "Vorgeschlagen nach deiner Geräte-Sprache",
+  "languageSystemHint": "Vorgeschlagen nach der Sprache deines Geräts",
 
   "settingsLanguage": "Sprache",
   "@settingsLanguage": {
@@ -26,7 +26,7 @@
   "loginNoAccountPrefix": "Noch kein Konto? ",
   "loginRegisterNow": "Jetzt registrieren",
   "loginResendVerification": "E-Mail erneut senden",
-  "loginVerificationResent": "Bestätigungs-E-Mail an {email} erneut gesendet.",
+  "loginVerificationResent": "Bestätigungsmail an {email} erneut gesendet.",
   "@loginVerificationResent": {
     "placeholders": { "email": { "type": "String" } }
   },
@@ -38,7 +38,7 @@
   "loginErrorFailed": "Login fehlgeschlagen. Bitte erneut versuchen.",
 
   "authSignIn": "Anmelden",
-  "authEmailLabel": "E-Mail Adresse",
+  "authEmailLabel": "E-Mail-Adresse",
   "authEmailHint": "deine@email.de",
   "authPasswordLabel": "Passwort",
   "authPasswordHint": "••••••••",
@@ -76,21 +76,21 @@
   "changePasswordSet": "Passwort gesetzt. Du kannst dich jetzt auch mit E-Mail anmelden.",
 
   "resetPasswordTitle": "Passwort zurücksetzen",
-  "resetPasswordEnterEmail": "Gib deine E-Mail-Adresse ein. Wir schicken dir einen 6-stelligen Code, mit dem du ein neues Passwort setzt.",
+  "resetPasswordEnterEmail": "Gib deine E-Mail-Adresse ein. Wir schicken dir einen sechsstelligen Code, mit dem du ein neues Passwort setzt.",
   "resetPasswordCodeStepTitle": "Code eingeben",
-  "resetPasswordCodeStepSubtitle": "Falls ein Konto mit {email} existiert, haben wir dir einen 6-stelligen Code geschickt.",
+  "resetPasswordCodeStepSubtitle": "Falls ein Konto mit {email} existiert, haben wir dir einen sechsstelligen Code geschickt.",
   "@resetPasswordCodeStepSubtitle": {
     "placeholders": { "email": { "type": "String" } }
   },
-  "resetPasswordNewStepSubtitle": "Wähl ein neues Passwort — mindestens {min} Zeichen.",
+  "resetPasswordNewStepSubtitle": "Wähl ein neues Passwort mit mindestens {min} Zeichen.",
   "@resetPasswordNewStepSubtitle": {
     "placeholders": { "min": { "type": "int" } }
   },
   "resetPasswordDoneTitle": "Passwort geändert",
   "resetPasswordDoneSubtitle": "Dein neues Passwort ist aktiv und du bist angemeldet. Beim nächsten Login nutzt du das neue Passwort.",
   "resetPasswordSendCode": "Code senden",
-  "resetPasswordCodeLabel": "6-stelliger Code",
-  "resetPasswordSpamHint": "Keine Mail erhalten? Sieh auch im Spam-Ordner nach.",
+  "resetPasswordCodeLabel": "sechsstelliger Code",
+  "resetPasswordSpamHint": "Keine Mail erhalten? Sieh auch im Spamordner nach.",
   "resetPasswordResend": "Code erneut senden",
   "resetPasswordResendIn": "Code erneut senden ({seconds} s)",
   "@resetPasswordResendIn": {
@@ -103,7 +103,7 @@
   "resetPasswordErrorSendFailed": "Der Code konnte nicht gesendet werden. Bitte erneut versuchen.",
   "resetPasswordCodeSent": "Neuer Code gesendet. Schau in dein Postfach.",
   "resetPasswordErrorResendFailed": "Konnte keinen neuen Code senden. Bitte kurz warten.",
-  "resetPasswordErrorCodeMissing": "Bitte gib den 6-stelligen Code ein.",
+  "resetPasswordErrorCodeMissing": "Bitte gib den sechsstelligen Code ein.",
   "resetPasswordErrorCodeInvalid": "Code ungültig oder abgelaufen.",
   "resetPasswordErrorVerifyFailed": "Bestätigung fehlgeschlagen. Bitte erneut versuchen.",
   "resetPasswordErrorRateLimited": "Zu viele E-Mails in kurzer Zeit. Bitte warte ein paar Minuten.",

@@ -117,7 +117,7 @@ class AppInputLimits {
   static String usernameFoldingHint(String value) {
     final trimmed = value.trim();
     if (!usernameNeedsFoldingHint(trimmed)) return '';
-    return ' „$trimmed" zählt dabei wie „${usernameKey(trimmed)}" — Groß- und '
+    return ' „$trimmed" zählt dabei wie „${usernameKey(trimmed)}". Groß- und '
         'Kleinschreibung sowie ä ö ü ß werden beim Vergleich gleich behandelt.';
   }
 

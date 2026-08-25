@@ -243,8 +243,8 @@ class _ProfilePageState extends State<ProfilePage>
           SnackBar(
             content: Text(
               source == ImageSource.camera
-                  ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
-                  : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.',
+                  ? 'Kein Zugriff auf die Kamera. Erlaube ihn in den Einstellungen.'
+                  : 'Kein Zugriff auf die Galerie. Erlaube ihn in den Einstellungen.',
             ),
             backgroundColor: const Color(0xFF1C1F26),
           ),
@@ -1776,7 +1776,9 @@ class _ProfilePageState extends State<ProfilePage>
             style: TextStyle(color: Colors.white),
           ),
           content: Text(
-            'Wenn du "${route.name ?? route.style}" entfernst, werden auch deine Posts mit dieser Route gelöscht, inklusive Community-Posts und Community-Chat-Posts.',
+            'Wenn du "${route.name ?? route.style}" entfernst, werden auch '
+            'deine Posts mit dieser Route gelöscht. Das gilt auch für Posts '
+            'in einer Community und für Posts in ihrem Chat.',
             style: const TextStyle(color: Colors.grey),
           ),
           actions: [
@@ -2092,7 +2094,7 @@ class _ProfilePageState extends State<ProfilePage>
       (label: 'Profilbild', done: _hasText(avatarUrl)),
       (label: 'Banner', done: _hasText(bannerUrl)),
       (label: 'Beschreibung', done: _hasText(bio)),
-      (label: 'Garage-Fahrzeug', done: hasVehicle),
+      (label: 'Fahrzeug in der Garage', done: hasVehicle),
     ];
     final missing = [
       for (final item in items)
@@ -2623,9 +2625,9 @@ class _ProfilePageState extends State<ProfilePage>
         _zeigeGruppenHinweis(
           willDelete
               ? 'Ob die Gruppe gelöscht wurde, ist unklar. Wir laden die '
-                    'Liste neu — schau bitte nach.'
+                    'Liste neu. Schau bitte nach.'
               : 'Ob du die Gruppe verlassen hast, ist unklar. Wir laden die '
-                    'Liste neu — schau bitte nach.',
+                    'Liste neu. Schau bitte nach.',
         );
         await _loadData();
     }
@@ -2729,10 +2731,10 @@ class _LeaveGroupDialogState extends State<LeaveGroupDialog> {
         _busy = false;
         _error = widget.willDelete
             ? 'Das dauert zu lange. Die Anfrage kann trotzdem angekommen '
-                  'sein — schließe den Dialog und sieh nach, ob die Gruppe '
+                  'sein. Schließe den Dialog und sieh nach, ob die Gruppe '
                   'noch da ist.'
             : 'Das dauert zu lange. Die Anfrage kann trotzdem angekommen '
-                  'sein — schließe den Dialog und sieh nach, ob du noch '
+                  'sein. Schließe den Dialog und sieh nach, ob du noch '
                   'Mitglied bist.';
       });
     } catch (e) {

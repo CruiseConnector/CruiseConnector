@@ -334,8 +334,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
           SnackBar(
             content: Text(
               source == ImageSource.camera
-                  ? 'Kein Kamera-Zugriff. Berechtigung in den Einstellungen erlauben.'
-                  : 'Kein Galerie-Zugriff. Berechtigung in den Einstellungen erlauben.',
+                  ? 'Kein Zugriff auf die Kamera. Berechtigung in den Einstellungen erlauben.'
+                  : 'Kein Zugriff auf die Galerie. Berechtigung in den Einstellungen erlauben.',
             ),
             backgroundColor: const Color(0xFF1C1F26),
           ),
@@ -484,7 +484,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final title = switch (preset) {
       _ImageCropPreset.avatar => 'Profilbild zuschneiden',
       _ImageCropPreset.banner => 'Banner zuschneiden',
-      _ImageCropPreset.car => 'Fahrzeug-Foto zuschneiden',
+      _ImageCropPreset.car => 'Foto des Fahrzeugs zuschneiden',
     };
 
     return ImageCropper().cropImage(
@@ -1082,7 +1082,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                           const SizedBox(height: 20),
 
                           _buildSectionHeader(
-                            'Badge-Sticker',
+                            'Abzeichen als Sticker',
                             Icons.workspace_premium_rounded,
                           ),
                           const SizedBox(height: 16),
@@ -1098,7 +1098,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
                           const SizedBox(height: 28),
 
-                          _buildLabel('Bio-Überschrift'),
+                          _buildLabel('Überschrift deiner Bio'),
                           _buildTextField(
                             _bioTitleController,
                             'z.B. Über mich',
@@ -1768,8 +1768,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   Expanded(
                     child: Text(
                       hasImage
-                          ? 'Fahrzeug-Foto ändern'
-                          : 'Fahrzeug-Foto hinzufügen',
+                          ? 'Foto des Fahrzeugs ändern'
+                          : 'Foto des Fahrzeugs hinzufügen',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

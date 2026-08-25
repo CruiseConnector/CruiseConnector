@@ -264,8 +264,8 @@ class _RoutingOnboardingSheetState extends State<RoutingOnboardingSheet> {
                                         const SizedBox(height: 8),
                                         Text(
                                           _readToBottom
-                                              ? 'Mit „Verstanden" erscheint dieser Cruise-Hinweis nicht mehr automatisch. Schließt du oben mit ✕, zeigen wir ihn beim nächsten Mal wieder.'
-                                              : 'Scrolle bis zum Ende, danach kannst du bestätigen. Mit ✕ oben kommst du jederzeit heraus — der Hinweis kommt dann erneut.',
+                                              ? 'Mit „Verstanden" erscheint dieser Hinweis nicht mehr automatisch. Schließt du oben mit ✕, zeigen wir ihn beim nächsten Mal wieder.'
+                                              : 'Scrolle bis zum Ende, danach kannst du bestätigen. Mit ✕ oben kommst du jederzeit heraus. Der Hinweis kommt dann erneut.',
                                           style: TextStyle(
                                             color: Colors.white.withValues(
                                               alpha: 0.56,

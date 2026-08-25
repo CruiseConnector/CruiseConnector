@@ -200,7 +200,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
         content: const Text(
-          'Bist du dir sicher, dass du das Hintergrund-Foto entfernen möchtest?',
+          'Bist du dir sicher, dass du das Foto im Hintergrund entfernen möchtest?',
           style: TextStyle(color: Color(0xFFA0AEC0)),
         ),
         actions: [
@@ -304,7 +304,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
       debugPrint('[ShareFehler] $e\n$st');
       // Echte Fehlerursache sichtbar machen (debugPrint loggt im Release nicht).
       final msg = e.toString().replaceAll('\n', ' ');
-      _toast('Teilen-Fehler: ${msg.length > 150 ? msg.substring(0, 150) : msg}');
+      _toast('Fehler beim Teilen: ${msg.length > 150 ? msg.substring(0, 150) : msg}');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -503,7 +503,7 @@ class _RouteSharePageState extends State<RouteSharePage> {
                 Expanded(
                   child: Text(
                     _isSticker
-                        ? 'Transparenter Sticker, leg ihn in der Story-App über dein eigenes Foto.'
+                        ? 'Transparenter Sticker, leg ihn in deiner App für Storys über dein eigenes Foto.'
                         : _isMap
                             ? 'Echte Karte mit deiner Route, direkt teilen.'
                             : _bgPhoto != null

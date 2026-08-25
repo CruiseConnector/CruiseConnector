@@ -14,8 +14,42 @@ class Badge {
   /// (`StarterAufgabenService.aufgabenFuerBoost`) und BLEIBT dort. Sie ist der
   /// Preis fuer die Bonuswoche und muss erreichbar bleiben — gemessen am
   /// 24.08. hatte die frueher unerreichbare Schwelle dazu gefuehrt, dass 0 von
-  /// 183 Nutzern den Boost je bekommen haben. „Alle zwoelf" ist seit dem
-  /// 25.08. die Bedingung von [onboardingBadgeId], nicht von diesem hier.
+  /// 183 Nutzern den Boost je bekommen haben.
+  ///
+  /// 2026-08-25, ZWEITE ENTSCHEIDUNG — DIESES ABZEICHEN IST *DIE* BELOHNUNG
+  /// DER STARTER-LISTE. Vucko woertlich: „das abzeichen nach dem onboarding
+  /// soll startklar heissen und nicht durchgespielt" und „man bekommt ein
+  /// badge 1000 XP + noch einen 2 fach boost der 7 Tage lang aktiv ist".
+  ///
+  /// Es gab zwei Kandidaten fuer denselben Namen, und keiner liess sich
+  /// entziehen (`profiles.badges` ist seit dem 06.05. append-only):
+  ///
+  ///   badge_16 „Startklar"      183 von 202 Profilen — aber ALLE aus der
+  ///                             Migration vom 24.08., verdient hat es keiner.
+  ///   badge_58 „Durchgespielt"  1 Profil (Vucko), und das noch aus der Zeit,
+  ///                             als die Bedingung das Tutorial allein war.
+  ///
+  /// ENTSCHIEDEN WURDE FUER badge_16, aus drei Gruenden:
+  ///  1. Es traegt den Namen, den Vucko verlangt, bereits — badge_58 koennte
+  ///     ihn nicht bekommen, ohne dass es zwei „Startklar" gaebe.
+  ///  2. Sein Emblem ist der Zuendschluessel (`amber_ignition`). Das ist das
+  ///     Bild fuer „jetzt kann es losgehen", nicht fuer „alles abgehakt".
+  ///  3. 183 Profile tragen es schon. Haette badge_58 die Belohnung bekommen,
+  ///     waere badge_16 fuer 183 Leute ein Abzeichen ohne jede Bedeutung
+  ///     geworden — und weggenommen haette man es ihnen trotzdem nicht.
+  ///
+  /// AN DIESER EINEN BEDINGUNG (`StarterAufgabenService.paketVerdient`)
+  /// haengt seit dem 25.08. die GANZE Belohnung, und zwar gemeinsam:
+  /// dieses Abzeichen, 1000 XP (`GamificationService.starterPaketBonusXp`)
+  /// und sieben Tage doppelte XP. Eine Belohnung fuer eine Sache.
+  ///
+  /// DIE EHRLICHE ALTLAST: Fuer die 183 Profile aus der Migration ist der
+  /// Abzeichen-Teil dieser Belohnung schon ausgegeben. Sie werden die
+  /// Verleihung nie sehen, weil `newlyQualifiedBadgeIds` nur meldet, was noch
+  /// nicht im Profil steht, und Entziehen verboten ist. Was bei ihnen
+  /// ankommt, sind die 1000 XP und die Bonuswoche — gemessen am 25.08. hatte
+  /// genau 1 von 202 Profilen ueberhaupt ein `starter_bonus_ende`, der Boost
+  /// ist fuer praktisch alle noch offen.
   static const String starterBadgeId = 'badge_16';
 
   /// 2026-08-24 (Aufgabe 10a, vucko woertlich): „dass community ein enzelnes
@@ -69,6 +103,41 @@ class Badge {
   ///
   /// badge_58 ist damit das SPAETERE der beiden und nicht mehr das fruehere.
   ///
+  /// 2026-08-25, ABENDS — DIESES ABZEICHEN IST NICHT DIE BELOHNUNG.
+  ///
+  /// Vucko: „das abzeichen nach dem onboarding soll startklar heissen und
+  /// nicht durchgespielt." Die Belohnung der Starter-Liste ist ab jetzt
+  /// ausschliesslich [starterBadgeId] „Startklar", zusammen mit 1000 XP und
+  /// der Doppel-XP-Woche. badge_58 bekommt davon NICHTS: keine XP, keine
+  /// Bonuswoche, und der Belohnungskasten der Karte nennt es nicht.
+  ///
+  /// Es bleibt trotzdem stehen, und zwar mit voller Absicht:
+  ///  * Streichen wuerde es seinem einen Traeger WEGNEHMEN.
+  ///    `GamificationService.normalizeBadgeIds` verwirft jede Kennung, die
+  ///    nicht in [all] steht, und schreibt die bereinigte Liste beim naechsten
+  ///    Sync ins Profil zurueck. Der Eintrag waere nicht nur unsichtbar,
+  ///    sondern weg.
+  ///  * Ohne Bedingung waere es ein Abzeichen, das 201 von 202 Profilen fuer
+  ///    immer gesperrt sehen. Die Sammlung zeigt „x von N freigeschaltet";
+  ///    N ist dann nie erreichbar.
+  ///  * Und die letzten vier Aufgaben der Liste brauchen ein Ziel. Die
+  ///    Belohnung faellt bei acht — was danach kommt, waere sonst unbezahlte
+  ///    Restarbeit.
+  ///
+  /// Damit messen die beiden endgueltig Verschiedenes, statt fast dasselbe:
+  /// badge_16 ist ein BELOHNUNGSPAKET bei acht, badge_58 ein reines
+  /// Sammler-Abzeichen bei zwoelf.
+  ///
+  /// WARUM DIE BELOHNUNG NICHT AUF ZWOELF GEHT — die Zahl, die es entscheidet.
+  /// GEMESSEN am 25.08. ueber alle 202 Profile, nur die acht serverseitig
+  /// ableitbaren Aufgaben: ein Beitrag 9, ein Hashtag 0 (in Worten: null),
+  /// eine beendete Fahrt 18, eine Gruppenfahrt 1, ein Auto in der Garage 66,
+  /// eine gespeicherte Route 19, drei Abzeichen 6, fuenfzig Kilometer 9 —
+  /// und alle acht zusammen: 0. Eine Belohnung bei zwoelf waere heute fuer
+  /// niemanden erreichbar. Genau dieser Fehler hat am 24.08. dazu gefuehrt,
+  /// dass 0 von 183 Nutzern den Boost je bekommen haben. Er wird hier nicht
+  /// wiederholt.
+  ///
   /// BESTANDSSCHUTZ: Wer badge_58 heute schon traegt, behaelt es.
   /// `profiles.badges` ist seit dem 06.05. append-only (Waechter
   /// `preserve_profile_badges`), ein Entziehen waere ein Bruch dieses
@@ -77,7 +146,19 @@ class Badge {
   /// Der Abschluss selbst liegt seit Migration 20260824150000 am KONTO
   /// (`profiles`), nicht mehr nur in den SharedPreferences. Diese Datei legt
   /// nur den Katalog-Eintrag an; vergeben wird er an der Serverseite.
-  static const String onboardingBadgeId = 'badge_58';
+  static const String alleAufgabenBadgeId = 'badge_58';
+
+  /// 2026-08-25: Der alte Name dieser Kennung.
+  ///
+  /// Er hat gelogen, und genau darueber ist Vucko gestolpert: „das abzeichen
+  /// nach dem onboarding soll startklar heissen und nicht durchgespielt."
+  /// Das Abzeichen NACH dem Onboarding ist [starterBadgeId] „Startklar". Was
+  /// hier haengt, ist das Sammler-Abzeichen fuer alle zwoelf Aufgaben.
+  ///
+  /// Der alte Name bleibt als Alias stehen, damit die Startseiten-Karte
+  /// weiterlaeuft, waehrend sie umgebaut wird. Neuer Code nimmt
+  /// [alleAufgabenBadgeId].
+  static const String onboardingBadgeId = alleAufgabenBadgeId;
   static const String membershipDatePlaceholder = '{datum}';
 
 
@@ -730,7 +811,7 @@ class Badge {
     // Bewusst OHNE Zahl im Text: die Zahl steht in
     // StarterAufgabenService.aufgaben und wuerde hier stumm veralten.
     Badge(
-      id: onboardingBadgeId,
+      id: alleAufgabenBadgeId,
       name: 'Durchgespielt',
       description:
           'Jede Starter-Aufgabe erledigt. Du hast alle Funktionen der App '

@@ -8,6 +8,7 @@ import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
+import 'package:cruise_connect/presentation/widgets/starter_bereiche.dart';
 import 'package:cruise_connect/presentation/widgets/ziel_hinweis_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -34,10 +35,45 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// oben und zeigt, wie weit man ist.
 ///
 /// Zustände:
-///  * Aufgaben offen              → Fortschritt + Checkliste.
+///  * Aufgaben offen              → Fortschritt + Gliederung + Belohnung.
 ///  * Bonus läuft, Rest offen     → „2× XP"-Countdown UND die Restliste.
 ///  * Bonus läuft, alles erledigt → nur der Countdown.
 ///  * Alles erledigt, kein Bonus  → die Karte verschwindet ersatzlos.
+///
+/// ─────────────────────────────────────────────────────────────────────────
+/// 2026-08-25, zweiter Auftrag desselben Tages (vucko wörtlich): „mache es so
+/// das die leute es zuklappen koennen und das ganze besser gegliedert ist
+/// unter fahren unter community usw. [...] sonnst ist es zu unuebersichtlich
+/// das man auch sieht was man als belohnung bekommt unten [...] und es soll
+/// besser eingerahmt sein pro aufgabe".
+///
+/// GEMESSEN, bevor etwas geändert wurde (Widget-Test, 320 Punkte Breite,
+/// frisches Konto, 0 von 12 erledigt):
+///
+///   Karte gesamt                       2165 pt
+///   davon die zwölf Aufgabenzeilen     1870 pt   (86 %)
+///   der Erklärabsatz unter dem Balken   112 pt
+///   Karte bei 10 von 12                1552 pt
+///
+/// Also drei Bildschirmlängen Liste, ganz oben auf der Startseite. Nach dem
+/// Umbau, im selben Aufbau gemessen:
+///
+///   Karte gesamt                        759 pt   (−65 %)
+///   alle drei Bereiche aufgeklappt     1234 pt   (der schlimmste Fall,
+///                                                immer noch 43 % unter alt)
+///   ganz zugeklappt                     119 pt
+///
+/// (Die Zahlen sind mit der Testschrift gemessen, in der jedes Zeichen ein
+/// Quadrat ist. Auf dem Gerät ist alles kleiner — der Vergleich stimmt, weil
+/// beide Zustände gleich gemessen sind.)
+///
+/// DER AUFBAU, von oben nach unten:
+///   1. Kopfzeile: Symbol, „Dein Starter-Paket", Stand „3/12", Pfeil. Die
+///      ganze Zeile klappt die Karte zu und wieder auf, dauerhaft.
+///   2. Fortschrittsbalken über die ganzen zwölf.
+///   3. Drei Bereiche als Schubladen (`starter_bereiche.dart`), von denen
+///      genau EINE offen ist: die erste mit einer offenen Aufgabe.
+///   4. Der Belohnungsblock, ganz unten: Abzeichen, XP, Bonuswoche.
 class StarterPaketKarte extends StatefulWidget {
   const StarterPaketKarte({super.key, this.onTabChange});
 
@@ -77,6 +113,13 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
     );
     StarterAufgabenService.instance.alleAufgabenFrischErledigt.addListener(
       _beiAllenAufgaben,
+    );
+    // Zugeklappt-Zustand und die schon gelaufenen Einblendungen holen. Bis das
+    // da ist, steht die Karte offen und animiert NICHT — siehe _darfAnimieren.
+    unawaited(
+      StarterKartenGedaechtnis.laden().then((_) {
+        if (mounted) setState(() {});
+      }),
     );
     // Minutentakt reicht für einen Wochen-Countdown und kostet nichts.
     _tick = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -171,6 +214,31 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
     return '$minuten Min';
   }
 
+  /// Eigenhaendig auf- oder zugeklappte Bereiche.
+  ///
+  /// Wie in `badge_uebersicht_panel.dart`: die VORGABE wird bei jedem Aufbau
+  /// neu berechnet und nicht in `initState` eingefroren. Der Aufgabenstand
+  /// kommt nachgeladen (Geraetespeicher, dann Profil) — waere die Vorgabe
+  /// eingefroren, stuende beim ersten Aufbau noch „nichts erledigt" und der
+  /// falsche Bereich waere offen.
+  final Map<String, bool> _umgeschaltet = {};
+
+  /// Der Bereich, der ohne Zutun offen steht: der erste mit einer offenen
+  /// Aufgabe.
+  ///
+  /// AUSLIEFERUNGSZUSTAND, und zwar mit Absicht genau EINER. Alles zu waere
+  /// ratlos — man saehe drei Ueberschriften und keine einzige Aufgabe. Alles
+  /// offen waere wieder die flache Liste, die Vucko gemeldet hat (gemessen:
+  /// 2165 Punkte Hoehe). Ein offener Bereich zeigt, wo man steht, und die
+  /// beiden anderen sagen mit ihrer Pille „2/4", dass da noch etwas kommt.
+  String? _vorgabeOffen(List<StarterBereichInhalt> bereiche) {
+    final dienst = StarterAufgabenService.instance;
+    for (final b in bereiche) {
+      if (b.aufgaben.any((a) => !dienst.erledigt(a.id))) return b.bereich.id;
+    }
+    return bereiche.isEmpty ? null : bereiche.first.bereich.id;
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -191,7 +259,7 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
         final restOffen = !dienst.alleAufgabenErledigt;
         return Container(
           margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: const Color(0xFF1C1F26),
             borderRadius: BorderRadius.circular(24),
@@ -270,260 +338,215 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
   }
 
   Widget _aufgabenInhalt(Color accent, StarterAufgabenService dienst) {
+    final bereiche = starterBereicheMitAufgaben();
+    final vorgabe = _vorgabeOffen(bereiche);
+    final offen = StarterKartenGedaechtnis.geladen
+        ? !StarterKartenGedaechtnis.zugeklappt
+        : true;
+    final gesamt = StarterAufgabenService.aufgaben.length;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(Icons.card_giftcard_rounded, color: accent, size: 20),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text(
-                'Dein Starter-Paket',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
+        // 2026-08-25 (vucko): „mache es so das die leute es zuklappen koennen".
+        // Die ganze Kopfzeile ist der Schalter — dieselbe Geste wie bei den
+        // Bereichen darunter und bei den Schubladen der Abzeichen-Sammlung.
+        Semantics(
+          button: true,
+          expanded: offen,
+          child: InkWell(
+            key: const ValueKey('starter_karte_kopf'),
+            onTap: _kartenSchalter,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Icon(Icons.card_giftcard_rounded, color: accent, size: 20),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Dein Starter-Paket',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  // 2026-08-25 (vucko): „es soll darstehen [...] wie weit ich
+                  // schon bin". Der Zaehler zeigt die GANZE Liste, nicht die
+                  // Boost-Schwelle: Wer bei 8/8 stand, sah „fertig", obwohl
+                  // vier Funktionen der App noch nie benutzt waren.
+                  Semantics(
+                    label:
+                        '${dienst.erledigtAnzahl} von $gesamt Aufgaben '
+                        'erledigt',
+                    child: Text(
+                      '${dienst.erledigtAnzahl}/$gesamt',
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  AnimatedRotation(
+                    turns: offen ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 160),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 21,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ],
               ),
             ),
-            // 2026-08-25 (vucko): „es soll darstehen [...] wie weit ich schon
-            // bin". Der Zaehler zeigt jetzt die GANZE Liste, nicht die
-            // Boost-Schwelle.
-            //
-            // Vorher stand hier „x/8". Das war die Schwelle fuer die
-            // Bonuswoche — und genau die Zahl hat die Verwechslung
-            // mitgetragen, die den Auftrag ausgeloest hat: Wer bei 8/8 stand,
-            // sah „fertig", obwohl vier Funktionen der App noch nie benutzt
-            // waren. Die Schwelle verschwindet nicht, sie wandert eine Zeile
-            // tiefer auf den Balken (die „Boost"-Marke). So stehen BEIDE
-            // Zahlen da: zwoelf als Ziel, acht als Zwischenstand.
-            Semantics(
-              label:
-                  '${dienst.erledigtAnzahl} von '
-                  '${StarterAufgabenService.aufgaben.length} Aufgaben erledigt',
-              child: Text(
-                '${dienst.erledigtAnzahl}'
-                '/${StarterAufgabenService.aufgaben.length}',
-                style: TextStyle(
-                  color: accent,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _fortschrittsBalken(accent, dienst),
-        const SizedBox(height: 8),
-        Text(
-          _fortschrittsText(dienst),
-          style: const TextStyle(
-            color: Colors.white54,
-            fontSize: 12.5,
-            height: 1.3,
           ),
         ),
-        const SizedBox(height: 12),
-        for (final aufgabe in StarterAufgabenService.aufgaben)
-          _aufgabenZeile(context, accent, dienst, aufgabe),
+        const SizedBox(height: 10),
+        _fortschrittsBalken(accent, dienst),
+        if (!offen) ...[
+          const SizedBox(height: 9),
+          // Zugeklappt bleibt der Grund stehen, warum es die Karte gibt.
+          // Sonst waere die zugeklappte Karte ein Balken ohne Aussage.
+          Row(
+            children: [
+              Icon(Icons.redeem_rounded, color: accent, size: 14),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _restText(dienst),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (offen) ...[
+          const SizedBox(height: 12),
+          for (var i = 0; i < bereiche.length; i++) ...[
+            if (i > 0) const SizedBox(height: 7),
+            StarterBereichSchublade(
+              inhalt: bereiche[i],
+              accent: accent,
+              offen:
+                  _umgeschaltet[bereiche[i].bereich.id] ??
+                  (bereiche[i].bereich.id == vorgabe),
+              erledigt: dienst.erledigt,
+              aufTippen: () => _bereichSchalter(bereiche[i].bereich.id, vorgabe),
+              aufZeigen: (aufgabe) => _fuehreHin(context, aufgabe.id),
+              animieren: _darfAnimieren(bereiche[i].bereich.id),
+              aufAnimationGelaufen: () =>
+                  unawaited(
+                    StarterKartenGedaechtnis.merkeAnimiert(
+                      bereiche[i].bereich.id,
+                    ),
+                  ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          StarterBelohnungsBlock(
+            accent: accent,
+            offeneAufgaben: gesamt - dienst.erledigtAnzahl,
+          ),
+        ],
       ],
     );
   }
 
-  /// 2026-08-25 (vucko): „es soll darstehen beim onboarding widget wie weit
-  /// ich schon bin."
+  String _restText(StarterAufgabenService dienst) {
+    final offen =
+        StarterAufgabenService.aufgaben.length - dienst.erledigtAnzahl;
+    final schritte = offen == 1 ? '1 Schritt' : '$offen Schritte';
+    return 'Noch $schritte bis zur Belohnung';
+  }
+
+  /// Die ganze Liste auf- oder zuklappen. Der Zustand bleibt ueber den
+  /// App-Start hinweg stehen, sonst muesste man nach jedem Start neu zuklappen.
+  void _kartenSchalter() {
+    final neu = StarterKartenGedaechtnis.geladen
+        ? !StarterKartenGedaechtnis.zugeklappt
+        : true;
+    unawaited(StarterKartenGedaechtnis.setzeZugeklappt(neu));
+    setState(() {});
+  }
+
+  void _bereichSchalter(String id, String? vorgabe) {
+    setState(() {
+      _umgeschaltet[id] = !(_umgeschaltet[id] ?? (id == vorgabe));
+    });
+  }
+
+  /// Die Einblende-Animation laeuft je Bereich genau einmal.
   ///
-  /// WARUM EIN BALKEN UND NICHT NUR EINE ZAHL: Es gibt hier ZWEI Schwellen,
-  /// die verschiedene Dinge bedeuten — acht (Startklar-Abzeichen plus
-  /// Doppel-XP-Woche) und zwoelf (alle Funktionen einmal benutzt, badge_58).
-  /// Zwei Zahlen nebeneinander („8/12 und 10/12") liest niemand richtig. Der
-  /// Balken zeigt beide ohne Erklaerung: die Fuellung ist der Stand von
-  /// zwoelf, die Marke steht bei acht. Was rechts von der Marke liegt, ist der
-  /// Weg nach dem Boost.
+  /// Solange das Gedaechtnis noch nicht geladen ist, wird NICHT animiert:
+  /// sonst liefe sie beim ersten Bild jedes App-Starts, und der gespeicherte
+  /// Vermerk „schon gesehen" waere wertlos.
+  bool _darfAnimieren(String bereichId) {
+    if (!StarterKartenGedaechtnis.geladen) return false;
+    return !StarterKartenGedaechtnis.animierteBereiche.contains(bereichId);
+  }
+
+  /// Der Fortschrittsbalken ueber der Gliederung.
+  ///
+  /// 2026-08-25: Die „Boost"-Marke bei acht von zwoelf ist weg. Sie war der
+  /// Rest der zwei Schwellen, die Vucko verwechselt hat — und sie widerspraeche
+  /// jetzt dem Belohnungsblock unten, der EIN Paket am Ende der Liste zeigt
+  /// (Abzeichen, XP, Bonuswoche). Zwei Ziele auf einem Balken, dazu ein
+  /// dritter Zaehler in der Kopfzeile: genau daraus entstand die
+  /// Unuebersichtlichkeit. Der Balken zeigt seitdem eine Sache: wie weit von
+  /// zwoelf.
   Widget _fortschrittsBalken(Color accent, StarterAufgabenService dienst) {
     final gesamt = StarterAufgabenService.aufgaben.length;
-    const schwelle = StarterAufgabenService.aufgabenFuerBoost;
     final anteil = gesamt == 0
         ? 0.0
         : (dienst.erledigtAnzahl / gesamt).clamp(0.0, 1.0);
-    final markeAnteil = gesamt == 0 ? 0.0 : (schwelle / gesamt).clamp(0.0, 1.0);
-    final erreicht = dienst.boostErreicht;
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final breite = constraints.maxWidth;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: 10,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: breite * anteil,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                  ),
-                  // Die Boost-Marke. Sie sitzt AUF dem Balken, damit sie auch
-                  // im gefuellten Teil sichtbar bleibt.
-                  Positioned(
-                    left: (breite * markeAnteil - 1.5).clamp(0.0, breite - 3),
-                    top: -1,
-                    bottom: -1,
-                    width: 3,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1F26),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.55),
-                          width: 0.6,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            SizedBox(
-              height: 14,
-              child: Stack(
-                children: [
-                  Positioned(
-                    left: (breite * markeAnteil - 22).clamp(0.0, breite - 44),
-                    top: 0,
-                    width: 44,
-                    child: Text(
-                      erreicht ? 'Boost ✓' : 'Boost',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: erreicht
-                            ? accent
-                            : Colors.white.withValues(alpha: 0.45),
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// Der Satz unter dem Balken. Er sagt genau EINE Sache: was der naechste
-  /// Schritt bringt. Vor dem Boost ist das die Bonuswoche, danach das
-  /// Abzeichen fuer die vollstaendige Liste.
-  String _fortschrittsText(StarterAufgabenService dienst) {
-    final gesamt = StarterAufgabenService.aufgaben.length;
-    final abzeichen =
-        app.Badge.getById(app.Badge.onboardingBadgeId)?.name ?? 'Durchgespielt';
-    if (!dienst.boostErreicht) {
-      final bisBoost = StarterAufgabenService.aufgabenFuerBoost -
-          dienst.erledigtAnzahl;
-      return 'Noch ${_schritte(bisBoost)} bis zum Startklar-Abzeichen und '
-          'einer Woche doppelte XP. Wer alle $gesamt schafft, bekommt das '
-          'Abzeichen „$abzeichen".';
-    }
-    final offen = gesamt - dienst.erledigtAnzahl;
-    return 'Boost geschafft. Noch ${_schritte(offen)}, dann hast du jede '
-        'Funktion der App einmal benutzt und bekommst das Abzeichen '
-        '„$abzeichen".';
-  }
-
-  static String _schritte(int anzahl) =>
-      anzahl == 1 ? '1 Schritt' : '$anzahl Schritte';
-
-  Widget _aufgabenZeile(
-    BuildContext context,
-    Color accent,
-    StarterAufgabenService dienst,
-    StarterAufgabe aufgabe,
-  ) {
-    final erledigt = dienst.erledigt(aufgabe.id);
-    return Semantics(
-      button: !erledigt,
-      label: erledigt ? '${aufgabe.titel}, erledigt' : '${aufgabe.titel}, zeigen wie',
-      child: InkWell(
-        key: ValueKey('starter_aufgabe_${aufgabe.id}'),
-        onTap: erledigt ? null : () => _fuehreHin(context, aufgabe.id),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-          child: Row(
+        return SizedBox(
+          height: 7,
+          child: Stack(
             children: [
-              Icon(
-                erledigt
-                    ? Icons.check_circle_rounded
-                    : Icons.radio_button_unchecked,
-                color: erledigt ? accent : Colors.white24,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      aufgabe.titel,
-                      style: TextStyle(
-                        color: erledigt ? Colors.white38 : Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        decoration: erledigt ? TextDecoration.lineThrough : null,
-                      ),
-                    ),
-                    Text(
-                      aufgabe.beschreibung,
-                      style: const TextStyle(color: Colors.white38, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              if (!erledigt) ...[
-                const SizedBox(width: 6),
-                // „So geht das": kleiner Hinweis, dass die Zeile hinfuehrt.
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              Positioned.fill(
+                child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.14),
+                    color: Colors.white.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(999),
                   ),
-                  child: Text(
-                    'Zeigen',
-                    style: TextStyle(
-                      color: accent,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
+                ),
+              ),
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: breite * anteil,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [accent.withValues(alpha: 0.65), accent],
                     ),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                 ),
-              ],
+              ),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 

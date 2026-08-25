@@ -27,7 +27,7 @@ void main() {
 
     // Wichtig fuer den Erststart: Wer eine Gruppe anlegt, soll das Formular
     // sehen, nicht eine leere Karte.
-    expect(find.text('Gruppen-Details'), findsOneWidget);
+    expect(find.text('Details zur Gruppe'), findsOneWidget);
     expect(find.text('Gruppe einstellen'), findsNothing);
   });
 
@@ -39,12 +39,12 @@ void main() {
     await tester.tap(find.byTooltip('Karte im Vollbild'));
     await tester.pumpAndSettle();
     expect(find.text('Gruppe einstellen'), findsOneWidget);
-    expect(find.text('Gruppen-Details'), findsNothing);
+    expect(find.text('Details zur Gruppe'), findsNothing);
 
     // Zurueckholen
     await tester.tap(find.text('Gruppe einstellen'));
     await tester.pumpAndSettle();
-    expect(find.text('Gruppen-Details'), findsOneWidget);
+    expect(find.text('Details zur Gruppe'), findsOneWidget);
     expect(find.text('Gruppe einstellen'), findsNothing);
   });
 
@@ -59,7 +59,7 @@ void main() {
     await tester.tap(find.byTooltip('Einstellungen zeigen'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Gruppen-Details'), findsOneWidget);
+    expect(find.text('Details zur Gruppe'), findsOneWidget);
   });
 
   testWidgets('der Zurueck-Knopf bleibt in beiden Zustaenden erreichbar', (
@@ -110,13 +110,13 @@ void main() {
   ) async {
     await tester.pumpWidget(seite());
     await tester.pump();
-    expect(find.text('Gruppen-Details'), findsOneWidget);
+    expect(find.text('Details zur Gruppe'), findsOneWidget);
 
     await tester.tap(find.text('Wegpunkte'));
     await tester.pumpAndSettle();
 
     // Panel weg, Vollbild-Leiste da — genau wie beim Cruisen.
-    expect(find.text('Gruppen-Details'), findsNothing);
+    expect(find.text('Details zur Gruppe'), findsNothing);
     expect(find.text('Gruppe einstellen'), findsOneWidget);
 
     // Den Hinweis-Toast (2,6 s) auslaufen lassen, sonst meldet das

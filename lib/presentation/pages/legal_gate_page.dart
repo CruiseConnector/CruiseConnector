@@ -133,7 +133,7 @@ class LegalGateErrorScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Bitte prüfe die Verbindung oder ob die Legal-Migration bereits in Supabase deployed ist.',
+                  'Bitte prüfe die Verbindung oder ob die Migration für die Rechtstexte in Supabase schon eingespielt ist.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0xFFB6BECC), height: 1.35),
                 ),

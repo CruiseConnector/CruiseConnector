@@ -233,7 +233,7 @@ class GeocodingService {
     } on TimeoutException {
       throw GeocodingException(
         type: GeocodingErrorType.network,
-        userMessage: 'Geocoding-Dienst antwortet nicht rechtzeitig.',
+        userMessage: 'Die Adresssuche antwortet nicht rechtzeitig.',
         debugMessage: 'Self-hosted geocoding timeout',
       );
     } on FunctionException catch (e) {
@@ -260,7 +260,7 @@ class GeocodingService {
     if (error == 'self_hosted_geocoder_not_configured') {
       return GeocodingException(
         type: GeocodingErrorType.server,
-        userMessage: 'Geocoding-Dienst ist noch nicht konfiguriert.',
+        userMessage: 'Die Adresssuche ist noch nicht eingerichtet.',
         debugMessage: error!,
         statusCode: status,
       );
@@ -285,15 +285,15 @@ class GeocodingService {
 
   static String _userMessageForStatus(int? status) {
     if (status == 401 || status == 403) {
-      return 'Geocoding-Anfrage wurde abgelehnt.';
+      return 'Die Adresssuche wurde abgelehnt.';
     }
     if (status == 429) {
-      return 'Zu viele Geocoding-Anfragen. Bitte kurz warten.';
+      return 'Zu viele Anfragen an die Adresssuche. Bitte kurz warten.';
     }
     if (status != null && status >= 500) {
-      return 'Geocoding-Dienst ist derzeit nicht verfügbar.';
+      return 'Die Adresssuche ist derzeit nicht verfügbar.';
     }
-    return 'Geocoding-Anfrage konnte nicht verarbeitet werden.';
+    return 'Die Adresse konnte nicht gesucht werden.';
   }
 
   static List<Map<String, dynamic>> _featuresFromPayload(

@@ -1084,7 +1084,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
       : Icons.info_outline;
 
   String get _kopfzeileHinweis => _kopfzeileFuehrtInEinstellungen
-      ? 'Community-Einstellungen'
+      ? 'Einstellungen der Community'
       : 'Eckdaten dieser Community';
 
   @override
@@ -1178,7 +1178,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Community-Einstellungen',
+                          'Einstellungen der Community',
                           style: TextStyle(color: Colors.white),
                         ),
                       ),
