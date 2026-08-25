@@ -32,6 +32,24 @@ import 'package:cruise_connect/data/services/community_chat_service.dart';
 /// [communityFilterLeerText] und den Knopf „Alles anzeigen": ein leerer
 /// Bildschirm ohne Erklaerung waere hier der wahrscheinlichste Ausgang.
 
+/// 2026-08-25 — Auftrag Vucko, woertlich: „es soll automatisch erkannt werden
+/// in welchem land man ist und man soll aus dem Land nur die regionen haben
+/// also wenn ich in deutschland bin will ich keine regionen von oesterreich
+/// haben usw. es solls automatisch am standort erkennen bitte auf das acht
+/// geben".
+///
+/// Das Blatt zeigt seither nur noch die Regionen des erkannten Landes. Die
+/// Erkennung selbst liegt in [CommunityStandortLand]; hier steht nur, was man
+/// davon SIEHT — die Zeile „Nach deinem Standort: Österreich" und der Knopf,
+/// der die anderen Länder wieder hereinholt.
+///
+/// WARUM DIE ANDEREN LAENDER EINEN KNOPF BEKOMMEN UND NICHT VERSCHWINDEN:
+/// Zwei Faelle, die es wirklich gibt. Der Vorarlberger im Urlaub in Italien
+/// bekommt vom Standort weder AT noch DE noch CH — er faellt aufs Profil
+/// zurueck, und wenn auch das leer ist, muss er trotzdem waehlen koennen. Und
+/// wer in Lustenau wohnt, schaut sehr wohl nach St. Gallen. Ein hartes
+/// Wegschneiden waere fuer beide eine Sackgasse.
+
 /// Der Satz, der ein leeres Ergebnis erklaert — oder `null`, wenn gar nichts
 /// weggefiltert wurde und die Liste wirklich leer ist.
 ///
@@ -75,6 +93,8 @@ class CommunityFilterLeiste extends StatelessWidget {
     super.key,
     required this.einstellungen,
     required this.regionen,
+    this.landCode,
+    this.landQuelle = CommunityLandQuelle.unbekannt,
     required this.onFahrzeugart,
     required this.onRegion,
     required this.onSortierung,
@@ -83,6 +103,13 @@ class CommunityFilterLeiste extends StatelessWidget {
 
   final CommunityFilterEinstellungen einstellungen;
   final List<CommunityRegion> regionen;
+
+  /// Das erkannte Land (`AT`/`CH`/`DE`) oder `null` = alle Regionen zeigen.
+  final String? landCode;
+
+  /// Woher [landCode] stammt — steht als eine Zeile im Blatt.
+  final CommunityLandQuelle landQuelle;
+
   final ValueChanged<CommunityFahrzeugart> onFahrzeugart;
   final ValueChanged<String?> onRegion;
   final ValueChanged<CommunitySortierung> onSortierung;
@@ -125,6 +152,8 @@ class CommunityFilterLeiste extends StatelessWidget {
                     context,
                     regionen: regionen,
                     aktuell: einstellungen.regionCode,
+                    landCode: landCode,
+                    landQuelle: landQuelle,
                   );
                   if (wahl != null) onRegion(wahl.code);
                 },
@@ -212,11 +241,17 @@ class CommunityRegionBlatt extends StatelessWidget {
     required this.regionen,
     required this.aktuell,
     required this.titel,
+    this.landCode,
+    this.landQuelle = CommunityLandQuelle.unbekannt,
   });
 
   final List<CommunityRegion> regionen;
   final String? aktuell;
   final String titel;
+
+  /// Das erkannte Land. `null` = alle Regionen zeigen.
+  final String? landCode;
+  final CommunityLandQuelle landQuelle;
 
   /// Oeffnet das Blatt. `null` = abgebrochen, sonst die Wahl (deren `code`
   /// wiederum `null` sein darf: „alle Regionen").
@@ -226,6 +261,8 @@ class CommunityRegionBlatt extends StatelessWidget {
     required String? aktuell,
     String titel = 'Region',
     String alleBeschriftung = 'Alle Regionen',
+    String? landCode,
+    CommunityLandQuelle landQuelle = CommunityLandQuelle.unbekannt,
   }) {
     return showModalBottomSheet<CommunityRegionWahl>(
       context: context,
@@ -239,6 +276,8 @@ class CommunityRegionBlatt extends StatelessWidget {
         aktuell: aktuell,
         titel: titel,
         alleBeschriftung: alleBeschriftung,
+        landCode: landCode,
+        landQuelle: landQuelle,
       ),
     );
   }
@@ -250,36 +289,86 @@ class CommunityRegionBlatt extends StatelessWidget {
       aktuell: aktuell,
       titel: titel,
       alleBeschriftung: 'Alle Regionen',
+      landCode: landCode,
+      landQuelle: landQuelle,
     );
   }
 }
 
-class _RegionBlattInhalt extends StatelessWidget {
+class _RegionBlattInhalt extends StatefulWidget {
   const _RegionBlattInhalt({
     required this.regionen,
     required this.aktuell,
     required this.titel,
     required this.alleBeschriftung,
+    required this.landCode,
+    required this.landQuelle,
   });
 
   final List<CommunityRegion> regionen;
   final String? aktuell;
   final String titel;
   final String alleBeschriftung;
+  final String? landCode;
+  final CommunityLandQuelle landQuelle;
 
+  @override
+  State<_RegionBlattInhalt> createState() => _RegionBlattInhaltState();
+}
+
+class _RegionBlattInhaltState extends State<_RegionBlattInhalt> {
   static const Map<String, String> _landNamen = {
     'AT': 'Österreich',
     'CH': 'Schweiz',
     'DE': 'Deutschland',
   };
 
+  /// `true` = alle Laender, nicht nur das erkannte.
+  ///
+  /// Der Zustand lebt nur solange das Blatt offen ist. Er wird BEWUSST nicht
+  /// gemerkt: die naechste Wahl trifft der Nutzer wahrscheinlich wieder dort,
+  /// wo er ist. Wer dauerhaft alles will, setzt die Region einfach auf „alle".
+  late bool _alleLaender;
+
+  @override
+  void initState() {
+    super.initState();
+    // Aufgeklappt starten, wenn es nichts zu beschneiden gibt — oder wenn die
+    // bereits gewaehlte Region zu einem anderen Land gehoert. Eine gesetzte
+    // Wahl, die man im Blatt nicht sieht, waere ein Filter ohne Griff.
+    _alleLaender =
+        widget.landCode == null ||
+        CommunityStandortLand.istFremdeRegion(
+          regionCode: widget.aktuell,
+          landCode: widget.landCode,
+          regionen: widget.regionen,
+        );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Die sichtbare Liste. [CommunityStandortLand.regionenFuerLand] gibt von
+    // sich aus ALLES zurueck, wenn zum Land nichts passt — eine leere Auswahl
+    // waere die schlechteste aller Anzeigen.
+    final gefiltert = CommunityStandortLand.regionenFuerLand(
+      widget.regionen,
+      widget.landCode,
+    );
+    final beschneidetWirklich = gefiltert.length < widget.regionen.length;
+    final sichtbar = (_alleLaender || !beschneidetWirklich)
+        ? widget.regionen
+        : gefiltert;
+    final herkunft = beschneidetWirklich
+        ? CommunityStandortLand.herkunftText(widget.landCode, widget.landQuelle)
+        : null;
+
     // Nach Land gruppiert, in der Reihenfolge, in der die Datenbank sortiert:
     // „ganzes Land" zuerst (sortierung 0), dann alphabetisch.
     final nachLand = <String, List<CommunityRegion>>{};
-    for (final region in regionen) {
-      nachLand.putIfAbsent(region.landCode, () => <CommunityRegion>[]).add(region);
+    for (final region in sichtbar) {
+      nachLand
+          .putIfAbsent(region.landCode, () => <CommunityRegion>[])
+          .add(region);
     }
     final laender = nachLand.keys.toList()..sort();
 
@@ -302,9 +391,14 @@ class _RegionBlattInhalt extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 10),
+              padding: EdgeInsets.fromLTRB(
+                18,
+                16,
+                18,
+                herkunft == null ? 10 : 4,
+              ),
               child: Text(
-                titel,
+                widget.titel,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -312,17 +406,41 @@ class _RegionBlattInhalt extends StatelessWidget {
                 ),
               ),
             ),
+            if (herkunft != null && !_alleLaender)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.my_location,
+                      size: 13,
+                      color: Color(0xFFA0AEC0),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        herkunft,
+                        style: const TextStyle(
+                          color: Color(0xFFA0AEC0),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
                 children: [
                   _eintrag(
                     context,
-                    text: alleBeschriftung,
-                    gewaehlt: aktuell == null || aktuell!.isEmpty,
+                    text: widget.alleBeschriftung,
+                    gewaehlt: widget.aktuell == null || widget.aktuell!.isEmpty,
                     wahl: const CommunityRegionWahl(null),
                   ),
-                  if (regionen.isEmpty)
+                  if (widget.regionen.isEmpty)
                     const Padding(
                       padding: EdgeInsets.fromLTRB(12, 18, 12, 0),
                       child: Text(
@@ -348,14 +466,64 @@ class _RegionBlattInhalt extends StatelessWidget {
                       _eintrag(
                         context,
                         text: region.name,
-                        gewaehlt: aktuell == region.code,
+                        gewaehlt: widget.aktuell == region.code,
                         wahl: CommunityRegionWahl(region.code),
                       ),
                   ],
+                  if (beschneidetWirklich) _landUmschalter(),
                 ],
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Der Weg zu den anderen Laendern — und zurueck.
+  ///
+  /// Steht UNTEN, nicht oben: oben stuende er zwischen dem Nutzer und dem, was
+  /// er in neun von zehn Faellen sucht. Unten findet ihn genau der, der weiter
+  /// gescrollt hat, weil seine Region nicht dabei war.
+  Widget _landUmschalter() {
+    final landName = CommunityStandortLand.landName(widget.landCode);
+    final text = _alleLaender
+        ? 'Nur $landName zeigen'
+        : 'Regionen aus allen Ländern zeigen';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 0),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _alleLaender = !_alleLaender),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _alleLaender ? Icons.filter_alt_outlined : Icons.public,
+                  size: 16,
+                  color: AppAccentColors.accent,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

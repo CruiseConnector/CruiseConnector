@@ -7,8 +7,15 @@ class Badge {
   /// dadurch const, der Sonderfall lebt in [resolveDescription].
   static const String membershipBadgeId = 'badge_15';
 
-  /// 2026-08-14 (vucko Starter-Paket): badge_16 „Startklar" gibt es fuer das
-  /// Erfuellen der fuenf Starter-Aufgaben — zusammen mit der Doppel-XP-Woche.
+  /// 2026-08-14 (vucko Starter-Paket): badge_16 „Startklar" gibt es zusammen
+  /// mit der Doppel-XP-Woche.
+  ///
+  /// 2026-08-25: Die Schwelle ist ACHT von zwoelf Starter-Aufgaben
+  /// (`StarterAufgabenService.aufgabenFuerBoost`) und BLEIBT dort. Sie ist der
+  /// Preis fuer die Bonuswoche und muss erreichbar bleiben — gemessen am
+  /// 24.08. hatte die frueher unerreichbare Schwelle dazu gefuehrt, dass 0 von
+  /// 183 Nutzern den Boost je bekommen haben. „Alle zwoelf" ist seit dem
+  /// 25.08. die Bedingung von [onboardingBadgeId], nicht von diesem hier.
   static const String starterBadgeId = 'badge_16';
 
   /// 2026-08-24 (Aufgabe 10a, vucko woertlich): „dass community ein enzelnes
@@ -39,22 +46,33 @@ class Badge {
   /// onboarding soll einmal pro account absolviert werden und man soll dafuer
   /// auch ein badge bekommen wenn man es abgeschlossen hat wie startklar".
   ///
-  /// ABGRENZUNG ZU badge_16 „Startklar" — GEPRUEFT am 24.08., weil zwei fast
-  /// gleiche Abzeichen schlimmer waeren als keines:
+  /// 2026-08-25, DIE BEDINGUNG WURDE ANGEHOBEN. Vucko woertlich: „es soll
+  /// passend sein dafuer weil ich jetzt nur das tutorial bekommen habe und
+  /// nicht das onboarding [...] also einfach alle funktionen einmal
+  /// durchgetestet haben die es in der app gibt".
   ///
-  ///   badge_16 haengt NICHT am Tutorial, sondern an
-  ///   `StarterAufgabenService.paketVerdient`, also an
-  ///   `erledigtAnzahl >= aufgabenFuerBoost` = ACHT von ELF Starter-Aufgaben.
-  ///   Das Tutorial ist dort nur EINE Zeile der Liste; die anderen sieben
-  ///   verlangen unter anderem eine zu Ende gefahrene Runde und einen
-  ///   Beitrag. GEMESSEN am 24.08.: 0 von 183 Profilen tragen badge_16
-  ///   verdient (es steht heute nur durch die Migration vom 24.08. bei allen).
+  /// Bis dahin genuegte die EINE Starter-Aufgabe „tutorial", also die Fuehrung
+  /// mit den Leuchtkreisen. GEMESSEN am 25.08.: genau ein Profil von 199
+  /// traegt badge_58 — und dieses Profil hatte zehn von zwoelf Aufgaben
+  /// erledigt, „Einen Hashtag benutzen" und „Eine Gruppenfahrt erstellen"
+  /// standen offen. Das Abzeichen sass also am falschen Ereignis.
   ///
-  /// Die beiden messen also verschiedene Dinge und liegen zeitlich weit
-  /// auseinander: badge_58 faellt in der Minute an, in der die Tour zu Ende
-  /// ist, badge_16 fruehestens nach der ersten echten Fahrt. Deshalb ist es
-  /// KEIN Doppel. Waere badge_16 „Tutorial fertig", dann waere badge_58
-  /// ueberfluessig gewesen und dieser Eintrag haette nicht kommen duerfen.
+  /// AB JETZT: `StarterAufgabenService.alleAufgabenErledigt`, also ALLE
+  /// ZWOELF Aufgaben.
+  ///
+  /// ABGRENZUNG ZU badge_16 „Startklar" — die beiden messen seitdem klar
+  /// Verschiedenes, statt fast dasselbe:
+  ///
+  ///   badge_16 = ACHT von zwoelf (`aufgabenFuerBoost`). Die Boost-Schwelle,
+  ///              zusammen mit der Doppel-XP-Woche.
+  ///   badge_58 = ZWOELF von zwoelf. Die vollstaendige Liste.
+  ///
+  /// badge_58 ist damit das SPAETERE der beiden und nicht mehr das fruehere.
+  ///
+  /// BESTANDSSCHUTZ: Wer badge_58 heute schon traegt, behaelt es.
+  /// `profiles.badges` ist seit dem 06.05. append-only (Waechter
+  /// `preserve_profile_badges`), ein Entziehen waere ein Bruch dieses
+  /// Schutzes. Ab jetzt verdient man es haerter.
   ///
   /// Der Abschluss selbst liegt seit Migration 20260824150000 am KONTO
   /// (`profiles`), nicht mehr nur in den SharedPreferences. Diese Datei legt
@@ -233,11 +251,17 @@ class Badge {
       assetPath: 'lib/images/badges/badge_12_gold_finish_flag_alt.png',
     ),
     // 2026-08-14 (vucko Starter-Paket): Belohnung fuer die Starter-Aufgaben.
+    //
+    // 2026-08-25: „Alle Starter-Aufgaben erledigt" war falsch — badge_16 haengt
+    // an ACHT von zwoelf (StarterAufgabenService.aufgabenFuerBoost), und seit
+    // heute gehoert „alle zwoelf" badge_58. Zwei Abzeichen mit demselben Text
+    // waeren genau die Verwechslung, die den Auftrag ausgeloest hat.
     Badge(
       id: starterBadgeId,
       name: 'Startklar',
       description:
-          'Alle Starter-Aufgaben erledigt. Dein Einstieg ist geschafft.',
+          'Die wichtigsten Starter-Aufgaben erledigt. Dein Einstieg ist '
+          'geschafft.',
       emoji: '\u{1F511}',
       category: 'membership',
       assetPath: 'lib/images/badges/badge_16_amber_ignition.png',
@@ -700,10 +724,17 @@ class Badge {
     // Emblem: badge_11 war die letzte ungenutzte Luecke der Bildserie (das
     // Motiv wurde nie einem Abzeichen zugeordnet) und ist ein Lenkrad — das
     // passende Bild fuer „jetzt darfst du losfahren".
+    // 2026-08-25 (vucko): Name und Beschreibung nachgezogen. „Eingewiesen /
+    // Das Tutorial einmal komplett durchgespielt." beschrieb die alte
+    // Bedingung (eine Aufgabe von zwoelf). Seit heute sind es ALLE zwoelf.
+    // Bewusst OHNE Zahl im Text: die Zahl steht in
+    // StarterAufgabenService.aufgaben und wuerde hier stumm veralten.
     Badge(
       id: onboardingBadgeId,
-      name: 'Eingewiesen',
-      description: 'Das Tutorial einmal komplett durchgespielt.',
+      name: 'Durchgespielt',
+      description:
+          'Jede Starter-Aufgabe erledigt. Du hast alle Funktionen der App '
+          'einmal benutzt.',
       emoji: '\u{1F393}',
       category: 'membership',
       assetPath: 'lib/images/badges/badge_11_silver_steering_wings_large.png',

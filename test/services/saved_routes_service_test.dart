@@ -280,7 +280,8 @@ void main() {
           'badge_57',
           // 2026-08-24 (Auftrag vom 24.08., vucko): „man soll dafuer auch ein
           // badge bekommen wenn man es abgeschlossen hat wie startklar" —
-          // badge_58 „Eingewiesen" fuer das durchgespielte Tutorial.
+          // badge_58 fuer das durchgespielte Tutorial; seit 25.08. heisst
+          // es „Durchgespielt" und verlangt ALLE zwoelf Starter-Aufgaben.
           'badge_58',
           // 2026-08-24 (Auftrag vom 24.08.): vier neue Familien fuer Bereiche
           // ohne jedes Abzeichen — Garage (59-61), Beitraege (62-64),

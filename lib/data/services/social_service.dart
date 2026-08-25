@@ -275,9 +275,15 @@ class SocialService {
   }) {
     final username = (profile?['username'] as String?)?.trim();
     if (username != null && username.isNotEmpty) {
+      // 2026-08-25 (Auftrag Vucko: Umlaute im Benutzernamen): Der Schnitt
+      // haelt Umlaute drin. Vorher machte `[^a-z0-9]` aus „müller" ein
+      // „m_ller" — der Name waere ueberall dort verstuemmelt worden, wo ein
+      // Handle steht (Feed, Profil, Glocke, Community-Karte). Angezeigt wird,
+      // was der Nutzer getippt hat; der Schnitt greift nur noch bei
+      // Altbestaenden, die gar kein gueltiger Benutzername sind („Max Power").
       final slug = username
           .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+          .replaceAll(RegExp('[^a-z0-9äöüß]+'), '_')
           .replaceAll(RegExp(r'^_+|_+$'), '');
       return '@${slug.isEmpty ? 'user' : slug}';
     }
@@ -294,13 +300,141 @@ class SocialService {
         .toLowerCase();
   }
 
-  /// Erkennt `@username`-Tokens in freiem Text. Zentrale Quelle, damit
-  /// Service und UI dasselbe Pattern verwenden.
-  static final RegExp _mentionPattern = RegExp(r'@([A-Za-z0-9_\.]+)');
+  // ── Benutzernamen und Erwaehnungen ───────────────────────────────────
+  //
+  // 2026-08-25 — Auftrag Vucko: „schau auch noch das man beim benutzernamen
+  // aeoeue verwenden kann das ist bis jetzt nicht gegangen".
+  //
+  // Die Umlaute zuzulassen ist ein Zweizeiler. Das eigentliche Problem sitzt
+  // eine Ebene tiefer: sobald „müller" moeglich ist, ist er von „mueller" in
+  // einer Liste kaum zu unterscheiden — und wer eine Nachricht von „@müller"
+  // bekommt, haelt sie fuer die von „@mueller". Deshalb steht hier neben dem
+  // Zeichensatz auch die FALTUNG, mit der verglichen wird.
 
-  static Set<String> _extractMentions(String text) => _mentionPattern
+  /// Zeichensatz eines Benutzernamens — und damit auch der einer Erwaehnung.
+  ///
+  /// Neu dazu gekommen sind AUSSCHLIESSLICH die deutschen Umlaute und das
+  /// scharfe S. Bewusst NICHT `\p{L}` wie beim Hashtag: das kyrillische „а"
+  /// sieht aus wie das lateinische „a", damit liesse sich jeder Name exakt
+  /// nachbauen. Genau deshalb lassen Instagram und X nur ASCII zu. Bei einem
+  /// Hashtag ist das egal — der gehoert niemandem. Bei einem Namen nicht.
+  static const String usernameCharClass = 'A-Za-z0-9_ÄÖÜäöüß';
+
+  /// Erkennt `@username`-Tokens in freiem Text. EINZIGE Quelle — die Anzeige
+  /// in `mentions.dart` benutzt genau dieses Objekt, keine Kopie.
+  ///
+  /// Frueher stand hier zusaetzlich ein Punkt: `@([A-Za-z0-9_\.]+)`. Der war
+  /// nie begruendet (er kam mit dem Muster im selben Commit ohne ein Wort
+  /// dazu) und er ist nicht erfuellbar: `profiles_username_format` laesst in
+  /// der Datenbank nur `[A-Za-z0-9_]` zu, ein Punkt kann in keinem
+  /// Benutzernamen stehen. Schaden hat er trotzdem angerichtet — „Danke
+  /// @vucko." am Satzende ergab hier das Token „vucko.", das zu keinem
+  /// Profil passt. Die Anzeige verlinkte „@vucko" (ihr Muster kannte den
+  /// Punkt nicht), die Benachrichtigung ging ins Leere. Ein Fehler, den
+  /// niemand sieht: der Erwaehnte erfaehrt einfach nichts.
+  ///
+  /// Satzzeichen gehoeren nicht zum Namen und stehen deshalb in keiner der
+  /// Klassen: „@müller." „@müller," „@müller?" enden alle am Namen.
+  static final RegExp usernameMentionPattern = RegExp(
+    '@([$usernameCharClass]+)',
+  );
+
+  /// Ein vollstaendiger Benutzername, ohne `@`.
+  static final RegExp usernameFullPattern = RegExp('^[$usernameCharClass]+\$');
+
+  /// Was schon getippt ist, waehrend die Vorschlagsliste laeuft (darf leer
+  /// sein). Damit die Vorschlaege beim ersten Umlaut nicht abreissen.
+  static final RegExp usernamePrefixPattern = RegExp(
+    '^[$usernameCharClass]*\$',
+  );
+
+  /// Die Vergleichsform eines Benutzernamens: klein geschrieben, ae/oe/ue/ss
+  /// ausgeschrieben, Akzente entfernt.
+  ///
+  /// ZEICHENGLEICH MIT `public.hashtag_schluessel(text)` aus Migration
+  /// 20260824102000. Das ist Absicht: fuer genau dieses Problem — „#Kurven-
+  /// koenig" und „#kurvenkönig" sind derselbe Hashtag — gibt es die Faltung
+  /// im Haus schon. Ein zweites, leicht anderes Verfahren waere die Sorte
+  /// Fehler, die uns die Laender-Klassifikation gekostet hat.
+  ///
+  /// Gefaltet wird NUR zum Vergleichen. Angezeigt wird immer die
+  /// Schreibweise, die der Nutzer getippt hat.
+  static String usernameKey(String name) {
+    // Reihenfolge wie in der Migration: erst lower, dann die ausgeschriebenen
+    // Ersetzungen, dann die Akzent-Tabelle.
+    var wert = name.trim().toLowerCase();
+    const ersetzungen = <String, String>{
+      'ä': 'ae',
+      'ö': 'oe',
+      'ü': 'ue',
+      'ß': 'ss',
+      'æ': 'ae',
+      'ø': 'oe',
+      'å': 'aa',
+      'œ': 'oe',
+    };
+    ersetzungen.forEach((von, nach) => wert = wert.replaceAll(von, nach));
+    const akzente = 'áàâãāăçćčéèêëēėęíìîïīıñńóòôõōšśúùûūýÿžźż';
+    const ersatz = 'aaaaaaccceeeeeeeiiiiiinnooooossuuuuyyzzz';
+    final gefaltet = StringBuffer();
+    for (final zeichen in wert.split('')) {
+      final stelle = akzente.indexOf(zeichen);
+      gefaltet.write(stelle < 0 ? zeichen : ersatz[stelle]);
+    }
+    return gefaltet.toString();
+  }
+
+  /// Alle Schreibweisen, die auf denselben Schluessel fallen: „mueller" und
+  /// „müller", „strasse" und „straße".
+  ///
+  /// Gebraucht wird das beim NACHSCHLAGEN. Der Client kann die Datenbank
+  /// nicht falten lassen — `hashtag_schluessel` ist fuer `authenticated`
+  /// bewusst gesperrt, und eine Schluesselspalte am Benutzernamen gibt es
+  /// noch nicht. Also fragt er nach allen Schreibweisen und prueft die
+  /// Antwort selbst gegen [usernameKey]. Jede erzeugte Variante hat
+  /// konstruktionsbedingt denselben Schluessel — es kann also nie der
+  /// falsche Mensch herauskommen.
+  static List<String> usernameSpellings(String name, {int max = 16}) {
+    final start = name.trim();
+    if (start.isEmpty) return const <String>[];
+    const paare = <String, String>{
+      'ä': 'ae',
+      'ö': 'oe',
+      'ü': 'ue',
+      'ß': 'ss',
+    };
+    final gefunden = <String>{start};
+    final offen = <String>[start];
+    while (offen.isNotEmpty && gefunden.length < max) {
+      final wort = offen.removeAt(0);
+      final klein = wort.toLowerCase();
+      for (final paar in paare.entries) {
+        for (final richtung in <List<String>>[
+          <String>[paar.key, paar.value],
+          <String>[paar.value, paar.key],
+        ]) {
+          final von = richtung[0];
+          final nach = richtung[1];
+          var stelle = klein.indexOf(von);
+          while (stelle >= 0 && gefunden.length < max) {
+            final kandidat = wort.replaceRange(
+              stelle,
+              stelle + von.length,
+              nach,
+            );
+            if (gefunden.add(kandidat)) offen.add(kandidat);
+            stelle = klein.indexOf(von, stelle + 1);
+          }
+        }
+      }
+    }
+    return gefunden.toList();
+  }
+
+  static Set<String> _extractMentions(String text) => usernameMentionPattern
       .allMatches(text)
-      .map((m) => m.group(1)!.toLowerCase())
+      .map((m) => m.group(1)!)
+      .where((name) => name.isNotEmpty)
       .toSet();
 
   static Future<void> _hydratePostReactionState(
@@ -1600,18 +1734,46 @@ class SocialService {
     return (result as List).length;
   }
 
-  /// Löst einen Username (Case-insensitive) zu einer User-ID auf.
-  /// Gibt null zurück, falls kein Profil mit diesem Username existiert.
+  /// Loest einen Benutzernamen zu einer User-ID auf.
+  ///
+  /// 2026-08-25 (Umlaute im Benutzernamen): Verglichen wird ueber
+  /// [usernameKey], nicht mehr nur ueber Gross- und Kleinschreibung.
+  /// „@Mueller" trifft damit den Nutzer „müller" und umgekehrt.
+  ///
+  /// Das ist eine Entscheidung fuer GROSSZUEGIGKEIT beim Erwaehnen, und sie
+  /// ist gefahrlos, weil die Eindeutigkeit auf derselben Faltung steht: es
+  /// kann „mueller" und „müller" nicht gleichzeitig geben. Wer erwaehnt,
+  /// kann also gar nicht den Falschen treffen. Er kann den Richtigen nur
+  /// verfehlen, wenn wir zu streng sind — und genau das merkt niemand.
+  ///
+  /// Warum nicht mehr blank `ilike`: `_` ist in LIKE ein Platzhalter fuer ein
+  /// beliebiges Zeichen, „@a_b" hat damit auch „axb" gefunden. Die Antwort
+  /// wird deshalb gegen den Schluessel nachgeprueft, statt ihr zu glauben.
   static Future<String?> findUserIdByUsername(String username) async {
     final cleaned = username.trim();
     if (cleaned.isEmpty) return null;
+    // Nur echte Namenszeichen gehen in den Filter. Das haelt neben Unsinn
+    // auch Komma und Punkt aus der or-Bedingung heraus, die beide dort eine
+    // Bedeutung haetten.
+    if (!usernameFullPattern.hasMatch(cleaned)) return null;
+    final schluessel = usernameKey(cleaned);
     try {
-      final row = await _db
+      final filter = usernameSpellings(
+        cleaned,
+      ).map((wort) => 'username.ilike.$wort').join(',');
+      final rows = await _db
           .from('profiles')
-          .select('id')
-          .ilike('username', cleaned)
-          .maybeSingle();
-      return (row as Map?)?['id'] as String?;
+          .select('id, username')
+          .or(filter)
+          .limit(16);
+      for (final row in rows as List) {
+        final treffer = row as Map;
+        if (usernameKey(treffer['username'] as String? ?? '') != schluessel) {
+          continue;
+        }
+        return treffer['id'] as String?;
+      }
+      return null;
     } catch (e) {
       debugPrint('[SocialService] findUserIdByUsername Fehler: $e');
       return null;
@@ -1637,14 +1799,17 @@ class SocialService {
         .eq('status', 'accepted');
 
     final profiles = <Map<String, dynamic>>[];
-    final p = prefix.trim().toLowerCase();
+    // 2026-08-25 (Umlaute im Benutzernamen): Verglichen wird ueber die
+    // Faltung. Wer „@mue" tippt, bekommt „müller" vorgeschlagen — sonst
+    // reisst die Liste genau bei dem Namen ab, den man gerade sucht.
+    final p = usernameKey(prefix);
     final blocked = await getBlockedAndBlockerIds();
     for (final row in rows as List) {
       final profile = (row as Map)['profiles'] as Map<String, dynamic>?;
       if (profile == null) continue;
       final targetId = profile['id'] as String?;
       if (targetId == null || blocked.contains(targetId)) continue;
-      final username = (profile['username'] as String? ?? '').toLowerCase();
+      final username = usernameKey(profile['username'] as String? ?? '');
       if (username.isEmpty) continue;
       if (p.isNotEmpty && !username.startsWith(p)) continue;
       profiles.add(Map<String, dynamic>.from(profile));
@@ -1663,8 +1828,11 @@ class SocialService {
   }) async {
     final uid = _userId;
     if (uid == null) return [];
+    // 2026-08-25 (Umlaute im Benutzernamen): Beide Seiten werden gefaltet.
+    // Ohne das bekaeme „müller" nichts, wenn jemand „@mueller" geschrieben
+    // hat — und niemand wuerde es merken.
     final cleaned = usernames
-        .map((u) => u.trim().toLowerCase())
+        .map(usernameKey)
         .where((u) => u.isNotEmpty)
         .toSet();
     if (cleaned.isEmpty) return [];
@@ -1682,7 +1850,7 @@ class SocialService {
     final notified = <String>[];
     for (final row in rows as List) {
       final profile = (row as Map)['profiles'] as Map<String, dynamic>?;
-      final username = (profile?['username'] as String? ?? '').toLowerCase();
+      final username = usernameKey(profile?['username'] as String? ?? '');
       final targetId = profile?['id'] as String?;
       if (targetId == null || targetId == uid) continue;
       if (blocked.contains(targetId)) continue;
@@ -2053,10 +2221,18 @@ class SocialService {
     if (sanitized.isEmpty) return [];
 
     final blocked = await getBlockedAndBlockerIds();
+    // 2026-08-25 (Umlaute im Benutzernamen): Gesucht wird nach allen
+    // Schreibweisen. Sonst findet, wer „mueller" tippt, den Nutzer „müller"
+    // nicht — und damit auch nicht die Person, die er gleich erwaehnen will.
+    // Die Sonderzeichen sind eine Zeile darueber schon herausgeschnitten,
+    // die Bedingung kann also nicht aufbrechen.
+    final bedingung = usernameSpellings(
+      sanitized,
+    ).map((wort) => 'username.ilike.%$wort%').join(',');
     final results = await _db
         .from('profiles')
         .select('id, username, avatar_url, is_private')
-        .or('username.ilike.%$sanitized%')
+        .or(bedingung)
         .limit(20);
 
     final profiles = List<Map<String, dynamic>>.from(

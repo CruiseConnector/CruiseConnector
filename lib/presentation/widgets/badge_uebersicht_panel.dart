@@ -267,6 +267,131 @@ String badgeEinheit(String einheit, int anzahl) {
   return einzahl[einheit] ?? einheit;
 }
 
+// ---------------------------------------------------------------------------
+// Das Raster — EIN Gesetz fuer die ganze Abzeichen-Seite
+// ---------------------------------------------------------------------------
+
+/// 2026-08-25 (vucko woertlich): „das man die badges besser darstellen kann
+/// nicht untereinander sondern schon nebeneinander".
+///
+/// GEMESSEN, warum sie untereinander standen: Der Katalog rechnete seine
+/// Kachelbreite aus der AUSSENbreite der Liste (390 Punkte ergaben zwei
+/// Kacheln zu 191), gezeichnet wurden die Kacheln aber INNERHALB der
+/// Schublade, die nach Rand und Innenabstand nur noch 370 Punkte breit ist.
+/// 191 + 8 + 191 = 390 passt nicht in 370 — also brach das `Wrap` nach JEDER
+/// Kachel um. Auf dem Telefon stand damit genau eine Kachel je Reihe, obwohl
+/// zwei gemeint waren. Gemessen bei 390 Punkten: Kacheln je Reihe
+/// [1, 1, 1, 1, 1], voll aufgeklappt 11.532 Punkte.
+///
+/// Damit das nicht wieder passiert, steht die Rasterregel ab jetzt an EINER
+/// Stelle und wird von beiden Rastern der Seite benutzt: von den
+/// Familien-Zellen im Uebersichts-Panel und von den Kacheln im Katalog. Wer
+/// sie aufruft, uebergibt die WIRKLICH verfuegbare Breite — nicht die des
+/// umgebenden Kastens.
+///
+/// Nebeneffekt und eigentlicher Grund fuer „schoener": beide Raster der Seite
+/// haben jetzt dieselbe Spaltenzahl, dieselbe Luecke und damit dieselbe
+/// Rasterkante. Vorher hatte das Panel 7 Punkte Luecke und die Schwellen
+/// 430/620, der Katalog 8 Punkte und die Schwellen 500/700 — zwei Raster
+/// uebereinander, die sich um zwei Spalten unterschieden.
+const double badgeRasterLuecke = 8.0;
+
+/// Wie viele Kacheln nebeneinander passen.
+///
+/// GERECHNET, nicht geschaetzt — mit [badgeRasterLuecke] von 8 Punkten:
+///   320 Punkte Geraet -> Katalog 300 nutzbar -> 3 Spalten zu 94,7
+///                     -> Panel   276 nutzbar -> 3 Spalten zu 86,7
+///   390 Punkte Geraet -> Katalog 370 nutzbar -> 3 Spalten zu 118,0
+///   Tablet ab 440     -> 4 Spalten, ab 600 -> 5
+///
+/// Die Schwelle fuer die dritte Spalte liegt bei 260 und nicht hoeher, weil
+/// das schmalste Geraet, das noch bedient wird (320 Punkte), im
+/// Uebersichts-Panel nur 276 Punkte nutzbare Breite uebrig laesst. Eine
+/// Schwelle von 300 haette dort auf zwei Spalten zurueckgeschaltet — also
+/// genau das Gegenteil dessen, was Vucko wollte. Unter 260 Punkten (kein
+/// heutiges Geraet) bleiben zwei Spalten, damit eine Kachel nicht unter
+/// 80 Punkte faellt.
+int badgeRasterSpalten(double verfuegbar) => verfuegbar >= 600
+    ? 5
+    : verfuegbar >= 440
+    ? 4
+    : verfuegbar >= 260
+    ? 3
+    : 2;
+
+/// Die Breite einer Kachel bei [verfuegbar] Punkten nutzbarer Breite.
+double badgeRasterKachelBreite(double verfuegbar) {
+  final spalten = badgeRasterSpalten(verfuegbar);
+  return (verfuegbar - (spalten - 1) * badgeRasterLuecke) / spalten;
+}
+
+/// Die Masse EINER Katalog-Kachel, aus ihrer Breite abgeleitet.
+///
+/// WARUM ABGELEITET UND NICHT FEST: Die Kachel war bisher immer 138 Punkte
+/// hoch, egal ob sie 191 oder 95 Punkte breit war. Bei drei Spalten auf einem
+/// schmalen Telefon steht darin ein 52 Punkte grosses Emblem in einer 95
+/// Punkte breiten Kachel — das Emblem fuellt die Kachel fast randlos und der
+/// Name darunter wird zur Restflaeche. Emblem, Innenabstand und Schriftgrad
+/// folgen deshalb der Breite. Alle Kacheln der Seite bekommen DIESELBE
+/// Breite, also auch dieselbe Hoehe: das Raster bleibt eine saubere Kante.
+class BadgeKachelMasse {
+  const BadgeKachelMasse({
+    required this.breite,
+    required this.emblem,
+    required this.polster,
+    required this.namenGroesse,
+    required this.namenHoehe,
+    required this.hoehe,
+  });
+
+  final double breite;
+
+  /// Kantenlaenge des gezeichneten Stufen-Emblems.
+  final double emblem;
+
+  /// Seitlicher Innenabstand.
+  final double polster;
+
+  final double namenGroesse;
+
+  /// Feste Hoehe des Namensfeldes (zwei Zeilen), damit die Unterzeilen aller
+  /// Kacheln einer Reihe auf derselben Linie liegen.
+  final double namenHoehe;
+
+  final double hoehe;
+}
+
+/// Randstaerke einer Kachel. Steht hier, weil sie in die Hoehe eingeht: ein
+/// `Container` mit `Border` legt den Rand als zusaetzlichen Innenabstand um
+/// sein Kind. Wer den vergisst, baut einen Inhalt, der um genau zwei Punkte
+/// zu hoch ist — und Flutter meldet einen Ueberlauf.
+const double badgeKachelRand = 1.0;
+
+/// Feste Anteile der Kachel, die nicht mit der Breite wachsen: Rand oben und
+/// unten, Innenabstand oben (8) und unten (9), Kopfzeile (14), Luft darunter
+/// (6), Luft unter dem Emblem (8), Luft ueber der Unterzeile (3) und die
+/// Unterzeile selbst (13).
+const double _kachelFestAnteil =
+    2 * badgeKachelRand + 8 + 14 + 6 + 8 + 3 + 13 + 9;
+
+BadgeKachelMasse badgeKachelMasse(double breite) {
+  final emblem = (breite * 0.44).clamp(38.0, 56.0);
+  final namenGroesse = breite >= 130
+      ? 11.0
+      : breite >= 108
+      ? 10.5
+      : 9.5;
+  final namenHoehe = (namenGroesse * 1.12 * 2).ceilToDouble();
+  return BadgeKachelMasse(
+    breite: breite,
+    emblem: emblem,
+    polster: breite < 108 ? 6.0 : 10.0,
+    namenGroesse: namenGroesse,
+    namenHoehe: namenHoehe,
+    hoehe: emblem + namenHoehe + _kachelFestAnteil,
+  );
+}
+
 class BadgeUebersichtPanel extends StatelessWidget {
   const BadgeUebersichtPanel({
     super.key,
@@ -610,19 +735,15 @@ class _FamilienRaster extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Dieselbe Rasterregel wie im Katalog darunter — [badgeRasterSpalten].
+    // Der LayoutBuilder sitzt INNERHALB des Innenabstands der Schublade, die
+    // Breite ist hier also schon die wirklich nutzbare.
     return LayoutBuilder(
       builder: (context, constraints) {
-        final spalten = constraints.maxWidth >= 620
-            ? 5
-            : constraints.maxWidth >= 430
-            ? 4
-            : 3;
-        const luecke = 7.0;
-        final breite =
-            (constraints.maxWidth - (spalten - 1) * luecke) / spalten;
+        final breite = badgeRasterKachelBreite(constraints.maxWidth);
         return Wrap(
-          spacing: luecke,
-          runSpacing: luecke,
+          spacing: badgeRasterLuecke,
+          runSpacing: badgeRasterLuecke,
           children: [
             for (final familie in familien)
               SizedBox(

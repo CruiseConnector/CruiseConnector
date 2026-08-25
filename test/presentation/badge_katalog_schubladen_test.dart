@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/presentation/pages/analytics_page.dart';
+import 'package:cruise_connect/presentation/widgets/badge_uebersicht_panel.dart';
 
 /// 2026-08-24 (vucko woertlich): „die stufen badges sollen noch besser
 /// angezeigt werden man scrollt da endlos".
@@ -19,9 +20,11 @@ void main() {
   /// bekommt hier die Breite, die er auf der Seite auch hat.
   const breite = 390.0;
 
-  /// Kacheln in Originalgroesse (138 Punkte hoch, wie in der Seite), aber
-  /// ohne Bilder — der Test misst die Hoehe, nicht die Grafik.
-  Widget kachel(app.Badge badge) => Center(
+  /// Kacheln in Originalgroesse, aber ohne Bilder — der Test misst die Hoehe,
+  /// nicht die Grafik. Breite und Hoehe kommen seit dem 25.08. von aussen
+  /// ([BadgeKachelMasse]), damit Rechnung und Zeichnung nicht auseinander
+  /// laufen koennen.
+  Widget kachel(app.Badge badge, BadgeKachelMasse masse) => Center(
     child: Text(badge.id, maxLines: 1, overflow: TextOverflow.ellipsis),
   );
 

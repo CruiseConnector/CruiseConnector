@@ -471,17 +471,36 @@ void main() {
       final karte = File(
         'lib/presentation/widgets/starter_paket_karte.dart',
       ).readAsStringSync();
+      // 2026-08-25 (vucko): Die Bedingung ist nicht mehr `paketVergeben`
+      // (acht von zwoelf), sondern `alleAufgabenErledigt` (zwoelf von
+      // zwoelf). Gemessen am 25.08.: Vuckos Profil hatte zehn von zwoelf
+      // Aufgaben und ein abgelaufenes `starter_bonus_ende` — mit der alten
+      // Bedingung war die Karte fuer ihn unsichtbar, obwohl zwei Aufgaben
+      // offen standen. „als oberstes widget bis ich es abgeschlossen habe".
+      //
       // Quelle der Wahrheit in der Karte ...
       expect(karte.contains('if (!dienst.isLoaded) return const SizedBox.shrink();'),
           isTrue);
-      expect(karte.contains('dienst.paketVergeben && !dienst.doppelXpAktiv'),
-          isTrue);
+      expect(
+        karte.contains('dienst.alleAufgabenErledigt && !dienst.doppelXpAktiv'),
+        isTrue,
+      );
       // ... gespiegelt auf der Startseite.
       expect(
         home.contains(
-          'dienst.isLoaded && !(dienst.paketVergeben && !dienst.doppelXpAktiv)',
+          '!(dienst.alleAufgabenErledigt && !dienst.doppelXpAktiv)',
         ),
         isTrue,
+      );
+      // Und die alte, zu frueh ausblendende Bedingung ist an BEIDEN Stellen
+      // weg — sonst versteckte eine der beiden die Karte weiterhin.
+      expect(
+        karte.contains('dienst.paketVergeben && !dienst.doppelXpAktiv'),
+        isFalse,
+      );
+      expect(
+        home.contains('dienst.paketVergeben && !dienst.doppelXpAktiv'),
+        isFalse,
       );
       expect(
         home.contains('TutorialZielRegistry.key(TutorialZielRegistry.starterKarte)'),

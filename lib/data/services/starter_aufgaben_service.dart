@@ -241,6 +241,15 @@ class StarterAufgabenService extends ChangeNotifier {
   /// Oberfläche zeigt dann die Badge-Verleihung und startet die Bonus-Woche.
   final ValueNotifier<bool> paketFrischVerdient = ValueNotifier<bool>(false);
 
+  /// Feuert genau EINMAL, wenn die ZWOELFTE Aufgabe faellt.
+  ///
+  /// 2026-08-25: Getrennt von [paketFrischVerdient], weil die beiden seit
+  /// heute verschiedene Schwellen haben (acht gegen zwoelf). Ein einziger
+  /// Melder haette bedeutet, dass entweder die Bonuswoche zu spaet startet
+  /// oder badge_58 zu frueh faellt.
+  final ValueNotifier<bool> alleAufgabenFrischErledigt =
+      ValueNotifier<bool>(false);
+
   bool get isLoaded => _loaded;
   bool erledigt(String id) => _erledigt.contains(id);
   int get erledigtAnzahl =>
@@ -251,6 +260,24 @@ class StarterAufgabenService extends ChangeNotifier {
   /// verlangt (siehe [aufgabenFuerBoost]). Umbenannt statt umgedeutet, damit
   /// niemand die Schwelle uebersieht.
   bool get boostErreicht => erledigtAnzahl >= aufgabenFuerBoost;
+
+  /// 2026-08-25 (vucko woertlich): „alle funktionen einmal durchgetestet haben
+  /// die es in der app gibt".
+  ///
+  /// Das ist die ZWEITE, haertere Schwelle: ALLE zwoelf Aufgaben. Sie ist
+  /// bewusst etwas anderes als [boostErreicht] (acht von zwoelf):
+  ///
+  ///   * [boostErreicht] = ACHT  → badge_16 „Startklar" + Doppel-XP-Woche.
+  ///     Das ist der PREIS fuer die Belohnung und muss erreichbar bleiben.
+  ///   * [alleAufgabenErledigt] = ZWOELF → badge_58 und das Ende der Karte.
+  ///     Das ist woertlich „jede Funktion einmal benutzt".
+  ///
+  /// Bis 25.08. hing badge_58 an der EINEN Aufgabe „tutorial", also an der
+  /// Fuehrung mit den Leuchtkreisen allein. Gemessen: genau ein Profil von 199
+  /// traegt es, und dieses Profil hatte zehn von zwoelf Aufgaben offen stehen.
+  /// Vucko hat es fuer die Tour bekommen und nicht fuer die Liste — genau das
+  /// meint sein „es soll passend sein dafuer".
+  bool get alleAufgabenErledigt => erledigtAnzahl >= aufgaben.length;
 
   bool get paketVergeben => _paketVergeben;
   DateTime? get bonusEnde => _bonusEnde;
@@ -360,6 +387,9 @@ class StarterAufgabenService extends ChangeNotifier {
         .where((id) => _gueltigeIds.contains(id) && !_erledigt.contains(id))
         .toSet();
     if (neue.isEmpty) return;
+    // 2026-08-25: VOR dem Hinzufuegen merken, sonst waere „gerade jetzt alle
+    // zwoelf" nicht von „waren vorher schon alle zwoelf" zu unterscheiden.
+    final vorherAlle = alleAufgabenErledigt;
     _erledigt.addAll(neue);
 
     final geradeKomplett = boostErreicht && !_paketVergeben;
@@ -371,9 +401,21 @@ class StarterAufgabenService extends ChangeNotifier {
     notifyListeners();
     await _speichereLokal();
     if (geradeKomplett) {
-      debugPrint('[Starter] Paket komplett — Doppel-XP bis $_bonusEnde');
+      debugPrint('[Starter] Boost erreicht — Doppel-XP bis $_bonusEnde');
       paketFrischVerdient.value = true;
     }
+    _meldeAbschlussWennKomplett(vorherAlle);
+  }
+
+  /// 2026-08-25: Meldet den Abschluss ALLER zwoelf Aufgaben — einmal.
+  ///
+  /// [vorherAlle] ist der Stand VOR der Aenderung. Ohne ihn wuerde jede
+  /// weitere Meldung nach dem zwoelften Haken erneut feuern, und die Karte
+  /// zeigte die Abzeichen-Verleihung bei jedem Sync wieder.
+  void _meldeAbschlussWennKomplett(bool vorherAlle) {
+    if (vorherAlle || !alleAufgabenErledigt) return;
+    debugPrint('[Starter] Alle ${aufgaben.length} Aufgaben erledigt');
+    alleAufgabenFrischErledigt.value = true;
   }
 
   /// Leitet die Aufgaben ab, die man nicht „melden" kann, ohne fremde Dateien
@@ -500,6 +542,10 @@ class StarterAufgabenService extends ChangeNotifier {
 
     var geaendert = false;
     final vorher = _erledigt.length;
+    // 2026-08-25: Auch die Vereinigung mit dem Server kann die zwoelfte
+    // Aufgabe bringen (Geraetewechsel). Sonst kaeme badge_58 auf dem neuen
+    // Handy nie an.
+    final vorherAlle = alleAufgabenErledigt;
     _erledigt.addAll(serverErledigt);
     if (_erledigt.length != vorher) geaendert = true;
 
@@ -552,9 +598,10 @@ class StarterAufgabenService extends ChangeNotifier {
     }
 
     if (frischVergeben) {
-      debugPrint('[Starter] Paket komplett (Abgleich) — Bonus bis $_bonusEnde');
+      debugPrint('[Starter] Boost erreicht (Abgleich) — Bonus bis $_bonusEnde');
       paketFrischVerdient.value = true;
     }
+    _meldeAbschlussWennKomplett(vorherAlle);
   }
 
   static bool _nahezuGleich(DateTime a, DateTime b) =>
@@ -616,6 +663,7 @@ class StarterAufgabenService extends ChangeNotifier {
     _bonusEnde = null;
     _paketVergeben = false;
     paketFrischVerdient.value = false;
+    alleAufgabenFrischErledigt.value = false;
     profilLeserFuerTests = null;
     profilSchreiberFuerTests = null;
     ladeBremseFuerTests = null;

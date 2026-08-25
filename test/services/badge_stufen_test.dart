@@ -130,7 +130,7 @@ void main() {
     // bekommen [...] aber nur eins". Das Community-Abzeichen ist bewusst der
     // dritte stufenlose: Es gibt kein „zwei Communities" und kein „zehn
     // Communities", also darf es auch in keine Stufenleiter geraten.
-    // 2026-08-24 (Auftrag vom 24.08.): badge_58 „Eingewiesen" ist der vierte
+    // 2026-08-24 (Auftrag vom 24.08.): badge_58 „Durchgespielt" ist der vierte
     // stufenlose. Es gibt kein „zweites Tutorial", also darf auch dieses
     // Abzeichen in keine Stufenleiter geraten.
     test('ohne Familie sind nur die vier bewussten Einzelstuecke', () {

@@ -1105,21 +1105,36 @@ class GamificationService {
       currentlyQualifiedBadges.add(Badge.starterBadgeId);
     }
 
-    // 2026-08-24 (Aufgabe 3): badge_58 fuer das abgeschlossene Onboarding.
+    // 2026-08-25 (vucko): badge_58 verlangt jetzt ALLE ZWOELF Starter-Aufgaben.
     //
-    // BEDINGUNG ist die Starter-Aufgabe „tutorial", und die wird nur beim
-    // ECHTEN Abschluss gesetzt (app_tutorial_overlay.dart, _complete), nicht
-    // beim Ueberspringen. Genau das steht in Vuckos Satz: „wenn man es
-    // abgeschlossen hat". Wer uebersprungen hat, holt es ueber „Tutorial
-    // nochmal ansehen" nach.
+    // Hier stand bis heute `starter.erledigt('tutorial')` — das Abzeichen fiel
+    // also, sobald die Fuehrung mit den Leuchtkreisen durchgeklickt war.
+    // GEMESSEN am 25.08. in der Produktivdatenbank: genau EIN Profil von 199
+    // traegt badge_58, und dieses Profil hatte zehn von zwoelf Aufgaben
+    // erledigt, zwei offen. Vucko hat das Abzeichen also fuer die Tour
+    // bekommen und nicht fuer die Liste. Sein Satz dazu: „ich habe jetzt nur
+    // das tutorial bekommen und nicht das onboarding und es soll passend sein
+    // dafuer".
+    //
+    // NEUE ABGRENZUNG, damit die zwei Abzeichen verschiedene Dinge messen:
+    //   badge_16 „Startklar"   = ACHT von zwoelf (`paketVerdient`, oben).
+    //                            Die Boost-Schwelle, sie bleibt erreichbar.
+    //   badge_58               = ZWOELF von zwoelf. Woertlich „alle Funktionen
+    //                            einmal durchgetestet".
     //
     // WARUM ERST HIER, NACH `abzeichenOhneStartklar`: Das Abzeichen zaehlt
     // NICHT fuer die Aufgabe „die ersten drei Abzeichen sammeln" mit — aus
     // demselben Grund wie badge_16. Beide sind Belohnungen dieser Liste; wer
-    // sie mitzaehlt, haengt die Aufgabe an ihr eigenes Ergebnis. Vuckos
-    // „das anfangsbadge zaehlt dazu" meint badge_15, das jeder ohne Bedingung
-    // bekommt — es bleiben also zwei selbst verdiente Abzeichen zu holen.
-    if (starter.erledigt('tutorial')) {
+    // sie mitzaehlt, haengt die Aufgabe an ihr eigenes Ergebnis. Seit die
+    // Bedingung ALLE zwoelf Aufgaben sind (darunter „drei Abzeichen"), waere
+    // ein Mitzaehlen sogar ein echter Ringschluss und kein blosser
+    // Schoenheitsfehler.
+    //
+    // Das Tutorial bleibt Teil der Bedingung, nur eben als eine von zwoelf
+    // Zeilen: die Aufgabe „tutorial" wird weiterhin nur beim ECHTEN Abschluss
+    // gesetzt (app_tutorial_overlay.dart, _complete), nicht beim
+    // Ueberspringen.
+    if (starter.alleAufgabenErledigt) {
       currentlyQualifiedBadges.add(onboardingBadgeId);
     }
 

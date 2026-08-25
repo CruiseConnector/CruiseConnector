@@ -254,11 +254,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         _committedUsername = v;
         return true;
       }
+      final grund = UsernameChangeException(
+        res.error ?? 'unknown',
+        daysRemaining: res.daysRemaining,
+      ).message;
       _showError(
-        UsernameChangeException(
-          res.error ?? 'unknown',
-          daysRemaining: res.daysRemaining,
-        ).message,
+        res.error == 'taken'
+            ? '$grund${AppInputLimits.usernameFoldingHint(v)}'
+            : grund,
       );
       if (res.error == 'taken' || res.error == 'reserved') {
         setState(() {
@@ -533,7 +536,9 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       _startResendCooldown();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Neuer Code gesendet. Schau in dein Postfach.')),
+          const SnackBar(
+            content: Text('Neuer Code gesendet. Schau in dein Postfach.'),
+          ),
         );
       }
     } on AuthException catch (e) {
@@ -556,7 +561,9 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       }
     } catch (_) {
       if (mounted) {
-        _showError('Konnte gerade keinen neuen Code senden. Bitte kurz warten.');
+        _showError(
+          'Konnte gerade keinen neuen Code senden. Bitte kurz warten.',
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -653,7 +660,6 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       _goTo(_page + 1, forward: true);
     }
   }
-
 
   /// Vorschlaege fuer den Abschluss-Schritt.
   ///
@@ -1343,7 +1349,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       title: 'Wähl deinen @-Namen',
       subtitle:
           'Dein eindeutiger Handle, daran finden dich andere. 3 bis 20 Zeichen, '
-          'Buchstaben, Zahlen und _.',
+          'Buchstaben (auch ä ö ü ß), Zahlen und _.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1351,12 +1357,12 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
             controller: _usernameCtrl,
             onChanged: _onUsernameChanged,
             autocorrect: false,
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_]')),
-              LengthLimitingTextInputFormatter(
-                AppInputLimits.usernameMaxLength,
-              ),
-            ],
+            // 2026-08-25: Eigene Filterliste raus. Sie liess Umlaute beim
+            // TIPPEN verschwinden — der Nutzer drückt „ü" und es passiert
+            // nichts, er hält seine Tastatur für kaputt. Ab jetzt dieselbe
+            // Liste wie im Profil-Bearbeiten, damit nicht wieder eine der
+            // beiden Stellen vergessen wird.
+            inputFormatters: AppInputLimits.usernameFormatters,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 18,
@@ -1453,10 +1459,17 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         '@${_usernameCtrl.text.trim()} ist frei 🎉',
         _ok,
       ),
-      _UNameState.taken => ('Schon vergeben, probier einen Vorschlag.', _err),
+      // 2026-08-25: „Schon vergeben" allein verwirrt, seit Umlaute erlaubt
+      // sind. Wer „müller" tippt und „mueller" nie gesehen hat, versteht
+      // sonst nicht, womit sein Name kollidiert.
+      _UNameState.taken => (
+        'Schon vergeben, probier einen Vorschlag.'
+            '${AppInputLimits.usernameFoldingHint(_usernameCtrl.text)}',
+        _err,
+      ),
       _UNameState.reserved => ('Dieser Name ist reserviert.', _err),
       _UNameState.invalid => (
-        '3 bis 20 Zeichen: Buchstaben, Zahlen, _ '
+        '3 bis 20 Zeichen: Buchstaben (auch ä ö ü ß), Zahlen, _ '
             '(kein __, nicht mit _ beginnen oder enden).',
         _muted,
       ),
@@ -1686,9 +1699,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
                     decoration: BoxDecoration(
                       color: _card,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: accent.withValues(alpha: 0.30),
-                      ),
+                      border: Border.all(color: accent.withValues(alpha: 0.30)),
                     ),
                     child: Text(
                       marke,
@@ -1809,8 +1820,7 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
   Widget _mitfahrerZeile(Map<String, dynamic> person, Color accent) {
     final id = (person['id'] as String?) ?? '';
     final handle = SocialService.publicHandle(person, fallbackUserId: id);
-    final grund =
-        SocialService.mutualFollowersLine(person) ?? 'Neu dabei';
+    final grund = SocialService.mutualFollowersLine(person) ?? 'Neu dabei';
     final schonGefolgt = _gefolgt.contains(id);
     final laeuft = _folgenLaeuft.contains(id);
 

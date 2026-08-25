@@ -171,9 +171,28 @@ void main() {
             'erfuellen.',
       );
 
-      // Die Bedingung ist der ECHTE Abschluss (Starter-Aufgabe „tutorial"),
-      // nicht das Ueberspringen.
-      expect(quelle, contains("starter.erledigt('tutorial')"));
+      // 2026-08-25 (vucko): Die Bedingung ist nicht mehr die EINE Aufgabe
+      // „tutorial", sondern die GANZE Liste — „alle funktionen einmal
+      // durchgetestet haben die es in der app gibt".
+      //
+      // Geprueft wird die Zeile mit der Vergabe, nicht die ganze Datei: der
+      // alte Ausdruck steht als Zitat noch im erklaerenden Kommentar darueber,
+      // und ein `contains` ueber die Datei waere davon still gruen geblieben.
+      final zeile = quelle.substring(
+        quelle.lastIndexOf('\n', vergabe) + 1,
+        quelle.indexOf('\n', vergabe),
+      );
+      final bedingung = quelle.substring(
+        quelle.lastIndexOf('if (', vergabe),
+        vergabe,
+      );
+      expect(zeile.trim(), 'currentlyQualifiedBadges.add(onboardingBadgeId);');
+      expect(bedingung, contains('starter.alleAufgabenErledigt'));
+      expect(
+        bedingung,
+        isNot(contains("erledigt('tutorial')")),
+        reason: 'badge_58 haengt wieder allein am Tutorial.',
+      );
     });
 
     /// Aufgabe 5 (nachpruefen, nicht aendern). Vucko: „das anfangsbadge zaehlt

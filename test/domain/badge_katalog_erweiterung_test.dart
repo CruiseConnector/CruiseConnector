@@ -25,9 +25,10 @@ void main() {
     });
 
     test('ist ein anderes Abzeichen als Startklar', () {
-      // badge_16 haengt an ACHT von ELF Starter-Aufgaben, badge_58 allein am
-      // Tutorial. Wer die beiden zusammenlegt, verliert die Belohnung genau
-      // in der Minute, in der die Tour zu Ende ist.
+      // 2026-08-25 (vucko): badge_16 haengt an ACHT von zwoelf
+      // Starter-Aufgaben, badge_58 seit heute an ALLEN ZWOELF (vorher: allein
+      // am Tutorial). Wer die beiden zusammenlegt, hat wieder nur ein
+      // Abzeichen fuer zwei verschiedene Leistungen.
       expect(Badge.onboardingBadgeId, isNot(Badge.starterBadgeId));
       final onboarding = Badge.getById(Badge.onboardingBadgeId)!;
       final startklar = Badge.getById(Badge.starterBadgeId)!;

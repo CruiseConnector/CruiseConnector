@@ -1,12 +1,15 @@
 import 'dart:io' show HttpDate;
 
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/country_region.dart';
+import 'package:cruise_connect/data/services/location_permission_helper.dart';
 import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/domain/models/community_chat_message.dart';
@@ -2570,5 +2573,326 @@ class CommunityFilterEinstellungen extends ChangeNotifier {
     } catch (e) {
       debugPrint('[CommunityFilter] Wahl merken: $e');
     }
+  }
+}
+
+/// Woher das erkannte Land stammt. Steht im Regionsblatt als eine Zeile unter
+/// der Überschrift — sonst sieht der Nutzer eine gekürzte Liste und weiß
+/// nicht, warum.
+enum CommunityLandQuelle {
+  /// Aus dem GPS-Standort, über [CountryRegion.classify].
+  standort,
+
+  /// Aus `profiles.country_code`. Greift, wenn kein Standort da ist (keine
+  /// Freigabe, Dienst aus) oder der Standort außerhalb von AT/CH/DE liegt.
+  profil,
+
+  /// Aus dem letzten Start, aus den SharedPreferences. Steht schon da, bevor
+  /// Standort oder Profil geantwortet haben.
+  gemerkt,
+
+  /// Nichts davon war zu holen: es werden ALLE Regionen gezeigt.
+  unbekannt,
+}
+
+/// 2026-08-25 — Auftrag Vucko, wörtlich: „es soll automatisch erkannt werden
+/// in welchem land man ist und man soll aus dem Land nur die regionen haben
+/// also wenn ich in deutschland bin will ich keine regionen von oesterreich
+/// haben usw. es solls automatisch am standort erkennen bitte auf das acht
+/// geben".
+///
+/// Erkennt das Land und beschneidet damit die AUSWAHLLISTE der Regionen — an
+/// beiden Stellen, an denen es Regionen gibt: im Filter der öffentlichen
+/// Communities und beim Erstellen einer Community.
+///
+/// WAS HIER BEWUSST NICHT PASSIERT: Der Regionsfilter wird NICHT automatisch
+/// auf das erkannte Land gesetzt. Das Land beschneidet nur die Liste, aus der
+/// gewählt wird. Ein selbst gesetzter Filter würde Communities ausblenden,
+/// ohne dass jemand ihn angetippt hat — genau die Art stiller Filter, die wie
+/// eine kaputte App aussieht.
+///
+/// DIE REIHENFOLGE ist der heikle Teil, deshalb ausgeschrieben:
+///
+///  1. [laden] liest das zuletzt erkannte Land aus den SharedPreferences.
+///     Das ist sofort da und braucht weder Netz noch Freigabe. Vor dem
+///     allerersten Mal ist es `null` — und `null` heißt AUSDRÜCKLICH „alle
+///     Regionen zeigen", nie „leere Liste". Ein leeres Blatt beim Öffnen
+///     sieht kaputt aus, und der Nutzer hat dann keinen Weg mehr heraus.
+///  2. [aktualisieren] läuft daneben und schiebt nach: erst der Standort,
+///     dann als Rückfall das Profil-Land.
+///
+/// WARUM DER STANDORT VORNE STEHT: Vucko sagt „es solls automatisch am
+/// standort erkennen". Wer in Deutschland unterwegs ist, will deutsche
+/// Regionen — auch wenn im Profil noch AT steht.
+///
+/// WARUM DAS PROFIL DER RÜCKFALL IST (gemessen am 25.08.2026): 177 von 199
+/// Profilen haben ein `country_code` (AT 136, DE 35, CH 6). Ohne Freigabe
+/// wäre die Alternative Raten oder gar nichts — das Profil ist beides nicht.
+///
+/// DIESE FUNKTION FRAGT NIE NACH DER FREIGABE. Sie schaut nur nach, ob schon
+/// eine erteilt ist. Ein Berechtigungs-Dialog, der beim bloßen Öffnen eines
+/// Filters aufpoppt, ist eine Zumutung — und auf iOS verbrennt er die einzige
+/// Gelegenheit, in der das System ihn überhaupt zeigt.
+class CommunityStandortLand extends ChangeNotifier {
+  CommunityStandortLand._();
+
+  static final CommunityStandortLand instance = CommunityStandortLand._();
+
+  /// Nur für den Test: ein eigener, vom Singleton unabhängiger Stand.
+  @visibleForTesting
+  factory CommunityStandortLand.fuerTests() => CommunityStandortLand._();
+
+  /// Die Länder, für die es überhaupt Regionen gibt. Gemessen am 25.08.2026:
+  /// `community_regionen` hat 54 Zeilen — 10 AT, 27 CH, 17 DE. Ein Land
+  /// außerhalb dieser drei kann die Liste nur leeren, deshalb gilt es hier
+  /// als „unbekannt" und die Liste bleibt vollständig.
+  static const Set<String> unterstuetzteLaender = <String>{'AT', 'CH', 'DE'};
+
+  static const String prefsBasisLand = 'community_standort_land_v1';
+
+  /// Ersetzbar, damit der Test ohne GPS und ohne Supabase auskommt.
+  @visibleForTesting
+  static Future<String?> Function()? standortQuelleFuerTests;
+
+  @visibleForTesting
+  static Future<String?> Function()? profilQuelleFuerTests;
+
+  bool _geladen = false;
+  String? _landCode;
+  CommunityLandQuelle _quelle = CommunityLandQuelle.unbekannt;
+
+  bool get geladen => _geladen;
+
+  /// `AT`, `CH`, `DE` — oder `null` für „alle Regionen zeigen".
+  String? get landCode => _landCode;
+
+  CommunityLandQuelle get quelle => _quelle;
+
+  /// Der ausgeschriebene Landesname, für die Zeile im Regionsblatt.
+  static String landName(String? code) => switch (code?.toUpperCase()) {
+    'AT' => 'Österreich',
+    'CH' => 'Schweiz',
+    'DE' => 'Deutschland',
+    _ => code ?? '',
+  };
+
+  /// Der Satz unter der Überschrift im Regionsblatt, oder `null`, wenn kein
+  /// Land erkannt ist (dann steht die volle Liste ohnehin da und es gibt
+  /// nichts zu erklären).
+  static String? herkunftText(String? code, CommunityLandQuelle quelle) {
+    if (code == null || code.isEmpty) return null;
+    final name = landName(code);
+    return switch (quelle) {
+      CommunityLandQuelle.standort => 'Nach deinem Standort: $name',
+      CommunityLandQuelle.profil => 'Nach deinem Profil: $name',
+      CommunityLandQuelle.gemerkt => 'Zuletzt erkannt: $name',
+      CommunityLandQuelle.unbekannt => null,
+    };
+  }
+
+  /// Trimmt und macht groß. Leeres wird zu `null`.
+  static String? _gross(String? roh) {
+    final text = roh?.trim().toUpperCase();
+    return (text == null || text.isEmpty) ? null : text;
+  }
+
+  /// Nur ein Land, für das es Regionen gibt — sonst `null`.
+  static String? _unterstuetzt(String? roh) {
+    final code = _gross(roh);
+    if (code == null) return null;
+    return unterstuetzteLaender.contains(code) ? code : null;
+  }
+
+  /// Das Land zu einem Punkt, oder `null`.
+  ///
+  /// `null` bedeutet hier ZWEI Dinge, und beide führen zum selben Ergebnis:
+  /// der Punkt liegt außerhalb von AT/CH/DE (der Vorarlberger im Urlaub in
+  /// Italien), oder die Boxen kennen ihn gar nicht. In beiden Fällen darf der
+  /// Standort nichts beschneiden — es übernimmt das Profil, und wenn auch das
+  /// nichts hergibt, bleiben alle Regionen stehen.
+  static String? landAusPosition(double lat, double lng) {
+    return _unterstuetzt(CountryRegion.classify(lat, lng));
+  }
+
+  /// Die Entscheidung selbst, ohne GPS und ohne Datenbank — damit sie im Test
+  /// ohne Gerät fahrbar ist.
+  static String? entscheide({
+    String? standortLand,
+    String? profilLand,
+    String? gemerktesLand,
+  }) {
+    return _unterstuetzt(standortLand) ??
+        _unterstuetzt(profilLand) ??
+        _unterstuetzt(gemerktesLand);
+  }
+
+  /// Die Regionen, die zu [landCode] gehören.
+  ///
+  /// ZWEI SICHERUNGEN GEGEN EINE LEERE LISTE, weil eine leere Auswahl schlimmer
+  /// ist als eine zu lange:
+  ///  * `landCode == null` → alles.
+  ///  * kein einziger Treffer (unbekannter Code, Liste noch nicht geladen,
+  ///    neues Land ohne Regionen in der Datenbank) → ebenfalls alles.
+  static List<CommunityRegion> regionenFuerLand(
+    List<CommunityRegion> alle,
+    String? landCode,
+  ) {
+    final land = _gross(landCode);
+    if (land == null) return alle;
+    final treffer = alle
+        .where((region) => region.landCode.trim().toUpperCase() == land)
+        .toList();
+    return treffer.isEmpty ? alle : treffer;
+  }
+
+  /// Gehört [regionCode] zu einem ANDEREN Land als [landCode]?
+  ///
+  /// Entscheidet, ob das Regionsblatt gleich aufgeklappt startet: eine
+  /// gewählte Region, die man im Blatt nicht sieht, wäre ein Filter ohne
+  /// sichtbaren Griff.
+  static bool istFremdeRegion({
+    required String? regionCode,
+    required String? landCode,
+    required List<CommunityRegion> regionen,
+  }) {
+    final region = _gross(regionCode);
+    final land = _gross(landCode);
+    if (region == null || land == null) return false;
+    for (final eintrag in regionen) {
+      if (eintrag.code.trim().toUpperCase() == region) {
+        return eintrag.landCode.trim().toUpperCase() != land;
+      }
+    }
+    // Unbekannter Code: lieber aufklappen als die Wahl verstecken.
+    return true;
+  }
+
+  /// Schritt 1: das zuletzt erkannte Land. Sofort da, ohne Netz und ohne
+  /// Freigabe.
+  Future<void> laden() async {
+    if (_geladen) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final gemerkt = _unterstuetzt(
+        prefs.getString(NutzerPrefsSchluessel.fuer(prefsBasisLand)),
+      );
+      if (gemerkt != null) {
+        _landCode = gemerkt;
+        _quelle = CommunityLandQuelle.gemerkt;
+      }
+    } catch (e) {
+      debugPrint('[CommunityStandortLand] gemerktes Land lesen: $e');
+    }
+    _geladen = true;
+    notifyListeners();
+  }
+
+  /// Schritt 2: Standort, sonst Profil. Läuft im Hintergrund und schiebt das
+  /// Ergebnis nach.
+  ///
+  /// Wirft nie. Ein Filterregler ist kein Grund, eine Seite scheitern zu
+  /// lassen — im schlimmsten Fall bleibt es beim gemerkten Land oder bei
+  /// „alle Regionen".
+  Future<void> aktualisieren() async {
+    // BEIDE Quellen laufen durch [_unterstuetzt], bevor sie ueberhaupt als
+    // Fund gelten. Sonst zaehlt ein „IT" aus dem Standort als Treffer, die
+    // Liste bliebe (richtig) vollstaendig — aber im Blatt stuende die Zeile
+    // „Nach deinem Standort: IT". Eine Erklaerung, die nicht zur Anzeige
+    // passt, ist schlimmer als gar keine.
+    final standort = _unterstuetzt(await _standortLand());
+    final profil = standort != null ? null : _unterstuetzt(await _profilLand());
+    final neu = entscheide(
+      standortLand: standort,
+      profilLand: profil,
+      gemerktesLand: _landCode,
+    );
+    final neueQuelle = standort != null
+        ? CommunityLandQuelle.standort
+        : (profil != null
+              ? CommunityLandQuelle.profil
+              : (neu == null
+                    ? CommunityLandQuelle.unbekannt
+                    : CommunityLandQuelle.gemerkt));
+
+    _geladen = true;
+    if (neu == _landCode && neueQuelle == _quelle) return;
+    _landCode = neu;
+    _quelle = neueQuelle;
+    notifyListeners();
+    if (neu != null) await _merke(neu);
+  }
+
+  /// Der Standort — OHNE je einen Freigabe-Dialog zu zeigen.
+  static Future<String?> _standortLand() async {
+    final test = standortQuelleFuerTests;
+    if (test != null) return test();
+    if (kIsWeb) return null;
+    try {
+      final freigabe = await geo.Geolocator.checkPermission().timeout(
+        LocationPermissionHelper.abfrageGrenze,
+      );
+      // Nur nachsehen, nie fragen: `denied` heißt hier „noch nicht erteilt",
+      // und genau dann fragt diese Stelle bewusst NICHT nach.
+      if (!LocationPermissionHelper.isUsable(freigabe)) return null;
+
+      // Der gemerkte Fix ist sofort da und für die Frage „welches Land"
+      // genau genug — auf ein Land wirkt sich ein Fehler von hundert Metern
+      // nur direkt an der Grenze aus, und dort gibt es den Knopf „Regionen
+      // aus allen Ländern".
+      final letzte = await geo.Geolocator.getLastKnownPosition().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => null,
+      );
+      if (letzte != null) {
+        return landAusPosition(letzte.latitude, letzte.longitude);
+      }
+
+      final frisch = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.low,
+          timeLimit: Duration(seconds: 5),
+        ),
+      ).timeout(const Duration(seconds: 6));
+      return landAusPosition(frisch.latitude, frisch.longitude);
+    } catch (e) {
+      debugPrint('[CommunityStandortLand] Standort: $e');
+      return null;
+    }
+  }
+
+  /// Das Land aus dem eigenen Profil.
+  static Future<String?> _profilLand() async {
+    final test = profilQuelleFuerTests;
+    if (test != null) return test();
+    try {
+      final uid = CommunityChatService._userId;
+      if (uid == null) return null;
+      final zeile = await Supabase.instance.client
+          .from('profiles')
+          .select('country_code')
+          .eq('id', uid)
+          .maybeSingle();
+      return _unterstuetzt(zeile?['country_code']?.toString());
+    } catch (e) {
+      debugPrint('[CommunityStandortLand] Profil-Land: $e');
+      return null;
+    }
+  }
+
+  Future<void> _merke(String land) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(NutzerPrefsSchluessel.fuer(prefsBasisLand), land);
+    } catch (e) {
+      debugPrint('[CommunityStandortLand] Land merken: $e');
+    }
+  }
+
+  /// Nur für Tests: zurück auf den Auslieferungszustand.
+  @visibleForTesting
+  void zuruecksetzenFuerTest() {
+    _geladen = false;
+    _landCode = null;
+    _quelle = CommunityLandQuelle.unbekannt;
   }
 }

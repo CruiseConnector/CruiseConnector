@@ -36,6 +36,14 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   /// dann steht im Blatt nur „Alle Regionen".
   List<CommunityRegion> _regionen = const <CommunityRegion>[];
 
+  /// 2026-08-25 (Auftrag Vucko): das erkannte Land. Es beschneidet die
+  /// AUSWAHLLISTE der Regionen an beiden Stellen, an denen es Regionen gibt —
+  /// im Filter hier unten und im Blatt „Community erstellen".
+  ///
+  /// Es setzt BEWUSST keinen Filter. Würde das Land den Regionsfilter selbst
+  /// setzen, verschwänden Communities, ohne dass jemand etwas angetippt hat.
+  final _standortLand = CommunityStandortLand.instance;
+
   /// Der Suchtext, wie er zuletzt an die Datenbank gegangen ist.
   String _suchtext = '';
 
@@ -49,6 +57,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   void dispose() {
     _sucheTimer?.cancel();
     _filter.removeListener(_filterGeaendert);
+    _standortLand.removeListener(_landGeaendert);
     _codeSearchController.dispose();
     super.dispose();
   }
@@ -57,6 +66,7 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   void initState() {
     super.initState();
     _filter.addListener(_filterGeaendert);
+    _standortLand.addListener(_landGeaendert);
     _starten();
   }
 
@@ -67,7 +77,31 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
     await _filter.laden();
     if (!mounted) return;
     unawaited(_regionenLaden());
+    unawaited(_landErmitteln());
     await _load();
+  }
+
+  /// Das Land, in zwei Schritten.
+  ///
+  /// DIE REIHENFOLGE IST DER PUNKT: `laden()` holt das zuletzt erkannte Land
+  /// aus den Einstellungen und ist sofort da. `aktualisieren()` fragt danach
+  /// Standort und Profil und schiebt nach. Beides läuft NEBEN dem Laden der
+  /// Liste — die Liste wartet nie auf eine Standortfreigabe, und bis das Land
+  /// feststeht, stehen ALLE Regionen zur Wahl statt gar keiner.
+  Future<void> _landErmitteln() async {
+    await _standortLand.laden();
+    if (!mounted) return;
+    await _standortLand.aktualisieren();
+  }
+
+  /// Das erkannte Land hat sich geändert: nur neu zeichnen.
+  ///
+  /// KEIN Neuladen der Listen. Das Land beschneidet die Auswahlliste, es
+  /// filtert keine Community weg — eine Abfrage dafür wäre eine Abfrage für
+  /// nichts.
+  void _landGeaendert() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _regionenLaden() async {
@@ -640,6 +674,8 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
           CommunityFilterLeiste(
             einstellungen: _filter,
             regionen: _regionen,
+            landCode: _standortLand.landCode,
+            landQuelle: _standortLand.quelle,
             onFahrzeugart: _filter.setzeFahrzeugart,
             onRegion: _filter.setzeRegion,
             onSortierung: _filter.setzeSortierung,
@@ -1722,6 +1758,11 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
               aktuell: regionCode,
               titel: 'Region der Community',
               alleBeschriftung: 'Keine Angabe (überregional)',
+              // 2026-08-25: dieselbe Beschneidung wie im Filter. Wer in
+              // Deutschland eine Community anlegt, soll nicht erst durch neun
+              // österreichische Bundesländer und 26 Kantone scrollen.
+              landCode: _standortLand.landCode,
+              landQuelle: _standortLand.quelle,
             );
             if (wahl != null) onWahl(wahl.code);
           },

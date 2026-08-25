@@ -224,6 +224,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   final Map<_FahrzeugFilter, List<_MarkenEintrag>> _markenCache = {};
   bool _markenLaedt = false;
   String? _markenFehler;
+
   /// Gesetzt = Drilldown offen. Der Wert ist die kanonische Marke aus der
   /// Übersicht; die RPC nimmt aber jede Schreibweise entgegen.
   String? _offeneMarke;
@@ -2767,14 +2768,12 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           else if (eintraege == null || (_markenLaedt && eintraege.isEmpty))
             const _MarkenSkelett()
           else if (eintraege.isEmpty)
-            _buildMarkenHinweis(
-              switch (_fahrzeugFilter) {
-                _FahrzeugFilter.autos => 'Noch kein Auto in der Garage.',
-                _FahrzeugFilter.motorraeder =>
-                  'Noch kein Motorrad in der Garage.',
-                _FahrzeugFilter.alle => 'Noch kein Fahrzeug eingetragen.',
-              },
-            )
+            _buildMarkenHinweis(switch (_fahrzeugFilter) {
+              _FahrzeugFilter.autos => 'Noch kein Auto in der Garage.',
+              _FahrzeugFilter.motorraeder =>
+                'Noch kein Motorrad in der Garage.',
+              _FahrzeugFilter.alle => 'Noch kein Fahrzeug eingetragen.',
+            })
           else
             for (var i = 0; i < eintraege.length; i++) ...[
               _buildMarkenZeile(eintraege[i]),
@@ -2964,17 +2963,15 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   Widget _buildMarkenPersonenListe() {
     if (_personenLaden) return const _MarkenSkelett();
     if (_markenPersonen.isEmpty) {
-      return _buildMarkenHinweis(
-        switch (_fahrzeugFilter) {
-          _FahrzeugFilter.autos =>
-            'Diese Marke fährt hier niemand als Auto. Stell den Filter auf '
-                'Alle.',
-          _FahrzeugFilter.motorraeder =>
-            'Diese Marke fährt hier niemand als Motorrad. Stell den Filter '
-                'auf Alle.',
-          _FahrzeugFilter.alle => 'Zu dieser Marke ist niemand eingetragen.',
-        },
-      );
+      return _buildMarkenHinweis(switch (_fahrzeugFilter) {
+        _FahrzeugFilter.autos =>
+          'Diese Marke fährt hier niemand als Auto. Stell den Filter auf '
+              'Alle.',
+        _FahrzeugFilter.motorraeder =>
+          'Diese Marke fährt hier niemand als Motorrad. Stell den Filter '
+              'auf Alle.',
+        _FahrzeugFilter.alle => 'Zu dieser Marke ist niemand eingetragen.',
+      });
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3601,7 +3598,41 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     );
   }
 
-  Widget _buildBadgeTile(app.Badge badge) {
+  /// 2026-08-25 (vucko woertlich): „nicht untereinander sondern schon
+  /// nebeneinander und das es noch besser aussieht".
+  ///
+  /// WAS SICH GEAENDERT HAT UND WARUM:
+  ///
+  /// 1. GROESSE FOLGT DER BREITE. Die Kachel war fest 138 Punkte hoch, egal
+  ///    ob sie 191 oder 95 Punkte breit war. Mit drei Spalten auf einem
+  ///    schmalen Telefon fuellte das 52 Punkte grosse Emblem die Kachel fast
+  ///    randlos und der Name wurde zur Restflaeche. Emblem, Innenabstand und
+  ///    Schriftgrad kommen jetzt aus [badgeKachelMasse] — fuer alle Kacheln
+  ///    der Seite dieselben Werte, also eine durchgehende Rasterkante.
+  ///
+  /// 2. EIN GEZEICHNETES ABZEICHEN STATT ZWEI. In der linken oberen Ecke sass
+  ///    eine [BadgeStufenMarke]: die Silhouette der Stufe mit Fuellung, Rand,
+  ///    Symbol und Ziffer — also GENAU dieselbe Form und Farbe, die zwei
+  ///    Zentimeter darunter das Emblem noch einmal zeichnet. Bei 191 Punkten
+  ///    Breite fiel das kaum auf, bei 118 sind es zwei gleiche Silhouetten in
+  ///    einer Kachel. Die Ecke traegt jetzt nur noch, was das Emblem NICHT
+  ///    sagt: das Stufensymbol und die roemische Ziffer, ohne zweiten Rahmen.
+  ///    Die drei Merkmale aus `badge_stufen_stil.dart` bleiben damit
+  ///    vollstaendig — Form und Farbe im Emblem, Symbol und Ziffer in der
+  ///    Ecke; nur die Dopplung faellt weg.
+  ///
+  /// 3. DIE UNTERZEILE WIRD KUERZER STATT ABGESCHNITTEN. Freigeschaltet stand
+  ///    dort „Stufe III · Violett" — bei 118 Punkten Breite bleibt davon
+  ///    „Stufe III · V…". Die Ziffer steht jetzt oben in der Ecke, unten
+  ///    reicht der Farbname. Gesperrt stand der volle Familienname
+  ///    („Abgeschlossene Fahrten"); dafuer gibt es [badgeKurzTitel], das
+  ///    genau aus diesem Grund schon existiert.
+  ///
+  /// Zeile 1 der Kachel ist die Kopfzeile (Stufe links, Zustand rechts),
+  /// darunter mittig Emblem, Name und Unterzeile. Alle drei Textfelder haben
+  /// eine feste Hoehe, damit die Namen aller Kacheln einer Reihe auf
+  /// derselben Grundlinie sitzen.
+  Widget _buildBadgeTile(app.Badge badge, BadgeKachelMasse masse) {
     final earned = _earnedBadges.any((b) => b.id == badge.id);
     // 2026-08-19 (vucko woertlich): „schau das sie andere Farben andere Formen
     // andere Symbole haben ... das die niedrigste Stufe Bronze / Rot ist, die
@@ -3614,11 +3645,36 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       decoration: BoxDecoration(
+        // 2026-08-25: Der Grund traegt die Stufenfarbe nur noch als Hauch,
+        // und beide Enden des Verlaufs sind DECKEND.
+        //
+        // GEMESSEN am gerenderten Bild, nicht gerechnet: Der Verlauf lief
+        // vorher von einer durchscheinenden Leitfarbe (Deckkraft 0,20) zu
+        // einem deckenden Dunkel. Flutter blendet zwischen den beiden Enden
+        // auch die DECKKRAFT ueber — auf halber Strecke, also genau dort, wo
+        // das Emblem sitzt, lag sie bei rund 0,5 statt bei 0,2. Der Grund
+        // hinter dem Emblem war damit viel kraeftiger als die 0,20 vermuten
+        // lassen, und zwar in DERSELBEN Farbe wie das Emblem.
+        //
+        // Gemessener Kontrast des Emblem-Randes gegen den Grund, an dem er
+        // liegt (Bronze / Tuerkis / Violett):
+        //   vorher  3,29 : 1   5,42 : 1   4,15 : 1
+        //   jetzt   4,21 : 1   9,12 : 1   6,14 : 1
+        // Bronze lag vorher knapp ueber den 3 : 1, die fuer grafische
+        // Elemente die Untergrenze sind — bei einer Kachel, die von 191 auf
+        // 118 Punkte geschrumpft ist, war das zu wenig.
+        //
+        // Verloren geht dabei nichts: freigeschaltet bleibt an sechs Stellen
+        // erkennbar — gefuelltes Emblem, Rand in der Leitfarbe, Ziffer,
+        // Haken, weisser Name und farbige Unterzeile.
         gradient: earned
             ? LinearGradient(
                 colors: [
-                  accent.withValues(alpha: 0.18),
-                  const Color(0xFF10141B),
+                  Color.alphaBlend(
+                    accent.withValues(alpha: 0.18),
+                    const Color(0xFF0B0E14),
+                  ),
+                  const Color(0xFF0D1118),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -3628,124 +3684,144 @@ class _AnalyticsPageState extends State<AnalyticsPage>
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-        borderRadius: BorderRadius.circular(18),
+        // 14 statt 18: die Kachel ist nur noch rund 118 statt 191 Punkte
+        // breit, ein 18er Radius laesst sie dabei wie eine Pille wirken.
+        // 14 ist derselbe Radius wie der der Schublade, in der sie liegt.
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
+          width: badgeKachelRand,
           color: earned
-              ? accent.withValues(alpha: 0.42)
+              ? accent.withValues(alpha: 0.48)
               : Colors.white.withValues(alpha: 0.045),
         ),
       ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: 9,
-            right: 9,
-            child: Icon(
-              earned ? Icons.check_circle_rounded : Icons.lock_rounded,
-              color: earned ? accent : Colors.white.withValues(alpha: 0.2),
-              size: 16,
-            ),
-          ),
-          // 2026-08-19 (vucko): Die linke Ecke traegt jetzt alle drei
-          // Merkmale zugleich — Form, Symbol und Ziffer. Farbe allein waere
-          // fuer jemanden mit Rot-Gruen-Schwaeche zu wenig gewesen.
-          Positioned(
-            top: 8,
-            left: 9,
-            child: BadgeStufenMarke(stufe: badge.stufe, freigeschaltet: earned),
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(masse.polster, 8, masse.polster, 9),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: 14,
+              child: Row(
                 children: [
-                  // 2026-08-19 (vucko): „andere Formen" — Kreis fuer Stufe I,
-                  // Sechseck fuer II, Zackenkranz fuer III. Gezeichnet, nicht
-                  // als Bild: zwanzig weitere PNG waeren nach den gemessenen
-                  // 31 MB der bestehenden Serie rund 20 MB obendrauf gewesen.
-                  // Das vorhandene Familien-Emblem bleibt als Bild im Inneren.
-                  BadgeStufenEmblem(
-                    stufe: badge.stufe,
-                    groesse: 52,
-                    freigeschaltet: earned,
-                    child: badge.assetPath != null
-                        ? Opacity(
-                            opacity: earned ? 1 : 0.26,
-                            child: Image.asset(
-                              badge.assetPath!,
-                              width: 34,
-                              height: 34,
-                              fit: BoxFit.contain,
-                            ),
-                          )
-                        : Text(
-                            badge.emoji,
-                            style: TextStyle(
-                              fontSize: 22,
-                              color: earned
-                                  ? null
-                                  : Colors.white.withValues(alpha: 0.18),
-                            ),
-                          ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 30,
-                    child: Center(
-                      child: Text(
-                        badge.name,
-                        style: TextStyle(
-                          color: earned
-                              ? Colors.white
-                              : Colors.white.withValues(alpha: 0.34),
-                          fontSize: 11,
-                          height: 1.08,
-                          fontWeight: FontWeight.w900,
-                        ),
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                  // Stufensymbol und Ziffer, ohne zweiten Rahmen.
+                  Icon(
+                    stil.symbol,
+                    size: 12,
+                    color: stil.farbeHell.withValues(
+                      alpha: earned ? 0.95 : 0.32,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  SizedBox(
-                    height: 14,
-                    child: Center(
-                      child: Text(
-                        earned
-                            ? (badge.stufe > 0
-                                  ? 'Stufe ${stil.ziffer} \u00b7 ${stil.name}'
-                                  : 'Freigeschaltet')
-                            : (badge.familie == null
-                                  ? badge.category
-                                  : app
-                                            .badgeFamilieVon(badge.familie!)
-                                            ?.titel ??
-                                        badge.category),
-                        style: TextStyle(
-                          color: earned
-                              ? accent
-                              : Colors.white.withValues(alpha: 0.24),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
+                  if (stil.ziffer.isNotEmpty) ...[
+                    const SizedBox(width: 3),
+                    Text(
+                      stil.ziffer,
+                      style: TextStyle(
+                        color: stil.farbeHell.withValues(
+                          alpha: earned ? 0.95 : 0.32,
                         ),
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        fontSize: 9.5,
+                        height: 1.2,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
                       ),
                     ),
+                  ],
+                  const Spacer(),
+                  Icon(
+                    earned ? Icons.check_circle_rounded : Icons.lock_rounded,
+                    color: earned
+                        ? accent
+                        : Colors.white.withValues(alpha: 0.2),
+                    size: 14,
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 6),
+            // 2026-08-19 (vucko): „andere Formen" — Kreis fuer Stufe I,
+            // Sechseck fuer II, Zackenkranz fuer III. Gezeichnet, nicht
+            // als Bild: zwanzig weitere PNG waeren nach den gemessenen
+            // 31 MB der bestehenden Serie rund 20 MB obendrauf gewesen.
+            // Das vorhandene Familien-Emblem bleibt als Bild im Inneren.
+            Center(
+              child: BadgeStufenEmblem(
+                stufe: badge.stufe,
+                groesse: masse.emblem,
+                freigeschaltet: earned,
+                child: badge.assetPath != null
+                    ? Opacity(
+                        opacity: earned ? 1 : 0.26,
+                        child: Image.asset(
+                          badge.assetPath!,
+                          width: masse.emblem * 0.65,
+                          height: masse.emblem * 0.65,
+                          fit: BoxFit.contain,
+                        ),
+                      )
+                    : Text(
+                        badge.emoji,
+                        style: TextStyle(
+                          fontSize: masse.emblem * 0.42,
+                          color: earned
+                              ? null
+                              : Colors.white.withValues(alpha: 0.18),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: masse.namenHoehe,
+              child: Center(
+                child: Text(
+                  badge.name,
+                  style: TextStyle(
+                    color: earned
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.34),
+                    fontSize: masse.namenGroesse,
+                    height: 1.12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+            const SizedBox(height: 3),
+            SizedBox(
+              height: 13,
+              child: Center(
+                child: Text(
+                  _kachelUnterzeile(badge, stil, earned),
+                  style: TextStyle(
+                    color: earned
+                        ? accent
+                        : Colors.white.withValues(alpha: 0.24),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  /// Die Unterzeile der Kachel: freigeschaltet der Name der Stufe, gesperrt
+  /// die Familie — beide bewusst kurz, siehe [_buildBadgeTile].
+  String _kachelUnterzeile(app.Badge badge, BadgeStufenStil stil, bool earned) {
+    if (earned) return badge.stufe > 0 ? stil.name : 'Freigeschaltet';
+    if (badge.familie == null) return badge.category;
+    final familie = app.badgeFamilieVon(badge.familie!);
+    return familie == null ? badge.category : badgeKurzTitel(familie.titel);
   }
 
   Color _badgeAccentColor(app.Badge badge) {
@@ -3950,7 +4026,6 @@ class _AnalyticsCache {
   final DateTime at;
 }
 
-
 // ---------------------------------------------------------------------------
 // Der Katalog unter der Uebersicht — gegen das endlose Scrollen
 // ---------------------------------------------------------------------------
@@ -4015,13 +4090,33 @@ class BadgeKatalogListe extends StatefulWidget {
   final Map<app.BadgeMetrik, double>? metriken;
 
   /// Baut die Kachel eines Abzeichens. Als Rueckruf, weil die Kachel den
-  /// Zustand der Seite braucht (freigeschaltet, Akzentfarbe).
-  final Widget Function(app.Badge badge) kachelBauer;
+  /// Zustand der Seite braucht (freigeschaltet, Akzentfarbe). Die Masse
+  /// kommen von hier und werden NICHT in der Kachel neu aus ihrer eigenen
+  /// Breite abgeleitet: ein `Container` mit Rand gibt seinem Kind zwei Punkte
+  /// weniger, und aus dieser Differenz entstuenden zwei Rechnungen mit zwei
+  /// Ergebnissen.
+  final Widget Function(app.Badge badge, BadgeKachelMasse masse) kachelBauer;
 
   final void Function(app.Badge badge)? onBadgeTippen;
 
   /// Die Schublade der Abzeichen ohne Familie („Weitere").
   static const String weitereSchluessel = '__weitere__';
+
+  /// 2026-08-25 (vucko woertlich): „nicht untereinander sondern schon
+  /// nebeneinander".
+  ///
+  /// Rand und seitlicher Innenabstand einer Schublade stehen hier EINMAL und
+  /// werden von [_KatalogSchublade] gezeichnet UND von der Kachelbreite
+  /// abgezogen. Genau dieses Auseinanderlaufen war der Fehler: gerechnet
+  /// wurde mit der Aussenbreite der Liste (390 -> zwei Kacheln zu 191),
+  /// gezeichnet wurde in der Innenbreite der Schublade (370). 191 + 8 + 191
+  /// passte nicht hinein, also brach das `Wrap` nach jeder einzelnen Kachel
+  /// um — auf dem Telefon stand eine Kachel je Reihe.
+  static const double schubladeRand = 1.0;
+  static const double schubladeInnen = 9.0;
+
+  /// Was Rand und Innenabstand einer Schublade der Kachelreihe wegnehmen.
+  static const double schubladeChrom = 2 * (schubladeRand + schubladeInnen);
 
   /// Welche Schublade steht ohne Zutun offen?
   ///
@@ -4103,13 +4198,12 @@ class _BadgeKatalogListeState extends State<BadgeKatalogListe> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final spalten = constraints.maxWidth >= 700
-            ? 4
-            : constraints.maxWidth >= 500
-            ? 3
-            : 2;
-        final kachelBreite =
-            (constraints.maxWidth - (spalten - 1) * 8) / spalten;
+        // Die nutzbare Breite ist die INNENbreite der Schublade, nicht die
+        // der Liste. Gerechnet wird mit derselben Rasterregel wie im
+        // Uebersichts-Panel darueber, damit beide Raster dieselbe Kante
+        // haben — [badgeRasterSpalten].
+        final nutzbar = constraints.maxWidth - BadgeKatalogListe.schubladeChrom;
+        final masse = badgeKachelMasse(badgeRasterKachelBreite(nutzbar));
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4122,7 +4216,7 @@ class _BadgeKatalogListeState extends State<BadgeKatalogListe> {
                 schluessel: schubladen[i],
                 erreichteIds: widget.erreichteIds,
                 metriken: widget.metriken,
-                kachelBreite: kachelBreite,
+                masse: masse,
                 kachelBauer: widget.kachelBauer,
                 onBadgeTippen: widget.onBadgeTippen,
                 offen: _offen(schubladen[i], vorgabe),
@@ -4197,7 +4291,7 @@ class _KatalogSchublade extends StatelessWidget {
     required this.schluessel,
     required this.erreichteIds,
     required this.metriken,
-    required this.kachelBreite,
+    required this.masse,
     required this.kachelBauer,
     required this.offen,
     required this.aufTippen,
@@ -4207,8 +4301,11 @@ class _KatalogSchublade extends StatelessWidget {
   final String schluessel;
   final Set<String> erreichteIds;
   final Map<app.BadgeMetrik, double>? metriken;
-  final double kachelBreite;
-  final Widget Function(app.Badge badge) kachelBauer;
+
+  /// Breite, Hoehe und Innenmasse jeder Kachel — fuer die ganze Seite
+  /// dieselben, damit das Raster eine saubere Kante behaelt.
+  final BadgeKachelMasse masse;
+  final Widget Function(app.Badge badge, BadgeKachelMasse masse) kachelBauer;
   final bool offen;
   final VoidCallback aufTippen;
   final void Function(app.Badge badge)? onBadgeTippen;
@@ -4244,6 +4341,7 @@ class _KatalogSchublade extends StatelessWidget {
         color: Colors.white.withValues(alpha: offen ? 0.03 : 0.02),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
+          width: BadgeKatalogListe.schubladeRand,
           color: fertig
               ? zielStil.farbe.withValues(alpha: 0.30)
               : Colors.white.withValues(alpha: 0.05),
@@ -4307,7 +4405,12 @@ class _KatalogSchublade extends StatelessWidget {
           ),
           if (offen)
             Padding(
-              padding: const EdgeInsets.fromLTRB(9, 0, 9, 10),
+              padding: const EdgeInsets.fromLTRB(
+                BadgeKatalogListe.schubladeInnen,
+                0,
+                BadgeKatalogListe.schubladeInnen,
+                10,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -4342,20 +4445,20 @@ class _KatalogSchublade extends StatelessWidget {
                     const SizedBox(height: 10),
                   ],
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: badgeRasterLuecke,
+                    runSpacing: badgeRasterLuecke,
                     children: [
                       for (final badge in badges)
                         SizedBox(
-                          width: kachelBreite,
-                          height: 138,
+                          width: masse.breite,
+                          height: masse.hoehe,
                           // 2026-08-15 (vucko): Jede Kachel oeffnet das
                           // Overlay — freigeschaltet mit Beschreibung,
                           // gesperrt mit Bedingung und Fortschritt.
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onTap: () => onBadgeTippen?.call(badge),
-                            child: kachelBauer(badge),
+                            child: kachelBauer(badge, masse),
                           ),
                         ),
                     ],

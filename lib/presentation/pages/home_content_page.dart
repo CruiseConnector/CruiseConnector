@@ -3204,16 +3204,32 @@ class _HomeContentPageState extends State<HomeContentPage>
   /// Der Anker haengt nur dran, wenn die Karte auch wirklich etwas zeigt.
   /// Sonst waere der Ring ein 20 px grosser Punkt am oberen Rand - schlimmer
   /// als gar keiner. Die Bedingung spiegelt `StarterPaketKarte.build`
-  /// (`!isLoaded` und `paketVergeben && !doppelXpAktiv` liefern dort beide
-  /// `SizedBox.shrink()`); `test/widgets/home_anpassung_onboarding_test.dart`
-  /// schlaegt fehl, wenn die beiden auseinanderlaufen.
+  /// (`!isLoaded` und `alleAufgabenErledigt && !doppelXpAktiv` liefern dort
+  /// beide `SizedBox.shrink()`);
+  /// `test/widgets/home_anpassung_onboarding_test.dart` schlaegt fehl, wenn
+  /// die beiden auseinanderlaufen.
+  ///
+  /// 2026-08-25 (vucko): „als oberstes widget bis ich es abgeschlossen habe".
+  ///
+  /// Der PLATZ stimmte schon: dieser Aufruf steht im Baum VOR
+  /// `_buildDashboard()`, also ueber allen Kacheln, und die Karte ist keine
+  /// Kachel — sie taucht in `_dashboardItems` nicht auf, laesst sich nicht
+  /// verschieben und kann die eigene Anordnung des Nutzers also gar nicht
+  /// beruehren. Genau das ist die Antwort auf „nur die Darstellung ist
+  /// voruebergehend anders": es wird nichts umsortiert und nichts
+  /// gespeichert.
+  ///
+  /// Falsch war die BEDINGUNG. `paketVergeben` heisst acht von zwoelf; steht
+  /// dazu eine abgelaufene Bonuswoche im Profil, verschwand die Karte mit
+  /// offenen Aufgaben. Gemessen am 25.08.: genau dieser Fall lag bei Vuckos
+  /// Profil vor (zehn von zwoelf, `starter_bonus_ende` vom 22.08.).
   Widget _buildStarterPaketMitTutorialAnker() {
     return ListenableBuilder(
       listenable: StarterAufgabenService.instance,
       builder: (context, _) {
         final dienst = StarterAufgabenService.instance;
-        final sichtbar =
-            dienst.isLoaded && !(dienst.paketVergeben && !dienst.doppelXpAktiv);
+        final sichtbar = dienst.isLoaded &&
+            !(dienst.alleAufgabenErledigt && !dienst.doppelXpAktiv);
         final karte = StarterPaketKarte(onTabChange: widget.onTabChange);
         // Die Huelle steht IMMER, nur der Schluessel wechselt. Sonst wanderte
         // die Karte beim Umschalten im Baum und ihr State (Timer,

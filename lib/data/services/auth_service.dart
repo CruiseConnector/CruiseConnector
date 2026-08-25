@@ -51,8 +51,10 @@ class AuthService {
         : AppInputLimits.normalizeUsernameFallback(email.split('@').first);
     if (!AppInputLimits.isValidUsername(rawName)) {
       throw ArgumentError(
-        'Username muss 3-${AppInputLimits.usernameMaxLength} Zeichen haben '
-        'und darf nur Buchstaben, Zahlen und _ enthalten.',
+        'Username muss ${AppInputLimits.usernameMinLength}-'
+        '${AppInputLimits.usernameMaxLength} Zeichen haben und darf nur '
+        'Buchstaben (auch ä ö ü ß), Zahlen und _ enthalten '
+        '(kein __, nicht mit _ beginnen oder enden).',
       );
     }
 
@@ -482,16 +484,43 @@ class AuthService {
     final username = _safeUsername(rawUsername, fallbackId: user.id);
 
     try {
-      await _db
-          .from('profiles')
-          .upsert(
-            {'id': user.id, 'email': user.email, 'username': username},
-            onConflict: 'id',
-            ignoreDuplicates: true,
-          );
+      await _upsertProfile(user, username);
+    } on PostgrestException catch (e) {
+      // 23505 = der @-Name ist schon vergeben. `onConflict: 'id'` faengt nur
+      // die doppelte ID ab, nicht den doppelten Namen.
+      //
+      // 2026-08-25: Das ist jetzt wahrscheinlicher als vorher. Frueher wurde
+      // „Jürgen" zu „J_rgen" — daran ist selten jemand haengengeblieben. Jetzt
+      // heisst der Vorschlag „Jürgen", und weil die Eindeutigkeit Umlaute
+      // faltet, kollidiert er auch mit einem bereits vergebenen „Juergen".
+      // Ohne diesen zweiten Versuch bekaeme der Nutzer GAR KEIN Profil.
+      if (e.code != '23505') {
+        debugPrint(
+          '[AuthService] Profil konnte nicht sichergestellt werden: $e',
+        );
+        return;
+      }
+      final fallback = _fallbackUsername(user.id);
+      try {
+        await _upsertProfile(user, fallback);
+      } catch (inner) {
+        debugPrint(
+          '[AuthService] Profil auch mit Ersatznamen nicht angelegt: $inner',
+        );
+      }
     } catch (e) {
       debugPrint('[AuthService] Profil konnte nicht sichergestellt werden: $e');
     }
+  }
+
+  static Future<void> _upsertProfile(User user, String username) {
+    return _db
+        .from('profiles')
+        .upsert(
+          {'id': user.id, 'email': user.email, 'username': username},
+          onConflict: 'id',
+          ignoreDuplicates: true,
+        );
   }
 
   /// Laedt den Benutzernamen aus der `profiles` Tabelle.
@@ -608,18 +637,23 @@ class AuthService {
     return null;
   }
 
+  /// Macht aus dem Anzeigenamen von Apple/Google einen gueltigen @-Namen.
+  ///
+  /// 2026-08-25: Bis hierher wurde ALLES ausserhalb von A-Z, a-z, 0-9 und `_`
+  /// durch `_` ersetzt — wer „Jürgen" heisst, wurde zu „J_rgen". Umlaute
+  /// bleiben jetzt stehen ([AppInputLimits.sanitizeUsername]); der
+  /// Ersatzname aus der User-ID greift weiter, wenn nichts Gueltiges
+  /// uebrig bleibt.
   static String _safeUsername(String raw, {required String fallbackId}) {
-    var normalized = raw
-        .trim()
-        .replaceAll(RegExp(r'[^A-Za-z0-9_]'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-    if (normalized.length > AppInputLimits.usernameMaxLength) {
-      normalized = normalized.substring(0, AppInputLimits.usernameMaxLength);
-    }
+    final normalized = AppInputLimits.sanitizeUsername(raw);
     if (AppInputLimits.isValidUsername(normalized)) {
       return normalized;
     }
+    return _fallbackUsername(fallbackId);
+  }
+
+  /// Ersatzname aus der User-ID — praktisch kollisionsfrei, weil die ID es ist.
+  static String _fallbackUsername(String fallbackId) {
     final suffix = fallbackId.replaceAll('-', '');
     return 'cruiser_${suffix.substring(0, 8)}';
   }

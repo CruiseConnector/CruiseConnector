@@ -8,7 +8,20 @@ import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 
 /// Regex zum Parsen von `@username`-Tokens.
-final RegExp mentionPattern = RegExp(r'@([A-Za-z0-9_]+)');
+///
+/// 2026-08-25 — Auftrag Vucko: „schau auch noch das man beim benutzernamen
+/// aeoeue verwenden kann".
+///
+/// KEINE eigene Fassung mehr, sondern GENAU DAS OBJEKT aus dem Service. Vorher
+/// standen hier `@([A-Za-z0-9_]+)` und dort `@([A-Za-z0-9_\.]+)` — zwei
+/// Muster, die sich schon am Satzende widersprachen: die Anzeige verlinkte
+/// „@vucko", die Benachrichtigung suchte „vucko." und fand niemanden.
+///
+/// Wuerde hier ein reines `[A-Za-z0-9_]` stehenbleiben, waere „@müller" im
+/// Text nur „@m" — der Rest bliebe toter Buchstabensalat. Das faellt sofort
+/// auf; die stumme Haelfte desselben Fehlers (keine Benachrichtigung) faellt
+/// nie auf. Deshalb gibt es das Muster nur noch einmal.
+final RegExp mentionPattern = SocialService.usernameMentionPattern;
 
 /// 2026-08-24 — Aufgabe 1.3 aus dem Auftrag vom 23.08.
 ///
@@ -39,6 +52,10 @@ final RegExp hashtagPattern = RegExp(
 );
 
 /// Zieht alle erwähnten Usernames (lowercase, ohne `@`) aus einem Text.
+///
+/// Die SCHREIBWEISE bleibt erhalten, nur die Grossschreibung fällt weg:
+/// „@Müller" ergibt „müller", nicht „mueller". Verglichen wird woanders mit
+/// `SocialService.usernameKey` — angezeigt wird immer, was getippt wurde.
 Set<String> extractMentionUsernames(String text) {
   return mentionPattern
       .allMatches(text)
@@ -284,7 +301,11 @@ class _MentionTextFieldState extends State<MentionTextField> {
       return;
     }
     final prefix = text.substring(at + 1, cursor);
-    if (!RegExp(r'^[A-Za-z0-9_]*$').hasMatch(prefix)) {
+    // 2026-08-25 (Umlaute im Benutzernamen): derselbe Zeichensatz wie im
+    // Muster. Stuende hier weiter `[A-Za-z0-9_]`, brächen die Vorschläge
+    // beim ersten Umlaut ab — man tippt „@mü" und die Liste ist plötzlich
+    // leer, obwohl es den Namen gibt.
+    if (!SocialService.usernamePrefixPattern.hasMatch(prefix)) {
       _clearSuggestions();
       return;
     }
