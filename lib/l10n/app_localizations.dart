@@ -131,7 +131,7 @@ abstract class AppLocalizations {
   /// No description provided for @languageSystemHint.
   ///
   /// In de, this message translates to:
-  /// **'Vorgeschlagen nach deiner Geräte-Sprache'**
+  /// **'Vorgeschlagen nach der Sprache deines Geräts'**
   String get languageSystemHint;
 
   /// Menüpunkt in den App-Einstellungen
@@ -197,7 +197,7 @@ abstract class AppLocalizations {
   /// No description provided for @loginVerificationResent.
   ///
   /// In de, this message translates to:
-  /// **'Bestätigungs-E-Mail an {email} erneut gesendet.'**
+  /// **'Bestätigungsmail an {email} erneut gesendet.'**
   String loginVerificationResent(String email);
 
   /// No description provided for @loginResendFailed.
@@ -245,7 +245,7 @@ abstract class AppLocalizations {
   /// No description provided for @authEmailLabel.
   ///
   /// In de, this message translates to:
-  /// **'E-Mail Adresse'**
+  /// **'E-Mail-Adresse'**
   String get authEmailLabel;
 
   /// No description provided for @authEmailHint.
@@ -419,7 +419,7 @@ abstract class AppLocalizations {
   /// No description provided for @resetPasswordEnterEmail.
   ///
   /// In de, this message translates to:
-  /// **'Gib deine E-Mail-Adresse ein. Wir schicken dir einen 6-stelligen Code, mit dem du ein neues Passwort setzt.'**
+  /// **'Gib deine E-Mail-Adresse ein. Wir schicken dir einen sechsstelligen Code, mit dem du ein neues Passwort setzt.'**
   String get resetPasswordEnterEmail;
 
   /// No description provided for @resetPasswordCodeStepTitle.
@@ -431,13 +431,13 @@ abstract class AppLocalizations {
   /// No description provided for @resetPasswordCodeStepSubtitle.
   ///
   /// In de, this message translates to:
-  /// **'Falls ein Konto mit {email} existiert, haben wir dir einen 6-stelligen Code geschickt.'**
+  /// **'Falls ein Konto mit {email} existiert, haben wir dir einen sechsstelligen Code geschickt.'**
   String resetPasswordCodeStepSubtitle(String email);
 
   /// No description provided for @resetPasswordNewStepSubtitle.
   ///
   /// In de, this message translates to:
-  /// **'Wähl ein neues Passwort — mindestens {min} Zeichen.'**
+  /// **'Wähl ein neues Passwort mit mindestens {min} Zeichen.'**
   String resetPasswordNewStepSubtitle(int min);
 
   /// No description provided for @resetPasswordDoneTitle.
@@ -461,13 +461,13 @@ abstract class AppLocalizations {
   /// No description provided for @resetPasswordCodeLabel.
   ///
   /// In de, this message translates to:
-  /// **'6-stelliger Code'**
+  /// **'sechsstelliger Code'**
   String get resetPasswordCodeLabel;
 
   /// No description provided for @resetPasswordSpamHint.
   ///
   /// In de, this message translates to:
-  /// **'Keine Mail erhalten? Sieh auch im Spam-Ordner nach.'**
+  /// **'Keine Mail erhalten? Sieh auch im Spamordner nach.'**
   String get resetPasswordSpamHint;
 
   /// No description provided for @resetPasswordResend.
@@ -527,7 +527,7 @@ abstract class AppLocalizations {
   /// No description provided for @resetPasswordErrorCodeMissing.
   ///
   /// In de, this message translates to:
-  /// **'Bitte gib den 6-stelligen Code ein.'**
+  /// **'Bitte gib den sechsstelligen Code ein.'**
   String get resetPasswordErrorCodeMissing;
 
   /// No description provided for @resetPasswordErrorCodeInvalid.

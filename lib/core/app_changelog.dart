@@ -42,6 +42,25 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.24',
+      titel: 'Kreisverkehre ohne Fehlalarm, Kroatien wird erkannt',
+      punkte: <String>[
+        'Im Kreisverkehr meldete die App bisher, du seist nicht auf der '
+            'Strecke, und rechnete sie neu. Das lag an einem Messfehler '
+            'genau am Kreisverkehr und nicht daran, wie du gefahren bist. '
+            'Eine Neuberechnung kommt jetzt nur noch, wenn du wirklich von '
+            'der Strecke abkommst.',
+        'Kroatien war der App bisher gar kein Land. Wer in Pula stand, dem '
+            'wurde "Route bleibt in Italien" angezeigt. Jetzt steht dort '
+            'Kroatien.',
+        'Schlimmer war die stille Folge davon: im Landesinneren von Istrien '
+            'wurden Runden ab etwa 80 Kilometern abgelehnt, obwohl sie '
+            'komplett in Kroatien lagen. Das geht jetzt.',
+        'Auch an der slowenischen Küste stimmt das Land nun. Koper und '
+            'Piran galten bisher als Italien.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.23',
       titel: 'Umlaute im Namen, Abzeichen nebeneinander, Regionen aus deinem Land',
       punkte: <String>[

@@ -25,7 +25,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String get languageEnglish => 'English';
 
   @override
-  String get languageSystemHint => 'Vorgeschlagen nach der Sprache deines Geräts';
+  String get languageSystemHint =>
+      'Vorgeschlagen nach der Sprache deines Geräts';
 
   @override
   String get settingsLanguage => 'Sprache';
