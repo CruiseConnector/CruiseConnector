@@ -161,9 +161,17 @@ class CommunityChatService {
   ///
   /// ACHTUNG für später: das Leserecht ist jetzt spaltenweise. Jede neue
   /// Spalte auf `public.communities` braucht ein eigenes `grant select`.
+  ///
+  /// 2026-08-25: `fahrzeugart` und `region_code` kommen dazu. Sie fehlten
+  /// hier, obwohl es die Spalten seit dem 24.08. gibt — die Einstellungs-Seite
+  /// lädt ihre Zeile über [fetchCommunity] und hätte deshalb beim ersten
+  /// Laden beide Werte verloren und „Für alle, überregional" angezeigt, egal
+  /// was in der Zeile steht. Das Leserecht ist gemessen: `authenticated` hat
+  /// `select` auf beide Spalten.
   static const String _communitySelect =
       'id, owner_id, name, description, is_public, created_at, '
       'updated_at, owner_only_messages, avatar_url, '
+      'fahrzeugart, region_code, '
       'community_members(user_id, role), '
       'profiles:owner_id(id, username, avatar_url)';
 
@@ -645,6 +653,34 @@ class CommunityChatService {
 
   static CommunityFahrzeugart fahrzeugartVon(Map<String, dynamic> community) =>
       CommunityFahrzeugart.ausWert(community['fahrzeugart']);
+
+  /// Der Regionsschluessel einer geladenen Zeile, oder `null` fuer
+  /// „ueberregional". Leerer Text zaehlt wie `null`: eine Region, die es nicht
+  /// gibt, waere sonst ein Filter ohne Bedeutung.
+  static String? regionCodeVon(Map<String, dynamic>? community) {
+    final roh = community?['region_code']?.toString().trim();
+    if (roh == null || roh.isEmpty) return null;
+    return roh;
+  }
+
+  /// Der Anzeigename zu einem Regionsschluessel aus einer geladenen Liste.
+  ///
+  /// Wird gebraucht, wo NICHT die RPC geladen hat: [fetchCommunity] liefert
+  /// nur `region_code`, den Namen dazu kennt allein `community_regionen`.
+  /// Ist die Liste noch nicht da, steht der Schluessel da statt eines leeren
+  /// Feldes — eine kryptische Angabe ist ehrlicher als die Behauptung, es sei
+  /// keine Region gesetzt.
+  static String? regionNameFuer(
+    List<CommunityRegion> regionen,
+    String? regionCode,
+  ) {
+    final code = regionCode?.trim();
+    if (code == null || code.isEmpty) return null;
+    for (final region in regionen) {
+      if (region.code == code) return region.name;
+    }
+    return code;
+  }
 
   /// Der Anzeigename der Region, oder `null` fuer „ueberregional".
   static String? regionName(Map<String, dynamic> community) {
@@ -1143,6 +1179,92 @@ class CommunityChatService {
         );
       }
     } on PostgrestException catch (e) {
+      throw CommunityChatServiceException(e.message);
+    }
+  }
+
+  /// ─────────────────────────────────────────────────────────────────────
+  /// 2026-08-25 (Auftrag Vucko). Meldung: „Der Admin einer BESTEHENDEN
+  /// Community kann ihre Region nirgends ändern, sie wird nur beim Erstellen
+  /// gesetzt." Antwort wörtlich: „ja bitte der admin soll es bestimmen".
+  ///
+  /// DAS SCHREIBRECHT IST GEMESSEN, nicht angenommen. Auf `communities` gilt
+  /// seit dem 23.08.2026 ein SPALTENWEISES Schreibrecht, ein fehlender Grant
+  /// hätte hier also stillschweigend zugeschlagen. Am 25.08.2026 in der
+  /// Produktivdatenbank in einer Transaktion mit Rücknahme geprüft:
+  ///
+  ///  * `authenticated` hat `update` auf `fahrzeugart` UND `region_code`.
+  ///  * Als Besitzer geht der Update durch (eine Zeile zurück).
+  ///  * Als Mitglied ohne Admin-Rolle kommen NULL Zeilen zurück, ohne Fehler.
+  ///    Die Zeilenregel `leaders_update_communities` verlangt
+  ///    `is_community_admin`, und das ist ausschliesslich `owner`.
+  ///
+  /// Eine Migration war deshalb nicht nötig. Aus dem stillen Null-Zeilen-Fall
+  /// folgt aber, dass `.select('id')` hier PFLICHT ist: ohne die Rückgabe
+  /// sähe eine abgelehnte Änderung wie ein Erfolg aus, und die Oberfläche
+  /// zeigte einen Wert, der nie gespeichert wurde.
+  static Future<void> setCommunityFahrzeugart({
+    required String communityId,
+    required CommunityFahrzeugart fahrzeugart,
+  }) {
+    return _setzeAusrichtung(
+      communityId: communityId,
+      werte: <String, dynamic>{'fahrzeugart': fahrzeugart.spaltenWert},
+      fehlerOhneRecht:
+          'Nur Admins können ändern, für wen die Community gedacht ist.',
+    );
+  }
+
+  static Future<void> setCommunityRegion({
+    required String communityId,
+    required String? regionCode,
+  }) {
+    final sauber = regionCode?.trim();
+    return _setzeAusrichtung(
+      communityId: communityId,
+      werte: <String, dynamic>{
+        'region_code': (sauber == null || sauber.isEmpty) ? null : sauber,
+      },
+      fehlerOhneRecht: 'Nur Admins können die Region ändern.',
+    );
+  }
+
+  /// Der gemeinsame Weg für beide Werte. Getrennte Aufrufe mit Absicht: die
+  /// Oberfläche ändert immer nur einen davon, und nur dann kann sie bei einer
+  /// Ablehnung genau diesen einen Wert zurücksetzen.
+  static Future<void> _setzeAusrichtung({
+    required String communityId,
+    required Map<String, dynamic> werte,
+    required String fehlerOhneRecht,
+  }) async {
+    try {
+      final rows = await _db
+          .from('communities')
+          .update(werte)
+          .eq('id', communityId)
+          .select('id');
+      if ((rows as List).isEmpty) {
+        throw CommunityChatServiceException(fehlerOhneRecht);
+      }
+    } on PostgrestException catch (e) {
+      // Eine App-Version, die auf einer Datenbank VOR dem 24.08. läuft, darf
+      // keinen rohen Datenbanktext zeigen.
+      if (_isMissingColumn(e)) {
+        throw const CommunityChatServiceException(
+          'Fahrzeugart und Region sind in dieser Datenbank noch nicht aktiv.',
+        );
+      }
+      // 23503 = Fremdschlüssel auf community_regionen, 23514 = die CHECK-Regel
+      // auf fahrzeugart. Beides heisst dasselbe: der Wert kam nicht aus der
+      // Auswahlliste, sondern aus einer alten App.
+      if (e.code == '23503') {
+        throw const CommunityChatServiceException('Diese Region gibt es nicht.');
+      }
+      if (e.code == '23514') {
+        throw const CommunityChatServiceException(
+          'Diese Fahrzeugart gibt es nicht.',
+        );
+      }
       throw CommunityChatServiceException(e.message);
     }
   }

@@ -10,6 +10,7 @@ import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
+import 'package:cruise_connect/presentation/widgets/community/community_filter_leiste.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -57,10 +58,17 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
   List<Map<String, dynamic>> _joinRequests = [];
   String? _inviteCode;
 
+  /// Die Auswahlliste für die Region und das erkannte Land. Beides ist
+  /// dasselbe wie in der Übersicht: der Admin bekommt genau die beschnittene
+  /// Liste, die auch beim Erstellen erscheint.
+  List<CommunityRegion> _regionen = const <CommunityRegion>[];
+  final _standortLand = CommunityStandortLand.instance;
+
   bool _loading = true;
   bool _savingProfile = false;
   bool _uploadingImage = false;
   bool _busyRequest = false;
+  bool _busyAusrichtung = false;
   bool _changed = false;
 
   @override
@@ -69,13 +77,35 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
     _community = widget.initialCommunity;
     _applyToForm(widget.initialCommunity);
     _load();
+    _standortLand.addListener(_landGeaendert);
+    unawaited(_regionenLaden());
+    unawaited(_landLaden());
   }
 
   @override
   void dispose() {
+    _standortLand.removeListener(_landGeaendert);
     _nameCtrl.dispose();
     _descCtrl.dispose();
     super.dispose();
+  }
+
+  void _landGeaendert() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _regionenLaden() async {
+    final regionen = await CommunityChatService.regionenLaden();
+    if (!mounted) return;
+    setState(() => _regionen = regionen);
+  }
+
+  /// Erst das gemerkte Land (sofort da), dann Standort und Profil. Wirft nie:
+  /// eine Auswahlliste ist kein Grund, die Einstellungen scheitern zu lassen.
+  Future<void> _landLaden() async {
+    await _standortLand.laden();
+    if (!mounted) return;
+    await _standortLand.aktualisieren();
   }
 
   void _applyToForm(Map<String, dynamic>? community) {
@@ -133,9 +163,19 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
     return null;
   }
 
+  /// BEWUSST NUR `owner`. `is_community_owner` in der Datenbank liefert auch
+  /// für Moderatoren `true`, die Zeilenregel `leaders_update_communities`
+  /// verlangt aber `is_community_admin`, und das ist ausschliesslich der
+  /// Besitzer. Diese Seite bleibt zeichengleich dazu: würde hier ein
+  /// Moderator durchgelassen, sähe er Schalter, die serverseitig jedes Mal
+  /// still ins Leere laufen.
   bool get _amAdmin => _myRole == 'owner';
   bool get _isPublic => _community?['is_public'] == true;
   bool get _ownerOnlyMessages => _community?['owner_only_messages'] == true;
+
+  CommunityFahrzeugart get _fahrzeugart =>
+      CommunityChatService.fahrzeugartVon(_community ?? const {});
+  String? get _regionCode => CommunityChatService.regionCodeVon(_community);
 
   // ───────────────────────────────────────────────────────────────────────
   // Bild
@@ -475,6 +515,133 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
       }
       _showError(e, fallback: 'Sichtbarkeit konnte nicht geändert werden.');
     }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Fahrzeugart und Region
+  // ───────────────────────────────────────────────────────────────────────
+
+  /// Beide Wege sind gleich gebaut und halten sich an den Optimistic-UI-
+  /// Grundsatz des Projekts: der neue Wert steht SOFORT da, der Server zieht
+  /// nach. Lehnt er ab, kommt der ALTE Wert zurück statt einer Anzeige, die
+  /// eine Änderung behauptet, die es nie gab.
+  Future<void> _setFahrzeugart(CommunityFahrzeugart neu) async {
+    final vorher = _fahrzeugart;
+    if (vorher == neu || _busyAusrichtung) return;
+
+    final frage = CommunityReichweite.fahrzeugartFrage(
+      vorher: vorher,
+      nachher: neu,
+      mitglieder: _members.length,
+    );
+    if (frage != null && !await _frageNach(frage)) return;
+
+    setState(() {
+      _busyAusrichtung = true;
+      _community = {...?_community, 'fahrzeugart': neu.spaltenWert};
+      _changed = true;
+    });
+    try {
+      await CommunityChatService.setCommunityFahrzeugart(
+        communityId: widget.communityId,
+        fahrzeugart: neu,
+      );
+      _showMessage(CommunityReichweite.fahrzeugartErfolg(neu));
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _community = {...?_community, 'fahrzeugart': vorher.spaltenWert};
+        });
+      }
+      _showError(e, fallback: 'Einstellung konnte nicht gespeichert werden.');
+    } finally {
+      if (mounted) setState(() => _busyAusrichtung = false);
+    }
+  }
+
+  Future<void> _waehleRegion() async {
+    if (_busyAusrichtung) return;
+    final vorher = _regionCode;
+    final wahl = await CommunityRegionBlatt.zeigen(
+      context,
+      regionen: _regionen,
+      aktuell: vorher,
+      titel: 'Region der Community',
+      alleBeschriftung: 'Keine Angabe (überregional)',
+      // 2026-08-25: dieselbe Beschneidung wie im Filter und beim Erstellen.
+      // Der Admin soll nicht durch 26 Kantone scrollen, wenn er in
+      // Deutschland sitzt.
+      landCode: _standortLand.landCode,
+      landQuelle: _standortLand.quelle,
+    );
+    if (wahl == null || !mounted) return;
+    final neu = wahl.code;
+    if (neu == vorher) return;
+
+    final frage = CommunityReichweite.regionFrage(
+      vorher: vorher,
+      nachher: neu,
+      regionen: _regionen,
+      mitglieder: _members.length,
+    );
+    if (frage != null && !await _frageNach(frage)) return;
+
+    setState(() {
+      _busyAusrichtung = true;
+      _community = {...?_community, 'region_code': neu};
+      _changed = true;
+    });
+    try {
+      await CommunityChatService.setCommunityRegion(
+        communityId: widget.communityId,
+        regionCode: neu,
+      );
+      _showMessage(
+        CommunityReichweite.regionErfolg(
+          CommunityChatService.regionNameFuer(_regionen, neu),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _community = {...?_community, 'region_code': vorher};
+        });
+      }
+      _showError(e, fallback: 'Region konnte nicht geändert werden.');
+    } finally {
+      if (mounted) setState(() => _busyAusrichtung = false);
+    }
+  }
+
+  /// Die Rückfrage vor einer Änderung, die die Reichweite verengt. Gleiche
+  /// Form wie bei der Sichtbarkeit, damit die Seite sich überall gleich
+  /// anfühlt.
+  Future<bool> _frageNach(SichtbarkeitsFrage frage) async {
+    final antwort = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF151821),
+        title: Text(frage.titel, style: const TextStyle(color: Colors.white)),
+        content: Text(
+          frage.text,
+          style: const TextStyle(color: Colors.white70, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Abbrechen'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              frage.knopf,
+              style: TextStyle(color: AppAccentColors.accent),
+            ),
+          ),
+        ],
+      ),
+    );
+    return antwort == true;
   }
 
   // ───────────────────────────────────────────────────────────────────────
@@ -888,7 +1055,21 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
     );
   }
 
+  /// 2026-08-25 (Auftrag Vucko): Fahrzeugart und Region stehen HIER und
+  /// bekommen keinen eigenen Abschnitt. Sie beantworten dieselbe Frage wie der
+  /// Schalter darüber: wer findet diese Community im Entdecken. Genau so
+  /// wirken sie auch serverseitig, `get_communities_gefiltert` filtert die
+  /// Entdecken-Liste nach `is_public`, `fahrzeugart` und `region_code`. Ein
+  /// eigener Abschnitt hätte drei Karten für eine Sache gemacht.
+  ///
+  /// Die BEDIENELEMENTE sind bewusst dieselben wie im Erstellen-Blatt
+  /// ([CommunityFahrzeugartChips], [CommunityRegionBlatt]). Ein zweiter,
+  /// eigener Regler würde vom ersten wegdriften, so wie es beim Markenfeld
+  /// schon passiert ist.
   Widget _buildVisibilitySection() {
+    final regionText =
+        CommunityChatService.regionNameFuer(_regionen, _regionCode) ??
+        'Keine Angabe (überregional)';
     return _buildCard(
       title: 'Sichtbarkeit',
       subtitle: CommunitySettingsTexte.sichtbarkeitErklaerung,
@@ -912,7 +1093,78 @@ class _CommunitySettingsPageState extends State<CommunitySettingsPage> {
             style: const TextStyle(color: Colors.grey, fontSize: 12.5),
           ),
         ),
+        const SizedBox(height: 12),
+        _buildFeldUeberschrift('Für wen ist die Community?'),
+        const SizedBox(height: 8),
+        CommunityFahrzeugartChips(
+          gewaehlt: _fahrzeugart,
+          alleBeschriftung: 'Für alle',
+          // Kein zweiter Riegel: [_setFahrzeugart] steigt bei einem laufenden
+          // Speichern selbst gleich wieder aus.
+          onWahl: _setFahrzeugart,
+        ),
+        const SizedBox(height: 16),
+        _buildFeldUeberschrift('Region'),
+        const SizedBox(height: 8),
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _busyAusrichtung ? null : _waehleRegion,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F121A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _regionCode == null
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : AppAccentColors.accent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.place_outlined,
+                  size: 18,
+                  color: _regionCode == null
+                      ? Colors.grey
+                      : AppAccentColors.accent,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    regionText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _regionCode == null ? Colors.grey : Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.expand_more, color: Colors.grey, size: 20),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _isPublic
+              ? CommunityReichweite.regionHinweisOeffentlich
+              : CommunityReichweite.regionHinweisPrivat,
+          style: const TextStyle(color: Colors.grey, fontSize: 11.5),
+        ),
       ],
+    );
+  }
+
+  Widget _buildFeldUeberschrift(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 13,
+        fontWeight: FontWeight.w800,
+      ),
     );
   }
 
@@ -1133,6 +1385,172 @@ class CommunitySettingsTexte {
         lower.contains('violates') ||
         lower.contains('duplicate key') ||
         lower.contains('exception');
+  }
+}
+
+/// 2026-08-25 — der Fall, den Vucko nicht genannt hat, aber der beim ersten
+/// Test auffällt: eine Community WECHSELT ihre Region. Was wird aus den
+/// Mitgliedern, die wegen der alten Region beigetreten sind?
+///
+/// DIE ENTSCHEIDUNG, begründet und bewusst klein gehalten (es sind sechs
+/// Communities, gemessen am 25.08.2026):
+///
+///  1. AN DER MITGLIEDSCHAFT ÄNDERT SICH NICHTS. Niemand wird entfernt,
+///     niemand muss neu beitreten. Region und Fahrzeugart sind ein Wegweiser
+///     fürs Finden, keine Zutrittsregel. Genau so steht es auch in der
+///     Datenbank: `get_communities_gefiltert` wendet beide Werte
+///     ausschliesslich auf den Zweig „entdecken" an, der Zweig „meine" liest
+///     sie gar nicht. Wer drin ist, bleibt drin. Alles andere wäre eine
+///     Zwangsräumung durch einen Filterregler.
+///
+///  2. SIE SEHEN ES, ABER PASSIV. Die Kachel in „Meine Communities" zeigt
+///     dieselben Etiketten wie im Entdecken (`_buildCommunityCard` in
+///     community_chats_tab.dart wird für beide Listen benutzt). Wer das
+///     nächste Mal auf seine Liste schaut, sieht die neue Angabe. Mehr passiert
+///     nicht von selbst.
+///
+///  3. ES GEHT KEINE MELDUNG AN DIE MITGLIEDER. Der billige Weg wäre eine
+///     Systemnachricht im Chat, aber `community_messages.user_id` ist NOT
+///     NULL: jede Nachricht braucht einen Verfasser. Eine „vom System"
+///     bräuchte eine neue Spalte, eine neue Zeilenregel und eine eigene
+///     Darstellung im Chat. Das ist für sechs Communities kein Verhältnis,
+///     und eine Push-Meldung für einen geänderten Filter wäre Lärm.
+///
+///  4. STATTDESSEN ERFÄHRT ES DER ADMIN, BEVOR er bestätigt. Er ist der
+///     Einzige, der weiss, ob es seinen Leuten überhaupt etwas bedeutet, und
+///     er hat den Chat direkt daneben. Die Rückfrage sagt deshalb beides: dass
+///     alle drin bleiben, und dass sie es nicht von selbst mitbekommen.
+///
+///  5. GEFRAGT WIRD NUR BEI EINER VERENGUNG. „Für alle" oder „überregional"
+///     macht die Community sichtbarer, das braucht keine Rückfrage. Ein
+///     Dialog bei jedem Fingertipp wäre eine Bremse ohne Anlass.
+class CommunityReichweite {
+  const CommunityReichweite._();
+
+  static const String regionHinweisOeffentlich =
+      'Ohne Region erscheint die Community in jedem Regionsfilter.';
+
+  /// Bei einer privaten Community ist die Angabe nicht wirkungslos, aber sie
+  /// wirkt woanders. Das gehört dazugesagt, sonst stellt jemand die Region ein
+  /// und wundert sich, dass im Entdecken nichts passiert.
+  static const String regionHinweisPrivat =
+      'Privat steht die Community in keinem Filter. Fahrzeugart und Region '
+      'sind dann nur das Etikett auf der Kachel.';
+
+  /// Verengt der Wechsel die Reichweite? Nur dann wird gefragt.
+  static bool fahrzeugartVerengt({
+    required CommunityFahrzeugart vorher,
+    required CommunityFahrzeugart nachher,
+  }) {
+    if (vorher == nachher) return false;
+    // „Für alle" fällt aus keinem Filter heraus, dorthin ist es immer ein
+    // Aufmachen. Alles andere schliesst mindestens eine Gruppe aus.
+    return nachher != CommunityFahrzeugart.alle;
+  }
+
+  /// Dasselbe für die Region, mit einer Ausnahme, die die Datenbank vorgibt:
+  /// eine Community auf `AT` erscheint im Filter JEDES österreichischen
+  /// Bundeslandes (`get_communities_gefiltert`, Zweig `c.region_code =
+  /// v_region_land`). Von „Vorarlberg" auf „Österreich" ist deshalb ein
+  /// Aufmachen und keine Verengung.
+  static bool regionVerengt({
+    required String? vorher,
+    required String? nachher,
+    required List<CommunityRegion> regionen,
+  }) {
+    final alt = vorher?.trim();
+    final neu = nachher?.trim();
+    if (neu == null || neu.isEmpty) return false;
+    if (alt == neu) return false;
+    if (alt == null || alt.isEmpty) return true;
+    final neueZeile = _regionZu(regionen, neu);
+    final alteZeile = _regionZu(regionen, alt);
+    if (neueZeile != null &&
+        neueZeile.istLand &&
+        alteZeile != null &&
+        alteZeile.landCode == neueZeile.landCode) {
+      return false;
+    }
+    return true;
+  }
+
+  static CommunityRegion? _regionZu(
+    List<CommunityRegion> regionen,
+    String code,
+  ) {
+    for (final region in regionen) {
+      if (region.code == code) return region;
+    }
+    return null;
+  }
+
+  /// Die Rückfrage, oder `null`, wenn keine nötig ist.
+  static SichtbarkeitsFrage? fahrzeugartFrage({
+    required CommunityFahrzeugart vorher,
+    required CommunityFahrzeugart nachher,
+    required int mitglieder,
+  }) {
+    if (!fahrzeugartVerengt(vorher: vorher, nachher: nachher)) return null;
+    final wer = nachher == CommunityFahrzeugart.auto
+        ? 'Autofahrern'
+        : 'Motorradfahrern';
+    final andere = nachher == CommunityFahrzeugart.auto
+        ? 'Motorradfahrer'
+        : 'Autofahrer';
+    return SichtbarkeitsFrage(
+      titel: 'Nur noch $wer zeigen?',
+      text:
+          'Die Community erscheint danach nur noch bei $wer im Entdecken. '
+          '$andere finden sie dort nicht mehr. ${mitgliederSatz(mitglieder)}',
+      knopf: 'Ja, ändern',
+      erfolg: fahrzeugartErfolg(nachher),
+    );
+  }
+
+  static SichtbarkeitsFrage? regionFrage({
+    required String? vorher,
+    required String? nachher,
+    required List<CommunityRegion> regionen,
+    required int mitglieder,
+  }) {
+    if (!regionVerengt(vorher: vorher, nachher: nachher, regionen: regionen)) {
+      return null;
+    }
+    final name = _regionZu(regionen, nachher!.trim())?.name ?? nachher.trim();
+    return SichtbarkeitsFrage(
+      titel: 'Region auf $name ändern?',
+      text:
+          'Die Community erscheint danach nur noch im Regionsfilter für '
+          '$name. ${mitgliederSatz(mitglieder)}',
+      knopf: 'Region ändern',
+      erfolg: regionErfolg(name),
+    );
+  }
+
+  /// Der Kern der Entscheidung, in einem Satz für den Admin.
+  static String mitgliederSatz(int mitglieder) {
+    if (mitglieder <= 1) {
+      return 'An der Mitgliedschaft ändert sich nichts, es geht nur darum, '
+          'wer die Community neu findet.';
+    }
+    return 'Deine $mitglieder Mitglieder bleiben alle dabei, niemand fliegt '
+        'raus und niemand muss neu beitreten. Von selbst sehen sie nur das '
+        'neue Etikett auf der Kachel. Schreib es ihnen am besten kurz in den '
+        'Chat.';
+  }
+
+  static String fahrzeugartErfolg(CommunityFahrzeugart art) => switch (art) {
+    CommunityFahrzeugart.auto => 'Die Community ist jetzt für Autofahrer.',
+    CommunityFahrzeugart.motorrad =>
+      'Die Community ist jetzt für Motorradfahrer.',
+    CommunityFahrzeugart.alle => 'Die Community ist jetzt für alle offen.',
+  };
+
+  static String regionErfolg(String? name) {
+    if (name == null || name.trim().isEmpty) {
+      return 'Die Community ist jetzt überregional.';
+    }
+    return 'Die Community steht jetzt in der Region ${name.trim()}.';
   }
 }
 
