@@ -42,7 +42,7 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
-      version: '1.5.27',
+      version: '1.5.28',
       titel: 'Ruhigere Navigation',
       punkte: <String>[
         'Die Ansage konnte nach einer Neuberechnung minutenlang verschwinden. '
@@ -53,6 +53,8 @@ class AppChangelog {
         'Baustellen auf dem Weg werden umfahren. Bei A nach B fragen wir dich '
             'vorher und zeigen, was der Umweg kostet.',
         'Meilensteine wie 1.000 km gehen nicht mehr unbemerkt vorbei.',
+        'Ohne Empfang wird die Fahrt weiter aufgezeichnet und später '
+            'vollständig nachgetragen.',
       ],
     ),
     ChangelogEintrag(
