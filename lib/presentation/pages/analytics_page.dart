@@ -15,6 +15,7 @@ import 'package:cruise_connect/domain/models/user_level.dart';
 import 'package:cruise_connect/presentation/pages/user_profile_page.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 import 'package:cruise_connect/presentation/widgets/user_avatar.dart';
+import 'package:cruise_connect/presentation/widgets/badge_unlock_popup.dart';
 
 const List<String> _weekdayLabels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const List<String> _monthLabelsShort = [
@@ -310,6 +311,13 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         _loadLeaderboards(),
       ]);
       final gamResult = results[0] as GamificationResult;
+      // 2026-08-26 (vucko, Aufgabe 7): Genau HIER ist seine 1000-Kilometer-
+      // Marke untergegangen. Bei Fahrtende standen erst 992 km, das Abzeichen
+      // war noch nicht faellig; beim Oeffnen dieser Seite lief der naechste
+      // Abgleich mit 1007 km, schaltete es frei — und die Auswertung kannte
+      // keine Feier. Danach galt es als „schon vorhanden" und war fuer immer
+      // stumm vergeben.
+      if (mounted) unawaited(zeigeOffeneAuszeichnungen(context));
       final driveSessions = results[1] as List<UserDriveSession>;
       final leaderboards =
           results[2] as Map<_LeaderboardPeriod, List<_LeaderboardEntry>>;

@@ -110,9 +110,12 @@ void main() {
           gefahreneStile: stile,
         );
 
-    test('Vuckos Beispiel: 274 von 1000 km', () {
+    test('Vuckos Beispiel: 274 von 1.000 km', () {
+      // 2026-08-26 (Aufgabe 8): Der Tausenderpunkt ist neu und Absicht.
+      // Vierstellige Zahlen ohne Trennung sind auf einem Handy im Fahrzeug
+      // schwer zu erfassen.
       final p = f('badge_31', km: 274)!;
-      expect(p.zahlen, '274 von 1000 km');
+      expect(p.zahlen, '274 von 1.000 km');
       expect(p.anteil, closeTo(0.274, 1e-9));
     });
 

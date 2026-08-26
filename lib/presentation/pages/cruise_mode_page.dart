@@ -4601,7 +4601,27 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (!mounted || _disposed) return;
     final route = CruiseModePage.pendingRoute.value;
     if (route != null) {
+      // 2026-08-26 (vucko, Aufgabe 6: „Ich habe auf Route fahren geklickt, die
+      // Route hat nicht funktioniert. Ich hab nochmal draufgeklickt, dann hat
+      // es funktioniert."):
+      //
+      // An `pendingRoute` haengen ZWEI Zuhoerer: die Startseite, die auf den
+      // Fahr-Reiter umschaltet (home_page.dart), und diese Seite hier, die die
+      // Route uebernimmt. Die Startseite prueft dabei `pendingRoute.value !=
+      // null` — und wenn diese Zeile den Wert vorher geleert hat, sieht sie
+      // null und schaltet NICHT um. Die Route wird dann zwar geladen, aber im
+      // unsichtbaren Reiter: fuer den Fahrer passiert scheinbar nichts.
+      //
+      // Welcher Zuhoerer zuerst drankommt, haengt an der Reihenfolge der
+      // Anmeldung und damit daran, ob der Fahr-Reiter schon einmal offen war.
+      // Genau daher das Muster „einmal nichts, beim zweiten Mal geht es".
+      //
+      // Statt an dieser Reihenfolge herumzuschrauben, sagt diese Seite dem
+      // Rahmen selbst Bescheid. Der Reiterwechsel haengt damit nicht mehr
+      // daran, wer schneller war.
       CruiseModePage.pendingRoute.value = null;
+      CruiseModePage.openCruiseTab.value =
+          CruiseModePage.openCruiseTab.value + 1;
       unawaited(_uebernehmeAusstehendeRoute(route));
     }
   }
@@ -21073,8 +21093,9 @@ class _CruiseModePageState extends State<CruiseModePage>
           xpEarned: result.xpEarned ?? 0,
         );
       }
-      if (result.newBadges.isNotEmpty && mounted && !_disposed) {
-        await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+      // 2026-08-26 (Aufgabe 7): siehe zeigeOffeneAuszeichnungen.
+      if (mounted && !_disposed) {
+        await zeigeOffeneAuszeichnungen(context);
       }
     } catch (error) {
       debugPrint('[CruiseMode] Feier uebersprungen: $error');

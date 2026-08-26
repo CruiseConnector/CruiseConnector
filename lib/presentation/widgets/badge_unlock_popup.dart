@@ -6,6 +6,35 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/domain/models/badge.dart' as app;
 import 'package:cruise_connect/presentation/widgets/badge_stufen_stil.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
+
+/// 2026-08-26 (vucko, Aufgabe 7): Zeigt ALLES, was noch zu feiern ist — nicht
+/// nur das, was der Aufrufer gerade in der Hand hat.
+///
+/// Vorher konnte ein Abzeichen, das bei einem der stillen Abgleiche faellig
+/// wurde (Auswertung, Profil, Gruppe anlegen, Starter-Karte), nie gefeiert
+/// werden: es stand danach im Profil und galt beim naechsten Mal als „schon
+/// vorhanden". Genau so ist Vuckos 1000-Kilometer-Marke untergegangen.
+///
+/// Quittiert wird erst NACH der Feier. Bricht die App vorher ab, kommt sie
+/// beim naechsten Mal wieder — lieber einmal zu viel als ein verpasster
+/// Meilenstein.
+Future<void> zeigeOffeneAuszeichnungen(BuildContext context) async {
+  final offen = await OffeneAuszeichnungen.offene();
+  if (offen.isEmpty || !context.mounted) return;
+  final badges = offen
+      .map(app.Badge.getById)
+      .whereType<app.Badge>()
+      .toList(growable: false);
+  if (badges.isEmpty) {
+    // Unbekannte Kennungen (alte App auf neuer Datenbank) nicht ewig
+    // mitschleppen.
+    await OffeneAuszeichnungen.quittieren(offen);
+    return;
+  }
+  await showBadgeUnlockPopup(context: context, badges: badges);
+  await OffeneAuszeichnungen.quittieren(offen);
+}
 
 Future<void> showBadgeUnlockPopup({
   required BuildContext context,

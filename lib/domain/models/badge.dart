@@ -1104,11 +1104,35 @@ class BadgeFortschritt {
 
   double get anteil => ziel <= 0 ? 0 : (aktuell / ziel).clamp(0.0, 1.0);
 
-  String get zahlen {
-    String f(double v) =>
-        v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1);
-    return '${f(aktuell)} von ${f(ziel)} $einheit';
+  /// „1.008 von 2.500 km"
+  ///
+  /// 2026-08-26 (vucko, Aufgabe 8): Hier stand „1007.5 von 2500 km" — eine
+  /// Nachkommastelle, die niemanden interessiert, und vierstellige Zahlen ohne
+  /// Trennung. Auf einem Handy im Fahrzeug ist das schwer zu erfassen.
+  ///
+  /// Die Nachkommastelle bleibt nur, wo sie wirklich etwas aussagt: unter zehn
+  /// (etwa „2,5 von 5 Std"). Darueber wird gerundet.
+  String get zahlen =>
+      '${zahlMitTausenderpunkt(aktuell)} von '
+      '${zahlMitTausenderpunkt(ziel)} $einheit';
+}
+
+/// Eine Zahl, wie sie in Fortschritts- und Challenge-Anzeigen stehen soll.
+///
+/// Eine Quelle fuer alle Stellen, damit kuenftige Challenges dasselbe Format
+/// bekommen und nicht jede Anzeige ihr eigenes erfindet.
+String zahlMitTausenderpunkt(double wert) {
+  if (wert.abs() < 10 && wert != wert.roundToDouble()) {
+    return wert.toStringAsFixed(1).replaceAll('.', ',');
   }
+  final ganz = wert.round();
+  final ziffern = ganz.abs().toString();
+  final puffer = StringBuffer();
+  for (var i = 0; i < ziffern.length; i++) {
+    if (i > 0 && (ziffern.length - i) % 3 == 0) puffer.write('.');
+    puffer.write(ziffern[i]);
+  }
+  return ganz < 0 ? '-$puffer' : puffer.toString();
 }
 /// Kennzahl, an der eine Badge-Familie gemessen wird.
 ///

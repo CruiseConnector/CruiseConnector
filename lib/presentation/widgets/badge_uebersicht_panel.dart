@@ -111,7 +111,29 @@ String badgeRestweg(app.BadgeFortschritt fortschritt) {
     double.infinity,
   );
   final gerundet = rest.ceil();
-  return 'noch $gerundet ${badgeEinheit(fortschritt.einheit, gerundet)}';
+  return 'noch ${badgeZahl(gerundet)} '
+      '${badgeEinheit(fortschritt.einheit, gerundet)}';
+}
+
+/// Tausenderpunkt, damit vierstellige Zahlen lesbar bleiben. Eine Quelle
+/// fuer alle Fortschritts- und Challenge-Anzeigen, siehe badge.dart.
+String badgeZahl(int wert) => app.zahlMitTausenderpunkt(wert.toDouble());
+
+/// „Ziel 2.500 km" — das naechste Etappenziel beim Namen genannt.
+///
+/// 2026-08-26 (vucko, Aufgabe 8, woertlich): „Je nachdem, wie viele Kilometer
+/// noch fehlen, sagen wir 120 km bis zur 2000-km-Marke, oder wie viele
+/// Gruppenfahrten noch fehlen, sollte genau das als naechstes Etappenziel
+/// angezeigt werden." Und praezisierend: „ist fuer das Onboarding gemeint und
+/// zukuenftige Challenges, wo das gleiche Format haben werden."
+///
+/// Vorher stand in derselben Zeile „1007.5 von 2500 km" — die eigene Zahl mit
+/// Nachkommastelle, das Ziel ohne Trennung, und daneben schon „noch 1493 km".
+/// Zwei Sichten auf dieselbe Sache, keine davon nannte die Marke.
+String badgeEtappenziel(app.BadgeFortschritt fortschritt) {
+  final ziel = fortschritt.ziel.ceil();
+  return 'Ziel ${badgeZahl(ziel)} '
+      '${badgeEinheit(fortschritt.einheit, ziel)}';
 }
 
 // ---------------------------------------------------------------------------
@@ -900,7 +922,7 @@ class _ZielZeile extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                '${ziel.familie.titel} · ${ziel.fortschritt.zahlen}',
+                '${ziel.familie.titel} · ${badgeEtappenziel(ziel.fortschritt)}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(

@@ -3791,12 +3791,10 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
         if (!context.mounted || saved == null) return;
         await context.read<SavedRoutesProvider>().loadRoutes();
         if (!context.mounted || saved != true) return;
-        final gamResult = await GamificationService.calculateAndSync();
-        if (!context.mounted || gamResult.newBadges.isEmpty) return;
-        await showBadgeUnlockPopup(
-          context: context,
-          badges: gamResult.newBadges,
-        );
+        await GamificationService.calculateAndSync();
+        // 2026-08-26 (Aufgabe 7): siehe zeigeOffeneAuszeichnungen.
+        if (!context.mounted) return;
+        await zeigeOffeneAuszeichnungen(context);
       },
       child: SizedBox(
         width: 44,

@@ -7,6 +7,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart';
+import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/domain/models/user_level.dart';
 
@@ -157,6 +159,77 @@ class DriveSessionTotals {
 }
 
 /// Service für XP-, Level- und Badge-System mit Supabase-Backend.
+/// 2026-08-26 (vucko, Aufgabe 7): „Ich habe die 1000-Kilometer-Marke erreicht,
+/// aber die Animation dazu ist leider nicht gekommen. Das war sehr
+/// frustrierend, weil ich einen Meilenstein erreicht habe und nicht mitbekomme,
+/// dass ich ihn erreicht habe."
+///
+/// URSACHE, am Video und am Quelltext belegt: `calculateAndSync()` laeuft an
+/// ZWOELF Stellen, aber nur vier davon zeigen die Verleih-Feier. Wird ein
+/// Abzeichen bei einem der stillen Abgleiche freigeschaltet, schreibt der
+/// Dienst es ins Profil — und beim naechsten Abgleich gilt es als „schon
+/// vorhanden" und ist nie wieder neu. Es ist dann fuer immer stumm vergeben.
+///
+/// Genau das ist passiert: Bei Fahrtende standen erst 992 km, das Abzeichen war
+/// noch nicht faellig. Beim Oeffnen der Auswertung lief der naechste Abgleich,
+/// jetzt mit 1007 km — und die Auswertung kennt keine Feier.
+///
+/// Diese Warteschlange trennt das Freischalten vom Feiern. Freigeschaltet wird,
+/// wo es anfaellt; gefeiert wird, sobald ein Bildschirm da ist, der es kann.
+/// Nichts geht mehr verloren, und nichts wird doppelt gefeiert.
+class OffeneAuszeichnungen {
+  OffeneAuszeichnungen._();
+
+  static const String _schluessel = 'offene_auszeichnungen_v1';
+
+  /// Neu freigeschaltete Abzeichen vormerken. Doppelte werden verworfen.
+  static Future<void> merken(List<String> badgeIds) async {
+    if (badgeIds.isEmpty) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final k = NutzerPrefsSchluessel.fuer(_schluessel);
+      final vorhanden = p.getStringList(k) ?? const <String>[];
+      final zusammen = <String>{...vorhanden, ...badgeIds}.toList();
+      if (zusammen.length == vorhanden.length) return;
+      await p.setStringList(k, zusammen);
+      debugPrint(
+        '[Gamification] Vorgemerkt zum Feiern: ${badgeIds.join(', ')}',
+      );
+    } catch (e) {
+      debugPrint('[Gamification] Vormerken fehlgeschlagen: $e');
+    }
+  }
+
+  /// Was ist noch zu feiern?
+  static Future<List<String>> offene() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      return p.getStringList(NutzerPrefsSchluessel.fuer(_schluessel)) ??
+          const <String>[];
+    } catch (e) {
+      debugPrint('[Gamification] Offene Auszeichnungen nicht lesbar: $e');
+      return const <String>[];
+    }
+  }
+
+  /// Erst NACH der gezeigten Feier quittieren. Bricht die App vorher ab,
+  /// wird beim naechsten Start erneut gefeiert — lieber einmal zu viel als
+  /// ein verpasster Meilenstein.
+  static Future<void> quittieren(List<String> badgeIds) async {
+    if (badgeIds.isEmpty) return;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final k = NutzerPrefsSchluessel.fuer(_schluessel);
+      final rest = (p.getStringList(k) ?? const <String>[])
+          .where((b) => !badgeIds.contains(b))
+          .toList();
+      await p.setStringList(k, rest);
+    } catch (e) {
+      debugPrint('[Gamification] Quittieren fehlgeschlagen: $e');
+    }
+  }
+}
+
 class GamificationService {
   static SupabaseClient get _db => Supabase.instance.client;
 
@@ -1321,6 +1394,14 @@ class GamificationService {
 
     // Nur feiern, was wirklich gespeichert wurde.
     newBadges.removeWhere((b) => !bestaetigteBadges.contains(b));
+
+    // 2026-08-26 (vucko, Aufgabe 7): Vormerken, BEVOR das Ergebnis
+    // zurueckgeht. Zeigt der Aufrufer die Feier (vier von zwoelf tun das),
+    // quittiert er sie gleich danach. Zeigt er sie nicht, bleibt sie stehen
+    // und der naechste passende Bildschirm holt sie nach. Vorher war ein
+    // Abzeichen, das bei einem stillen Abgleich faellig wurde, fuer immer
+    // stumm vergeben.
+    await OffeneAuszeichnungen.merken(newBadges);
 
     return GamificationResult(
       level: level,

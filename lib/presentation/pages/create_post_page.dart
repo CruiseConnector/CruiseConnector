@@ -65,13 +65,11 @@ class _CreatePostPageState extends State<CreatePostPage> {
         sharedGroupId: widget.sharedGroupId,
       );
       if (!mounted) return;
-      final gamResult = await GamificationService.calculateAndSync();
+      await GamificationService.calculateAndSync();
       if (!mounted) return;
-      if (gamResult.newBadges.isNotEmpty) {
-        await showBadgeUnlockPopup(
-          context: context,
-          badges: gamResult.newBadges,
-        );
+      // 2026-08-26 (Aufgabe 7): siehe zeigeOffeneAuszeichnungen.
+      {
+        await zeigeOffeneAuszeichnungen(context);
       }
       if (mounted) Navigator.pop(context, true);
     } on DuplicateSharedRoutePostException catch (e) {

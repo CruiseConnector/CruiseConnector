@@ -2123,7 +2123,7 @@ class _HomeContentPageState extends State<HomeContentPage>
         unawaited(() async {
           if (!await AppTutorialService.hasCompleted()) return;
           if (!mounted) return;
-          await showBadgeUnlockPopup(context: context, badges: result.newBadges);
+          await zeigeOffeneAuszeichnungen(context);
         }());
       }
       // 2026-05-28 (vucko Task #68): Persistiere Home-Snapshot damit der
@@ -7199,13 +7199,13 @@ class _HomeContentPageState extends State<HomeContentPage>
           unawaited(context.read<SavedRoutesProvider>().loadRoutes());
           // Gamification + Badge-Popup async (kein UI-Block)
           unawaited(() async {
-            final gamResult = await GamificationService.calculateAndSync();
+            await GamificationService.calculateAndSync();
             if (!mounted) return;
-            if (gamResult.newBadges.isNotEmpty) {
-              await showBadgeUnlockPopup(
-                context: context,
-                badges: gamResult.newBadges,
-              );
+            // 2026-08-26 (Aufgabe 7): Nicht mehr an `newBadges` haengen —
+            // die Feier holt auch nach, was bei einem stillen Abgleich
+            // faellig wurde. Ist nichts offen, tut sie von selbst nichts.
+            {
+              await zeigeOffeneAuszeichnungen(context);
             }
           }());
         } catch (e) {
