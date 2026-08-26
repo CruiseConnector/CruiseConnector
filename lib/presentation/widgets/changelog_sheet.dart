@@ -25,11 +25,19 @@ Future<void> showChangelogSheet(
   BuildContext context,
   ChangelogEintrag eintrag,
 ) {
+  // 2026-08-26 (vucko): „man soll es nicht wegswipen koennen."
+  //
+  // Weder Wischen noch ein Tipp daneben schliesst das Blatt. Der Weg hinaus
+  // fuehrt ueber die Knoepfe, die IMMER sichtbar sind — sie liegen ausserhalb
+  // des scrollenden Textbereichs und koennen nie unter den Rand rutschen.
+  // Genau darauf kommt es an: sperren ja, einsperren nein. Das Blatt vom
+  // Routing-Onboarding hatte im August ohne diese Trennung Geraete blockiert.
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    isDismissible: true,
+    isDismissible: false,
+    enableDrag: false,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.72),
     builder: (_) => _ChangelogSheet(eintrag: eintrag),
@@ -106,7 +114,7 @@ class _ChangelogSheetState extends State<_ChangelogSheet> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Version ${widget.eintrag.version}',
+                          'Version ${widget.eintrag.sichtbareVersion}',
                           style: TextStyle(
                             color: accent,
                             fontSize: 12.5,
@@ -133,8 +141,11 @@ class _ChangelogSheetState extends State<_ChangelogSheet> {
                     farbe: accent,
                   ),
                   const SizedBox(height: 18),
+                  // Eigene Ueberschrift je Schritt. Vorher stand auf allen
+                  // Schritten derselbe Versionstitel.
                   Text(
-                    widget.eintrag.titel,
+                    widget.eintrag.titelFuer(_schritt),
+                    key: ValueKey<String>('titel$_schritt'),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 20,

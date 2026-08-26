@@ -59,13 +59,20 @@ void main() {
     await tester.tap(find.text('auf'));
     await tester.pumpAndSettle();
 
-    expect(find.text(eintrag.titel), findsOneWidget);
+    // 2026-08-26: Jeder Schritt hat jetzt eine eigene Ueberschrift; der
+    // Versionstitel steht nur noch als Rueckfall.
+    expect(find.text(eintrag.titelFuer(0)), findsOneWidget);
 
     for (var i = 0; i < eintrag.punkte.length; i++) {
       expect(
         find.text('${i + 1} von ${eintrag.punkte.length}'),
         findsOneWidget,
         reason: 'die Zaehlung oben muss mitlaufen',
+      );
+      expect(
+        find.text(eintrag.titelFuer(i)),
+        findsOneWidget,
+        reason: 'die Ueberschrift muss zum Schritt passen',
       );
       expect(
         find.text(eintrag.punkte[i]),
@@ -79,7 +86,7 @@ void main() {
     }
 
     // Nach dem letzten Schritt ist das Blatt zu.
-    expect(find.text(eintrag.titel), findsNothing);
+    expect(find.text(eintrag.titelFuer(0)), findsNothing);
   });
 
   test('gemerkt wird erst NACH dem Anzeigen', () {

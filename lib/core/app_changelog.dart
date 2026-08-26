@@ -17,10 +17,44 @@ class ChangelogEintrag {
     required this.version,
     required this.titel,
     required this.punkte,
+    this.anzeigeName,
+    this.schrittTitel,
   });
 
-  /// Marketing-Version ohne Build-Nummer, z. B. `1.5.10`.
+  /// TECHNISCHE Version ohne Build-Nummer, z. B. `1.5.28`. Muss zeichengleich
+  /// mit der `version:` aus der pubspec.yaml sein, sonst findet
+  /// [AppChangelog.fuerVersion] den Eintrag nicht und es erscheint kein
+  /// Hinweis. Diese Nummer sieht der Nutzer NICHT, wenn [anzeigeName] gesetzt
+  /// ist.
   final String version;
+
+  /// 2026-08-26 (vucko): „mache auch noch 1.3 bei den Neuigkeiten in der App,
+  /// nicht 1.5.28."
+  ///
+  /// Was der Nutzer im Update-Blatt liest. Die technische Nummer laeuft
+  /// intern weiter (Store, Build-Nummer, Wiedererkennung des Eintrags), nach
+  /// aussen zaehlt die Ausgabe. Ohne Angabe wird [version] angezeigt.
+  final String? anzeigeName;
+
+  /// Was im Blatt ueber den Punkten steht.
+  String get sichtbareVersion => anzeigeName ?? version;
+
+  /// 2026-08-26 (vucko): „ueberall steht Ruhigere Navigation, schau dass die
+  /// Titel besser sind."
+  ///
+  /// Der Versionstitel stand auf JEDEM Schritt gleich — bei sieben Schritten
+  /// siebenmal derselbe Satz, waehrend darunter jedes Mal etwas anderes stand.
+  /// Jetzt bekommt jeder Schritt seine eigene Ueberschrift. Sie muss so lang
+  /// sein wie [punkte]; fehlt sie, bleibt es beim Versionstitel, damit alte
+  /// Eintraege unveraendert weiterlaufen.
+  final List<String>? schrittTitel;
+
+  /// Ueberschrift fuer Schritt [i].
+  String titelFuer(int i) {
+    final t = schrittTitel;
+    if (t == null || t.length != punkte.length) return titel;
+    return t[i];
+  }
 
   /// Eine Zeile, die den Kern des Updates auf den Punkt bringt.
   final String titel;
@@ -43,18 +77,36 @@ class AppChangelog {
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
       version: '1.5.28',
+      anzeigeName: '1.3',
       titel: 'Ruhigere Navigation',
+      // 2026-08-26 (vucko): Jeder Schritt bekommt seine eigene Ueberschrift.
+      // Vorher stand auf allen sieben Schritten derselbe Versionstitel.
+      schrittTitel: <String>[
+        'Die Ansage bleibt stehen',
+        'Keine Neuberechnung ohne Grund',
+        'Angekommen ist angekommen',
+        'Links und rechts stimmen',
+        'Ohne Empfang geht es weiter',
+        'Baustellen bleiben sichtbar',
+        'Meilensteine fallen auf',
+        'Geteilte Runden starten sofort',
+      ],
       punkte: <String>[
-        'Die Ansage konnte nach einer Neuberechnung minutenlang verschwinden. '
+        'Nach einer Neuberechnung konnte die Ansage minutenlang verschwinden. '
             'Das ist behoben.',
-        'Keine Neuberechnung mehr, wenn du sauber auf der Strecke fährst.',
-        'Parkst du neben dem Ziel, gilt die Fahrt jetzt als angekommen.',
-        'Links und rechts stimmen auch an engen Gabelungen.',
-        'Baustellen auf dem Weg werden umfahren. Bei A nach B fragen wir dich '
-            'vorher und zeigen, was der Umweg kostet.',
-        'Meilensteine wie 1.000 km gehen nicht mehr unbemerkt vorbei.',
-        'Ohne Empfang wird die Fahrt weiter aufgezeichnet und später '
-            'vollständig nachgetragen.',
+        'Fährst du sauber auf der Strecke, wird nichts mehr neu berechnet. '
+            'Auch nicht im Kreisverkehr.',
+        'Parkst du neben dem Ziel statt direkt davor, endet die Navigation '
+            'jetzt trotzdem.',
+        'An engen Gabelungen war die Richtung manchmal vertauscht. '
+            'Jetzt stimmt sie.',
+        'Ohne Empfang wird alles weiter aufgezeichnet und später vollständig '
+            'nachgetragen.',
+        'Gemeldete Baustellen verschwinden nicht mehr und werden vorher '
+            'angesagt, mit Entfernung.',
+        'Marken wie 1.000 km gehen nicht mehr unbemerkt vorbei.',
+        'Eine geteilte Runde startet beim ersten Tippen. In der Karte einer '
+            'Fahrt kannst du ziehen und zoomen.',
       ],
     ),
     ChangelogEintrag(

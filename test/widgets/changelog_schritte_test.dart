@@ -11,7 +11,9 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   const eintrag = ChangelogEintrag(
     version: '9.9.9',
+    anzeigeName: '1.3',
     titel: 'Testtitel',
+    schrittTitel: <String>['Titel eins', 'Titel zwei', 'Titel drei'],
     punkte: <String>['Erster Punkt', 'Zweiter Punkt', 'Dritter Punkt'],
   );
 
@@ -108,5 +110,68 @@ void main() {
       expect(p.contains('-'), isFalse, reason: 'Strich in "$p"');
       expect(p.contains('—'), isFalse, reason: 'Gedankenstrich in "$p"');
     }
+  });
+
+  testWidgets('das Popup zeigt den Anzeigenamen, nicht die technische Nummer', (
+    tester,
+  ) async {
+    // 2026-08-26 (vucko): „mache auch noch 1.3 bei den Neuigkeiten in der App,
+    // nicht 1.5.28." Intern laeuft die technische Nummer weiter, nach aussen
+    // zaehlt die Ausgabe.
+    await oeffne(tester);
+    expect(find.text('Version 1.3'), findsOneWidget);
+    expect(find.text('Version 9.9.9'), findsNothing);
+  });
+
+  testWidgets('jeder Schritt hat seine eigene Ueberschrift', (tester) async {
+    // Vorher stand auf allen Schritten derselbe Versionstitel.
+    await oeffne(tester);
+    expect(find.text('Titel eins'), findsOneWidget);
+    expect(find.text('Testtitel'), findsNothing);
+
+    await tester.tap(find.text('Weiter'));
+    await tester.pumpAndSettle();
+    expect(find.text('Titel zwei'), findsOneWidget);
+    expect(find.text('Titel eins'), findsNothing);
+  });
+
+  testWidgets('wegwischen und danebentippen schliessen nicht', (tester) async {
+    await oeffne(tester);
+    expect(find.text('1 von 3'), findsOneWidget);
+
+    // Tipp auf den abgedunkelten Bereich darueber.
+    await tester.tapAt(const Offset(200, 40));
+    await tester.pumpAndSettle();
+    expect(find.text('1 von 3'), findsOneWidget, reason: 'darf nicht zugehen');
+
+    // Kraeftig nach unten wischen.
+    await tester.drag(find.text('Erster Punkt'), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.text('1 von 3'), findsOneWidget, reason: 'darf nicht zugehen');
+
+    // Der Weg hinaus ueber die Knoepfe muss aber immer offen sein.
+    expect(find.text('Weiter'), findsOneWidget);
+  });
+
+  test('ohne eigene Schritt-Titel bleibt der Versionstitel', () {
+    const ohne = ChangelogEintrag(
+      version: '1.0.0',
+      titel: 'Nur einer',
+      punkte: <String>['a', 'b'],
+    );
+    expect(ohne.titelFuer(0), 'Nur einer');
+    expect(ohne.titelFuer(1), 'Nur einer');
+    expect(ohne.sichtbareVersion, '1.0.0');
+  });
+
+  test('eine unpassend lange Titelliste wird ignoriert', () {
+    const schief = ChangelogEintrag(
+      version: '1.0.0',
+      titel: 'Rueckfall',
+      schrittTitel: <String>['nur einer'],
+      punkte: <String>['a', 'b'],
+    );
+    expect(schief.titelFuer(0), 'Rueckfall');
+    expect(schief.titelFuer(1), 'Rueckfall');
   });
 }
