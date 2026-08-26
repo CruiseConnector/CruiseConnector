@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  2026-08-26 (vucko, Release-Vorbereitung): Eigene Datei fuer den Store.
+
+	  Bis heute benutzten Debug, Profile UND Release dieselbe Datei mit
+	  `aps-environment = development`. Im fertigen Archiv stand das dann auch
+	  drin. Fuer den App Store und fuer TestFlight muss dort `production`
+	  stehen, sonst kommen bei den Nutzern keine Mitteilungen an — und der
+	  Fehler faellt erst auf, wenn sich jemand beschwert, dass nichts kommt.
+
+	  Debug und Profile behalten Runner.entitlements mit `development`, sonst
+	  passt die Signatur beim Testen auf dem eigenen Geraet nicht mehr.
+	-->
+	<key>aps-environment</key>
+	<string>production</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:cruiseconnector.at</string>
+	</array>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+</dict>
+</plist>
