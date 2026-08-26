@@ -625,17 +625,33 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
           // Abendrunde-Rundkurse ab Hohenems hatten 11-27 % ihrer Strecke
           // ueber 6 % Steigung und bis 786 Hoehenmeter Anstieg.
           //
-          // ZWEITE EINSCHRAENKUNG: Die Normalisierung weiter unten teilt ALLE
-          // Regeln dieses Overlays durch den groessten Wert (hier 1.6 von
-          // SECONDARY). Aus 0.83 wird also 0.52 und aus 0.5 wird 0.31 — der
-          // Server-Boost wird nicht nur neutralisiert, sondern netto
-          // ueberkompensiert (1.2 * 0.52 = 0.62). Richtung stimmt, Staerke ist
-          // groesser als die Rechnung oben vermuten laesst. Bewusst so
-          // gelassen: die Live-Messung ueber 60 Rundkurse ab Hohenems zeigte
-          // damit keinen einzigen ConnectionNotFound.
-          { if: 'curvature < 0.9', multiply_by: '0.83' },
-          // Serpentinen frueher daempfen als die 0.5-Regel darueber.
-          { if: 'curvature < 0.65', multiply_by: '0.5' },
+          // WARUM 1.33 UND NICHT 0.83 DASTEHT — bitte nicht "korrigieren":
+          // Die Normalisierung weiter unten (callGraphHopper, „GH-Default-
+          // Konformitaet") teilt ALLE Regeln dieses Overlays durch den
+          // groessten Wert. Der ist hier 1.6, drei Zeilen weiter oben bei
+          // SECONDARY. Aus 1.33 wird also die gewuenschte 0.83, aus 0.8 die
+          // gewuenschte 0.5. Wer hier direkt 0.83 hinschreibt, bekommt nach
+          // der Normalisierung 0.52 und damit netto 1.2 * 0.52 = 0.62 — also
+          // eine Ueberkompensation statt einer Neutralisierung.
+          //
+          // Das ist nicht Kosmetik, es wurde gemessen. 60 Rundkurse ab
+          // McDonald's Hohenems je Server, Autobahn an:
+          //   direkt 0.83/0.5  → PC1 49 von 56 Routen mit Kehrtwende
+          //                      PC2 47 von 49
+          //   1.33/0.8 (netto 1.0/0.5) → PC1 43 von 56, wie ohne die Regeln
+          // Die harte Daempfung draengt GraphHopper auf Hauptstrassen mit
+          // weniger Abzweigen und erzeugt dadurch MEHR Wendeschleifen — sie
+          // haette also Beschwerde 6 auf Kosten von Beschwerde 1 geloest und
+          // dem Kehrtwenden-Tor die Haelfte seiner sauberen Kandidaten
+          // weggenommen (13 statt 7 von 56).
+          //
+          // Werte > 1 sind hier unbedenklich: die Normalisierung laeuft VOR
+          // dem Zuschnitt auf die Server-Faehigkeiten und vor dem Absenden.
+          // GraphHopper sieht nie einen Wert ueber 1.
+          { if: 'curvature < 0.9', multiply_by: '1.33' },
+          // Serpentinen frueher daempfen: netto 0.5 fuer alles unter 0.65,
+          // zusammen mit der 0.7-Regel darueber netto 0.22 fuer unter 0.5.
+          { if: 'curvature < 0.65', multiply_by: '0.8' },
         ],
         distance_influence: 300,
       };
@@ -1597,6 +1613,19 @@ async function callGraphHopper(opts: {
   // und Forstwege darf ein PKW nicht befahren, dort wohnt niemand. PRIVATE
   // bleibt bei 0.02 statt 0 — Privatstrassen fuehren regelmaessig zum
   // einzigen Zugang eines Hauses oder Hotels.
+  //
+  // GEMESSENER PREIS der drei Hard-Blocks, 60 Rundkurse ab McDonald's
+  // Hohenems je Server: ConnectionNotFound steigt von 0 auf 3 (PC1) und von
+  // 7 auf 10 (PC2) — rund 5 % der Kandidaten sterben zusaetzlich. Kein
+  // einziger App-Aufruf blieb dadurch ohne Route, weil je Aufruf zehn Seeds
+  // parallel laufen. Die Gegenprobe mit 0.01 statt 0 wurde verworfen: sie
+  // brachte NICHTS (dieselben 3,17 km Feldweg wie ganz ohne Regel), weil die
+  // betroffenen Kanten dort die einzige Verbindung sind. Entweder blockieren
+  // oder weglassen — ein weicher Zwischenwert wirkt hier nicht.
+  // Offener Restrisiko-Fall: ein A→B-Start direkt auf einem Feld- oder
+  // Forstweg. Dort waere ConnectionNotFound ein echter Ausfall. Praktisch
+  // deckt das der bestehende TRACK/PATH-Hard-Block oben schon seit Monaten
+  // dieselbe Klasse ab.
   overlay.priority.push({ if: 'road_access == DESTINATION', multiply_by: '0.05' });
   overlay.priority.push({ if: 'road_access == CUSTOMERS', multiply_by: '0.05' });
   overlay.priority.push({ if: 'road_access == DELIVERY', multiply_by: '0.05' });
