@@ -1881,6 +1881,27 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// (Versatz > 20 m oder Lock war freigegeben) — sonst false: Mini-Jitter
   /// bleibt auf dem monotonen Glide, damit ein einzelner Seiten-Fix keinen
   /// sichtbaren Schnitt-Ruecksprung erzeugt.
+  /// 2026-08-26 (vucko, „bei der zweiten Fahrt war die Meldung weg"): Welche
+  /// Meldungen habe ich in DIESER Fahrt selbst abgesetzt? Nur die bleiben aus
+  /// der Vorwarnung heraus — man steht ja direkt daneben und wuerde sofort
+  /// gefragt, ob die eigene Baustelle noch da ist.
+  ///
+  /// Vorher galt der Ausschluss fuer ALLE eigenen Meldungen, dauerhaft, auf
+  /// jeder spaeteren Fahrt. Wer eine Baustelle vor der Haustuer meldet, bekam
+  /// sie danach nie wieder angesagt — kein Ton, keine Haptik, kein Blatt. Uebrig
+  /// blieb ein kleiner Marker auf der bewegten Karte. Genau das ist als „die
+  /// Meldung ist weg" angekommen.
+  final Set<String> _selbstGemeldetDieseFahrt = <String>{};
+
+  /// Die Liste, die in die Vorwarnung geht: alles auf der Route ausser dem,
+  /// was ich gerade eben selbst gemeldet habe.
+  List<RoadIncident> _meldungenFuerVorwarnung(List<RoadIncident> aufRoute) {
+    if (_selbstGemeldetDieseFahrt.isEmpty) return aufRoute;
+    return aufRoute
+        .where((i) => !_selbstGemeldetDieseFahrt.contains(i.id))
+        .toList();
+  }
+
   bool _reanchorRenderLockToDistance(double distanceM) {
     _ensureRouteCumDist();
     final cum = _routeCumDistM;
@@ -14741,6 +14762,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     unawaited(_navigationSocketService.close());
     _endNavigationLiveActivity();
     _startIdlePositionStream(); // Idle-Stream wieder starten
+    // 2026-08-26 (vucko, „bei der zweiten Fahrt war die Meldung weg"): Der
+    // Meldungs-Geofence merkt sich je Meldung, dass er schon gewarnt hat, und
+    // das Fragebudget zaehlt hoch. Beides wurde bisher NUR beim Routenwechsel
+    // zurueckgesetzt. Wer dieselbe Route ein zweites Mal fuhr, ohne sie neu
+    // berechnen zu lassen, bekam deshalb kein einziges Mal mehr eine Warnung —
+    // die Meldungen waren technisch da, aber stumm. Beim Beenden einer Fahrt
+    // gehoert das genauso zurueckgesetzt wie Stau-Erkennung und Zeitgeber
+    // darueber.
+    _incidentGeofence.clear();
+    _meldungsFragenGestellt = 0;
+    _selbstGemeldetDieseFahrt.clear();
   }
 
   RouteWindowMatch _guardRoundTripFinishMatch(RouteWindowMatch match) {
@@ -16563,12 +16595,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       setState(() {
         _routeIncidents = onRoute;
       });
-      // Eigene Meldungen NICHT in den Geofence — der Melder steht direkt an
-      // der Position und würde sonst sofort sein eigenes "Noch da?" sehen.
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      _incidentGeofence.setIncidents(
-        onRoute.where((i) => i.reportedBy != uid).toList(),
-      );
+      // Nur was ich in DIESER Fahrt selbst gemeldet habe, bleibt draussen.
+      // Siehe _selbstGemeldetDieseFahrt.
+      _incidentGeofence.setIncidents(_meldungenFuerVorwarnung(onRoute));
       debugPrint(
         '[CruiseMode] Verkehrsmeldungen geladen: ${incidents.length} bbox, '
         '${onRoute.length} auf Route.',
@@ -16633,10 +16662,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       final lebendig = nurGueltigeMeldungen(_routeIncidents);
       if (lebendig.length != _routeIncidents.length) {
         _safeSetState(() => _routeIncidents = lebendig);
-        final uid = Supabase.instance.client.auth.currentUser?.id;
-        _incidentGeofence.setIncidents(
-          lebendig.where((i) => i.reportedBy != uid).toList(),
-        );
+        _incidentGeofence.setIncidents(_meldungenFuerVorwarnung(lebendig));
         debugPrint(
           '[CruiseMode] Abgelaufene Verkehrsmeldungen entfernt: '
           '${_routeIncidents.length} → ${lebendig.length}.',
@@ -16833,8 +16859,23 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     _meldungsFragenGestellt++;
     _activeIncidentAlertId = incident.id;
+    // Entfernung mitgeben: das Blatt geht 200 bis 900 m vorher auf, und ohne
+    // die Zahl kann niemand einschaetzen, ob die Meldung auf der eigenen
+    // Strasse liegt oder zwei Strassen weiter.
+    final entfernung = _userLocation == null
+        ? null
+        : geo.Geolocator.distanceBetween(
+            _userLocation!.latitude,
+            _userLocation!.longitude,
+            incident.latitude,
+            incident.longitude,
+          );
     unawaited(
-      IncidentAlertSheet.show(context, incident).then((_) {
+      IncidentAlertSheet.show(
+        context,
+        incident,
+        entfernungMeter: entfernung,
+      ).then((_) {
         _activeIncidentAlertId = null;
       }),
     );
@@ -16959,10 +17000,23 @@ class _CruiseModePageState extends State<CruiseModePage>
         incident,
       ];
     });
+    // Fuer den Rest DIESER Fahrt nicht mehr danach fragen — ab der naechsten
+    // Fahrt wird sie normal angesagt wie jede fremde Meldung auch.
+    _selbstGemeldetDieseFahrt.add(incident.id);
+    // 2026-08-26 (vucko, Videobefund 06:00 Uhr): Hier stand bei `merged` nur
+    // „bestätigt, danke!". In der Aufnahme hatte der Fahrer aber nie einen
+    // Marker gesehen — er bestätigte also etwas, von dem er gar nichts wusste,
+    // und hielt es dann fuer eine neue Meldung. Der Text sagt jetzt, WAS
+    // passiert ist: die Meldung war schon da und laeuft weiter.
+    final eigeneMeldung =
+        result.incident!.reportedBy ==
+        Supabase.instance.client.auth.currentUser?.id;
     TopToast.show(
       context,
       message: result.merged
-          ? '${type.label} bestätigt, danke!'
+          ? (eigeneMeldung
+                ? 'Deine ${type.label} war noch gemeldet, Frist verlängert.'
+                : '${type.label} war schon gemeldet, du hast sie bestätigt.')
           : '${type.label} gemeldet, danke!',
       icon: type.icon,
     );

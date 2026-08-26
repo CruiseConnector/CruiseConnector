@@ -237,26 +237,92 @@ class RoadIncidentService {
     }
   }
 
-  /// Nur Meldungen nahe der Route (Sampling-Verfahren wie
-  /// ConstructionReportService.filterToRoute).
+  /// Nur Meldungen nahe der Route.
+  ///
+  /// 2026-08-26 (vucko, Sprachnachricht 06:02: „bei der zweiten Fahrt war die
+  /// Meldung auf einmal weg"): Hier lag die Ursache. Der alte Weg duennte die
+  /// Route auf FESTE 80 Stuetzpunkte aus, unabhaengig von ihrer Laenge, und mass
+  /// dann den Abstand von Punkt zu Punkt gegen 200 m — nicht den Abstand zur
+  /// LINIE. Auf langen Routen liegen diese 80 Punkte kilometerweit auseinander,
+  /// und dazwischen faellt alles durch.
+  ///
+  /// An echten Routen gemessen: bei 92 km lagen 47 Prozent der Strecke weiter
+  /// als 200 m von der naechsten Stichprobe entfernt, bei 107 km 55 Prozent.
+  /// Auf einer solchen Route wurde also JEDE ZWEITE Meldung auf der eigenen
+  /// Strecke stillschweigend verworfen.
+  ///
+  /// Und weil Hin- und Rueckweg zwei verschiedene Punktlisten sind, faellt die
+  /// Ausduennung jedes Mal anders aus: dieselbe Baustelle ueberlebt den Filter
+  /// einmal und einmal nicht. Genau das Muster „erste Fahrt da, zweite Fahrt
+  /// weg".
+  ///
+  /// Jetzt wird der senkrechte Abstand zu den Streckenabschnitten gemessen.
+  /// Das ist exakt statt geraten und haengt nicht mehr davon ab, wie GraphHopper
+  /// die Stuetzpunkte gesetzt hat.
   List<RoadIncident> filterToRoute({
     required List<RoadIncident> incidents,
     required List<List<double>> routeCoordinates,
     double bufferMeters = 200,
   }) {
     if (incidents.isEmpty || routeCoordinates.length < 2) return const [];
-    final samples = _sampleRoute(routeCoordinates, targetSamples: 80);
     final filtered = <RoadIncident>[];
     for (final incident in incidents) {
-      var minDist = double.infinity;
-      for (final c in samples) {
-        final d = _haversine(incident.latitude, incident.longitude, c[1], c[0]);
-        if (d < minDist) minDist = d;
-        if (minDist <= bufferMeters) break;
+      if (abstandZurRouteMeter(
+            latitude: incident.latitude,
+            longitude: incident.longitude,
+            routeCoordinates: routeCoordinates,
+          ) <=
+          bufferMeters) {
+        filtered.add(incident);
       }
-      if (minDist <= bufferMeters) filtered.add(incident);
     }
     return filtered;
+  }
+
+  /// Kuerzester Abstand eines Punktes zur Routenlinie, in Metern.
+  ///
+  /// Rechnet gegen jeden Streckenabschnitt, nicht gegen die Eckpunkte — ein
+  /// Punkt mitten auf einem 3 km langen geraden Abschnitt hat damit Abstand 0
+  /// und nicht 1500 m. Die Projektion laeuft in einer lokalen Ebene um den
+  /// Punkt; auf den paar hundert Metern, um die es geht, ist der Fehler
+  /// vernachlaessigbar.
+  static double abstandZurRouteMeter({
+    required double latitude,
+    required double longitude,
+    required List<List<double>> routeCoordinates,
+  }) {
+    if (routeCoordinates.length < 2) return double.infinity;
+    const meterProGradBreite = 111320.0;
+    final meterProGradLaenge =
+        meterProGradBreite * math.cos(latitude * math.pi / 180.0);
+    var kleinster = double.infinity;
+    for (var i = 0; i < routeCoordinates.length - 1; i++) {
+      final a = routeCoordinates[i];
+      final b = routeCoordinates[i + 1];
+      if (a.length < 2 || b.length < 2) continue;
+      final ax = (a[0] - longitude) * meterProGradLaenge;
+      final ay = (a[1] - latitude) * meterProGradBreite;
+      final bx = (b[0] - longitude) * meterProGradLaenge;
+      final by = (b[1] - latitude) * meterProGradBreite;
+      final dx = bx - ax;
+      final dy = by - ay;
+      final laengeQuadrat = dx * dx + dy * dy;
+      double px, py;
+      if (laengeQuadrat <= 0) {
+        px = ax;
+        py = ay;
+      } else {
+        final t = (-(ax * dx + ay * dy) / laengeQuadrat).clamp(0.0, 1.0);
+        px = ax + t * dx;
+        py = ay + t * dy;
+      }
+      final d = math.sqrt(px * px + py * py);
+      if (d < kleinster) {
+        kleinster = d;
+        if (kleinster <= 1.0) return kleinster;
+      }
+    }
+    return kleinster;
   }
 
   /// "Noch da" (true) oder "Schon weg" (false) — idempotent via RPC.
@@ -311,30 +377,7 @@ class RoadIncidentService {
     return channel;
   }
 
-  // ───────────────────── Helpers ──────────────────────────────────────
-  List<List<double>> _sampleRoute(
-    List<List<double>> coords, {
-    required int targetSamples,
-  }) {
-    if (coords.length <= targetSamples) return coords;
-    final step = coords.length / targetSamples;
-    final out = <List<double>>[];
-    for (var i = 0; i < targetSamples; i++) {
-      out.add(coords[(i * step).floor()]);
-    }
-    out.add(coords.last);
-    return out;
-  }
-
-  double _haversine(double lat1, double lng1, double lat2, double lng2) {
-    const r = 6371000.0;
-    final dLat = (lat2 - lat1) * math.pi / 180;
-    final dLng = (lng2 - lng1) * math.pi / 180;
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(lat1 * math.pi / 180) *
-            math.cos(lat2 * math.pi / 180) *
-            math.sin(dLng / 2) *
-            math.sin(dLng / 2);
-    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-  }
+  // 2026-08-26: `_sampleRoute` und `_haversine` sind entfallen. Sie dienten
+  // nur der alten, ungenauen Routenpruefung ueber 80 Stichproben; siehe die
+  // Begruendung bei `filterToRoute`.
 }

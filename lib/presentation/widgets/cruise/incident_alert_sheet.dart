@@ -14,18 +14,37 @@ import 'package:cruise_connect/domain/models/road_incident.dart';
 class IncidentAlertSheet extends StatefulWidget {
   final RoadIncident incident;
 
-  const IncidentAlertSheet({super.key, required this.incident});
+  /// 2026-08-26 (vucko, Sprachnachricht 06:02): „Im Popup sieht man nicht
+  /// eindeutig, ob sie noch da ist, zum Beispiel wenn sie zwei Strassen weiter
+  /// liegt." Das Blatt geht 200 bis 900 m vor der Meldung auf und sagte bisher
+  /// KEIN Wort darueber, wie weit weg sie ist. Ohne diese Zahl kann niemand
+  /// beurteilen, ob die Baustelle auf der eigenen Strasse liegt oder daneben —
+  /// und damit auch nicht ehrlich mit „noch da" oder „schon weg" antworten.
+  final double? entfernungMeter;
+
+  const IncidentAlertSheet({
+    super.key,
+    required this.incident,
+    this.entfernungMeter,
+  });
 
   static const Color _bgDark = Color(0xFF11141B);
 
-  static Future<void> show(BuildContext context, RoadIncident incident) async {
+  static Future<void> show(
+    BuildContext context,
+    RoadIncident incident, {
+    double? entfernungMeter,
+  }) async {
     HapticFeedback.mediumImpact();
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.25),
-      builder: (_) => IncidentAlertSheet(incident: incident),
+      builder: (_) => IncidentAlertSheet(
+        incident: incident,
+        entfernungMeter: entfernungMeter,
+      ),
     );
   }
 
@@ -123,6 +142,26 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
     if (alter.inHours < 24) return 'Gemeldet vor ${alter.inHours} Stunden';
     if (alter.inDays < 2) return 'Gemeldet vor einem Tag';
     return 'Gemeldet vor ${alter.inDays} Tagen';
+  }
+
+  /// „In 400 Metern, gemeldet vor 12 Tagen. Ist das noch da?"
+  /// Die Entfernung steht vorn, weil sie die Frage ueberhaupt erst
+  /// beantwortbar macht.
+  String _untertitel(RoadIncident incident) {
+    final alter = _alterText(incident.createdAt);
+    final d = widget.entfernungMeter;
+    if (d == null || !d.isFinite || d <= 0) {
+      return '$alter, ist das noch da?';
+    }
+    final weg = d < 1000
+        ? 'In ${(d / 10).round() * 10} Metern'
+        : 'In ${(d / 100).round() / 10} Kilometern';
+    // Kleinschreibung im Anschluss, weil der Satz jetzt vorn beginnt.
+    final alterKlein = alter.replaceFirst('Gemeldet', 'gemeldet').replaceFirst(
+      'Gerade eben gemeldet',
+      'gerade eben gemeldet',
+    );
+    return '$weg, $alterKlein. Ist das noch da?';
   }
 
   Future<void> _vote(bool stillThere) async {
@@ -251,7 +290,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '${_alterText(incident.createdAt)}, ist das noch da?',
+                            _untertitel(incident),
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.65),
                               fontSize: 13,
