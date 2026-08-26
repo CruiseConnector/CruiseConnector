@@ -603,6 +603,39 @@ function styleOverlayForProfile(profile: string): StyleOverlay {
           { if: 'max_speed < 55', multiply_by: '0.5' },
           { if: 'max_speed >= 100', multiply_by: '0.6' },
           { if: 'curvature < 0.5', multiply_by: '0.7' },
+          // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 6): „Im Stil
+          // Abendrunde kamen Bergstrecken mit Serpentinen statt zivilisierter
+          // Ortsdurchfahrten."
+          //
+          // Ursache, gemessen: Das BASIS-Profil auf dem Server
+          // (config/motorcycle_abendrunde.json) enthaelt
+          // `curvature < 0.9 -> multiply_by 1.2`. Es BELOHNT also kurvige
+          // Strassen — genau das Gegenteil dessen, was die Abendrunde will.
+          // Dieses Overlay laeuft ZUSAETZLICH zum Basis-Profil, also hebt die
+          // Gegenregel den Serverboost auf: 1.2 * 0.83 = 0.996.
+          //
+          // EHRLICHE EINSCHRAENKUNG — das hier ist eine Ueberbrueckung, kein
+          // Bergsignal. `curvature` misst Kruemmung, nicht Steigung. Der Graph
+          // ist ohne Hoehendaten importiert (elevation=false), `average_slope`
+          // fehlt auf BEIDEN Mini-PCs (/info am 26.08. geprueft). Eine
+          // Serpentine und eine kurvige Talstrasse sehen fuer diese Regel
+          // gleich aus; gedaempft werden beide. Das echte Signal waere die
+          // Steigung, und dafuer braucht es einen Graph-Re-Import mit
+          // Hoehendaten. Gemessen wurde derweil, wie gross das Problem ist:
+          // Abendrunde-Rundkurse ab Hohenems hatten 11-27 % ihrer Strecke
+          // ueber 6 % Steigung und bis 786 Hoehenmeter Anstieg.
+          //
+          // ZWEITE EINSCHRAENKUNG: Die Normalisierung weiter unten teilt ALLE
+          // Regeln dieses Overlays durch den groessten Wert (hier 1.6 von
+          // SECONDARY). Aus 0.83 wird also 0.52 und aus 0.5 wird 0.31 — der
+          // Server-Boost wird nicht nur neutralisiert, sondern netto
+          // ueberkompensiert (1.2 * 0.52 = 0.62). Richtung stimmt, Staerke ist
+          // groesser als die Rechnung oben vermuten laesst. Bewusst so
+          // gelassen: die Live-Messung ueber 60 Rundkurse ab Hohenems zeigte
+          // damit keinen einzigen ConnectionNotFound.
+          { if: 'curvature < 0.9', multiply_by: '0.83' },
+          // Serpentinen frueher daempfen als die 0.5-Regel darueber.
+          { if: 'curvature < 0.65', multiply_by: '0.5' },
         ],
         distance_influence: 300,
       };
@@ -1018,6 +1051,203 @@ function selbstUeberlappungAnteil(coords: [number, number][]): number {
   return Number((treffer / n).toFixed(3));
 }
 
+// ─────────────────── Kehrtwenden-Zaehler ──────────────────────────────────
+//
+// 2026-08-26 (vucko Testfahrt 25.08. Vorarlberg, Beschwerde 1): „Bei einem
+// Restaurant musste ich eine 180-Grad-Wende fahren." Es war eine Stichstrasse
+// mit Wendeschleife MITTEN in der Route.
+//
+// Warum die vorhandenen Kennzahlen das nicht gesehen haben:
+//   * `u_turn_count` zaehlt nur GraphHopper-Vorzeichen (-8/8/-98). Auf einer
+//     Wendeschleife dreht die Fahrbahn baulich — GH sagt „Scharf links" an
+//     (sign -3) und setzt KEIN Wende-Vorzeichen. Der Kandidat kam sauber durch.
+//   * `selbstUeberlappungAnteil` hat einen Mindest-Indexabstand von 60
+//     Rasterpunkten a 100 m. Alles, was innerhalb von rund 6 km wieder
+//     zurueckkommt, ist fuer sie unsichtbar (in ihrem eigenen Kommentar oben
+//     als „BEKANNTE LUECKE" dokumentiert) — genau die Groessenordnung eines
+//     Stichs zu einem Restaurant.
+//
+// Diese Kennzahl schliesst die Luecke: gleiche Raster- und Gitter-Mechanik,
+// aber 25-m-Schritt und ein WEG-Fenster statt einer Untergrenze. Ein Punktpaar
+// (i,j) zaehlt als Kehrtwende, wenn
+//   * der Weg ENTLANG der Route zwischen i und j ueber 150 m und hoechstens
+//     6 km betraegt (darunter ist es eine enge Kehre, darueber uebernimmt
+//     selbstUeberlappungAnteil),
+//   * die beiden Punkte quer hoechstens 40 m auseinander liegen,
+//   * die Fahrtrichtungen gegenlaeufig sind (Skalarprodukt <= -0,5, also mehr
+//     als 120 Grad Richtungsunterschied).
+// Zusammenhaengende Trefferlaeufe werden zu EINER Kehrtwende gebuendelt —
+// sonst zaehlt ein einziger Stich hundertfach, einmal je Rasterpunkt.
+//
+// FALSCH-POSITIV-PROBE an echten Serpentinen (Kurvenjagd-Rundkurse ab
+// Rankweil ueber Laternser Tal und Furkajoch, 6 Seeds, 45 km): 0 Fehltreffer.
+// Der Grund ist der Querabstand: eine Serpentinenkehre liegt 60-150 m neben
+// der vorigen Schleife, eine Stichstrasse liegt auf DERSELBEN Fahrbahn.
+const KEHRTWENDE_RASTER_M = 25;
+const KEHRTWENDE_NAEHE_M = 40;
+const KEHRTWENDE_MIN_WEG_M = 150;
+const KEHRTWENDE_MAX_WEG_M = 6000;
+const KEHRTWENDE_GEGENLAEUFIG_COS = -0.5;
+// Zellenkante des Suchgitters. Muss groesser sein als Naehe + Rasterschritt
+// (40 + 25 = 65), sonst uebersieht die 3x3-Nachbarschaft einen Partner.
+const KEHRTWENDE_ZELLE_M = 120;
+// Zwei Trefferlaeufe gehoeren zur selben Wende, solange ihre Partner-Indizes
+// nicht weiter als 12 Rasterpunkte (300 m) auseinanderrutschen.
+const KEHRTWENDE_BUENDEL_TOLERANZ = 12;
+
+/// Zaehlt Kehrtwenden (raus und auf derselben Fahrbahn zurueck) und liefert
+/// die laengste davon in Metern. Koordinaten sind [longitude, latitude].
+function kehrtwendenZaehler(
+  coords: [number, number][],
+): { anzahl: number; maxLaengeM: number } {
+  if (!coords || coords.length < 2) return { anzahl: 0, maxLaengeM: 0 };
+  const { xs, ys, n } = ueberlappRaster(coords, KEHRTWENDE_RASTER_M);
+  const minSchritte = Math.round(KEHRTWENDE_MIN_WEG_M / KEHRTWENDE_RASTER_M);
+  const maxSchritte = Math.round(KEHRTWENDE_MAX_WEG_M / KEHRTWENDE_RASTER_M);
+  if (n <= minSchritte + 2) return { anzahl: 0, maxLaengeM: 0 };
+  // Fahrtrichtung je Rasterpunkt als Einheitsvektor (Nachbar davor/danach)
+  const rx = new Float64Array(n);
+  const ry = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = i > 0 ? i - 1 : 0;
+    const b = i < n - 1 ? i + 1 : n - 1;
+    let dx = xs[b] - xs[a];
+    let dy = ys[b] - ys[a];
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > 0) {
+      dx /= len;
+      dy /= len;
+    }
+    rx[i] = dx;
+    ry[i] = dy;
+  }
+  const zelle = KEHRTWENDE_ZELLE_M;
+  const gitter = new Map<number, number[]>();
+  const schluessel = (cx: number, cy: number) => cx * 1000003 + cy;
+  for (let i = 0; i < n; i++) {
+    const k = schluessel(Math.floor(xs[i] / zelle), Math.floor(ys[i] / zelle));
+    const eimer = gitter.get(k);
+    if (eimer) eimer.push(i);
+    else gitter.set(k, [i]);
+  }
+  const naeheQuadrat = KEHRTWENDE_NAEHE_M * KEHRTWENDE_NAEHE_M;
+  // Fuer jeden Punkt i der FRUEHESTE gegenlaeufige Partner j > i im Fenster.
+  // Der fruehste, damit die Wende an ihrer Spitze gemessen wird und nicht an
+  // einem spaeteren Zufallstreffer.
+  const partner = new Int32Array(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const cx = Math.floor(xs[i] / zelle);
+    const cy = Math.floor(ys[i] / zelle);
+    let bester = -1;
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        const eimer = gitter.get(schluessel(cx + ox, cy + oy));
+        if (!eimer) continue;
+        for (const j of eimer) {
+          const abstandSchritte = j - i;
+          if (abstandSchritte <= minSchritte) continue; // zu nah = enge Kehre
+          if (abstandSchritte > maxSchritte) continue; // zu weit = Ueberlappung
+          const dx = xs[j] - xs[i];
+          const dy = ys[j] - ys[i];
+          if (dx * dx + dy * dy > naeheQuadrat) continue;
+          if (rx[i] * rx[j] + ry[i] * ry[j] > KEHRTWENDE_GEGENLAEUFIG_COS) continue;
+          if (bester < 0 || j < bester) bester = j;
+        }
+      }
+    }
+    partner[i] = bester;
+  }
+  let anzahl = 0;
+  let maxLaengeM = 0;
+  let i = 0;
+  while (i < n) {
+    if (partner[i] < 0) {
+      i++;
+      continue;
+    }
+    const start = i;
+    const rueckkehr = partner[i];
+    while (
+      i + 1 < n && partner[i + 1] >= 0 &&
+      Math.abs(partner[i + 1] - partner[i]) <= KEHRTWENDE_BUENDEL_TOLERANZ
+    ) {
+      i++;
+    }
+    anzahl++;
+    const laengeM = (partner[start] - start) * KEHRTWENDE_RASTER_M;
+    if (laengeM > maxLaengeM) maxLaengeM = laengeM;
+    // Bis zum Rueckkehrpunkt springen: sonst zaehlt der Rueckweg denselben
+    // Stich ein zweites Mal.
+    i = Math.max(i + 1, rueckkehr);
+  }
+  return { anzahl, maxLaengeM: Math.round(maxLaengeM) };
+}
+
+// ─────────────────── Autobahn-Episoden ────────────────────────────────────
+//
+// 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 2): „Autobahn an — die Route
+// ging bei Klaus AUF die Autobahn, bei Goetzis wieder RUNTER und bei Altach
+// nochmal drauf. Ich will EINE laengere Autobahnpassage, kein Auf und Ab."
+//
+// `uses_motorway` und `motorway_distance_fraction` konnten das nicht sehen:
+// beide sagen nur, WIEVIEL Autobahn drin ist, nicht in wie vielen Stuecken.
+// Drei Auffahrten und drei Abfahrten haben denselben Anteil wie eine lange
+// Passage.
+//
+// Diese Kennzahl zaehlt die Stuecke. Zwei MOTORWAY-Laeufe, deren Luecke
+// entlang der Route kleiner als 2 km ist, gelten als EIN Stueck — das ist der
+// Wechsel auf eine Anschlussautobahn (A14 auf S16), bei dem man das Kreuz
+// durchfaehrt, ohne den Verkehr zu verlassen. Der Nutzer erlebt das als eine
+// Passage, und genau diese Faelle darf das neue Tor nicht wegwerfen.
+const AUTOBAHN_EPISODE_LUECKE_M = 2000;
+
+/// Zerlegt die MOTORWAY-Anteile einer Route in Episoden.
+/// `roadClassSegments` sind GraphHopper-Details der Form [von, bis, Klasse].
+function autobahnEpisoden(
+  roadClassSegments: Array<[number, number, string | number]>,
+  coords: [number, number][],
+): { anzahl: number; lueckenKm: number[] } {
+  if (!roadClassSegments || roadClassSegments.length === 0 || coords.length < 2) {
+    return { anzahl: 0, lueckenKm: [] };
+  }
+  // Kumulative Meter je Stuetzpunkt — die Details-Indizes zeigen auf coords.
+  const kumM = new Float64Array(coords.length);
+  for (let i = 1; i < coords.length; i++) {
+    kumM[i] = kumM[i - 1] +
+      distanceMeters(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+  }
+  const letzter = coords.length - 1;
+  const laeufe: Array<[number, number]> = [];
+  for (const seg of roadClassSegments) {
+    const von = Math.min(letzter, Math.max(0, Number(seg[0]) || 0));
+    const bis = Math.min(letzter, Math.max(0, Number(seg[1]) || 0));
+    if (bis <= von) continue;
+    if (String(seg[2] ?? '').toUpperCase() !== 'MOTORWAY') continue;
+    const a = kumM[von];
+    const b = kumM[bis];
+    // Direkt anschliessende Detail-Segmente (Fahrbahnwechsel, Bruecke) sind
+    // derselbe Lauf — GraphHopper zerlegt eine Autobahn in viele Segmente.
+    if (laeufe.length > 0 && a - laeufe[laeufe.length - 1][1] < 1) {
+      laeufe[laeufe.length - 1][1] = b;
+    } else {
+      laeufe.push([a, b]);
+    }
+  }
+  const episoden: Array<[number, number]> = [];
+  for (const [a, b] of laeufe) {
+    if (episoden.length > 0 && a - episoden[episoden.length - 1][1] < AUTOBAHN_EPISODE_LUECKE_M) {
+      episoden[episoden.length - 1][1] = b;
+    } else {
+      episoden.push([a, b]);
+    }
+  }
+  const lueckenKm: number[] = [];
+  for (let k = 0; k + 1 < episoden.length; k++) {
+    lueckenKm.push(Number(((episoden[k + 1][0] - episoden[k][1]) / 1000).toFixed(2)));
+  }
+  return { anzahl: episoden.length, lueckenKm };
+}
+
 // ─────────────────── Style-Quality Metriken ───────────────────────────────
 //
 // 2026-05-21 (vucko): User-Beschwerde "Sport hat manchmal nur 10 Kurven".
@@ -1340,6 +1570,40 @@ async function callGraphHopper(opts: {
   overlay.priority.push({ if: 'road_class == BRIDLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == CYCLEWAY', multiply_by: '0' });
   overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.15' });
+  // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 5): Die Route fuehrte durch
+  // die Anrainerstrasse „Buechel" in Fraxern (OSM way 29452961,
+  // highway=service, vehicle=destination, beschildert AT:52.1 mit Zusatz „54
+  // Ausgenommen Anrainer"). road_class allein sieht das nicht — SERVICE 0.15
+  // war zu wenig, weil die Strasse als Abkuerzung kurz ist. Der Encoded Value
+  // `road_access` traegt die Beschilderung und liegt auf BEIDEN Mini-PCs im
+  // Graph (live an /info geprueft, kein Re-Import noetig).
+  //
+  // Warum DESTINATION nicht 0 ist: Nutzer WOHNEN in Anrainerstrassen. Start
+  // oder Ziel dort muessen erreichbar bleiben; mit Prioritaet 0 lieferte der
+  // Test dort ConnectionNotFound. 0.05 heisst „als Start oder Ziel erreichbar,
+  // als Durchfahrt praktisch nie" — dasselbe Muster wie SERVICE 0.15 darueber,
+  // nur schaerfer. CUSTOMERS und DELIVERY folgen derselben Logik (Kundenpark-
+  // platz, Lieferzufahrt: Ziel ja, Durchfahrt nein).
+  //
+  // Zusammenspiel mit den beiden Nachbearbeitungen unten: alle sieben Werte
+  // sind <= 1, also aendern sie `maxMul` der Normalisierung NICHT und werden
+  // von ihr nur mitskaliert wie alles andere. `bedingungsFelder()` liest aus
+  // „road_access == DESTINATION" sauber das Feld `road_access` heraus — kennt
+  // ein Server den Encoded Value nicht, wirft overlayAufServerZuschneiden()
+  // genau diese sieben Regeln raus und der Rest des Stils wirkt weiter
+  // (Stand 26.08.: beide Mini-PCs kennen ihn).
+  //
+  // AGRICULTURAL, FORESTRY und NO sind dagegen echte Hard-Blocks (0): Feld-
+  // und Forstwege darf ein PKW nicht befahren, dort wohnt niemand. PRIVATE
+  // bleibt bei 0.02 statt 0 — Privatstrassen fuehren regelmaessig zum
+  // einzigen Zugang eines Hauses oder Hotels.
+  overlay.priority.push({ if: 'road_access == DESTINATION', multiply_by: '0.05' });
+  overlay.priority.push({ if: 'road_access == CUSTOMERS', multiply_by: '0.05' });
+  overlay.priority.push({ if: 'road_access == DELIVERY', multiply_by: '0.05' });
+  overlay.priority.push({ if: 'road_access == PRIVATE', multiply_by: '0.02' });
+  overlay.priority.push({ if: 'road_access == AGRICULTURAL', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_access == FORESTRY', multiply_by: '0' });
+  overlay.priority.push({ if: 'road_access == NO', multiply_by: '0' });
   if (opts.preferMainRoads) {
     // 2026-06-16 (Codex): Standard-A→B/Trip/Reroute dürfen nicht mehr über
     // Mini-Nebenstraßen gewinnen, wenn Hauptstraßen/Autobahn sinnvoll sind.
@@ -1590,6 +1854,12 @@ async function callGraphHopper(opts: {
     // signalisiert. Diese Kennzahl sieht die Faelle ohne Vorzeichen: Schleife
     // durchs Dorf und auf der Parallelfahrbahn zurueck.
     const selbstUeberlappung = selbstUeberlappungAnteil(coords as [number, number][]);
+    // 2026-08-26 (vucko Testfahrt 25.08.): Die beiden neuen Kennzahlen zu den
+    // Beschwerden 1 (Wendeschleife am Restaurant) und 2 (Autobahn auf/ab/auf).
+    // Beide werden hier EINMAL berechnet und wandern in die Meta — Racer-Tor
+    // und Best-of-N lesen sie von dort, statt die Geometrie erneut abzutasten.
+    const kehrtwenden = kehrtwendenZaehler(coords as [number, number][]);
+    const autobahn = autobahnEpisoden(roadClassSegments, coords as [number, number][]);
     return {
       geometry: p.points,
       distanceKm,
@@ -1607,6 +1877,10 @@ async function callGraphHopper(opts: {
         uses_motorway: usesMotorway,
         uses_trunk: usesTrunk,
         u_turn_count: uTurnCount,
+        kehrtwenden_count: kehrtwenden.anzahl,
+        kehrtwende_max_laenge_m: kehrtwenden.maxLaengeM,
+        motorway_episode_count: autobahn.anzahl,
+        motorway_episode_gaps_km: autobahn.lueckenKm,
         self_overlap_fraction: selbstUeberlappung,
         start_on_motorway: startOnMotorway,
         prefer_main_roads: opts.preferMainRoads === true,
@@ -2169,6 +2443,23 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // bevorzugen wir 0-U-Turn, fallen auf 1 zurück und liefern NIE eine
         // ≥2-U-Turn-Route (die der Client hart wegwirft → „keine Route").
         if (((r.meta.u_turn_count as number | undefined) ?? 0) > 0) return false;
+        // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 1): Die Wendeschleife
+        // am Restaurant trug KEIN GH-Wendevorzeichen und kam deshalb durch das
+        // Tor darueber. Das geometrische Tor ist hart: eine Kehrtwende reicht,
+        // um den Kandidaten abzulehnen. Fuer den Fall, dass ALLE Kandidaten
+        // eine haben, faengt das Best-of-N-Scoring weiter unten ab — es waehlt
+        // dann den mit der kuerzesten/geringsten Wende statt gar nichts.
+        if (((r.meta.kehrtwenden_count as number | undefined) ?? 0) > 0) return false;
+        // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 2): Bei „Autobahn an"
+        // will der Nutzer EINE Autobahnpassage, nicht Klaus rauf, Goetzis
+        // runter, Altach wieder rauf. Anschlussautobahnen sind ausgenommen —
+        // Luecken unter 2 km hat autobahnEpisoden() schon verschmolzen.
+        // Bei „Autobahn aus" greift dieses Tor nicht: dort ist jede Autobahn
+        // schon durch das uses_motorway-Tor oben verboten.
+        if (
+          !(req.avoid_highways ?? false) &&
+          ((r.meta.motorway_episode_count as number | undefined) ?? 0) > 1
+        ) return false;
         if (previousFps.has(r.fingerprint)) return false; // Duplikat → nächster Seed
         const deltaPct = Math.abs(r.distanceKm - targetKm) / targetKm * 100;
         if (deltaPct > 12) return false; // zu weit von Zieldistanz
@@ -3012,6 +3303,19 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     const ueberlappStrafe =
       selbstUeberlappung * 120 +
       (detourLevel > 0 ? Math.max(0, selbstUeberlappung - 0.15) * 700 : 0);
+    // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 1): Kehrtwenden-Strafe in
+    // derselben Groessenordnung wie die ≥2-U-Turn-Strafe (250). Ein Kandidat
+    // mit Wendeschleife verliert damit gegen jeden wendefreien, selbst wenn er
+    // die Zieldistanz exakt trifft — aber er wird nicht hart verworfen: gibt es
+    // ueberhaupt nur Kandidaten mit Wende (enges Tal, Sackgassen-Start), kommt
+    // immer noch eine Route heraus statt „keine Route".
+    const kehrtwenden = Number(c.result.meta.kehrtwenden_count ?? 0);
+    const kehrtwendenStrafe = kehrtwenden > 0 ? 250 + (kehrtwenden - 1) * 120 : 0;
+    // 2026-08-26 (vucko Testfahrt 25.08., Beschwerde 2): Je Autobahn-Episode
+    // ueber der ersten 250 Punkte. Eine lange Passage kostet nichts, drei
+    // Auf- und Abfahrten kosten 500.
+    const autobahnEpisodenAnzahl = Number(c.result.meta.motorway_episode_count ?? 0);
+    const autobahnEpisodenStrafe = Math.max(0, autobahnEpisodenAnzahl - 1) * 250;
     const country = countryRouteMetrics(
       c.result.geometry.coordinates as [number, number][],
       homeCountryCode,
@@ -3027,6 +3331,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       ...c, turns, turnsPerKm, stylePenalty, speedPenalty, avgSpeedKmh,
       isUnreasonablySlow, foreignFraction, countryRejected, countryScorePenalty,
       mainRoadPenalty, selbstUeberlappung, ueberlappStrafe,
+      kehrtwenden, kehrtwendenStrafe,
+      autobahnEpisodenAnzahl, autobahnEpisodenStrafe,
       foreignPointFraction: country.foreignPointFraction,
       foreignDistanceFraction: country.foreignDistanceFraction,
       maxForeignSegmentMeters: country.maxForeignSegmentMeters,
@@ -3043,6 +3349,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
           : c.deltaPct) +
         stylePenalty + speedPenalty + highwayPenalty +
         uTurnPenalty + ueberlappStrafe + countryScorePenalty + mainRoadPenalty +
+        kehrtwendenStrafe + autobahnEpisodenStrafe +
         (countryRejected ? 10000 : 0),
     };
   });
