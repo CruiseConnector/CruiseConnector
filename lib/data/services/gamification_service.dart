@@ -882,7 +882,7 @@ class GamificationService {
     // geschickt werden: Steht sie schon, lehnt Postgres den Insert mit 23505
     // ab, statt eine zweite Zeile anzulegen (CLAUDE.md: „Eine gefahrene Fahrt
     // = GENAU EINE Zeile"). Siehe OfflineFahrtenWarteschlange.
-    final sessionId = neueSessionId();
+    final sessionId = OfflineFahrtenWarteschlange.neueZeilenId();
     final row = buildDriveSessionInsert(
       userId: userId,
       distanceKm: distanceKm,
@@ -926,22 +926,6 @@ class GamificationService {
       }
       rethrow;
     }
-  }
-
-  /// Zufaellige UUID v4 fuer die Zeile in `user_drive_sessions`.
-  ///
-  /// Bewusst ohne das Paket `uuid`: Es haengt bereits als indirekte
-  /// Abhaengigkeit im Baum, ist hier aber nicht direkt verfuegbar, und fuer
-  /// sechzehn Zufallsbytes lohnt keine neue Zeile in der pubspec.
-  @visibleForTesting
-  static String neueSessionId() {
-    final zufall = math.Random.secure();
-    final bytes = List<int>.generate(16, (_) => zufall.nextInt(256));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variante 1 (RFC 4122)
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
-        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
   }
 
   /// 2026-06-25 (vucko Routen-Detail-Page): Foto einer Fahrt nachträglich setzen

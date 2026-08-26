@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
@@ -363,6 +364,11 @@ class SavedRoutesService {
       if (xpAwarded != null) 'xp_awarded': xpAwarded,
     };
     if (rating != null && rating > 0) row['rating'] = rating;
+    // 2026-08-26 (Vucko: „danach wieder online sollte es trotzdem alles
+    // aufgezeichnet haben"): id vom Client, damit dieselbe Strecke nach einem
+    // Funkloch gefahrlos ein zweites Mal geschickt werden kann — steht sie
+    // schon, lehnt Postgres mit 23505 ab statt sie zu verdoppeln.
+    row['id'] = OfflineFahrtenWarteschlange.neueZeilenId();
 
     try {
       return await _insertRouteRow(row);
@@ -407,6 +413,21 @@ class SavedRoutesService {
       } else {
         rethrow;
       }
+    } catch (e) {
+      // 2026-08-26 (Vucko: „danach wieder online sollte es trotzdem alles
+      // aufgezeichnet haben"): Kein Netz. Bis hierhin war die aufgezeichnete
+      // Strecke damit weg — die Fahrt landete zwar (seit derselben Aenderung)
+      // in der Warteschlange, „Meine Strecken" blieb aber leer. Jetzt wartet
+      // die Strecke genauso auf die naechste Verbindung.
+      //
+      // Ein PostgrestException mit echtem Fehlercode kommt hier NICHT an (die
+      // Klausel darueber faengt sie) — das ist Absicht: Was der Server
+      // fachlich ablehnt, wuerde er beim Nachtragen wieder ablehnen.
+      await OfflineFahrtenWarteschlange.stelleAn(
+        row,
+        tabelle: OfflineFahrtenWarteschlange.tabelleStrecke,
+      );
+      rethrow;
     }
   }
 

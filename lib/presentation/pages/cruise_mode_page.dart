@@ -13049,9 +13049,20 @@ class _CruiseModePageState extends State<CruiseModePage>
   }
 
   Future<void> _prepareXpStreakContext() async {
+    // 2026-08-26 (Vucko „ich will das es auch aufzeichnet wenn du offline
+    // gehst"): Gedeckelt. Diese Abfrage laeuft VOR dem Scharfschalten der
+    // Aufzeichnung (_startRecordingSession). Ohne Netz meldet sie sich meist
+    // sofort mit einem Fehler zurueck — bei einer WACKELIGEN Verbindung haengt
+    // sie aber an der Zeitueberschreitung der HTTP-Schicht, und solange
+    // passiert nach dem Tipp auf „Aufzeichnung starten" sichtbar nichts.
+    //
+    // Nach vier Sekunden faehrt die Fahrt mit der Basis-Serie los. Das ist
+    // dieselbe 1, die der Dienst bei einem Fehler ohnehin liefert; der Preis
+    // ist der Serien-Multiplikator fuer genau diese Fahrt, der Gewinn ist,
+    // dass ueberhaupt aufgezeichnet wird.
     final streakDays = await GamificationService.getStreakDaysForNextRide(
       rideDate: DateTime.now(),
-    );
+    ).timeout(const Duration(seconds: 4), onTimeout: () => 1);
     if (!mounted || _disposed) return;
     _xpStreakDays = streakDays;
   }
@@ -21164,10 +21175,23 @@ class _CruiseModePageState extends State<CruiseModePage>
           'progress=${(progressFraction * 100).round()}%, '
           'xp=${xpBreakdown.totalXp}',
         );
-        await _recordDriveSessionForCurrentRoute(
-          completed: completed,
-          photoUrl: photoUrl,
-        );
+        // 2026-08-26 (Vucko „danach wieder online sollte es trotzdem alles
+        // aufgezeichnet haben"): Der Fehlschlag der BUCHUNG darf das Speichern
+        // der STRECKE nicht verhindern. Bis hierhin flog der Fehler direkt
+        // nach oben — offline wurde `saveRoute` also nie erreicht, und die
+        // aufgezeichnete Strecke kam nicht einmal bis zur Warteschlange.
+        // Beide Zeilen wandern getrennt hinein und werden getrennt
+        // nachgetragen; der gemerkte Fehler geht anschliessend weiter, damit
+        // der Fahrer seinen Hinweis trotzdem bekommt.
+        Object? buchungsFehler;
+        try {
+          await _recordDriveSessionForCurrentRoute(
+            completed: completed,
+            photoUrl: photoUrl,
+          );
+        } catch (fehler) {
+          buchungsFehler = fehler;
+        }
         savedRouteId = await SavedRoutesService.saveRoute(
           result: adjustedResult,
           style: _abschlussStil,
@@ -21199,6 +21223,10 @@ class _CruiseModePageState extends State<CruiseModePage>
           // GESPEICHERTE Route ihr Foto unabhängig behält.
           photoUrl: photoUrl,
         );
+        // Die Strecke ist durch, die Buchung war es nicht (moeglich bei einer
+        // Verbindung, die zwischendurch zurueckkommt). Der Fahrer soll das
+        // erfahren — die Fahrt liegt in der Warteschlange.
+        if (buchungsFehler != null) throw buchungsFehler;
         if (mounted) {
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
           unawaited(context.read<SavedRoutesProvider>().loadRoutes());

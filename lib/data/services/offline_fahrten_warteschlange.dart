@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -41,6 +42,13 @@ class OfflineFahrtenWarteschlange {
   OfflineFahrtenWarteschlange._();
 
   static const String _dateiName = 'offene_fahrten_v1.json';
+
+  /// Die gefahrene FAHRT (Kilometer, Dauer, XP, Track) — laut CLAUDE.md die
+  /// fuehrende Tabelle fuer alles Gefahrene.
+  static const String tabelleFahrt = 'user_drive_sessions';
+
+  /// Die gespeicherte STRECKE, also der Eintrag in „Meine Strecken".
+  static const String tabelleStrecke = 'routes';
 
   /// Mehr als das hebt niemand mehr sinnvoll auf; die aeltesten fallen raus.
   /// Ein Deckel gehoert hierhin, weil die Datei sonst bei dauerhaft kaputtem
@@ -113,12 +121,62 @@ class OfflineFahrtenWarteschlange {
     return eintraege.sublist(eintraege.length - maxEintraege);
   }
 
-  /// Stellt eine nicht gebuchte Fahrt an. [zeile] ist genau die Zeile, die an
-  /// `user_drive_sessions` gehen sollte — inklusive der vom Client vergebenen
-  /// `id`, ohne die das Nachtragen nicht doppelsicher waere.
-  static Future<void> stelleAn(Map<String, dynamic> zeile) async {
+  /// Kuerzer als das wird offline NICHT aufgehoben.
+  ///
+  /// 2026-08-26 (Vucko: „es sollte mehr wie ein kilometer sein wenn du offline
+  /// bist"): Ohne Netz endet eine Fahrt oft unfreiwillig — Handy neu gestartet,
+  /// App abgeschossen, versehentlich getippt. Solche Schnipsel als Fahrt
+  /// nachzutragen verwaessert Statistik und Serie. Die Grenze gilt AUSDRUECKLICH
+  /// nur fuer die Warteschlange; online bleibt jede Fahrt so buchbar wie bisher.
+  static const double mindestKmOffline = 1.0;
+
+  /// Die Datenzeile eines Eintrags.
+  ///
+  /// Bis zum 26.08. stand die Zeile direkt im Eintrag, seitdem liegt sie unter
+  /// `zeile` neben der Zieltabelle. Alte Dateien duerfen deshalb nicht
+  /// verloren gehen — wer offline gefahren ist und dann die App aktualisiert,
+  /// haette sonst genau die Fahrt verloren, die dieses Feature retten soll.
+  static Map<String, dynamic> _zeileVon(Map<String, dynamic> eintrag) {
+    final zeile = eintrag['zeile'];
+    if (zeile is Map) return Map<String, dynamic>.from(zeile);
+    return eintrag;
+  }
+
+  static String _tabelleVon(Map<String, dynamic> eintrag) =>
+      eintrag['tabelle'] as String? ?? tabelleFahrt;
+
+  /// Wie viele Kilometer stecken in dieser Zeile? Fahrt und Strecke fuehren
+  /// die Strecke unter verschiedenen Spaltennamen.
+  @visibleForTesting
+  static double kilometer(Map<String, dynamic> zeile) {
+    final wert =
+        zeile['distance_km'] ?? zeile['driven_km'] ?? zeile['distance_actual'];
+    if (wert is num) return wert.toDouble();
+    return double.tryParse('$wert') ?? 0.0;
+  }
+
+  /// Stellt eine nicht gespeicherte Zeile an. [zeile] ist genau die Zeile, die
+  /// an [tabelle] gehen sollte — inklusive der vom Client vergebenen `id`, ohne
+  /// die das Nachtragen nicht doppelsicher waere.
+  ///
+  /// [tabelle] ist entweder `user_drive_sessions` (die FAHRT: Kilometer, XP,
+  /// Track) oder `routes` (die STRECKE fuer „Meine Strecken"). Beide gehoeren
+  /// zu einer Fahrt und werden unabhaengig voneinander nachgetragen — sie sind
+  /// im Datenmodell nicht verknuepft, die Reihenfolge ist also egal.
+  static Future<void> stelleAn(
+    Map<String, dynamic> zeile, {
+    String tabelle = tabelleFahrt,
+  }) async {
     if (zeile['user_id'] == null || zeile['id'] == null) {
       debugPrint('[OfflineFahrten] Zeile ohne id/user_id — nicht angestellt.');
+      return;
+    }
+    final km = kilometer(zeile);
+    if (km <= mindestKmOffline) {
+      debugPrint(
+        '[OfflineFahrten] Nur ${km.toStringAsFixed(2)} km — unter der '
+        'Offline-Grenze von $mindestKmOffline km, nicht angestellt.',
+      );
       return;
     }
     final gesichert = Map<String, dynamic>.from(zeile);
@@ -126,14 +184,51 @@ class OfflineFahrtenWarteschlange {
     gesichert['created_at'] ??= DateTime.now().toUtc().toIso8601String();
 
     final eintraege = List<Map<String, dynamic>>.from(await lade());
-    // Dieselbe Fahrt nicht zweimal anstellen (zweiter Abschluss-Versuch).
-    if (eintraege.any((e) => e['id'] == gesichert['id'])) return;
-    eintraege.add(gesichert);
+    // Dieselbe Zeile nicht zweimal anstellen (zweiter Abschluss-Versuch).
+    if (eintraege.any((e) => _zeileVon(e)['id'] == gesichert['id'])) return;
+    eintraege.add({'tabelle': tabelle, 'zeile': gesichert});
     await _schreibe(begrenze(eintraege));
-    debugPrint('[OfflineFahrten] Fahrt gesichert, wird nachgetragen.');
+    debugPrint('[OfflineFahrten] $tabelle gesichert, wird nachgetragen.');
   }
 
-  /// Ist dieser Fehler der Beweis, dass die Fahrt schon gebucht IST?
+  /// Zufaellige UUID v4 fuer eine Zeile, die der Client selbst vergibt.
+  ///
+  /// Sie ist der Schluessel der Doppelbuchungs-Sicherung: Dieselbe id ein
+  /// zweites Mal geschickt = `23505` statt einer zweiten Zeile. Deshalb steht
+  /// sie hier und nicht bei einer der beiden Tabellen — Fahrt und Strecke
+  /// brauchen sie gleichermassen.
+  ///
+  /// Bewusst ohne das Paket `uuid`: Es haengt nur als indirekte Abhaengigkeit
+  /// im Baum, und fuer sechzehn Zufallsbytes lohnt keine neue Zeile in der
+  /// pubspec.
+  static String neueZeilenId() {
+    final zufall = Random.secure();
+    final bytes = List<int>.generate(16, (_) => zufall.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variante 1 (RFC 4122)
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  /// So oft wird eine vom SERVER abgelehnte Zeile erneut versucht, dann
+  /// fliegt sie raus. Netzfehler zaehlen nicht mit.
+  static const int maxVersuche = 3;
+
+  /// Hat der Server geantwortet und die Zeile fachlich abgelehnt?
+  ///
+  /// Unterscheidet den dauerhaften Fehler (fehlende Pflichtspalte, RLS,
+  /// kaputter Wert — kommt als [PostgrestException] mit Code zurueck) vom
+  /// voruebergehenden (Funkloch, Zeitueberschreitung). Nur der dauerhafte darf
+  /// mitgezaehlt werden, sonst verbraucht eine lange Fahrt ohne Empfang die
+  /// Versuche, obwohl mit der Zeile alles in Ordnung ist.
+  @visibleForTesting
+  static bool istServerAblehnung(Object fehler) =>
+      fehler is PostgrestException &&
+      (fehler.code ?? '').isNotEmpty &&
+      !istSchonGebucht(fehler);
+
+  /// Ist dieser Fehler der Beweis, dass die Zeile schon gespeichert IST?
   ///
   /// `23505` ist die Postgres-Verletzung eines eindeutigen Schluessels — bei
   /// unserer selbst vergebenen `id` also: die Zeile steht bereits. Alles
@@ -162,27 +257,49 @@ class OfflineFahrtenWarteschlange {
       var gebucht = 0;
       var netzKaputt = false;
 
-      for (final zeile in eintraege) {
+      for (final eintrag in eintraege) {
+        final zeile = _zeileVon(eintrag);
+        final tabelle = _tabelleVon(eintrag);
         if (zeile['user_id'] != uid || netzKaputt) {
-          bleiben.add(zeile);
+          bleiben.add(eintrag);
           continue;
         }
         try {
-          await _db.from('user_drive_sessions').insert(zeile);
+          await _db.from(tabelle).insert(zeile);
           gebucht++;
         } catch (e) {
           if (istSchonGebucht(e)) {
             // Der Insert war beim ersten Mal durchgelaufen, nur die Antwort
             // ging verloren. Nichts zu tun — und vor allem NICHT ein zweites
             // Mal buchen.
-            debugPrint('[OfflineFahrten] Fahrt stand schon — Eintrag raus.');
+            debugPrint('[OfflineFahrten] $tabelle stand schon — Eintrag raus.');
             continue;
           }
           debugPrint('[OfflineFahrten] Nachtragen fehlgeschlagen: $e');
-          // Der naechste Eintrag wuerde am selben Netz scheitern. Abbrechen
-          // statt 50-mal in dieselbe Zeitueberschreitung zu laufen.
+          if (istServerAblehnung(e)) {
+            // Der Server hat GEANTWORTET und die Zeile abgelehnt (fehlende
+            // Pflichtspalte, RLS, kaputter Wert). Das wird beim naechsten Mal
+            // genauso ausgehen. Ohne Zaehler bliebe so ein Eintrag ewig vorne
+            // liegen und blockierte ueber `netzKaputt` jede spaetere Fahrt.
+            // Nach [maxVersuche] fliegt er raus — eine verlorene Fahrt ist
+            // schlimm, eine dauerhaft verstopfte Warteschlange schlimmer.
+            final versuche = (eintrag['versuche'] as int? ?? 0) + 1;
+            if (versuche >= maxVersuche) {
+              debugPrint(
+                '[OfflineFahrten] $tabelle nach $versuche Versuchen abgelehnt '
+                '— Eintrag verworfen.',
+              );
+              continue;
+            }
+            bleiben.add({...eintrag, 'versuche': versuche});
+            continue;
+          }
+          // Kein Netz: Der naechste Eintrag wuerde genauso scheitern.
+          // Abbrechen statt 50-mal in dieselbe Zeitueberschreitung zu laufen —
+          // und NICHT mitzaehlen, sonst verbraucht ein langes Funkloch die
+          // Versuche.
           netzKaputt = true;
-          bleiben.add(zeile);
+          bleiben.add(eintrag);
         }
       }
 
