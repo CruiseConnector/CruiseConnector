@@ -9,6 +9,14 @@ analyzer:
     unused_import: warning
     # Ungenutzte lokale Variablen als Warnung
     unused_local_variable: warning
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   rules:
