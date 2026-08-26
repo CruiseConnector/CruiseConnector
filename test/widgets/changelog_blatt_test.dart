@@ -32,7 +32,13 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   final eintrag = AppChangelog.eintraege.first;
 
-  testWidgets('das Blatt zeigt Titel und alle Punkte', (tester) async {
+  testWidgets('jeder Punkt ist erreichbar, einer nach dem anderen', (
+    tester,
+  ) async {
+    // 2026-08-26 (Aufgabe 3): Das Blatt ist keine scrollende Liste mehr,
+    // sondern fuehrt Schritt fuer Schritt. Die Absicht dieses Tests bleibt
+    // dieselbe wie am 11.08.: KEIN Punkt darf unerreichbar sein. Nur der Weg
+    // dorthin ist jetzt der Weiter-Knopf statt des Scrollbalkens.
     tester.view.physicalSize = const Size(430, 1600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -55,23 +61,25 @@ void main() {
 
     expect(find.text(eintrag.titel), findsOneWidget);
 
-    // Das Blatt scrollt, und was ausserhalb liegt, wird gar nicht erst
-    // gebaut. Also zu jedem Punkt hinscrollen — das prueft nebenbei, dass
-    // wirklich ALLE erreichbar sind und nicht der letzte unter dem Rand
-    // verschwindet.
-    final liste = find.byType(Scrollable).first;
-    for (final punkt in eintrag.punkte) {
-      await tester.scrollUntilVisible(
-        find.text(punkt),
-        120,
-        scrollable: liste,
+    for (var i = 0; i < eintrag.punkte.length; i++) {
+      expect(
+        find.text('${i + 1} von ${eintrag.punkte.length}'),
+        findsOneWidget,
+        reason: 'die Zaehlung oben muss mitlaufen',
       );
       expect(
-        find.text(punkt),
+        find.text(eintrag.punkte[i]),
         findsOneWidget,
-        reason: 'dieser Punkt ist im Blatt nicht erreichbar: $punkt',
+        reason: 'dieser Punkt ist im Blatt nicht erreichbar: '
+            '${eintrag.punkte[i]}',
       );
+      final letzter = i == eintrag.punkte.length - 1;
+      await tester.tap(find.text(letzter ? 'Alles klar' : 'Weiter'));
+      await tester.pumpAndSettle();
     }
+
+    // Nach dem letzten Schritt ist das Blatt zu.
+    expect(find.text(eintrag.titel), findsNothing);
   });
 
   test('gemerkt wird erst NACH dem Anzeigen', () {

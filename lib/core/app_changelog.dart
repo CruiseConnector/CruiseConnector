@@ -43,24 +43,16 @@ class AppChangelog {
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
       version: '1.5.26',
-      titel: 'Ansage bleibt stehen, keine Neuberechnung ohne Grund',
+      titel: 'Ruhigere Navigation',
       punkte: <String>[
-        'Nach einer Neuberechnung konnte die Ansage komplett verschwinden, '
-            'teilweise minutenlang, obwohl noch Abbiegungen kamen. Das lag an '
-            'einem falschen Zielpunkt, der beim Zusammensetzen der neuen '
-            'Strecke mitten in die Route rutschte. Behoben.',
-        'Die App berechnete manchmal neu, obwohl du sauber auf der Strecke '
-            'gefahren bist. In engen Gassen und am Berg verlor die Anzeige '
-            'ihren Halt, und das allein reichte als Auslöser. Jetzt wird '
-            'zuerst die Anzeige wieder eingefangen, und neu berechnet wird '
-            'nur noch, wenn du wirklich abgekommen bist.',
-        'Wenn du neben dem Ziel geparkt hast, etwa auf dem Parkplatz statt '
-            'direkt am Eingang, lief die Navigation endlos weiter. Jetzt '
-            'zählt auch das Ende der Straße als angekommen.',
-        'Bei einer Gabelung konnte links und rechts vertauscht sein, wenn '
-            'kurz dahinter die nächste Kurve kam. Die Prüfung greift jetzt '
-            'nur noch bei eindeutigen Abbiegungen.',
-        'Am Ziel stand in der Fußzeile ein Platzhalter statt einer Null.',
+        'Die Ansage konnte nach einer Neuberechnung minutenlang verschwinden. '
+            'Das ist behoben.',
+        'Keine Neuberechnung mehr, wenn du sauber auf der Strecke fährst.',
+        'Parkst du neben dem Ziel, gilt die Fahrt jetzt als angekommen.',
+        'Links und rechts stimmen auch an engen Gabelungen.',
+        'Baustellen auf dem Weg werden umfahren. Bei A nach B fragen wir dich '
+            'vorher und zeigen, was der Umweg kostet.',
+        'Meilensteine wie 1.000 km gehen nicht mehr unbemerkt vorbei.',
       ],
     ),
     ChangelogEintrag(
