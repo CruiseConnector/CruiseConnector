@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/construction_report.dart';
+import 'package:cruise_connect/data/services/road_incident_service.dart';
 
 /// 2026-05-28 (vucko Task #66): Baustellen-Service.
 ///
@@ -94,26 +95,33 @@ class ConstructionReportService {
     return reports;
   }
 
-  /// Filter: nur Baustellen die nahe an der Route liegen (default 80m).
+  /// Filter: nur Baustellen, die nahe an der Route liegen (Vorgabe 80 m).
   ///
-  /// Effizientes Verfahren: O(reports × samples). Bei 200 reports × 80
-  /// route-samples = 16k Distanz-Checks → <50ms.
+  /// 2026-08-26 (vucko, Nebenfund zu Aufgabe 1): Hier stand derselbe Fehler
+  /// wie bei den gemeldeten Baustellen — die Route wurde auf FESTE 80
+  /// Stuetzpunkte ausgeduennt und dann Punkt zu Punkt gemessen statt zur
+  /// Linie. An echten Routen gemessen lagen bei 92 km 47 Prozent der Strecke
+  /// weiter als 200 m vom naechsten Stuetzpunkt entfernt; bei einem Puffer von
+  /// nur 80 m faellt entsprechend mehr durch. Die Baustellen aus den
+  /// Kartendaten waren davon genauso betroffen wie die gemeldeten, nur hat es
+  /// niemand bemerkt, weil sie seltener sind.
+  ///
+  /// Jetzt derselbe exakte Weg wie in RoadIncidentService: senkrechter Abstand
+  /// zu den Streckenabschnitten.
   List<ConstructionReport> filterToRoute({
     required List<ConstructionReport> reports,
     required List<List<double>> routeCoordinates,
     double bufferMeters = 80,
   }) {
     if (reports.isEmpty || routeCoordinates.length < 2) return [];
-    final samples = _sampleRoute(routeCoordinates, targetSamples: 80);
     final filtered = <ConstructionReport>[];
     for (final report in reports) {
-      var minDist = double.infinity;
-      for (final c in samples) {
-        final d = _haversine(report.latitude, report.longitude, c[1], c[0]);
-        if (d < minDist) minDist = d;
-        if (minDist <= bufferMeters) break;
-      }
-      if (minDist <= bufferMeters) {
+      if (RoadIncidentService.abstandZurRouteMeter(
+            latitude: report.latitude,
+            longitude: report.longitude,
+            routeCoordinates: routeCoordinates,
+          ) <=
+          bufferMeters) {
         filtered.add(report);
       }
     }
@@ -284,31 +292,9 @@ out center 150;
       '${s.toStringAsFixed(2)}|${w.toStringAsFixed(2)}|'
       '${n.toStringAsFixed(2)}|${e.toStringAsFixed(2)}';
 
-  List<List<double>> _sampleRoute(
-    List<List<double>> coords, {
-    required int targetSamples,
-  }) {
-    if (coords.length <= targetSamples) return coords;
-    final step = coords.length / targetSamples;
-    final out = <List<double>>[];
-    for (var i = 0; i < targetSamples; i++) {
-      out.add(coords[(i * step).floor()]);
-    }
-    out.add(coords.last);
-    return out;
-  }
-
-  double _haversine(double lat1, double lng1, double lat2, double lng2) {
-    const r = 6371000.0;
-    final dLat = (lat2 - lat1) * math.pi / 180;
-    final dLng = (lng2 - lng1) * math.pi / 180;
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(lat1 * math.pi / 180) *
-            math.cos(lat2 * math.pi / 180) *
-            math.sin(dLng / 2) *
-            math.sin(dLng / 2);
-    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-  }
+  // 2026-08-26: `_sampleRoute` und `_haversine` sind entfallen. Sie dienten
+  // nur der alten, ungenauen Routenpruefung ueber 80 Stichproben; siehe die
+  // Begruendung bei `filterToRoute`.
 }
 
 class _BboxCacheEntry {
