@@ -14786,10 +14786,34 @@ class _CruiseModePageState extends State<CruiseModePage>
       _distanceToFinalTargetMeters = null;
       return null;
     }
-    final distance = distanceToCoordinateMeters(
+    var distance = distanceToCoordinateMeters(
       position: position,
       coordinate: target,
     );
+    // 2026-08-26 (vucko Testfahrt 25.08., „am Ziel war es komplett verbuggt"):
+    // Bei A→B ist das Ziel die GEOCODIERTE Nadel des Suchtreffers, also der
+    // Gebaeudemittelpunkt. Der Fahrer parkte auf dem Parkplatz daneben, mehr
+    // als 35 m von dieser Nadel entfernt — und es gab keinen einzigen Pfad,
+    // der „Route vollstaendig abgefahren, Fahrzeug steht daneben" als Ankunft
+    // gewertet haette. Die Navigation lief endlos weiter, das Banner klebte
+    // auf „Jetzt · Links abbiegen", die Fusszeile zeigte „... km".
+    //
+    // Das Ende der gefahrenen Strasse ist der ehrlichere Anker als die Nadel
+    // im Gebaeude: die Route endet dort, wo man mit dem Auto hinkommt. Es
+    // zaehlt, was naeher ist — die Nadel bleibt gueltig, wenn man direkt
+    // davor haelt.
+    if (!_isRoundTrip && _fullRouteCoordinates.length >= 2) {
+      final strassenende = _fullRouteCoordinates.last;
+      if (strassenende.length >= 2) {
+        final zumStrassenende = distanceToCoordinateMeters(
+          position: position,
+          coordinate: strassenende,
+        );
+        if (zumStrassenende.isFinite && zumStrassenende < distance) {
+          distance = zumStrassenende;
+        }
+      }
+    }
     _distanceToFinalTargetMeters = distance;
     return distance;
   }
@@ -15548,6 +15572,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     // der Off-Route-Detektor feuert (noch) nicht (Puck geometrisch nah). Dann EIN
     // Reroute erzwingen (re-ankert Banner+Linie+Rest-km; V1 committet garantiert).
     final renderDistNow = _renderLockDistM;
+    // 2026-08-26 (vucko Testfahrt-Video): Eine freigegebene Sperre meldet -1.
+    // Das ist keine eingefrorene Distanz, sondern gar keine — die Uhr darf
+    // dabei nicht laufen, sonst erzwingt der Watchdog nach 15 s eine
+    // Neuberechnung, obwohl der Fahrer sauber auf der Route faehrt.
+    final renderLockFreigegeben = !renderDistNow.isFinite || renderDistNow < 0;
+    if (renderLockFreigegeben) {
+      _renderDistChangedAt = position.timestamp;
+      _watchdogDrivenM = 0.0;
+      // Statt nichts zu tun: die Anzeige selbst wieder anheften, solange der
+      // Fahrer im Korridor ist. Genau das fehlte im Video — der Puck schwebte
+      // minutenlang frei neben der Linie, und der einzige Ausweg, den der Code
+      // kannte, war eine komplette Neuberechnung.
+      if (!isOutsideCorridor) {
+        final projektion = routeDistanceForMatchMeters(
+          cumulativeDistances: _routeCumDist,
+          match: routeProgressMatch,
+        );
+        if (projektion.isFinite && _reanchorRenderLockToDistance(projektion)) {
+          _lastTrimDistM = -1;
+          _lastDrivenHead = null;
+          _lastDimHead = null;
+          needsRebuild = true;
+        }
+      }
+    }
     if (_lastRenderDistForFreeze == null ||
         (renderDistNow - _lastRenderDistForFreeze!).abs() > 5.0) {
       _lastRenderDistForFreeze = renderDistNow;
@@ -15590,6 +15639,11 @@ class _CruiseModePageState extends State<CruiseModePage>
           nearRouteEnd: nearRouteEnd,
           drivenSinceProgressChangedM: _watchdogDrivenM,
           inRoundabout: _puckNaheKreisverkehr(position),
+          lockReleased: renderLockFreigegeben,
+          // Im Korridor ist die Strecke in Ordnung — dann ist ein stehender
+          // Render-Lock ein Anzeigefehler, kein Grund neu zu berechnen.
+          onRoute: !isOutsideCorridor,
+          accuracyMeters: accuracyM,
         ) &&
         (_lastRerouteTime == null ||
             position.timestamp.difference(_lastRerouteTime!) >
@@ -18806,7 +18860,11 @@ class _CruiseModePageState extends State<CruiseModePage>
               ...tail.skip(1),
             ];
             final mergedManeuvers = <RouteManeuver>[
-              ...connector.maneuvers,
+              // 2026-08-26 (vucko Testfahrt-Video, Banner neun Minuten weg):
+              // Der Connector endet mit einem eigenen „Ziel erreicht."; ohne
+              // diesen Filter landet es MITTEN in der Route und schaltet die
+              // Manoever-Auswahl auf null. Siehe selectActiveGuidanceManeuverIndex.
+              ...connector.maneuvers.where((m) => !m.isArrival),
               for (final m in planningManeuvers)
                 if (m.routeIndex >= rejoinIdx)
                   RouteManeuver(
@@ -19074,7 +19132,10 @@ class _CruiseModePageState extends State<CruiseModePage>
         finalResult = _buildRouteResultFromCoordinates(
           coordinates: mergedCoordinates,
           maneuvers: [
-            ...resolvedRerouteResult.maneuvers,
+            // 2026-08-26: gleiche Naht-Falle wie beim garantierten Re-Dock —
+            // die Ankunft der Anfahrt-Teilroute darf nicht mitten in die
+            // zusammengesetzte Route wandern.
+            ...resolvedRerouteResult.maneuvers.where((m) => !m.isArrival),
             ...remainingManeuvers,
           ],
           distanceMeters: rerouteDistanceMeters + remainingDistanceMeters,

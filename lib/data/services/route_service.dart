@@ -11947,6 +11947,22 @@ String exitOrdinalText(int exit) {
 bool turnSignsContradict(int ghSign, int geomSign) {
   bool isTurn(int s) => s.abs() >= 1 && s.abs() <= 3;
   if (!isTurn(ghSign) || !isTurn(geomSign)) return false;
+  // 2026-08-26 (vucko Testfahrt-Video 25.08., 22:18 „manchmal hat es nicht
+  // gepasst ob links oder rechts"): Die Geometrie darf GraphHopper nur
+  // widersprechen, wenn sie selbst EINDEUTIG ist. Der Drehwinkel wird ueber ein
+  // Fenster von 14 bis 42 m vor und nach dem Manoeverpunkt gemessen; in engen
+  // Wohn- und Berggassen liegt das naechste Manoever oft naeher als 42 m, und
+  // dann misst das Fenster die FOLGEKURVE mit. Eine leichte Gabelung nach links
+  // (GH-sign -1) wurde so zu „rechts abbiegen", weil 25 m dahinter die Gasse
+  // nach rechts schwenkte.
+  //
+  // Eine leichte GH-Abbiegung (|sign| == 1) wird deshalb gar nicht mehr
+  // umgedreht: bei flachen Winkeln reicht schon wenig Verschmutzung des
+  // Fensters, um die Haendigkeit zu kippen, und GHs Topologie ist an
+  // Y-Gabelungen die verlaesslichere Quelle. Umgedreht wird nur noch, wenn
+  // BEIDE Seiten eine deutliche Abbiegung sehen.
+  if (ghSign.abs() == 1) return false;
+  if (geomSign.abs() == 1) return false;
   return (ghSign > 0) != (geomSign > 0);
 }
 

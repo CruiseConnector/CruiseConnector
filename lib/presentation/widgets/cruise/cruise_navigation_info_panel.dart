@@ -159,7 +159,13 @@ class CruiseNavigationInfoPanel extends StatelessWidget {
   }
 
   static String _formatDistanceKm(double? rawDistance) {
-    if (rawDistance == null || rawDistance <= 0) return '… km';
+    // 2026-08-26 (vucko Testfahrt 25.08.): Eine echte Null ist KEIN unbekannter
+    // Wert. Am Ziel angekommen rechnete die Projektion sauber 0 m aus, und
+    // dieser Zweig machte daraus „... km" — auf dem Bildschirmfoto steht
+    // deshalb „0 Min. · Ankunft 21:40" neben „... km verbleibend". Nur ein
+    // fehlender Wert ist unbekannt.
+    if (rawDistance == null) return '… km';
+    if (rawDistance <= 0) return '0 m';
     // 2026-06-13 (vucko J2): Gleiche Google-Style-Stufung wie das Manöver-Banner
     // (rawDistance ist immer in Metern).
     return formatNavDistance(rawDistance);

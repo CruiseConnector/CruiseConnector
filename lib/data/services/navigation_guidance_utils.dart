@@ -302,6 +302,19 @@ int? selectActiveGuidanceManeuverIndex({
   for (var i = safeStart; i < maneuvers.length; i++) {
     final maneuver = maneuvers[i];
     if (maneuver.routeIndex < currentRouteIndex) continue;
+    // 2026-08-26 (vucko Testfahrt-Video 25.08., 22:22 bis 22:31): Das Banner
+    // war NEUN MINUTEN am Stueck komplett weg, mitten in der Bergstrecke,
+    // obwohl Manoever anstanden. Ursache: Nach einem Reroute wird die
+    // Anfahrt-Teilroute („Connector") an die Restroute genaeht, UND sie bringt
+    // ihr eigenes „Ziel erreicht."-Manoever mit — mitten in die Route hinein.
+    // Traf die Auswahl auf dieses Naht-Ziel, lieferte sie unten `null`, weil
+    // die Ankunftspruefung bei 12 km Rest natuerlich fehlschlaegt. Und `null`
+    // heisst: kein Banner, keine Distanz, bis der Puck die Naht passiert hat.
+    //
+    // Eine Ankunft, hinter der noch etwas kommt, ist keine Ankunft. Sie wird
+    // uebersprungen. Das heilt auch Routen, die schon falsch zusammengefuegt
+    // im Speicher liegen — deshalb hier und nicht nur an den Nahtstellen.
+    if (maneuver.isArrival && i < maneuvers.length - 1) continue;
     if (maneuver.isArrival) {
       return shouldShowArrivalManeuver(
             remainingRouteDistanceMeters: remainingRouteDistanceMeters,
@@ -425,6 +438,22 @@ bool graphhopperManeuverIsRoundabout({
 ///   oft still (der Puck kreist um den Manöverpunkt, die Distanz-entlang-Route
 ///   springt erst an der Ausfahrt) — dort feuert der Watchdog nicht; der
 ///   normale Off-Route-Detektor bleibt zuständig.
+///
+/// 2026-08-26 (vucko Testfahrt-Video 25.08., „Reroute obwohl ich auf der Route
+/// war"): Der Watchdog hing ausschliesslich an der ANZEIGE-Distanz und hatte
+/// keinerlei Bezug zur tatsaechlichen Lage des Fahrers. In den engen Berggassen
+/// um Fraxern liegen Parallelgassen 20 bis 40 m auseinander — innerhalb des
+/// 50-m-Korridors, also „auf der Route", aber ausserhalb der 35-m-Schranke, ab
+/// der der Render-Lock wieder einrastet. Der Lock gab frei, seine Distanz stand
+/// danach konstant auf -1, die Einfrier-Uhr lief durch, und nach 15 s erzwang
+/// der Watchdog eine Neuberechnung, obwohl die eigene Off-Route-Logik den
+/// Fahrer die ganze Zeit als on-route fuehrte. Drei Schranken dagegen:
+/// - [lockReleased]: Eine freigegebene Sperre ist NICHT eingefroren, sie ist
+///   abwesend. Ein Render-Problem darf keine Neuberechnung ausloesen.
+/// - [onRoute]: Liegt der Puck im Korridor, ist die Route in Ordnung; dann
+///   gehoert die Anzeige neu verankert, nicht die Strecke neu berechnet.
+/// - [accuracyMeters]: Bei schlechtem Empfang (Hang, Tunnel) nie erzwingen —
+///   dieselbe Vorsicht, die `rerouteVoteAllowed` fuer den normalen Pfad hat.
 bool shouldForceRerouteOnFrozenProgress({
   required Duration sinceProgressChanged,
   required double speedMps,
@@ -432,12 +461,23 @@ bool shouldForceRerouteOnFrozenProgress({
   required bool nearRouteEnd,
   double drivenSinceProgressChangedM = double.infinity,
   bool inRoundabout = false,
+  bool lockReleased = false,
+  bool onRoute = false,
+  double accuracyMeters = 0.0,
   Duration frozenLimit = const Duration(seconds: 15),
   double minSpeedMps = 5.0,
   double minDrivenM = 75.0,
+  double maxAccuracyMeters = 25.0,
 }) {
   if (approachingDestination || nearRouteEnd) return false;
   if (inRoundabout) return false;
+  if (lockReleased) return false;
+  if (onRoute) return false;
+  if (accuracyMeters.isFinite &&
+      accuracyMeters > 0 &&
+      accuracyMeters > maxAccuracyMeters) {
+    return false;
+  }
   if (!speedMps.isFinite || speedMps < minSpeedMps) return false;
   // Unbekannter Fahrweg (Default infinity / NaN) gated nicht — nur ein
   // bekannt zu KURZER Fahrweg haelt den Watchdog zurueck.
