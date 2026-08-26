@@ -424,6 +424,23 @@ interface RouteRequest {
   reroute_request?: boolean;
   moving_start?: boolean;
   current_heading?: number;
+  /// 2026-08-26 (vucko „gemeldete Baustellen umfahren"): Sperrflaechen um
+  /// gemeldete Baustellen und Unfaelle. Der Client schickt die Meldungen, die
+  /// in seiner Naehe aktiv sind; die Edge macht daraus GraphHopper-Flaechen
+  /// mit Prioritaet 0 (siehe `sperrflaechenAusAnfrage` und `callGraphHopper`).
+  ///
+  /// FORMAT (canonical, snake_case; `avoidAreas` ist der camelCase-Alias):
+  ///   "avoid_areas": [
+  ///     { "id": "8f3c…-uuid der road_incidents-Zeile", "lat": 47.365,
+  ///       "lng": 9.688, "radius_m": 60 }
+  ///   ]
+  /// `radius_m` ist optional (Vorgabe 60, siehe SPERRE_RADIUS_M_STANDARD).
+  /// `lat`/`lng` duerfen auch `latitude`/`longitude` heissen.
+  ///
+  /// FEHLT das Feld oder ist es leer, aendert sich am Routing NICHTS. Das ist
+  /// Pflicht: alte App-Versionen bleiben installiert und senden es nie.
+  avoid_areas?: SperrflaecheAnfrage[];
+  avoidAreas?: SperrflaecheAnfrage[];
   country_preference?: string;
   countryPreference?: string;
   home_country_code?: string;
@@ -459,6 +476,7 @@ function normalizeRequest(raw: RouteRequest): RouteRequest {
     home_country_code: normalizeCountryCode(raw.home_country_code ?? raw.homeCountryCode) ?? undefined,
     avoid_cross_border: raw.avoid_cross_border ?? raw.avoidCrossBorder ?? false,
     allowed_countries: raw.allowed_countries ?? raw.allowedCountries,
+    avoid_areas: raw.avoid_areas ?? raw.avoidAreas,
     _subject_id: null, // wird erst im Handler aus dem JWT gefuellt
   };
 }
@@ -800,6 +818,143 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// ───────── Sperrflaechen um gemeldete Baustellen und Unfaelle ──────────────
+//
+// 2026-08-26 (vucko): Gemeldete Baustellen/Unfaelle sollen umfahren werden.
+// Alles hier ist an PC1 (:8989) und PC2 (:8989), GraphHopper 8.0, live
+// gemessen — die Zahlen stehen bei den Konstanten.
+//
+// WAS NICHT GEHT (gemessen, bitte nicht erneut versuchen):
+//   * `block_area`: HTTP 400 „The block_area parameter is no longer
+//     supported. Use a custom model with areas instead." — ersatzlos tot.
+//   * Weiche Strafen: multiply_by 0.1 und 0.5 lassen die Route UNVERAENDERT
+//     durch die Baustelle. Erst <= 0.01 wirkt. Wir nehmen 0.
+//   * Ein schmaler Korridor exakt auf der Fahrspur wirkt NICHT. GraphHopper
+//     prueft die Flaeche gegen die KNOTEN des Graphen, nicht gegen den
+//     Strassenverlauf. Nur ein Kreis, der einen Knoten einschliesst, sperrt.
+//   * `id` in `properties`: HTTP 400 „Unable to process JSON". Die `id` MUSS
+//     auf Feature-Ebene stehen.
+//   * Eine priority-Regel ohne die zugehoerige Flaeche: HTTP 400 „Area …
+//     wasn't found". Regel und Flaeche gehen darum IMMER zusammen raus.
+// Unschaedlich (HTTP 200): leere `features` und Flaechen ohne Regel.
+
+/// Ein Eintrag aus `avoid_areas`, so wie der Client ihn schickt.
+interface SperrflaecheAnfrage {
+  id: string;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
+  radius_m?: number;
+  radiusM?: number;
+}
+
+/// Eine gepruefte Sperrflaeche, fertig fuer GraphHopper.
+interface Sperrflaeche {
+  /// Die urspruengliche Meldungs-ID (uuid) — nur fuer Protokoll und Antwort.
+  meldungId: string;
+  /// Der GraphHopper-Flaechenname. NUR [A-Za-z0-9_], sonst HTTP 400
+  /// „has an invalid id" (eine uuid mit Bindestrichen wird abgelehnt).
+  flaechenId: string;
+  lat: number;
+  lng: number;
+  radiusM: number;
+}
+
+/// Gemessen ueber 96 Sperrpunkte auf 12 Vorarlberger Strecken:
+///   30 m  → 4 % der Routen fahren trotzdem durch; bricht bei GPS-Versatz
+///           zusammen (bei 50 m Versatz wirkt es nur noch in 2 % der Faelle,
+///           60 m dagegen noch in 93 %).
+///   60 m  → Leck 2 % (PC1) / 0 % (PC2), in 7 % der Faelle keine Route.
+///   120 m → bringt bei Leck und Ausfall NICHTS mehr, kostet aber 36 % mehr
+///           Umwegmeter.
+///   250 m → verdoppelt die Faelle ohne Route.
+const SPERRE_RADIUS_M_STANDARD = 60;
+const SPERRE_RADIUS_M_MIN = 20;
+const SPERRE_RADIUS_M_MAX = 500;
+/// Aufwand: rund 2 ms je Flaeche je Aufruf; bei 200 Flaechen hat kein Server
+/// abgelehnt. 25 ist also reichlich Luft und schuetzt trotzdem vor einem
+/// Client, der seine ganze Meldungstabelle mitschickt.
+const SPERREN_MAX = 25;
+/// 16 Stuetzpunkte reichen: der Fehler eines 16-Ecks gegenueber dem echten
+/// Kreis ist unter 2 % des Radius, also ~1 m bei 60 m.
+const SPERRE_POLYGON_PUNKTE = 16;
+
+/// Kreisnaeherung als GeoJSON-Polygon in [lng, lat] (Mapbox-/GeoJSON-Format).
+/// Der Laengengrad wird mit cos(Breite) skaliert, sonst waere der Kreis in
+/// unseren Breiten (~47°) in Ost-West-Richtung nur halb so breit wie gewollt.
+function sperrflaechePolygon(
+  lat: number,
+  lng: number,
+  radiusM: number,
+): { type: 'Polygon'; coordinates: [number, number][][] } {
+  const R = 6371000;
+  const gradProMeterLat = 180 / (Math.PI * R);
+  const cosLat = Math.max(0.01, Math.cos((lat * Math.PI) / 180));
+  const gradProMeterLng = gradProMeterLat / cosLat;
+  const ring: [number, number][] = [];
+  for (let i = 0; i <= SPERRE_POLYGON_PUNKTE; i++) {
+    const w = (2 * Math.PI * i) / SPERRE_POLYGON_PUNKTE;
+    ring.push([
+      lng + radiusM * Math.sin(w) * gradProMeterLng,
+      lat + radiusM * Math.cos(w) * gradProMeterLat,
+    ]);
+  }
+  // GeoJSON verlangt einen geschlossenen Ring — i === PUNKTE liefert exakt
+  // wieder den Startpunkt (sin/cos von 2π), aber Rundungsfehler koennten ihn
+  // um ein Bit verfehlen. Darum hart gleichsetzen.
+  ring[ring.length - 1] = [ring[0][0], ring[0][1]];
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+/// Prueft die Rohdaten aus `avoid_areas` und macht daraus hoechstens
+/// SPERREN_MAX gueltige Sperrflaechen — die naechsten am Startpunkt zuerst.
+/// Ungueltige Eintraege werden STILL verworfen: eine kaputte Meldung darf
+/// niemals die Route des Nutzers kosten.
+function sperrflaechenAusAnfrage(
+  roh: unknown,
+  startLat: number,
+  startLng: number,
+): Sperrflaeche[] {
+  if (!Array.isArray(roh) || roh.length === 0) return [];
+  const gesehen = new Set<string>();
+  const gueltig: Array<Sperrflaeche & { abstandM: number }> = [];
+  for (const eintrag of roh) {
+    if (eintrag == null || typeof eintrag !== 'object') continue;
+    const e = eintrag as Record<string, unknown>;
+    const meldungId = typeof e.id === 'string' ? e.id.trim() : '';
+    if (meldungId.length === 0) continue;
+    // Aus der uuid einen gueltigen Flaechennamen machen: Bindestriche (und
+    // alles andere ausser [A-Za-z0-9_]) raus, Praefix davor, damit der Name
+    // garantiert mit einem Buchstaben beginnt.
+    const kern = meldungId.replace(/[^0-9a-zA-Z]/g, '').toLowerCase().slice(0, 40);
+    if (kern.length === 0) continue;
+    const flaechenId = `bau_${kern}`;
+    if (gesehen.has(flaechenId)) continue;
+    const lat = Number(e.lat ?? e.latitude);
+    const lng = Number(e.lng ?? e.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    // 0/0 ist der klassische „Koordinate fehlt"-Wert aus einem leeren
+    // Datensatz und liegt im Golf von Guinea — nie eine echte Meldung.
+    if (lat === 0 && lng === 0) continue;
+    const rohRadius = Number(e.radius_m ?? e.radiusM);
+    const radiusM = Number.isFinite(rohRadius) && rohRadius > 0
+      ? Math.min(SPERRE_RADIUS_M_MAX, Math.max(SPERRE_RADIUS_M_MIN, rohRadius))
+      : SPERRE_RADIUS_M_STANDARD;
+    gesehen.add(flaechenId);
+    gueltig.push({
+      meldungId,
+      flaechenId,
+      lat,
+      lng,
+      radiusM,
+      abstandM: distanceMeters(startLat, startLng, lat, lng),
+    });
+  }
+  gueltig.sort((a, b) => a.abstandM - b.abstandM);
+  return gueltig.slice(0, SPERREN_MAX).map(({ abstandM: _abstandM, ...rest }) => rest);
+}
 
 /// 2026-08-18 (Aufgabe 1.3): Welcher Term hat die Umweg-Basisdistanz bestimmt?
 export type UmwegBasisTerm = 'absolut' | 'untergrenze' | 'faktor' | 'zieldistanz';
@@ -1416,6 +1571,9 @@ async function callGraphHopper(opts: {
   // Standard-A→B, Trip-Wegpunkte und Navigation-Reroutes sollen sich wie
   // Google/Apple verhalten: Hauptstraßen/Autobahn vor Wohnstraßen-Shortcuts.
   preferMainRoads?: boolean;
+  // 2026-08-26 (vucko): Gemeldete Baustellen/Unfaelle, die umfahren werden
+  // sollen. Leer oder fehlend = exakt das Verhalten von vorher.
+  avoidAreas?: Sperrflaeche[];
   // 2026-06-02 (vucko): externes Abbruch-Signal (Round-Trip-Racer bricht die
   // nicht mehr benötigten Verlierer-Calls ab) + optionaler Per-Call-Timeout.
   signal?: AbortSignal;
@@ -1527,6 +1685,9 @@ async function callGraphHopper(opts: {
     priority: Array<{ if: string; multiply_by: string }>;
     speed?: Array<{ if: string; limit_to: string }>;
     distance_influence?: number;
+    // 2026-08-26 (vucko): Sperrflaechen als GeoJSON-FeatureCollection. Wird
+    // erst ganz unten gesetzt, siehe „Sperrflaechen anhaengen".
+    areas?: { type: 'FeatureCollection'; features: unknown[] };
   } = {
     priority: [...customOverlay.priority],
     // 2026-05-23 (vucko Bug-Fix FH→Romanshorn Fähre):
@@ -1645,16 +1806,53 @@ async function callGraphHopper(opts: {
       overlay.priority.push({ if: 'road_class == TERTIARY', multiply_by: '0.45' });
       overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.32' });
       overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.22' });
+      // 2026-08-26 (vucko Nebenbefund): LIVING_STREET fehlte in BEIDEN
+      // Tabellen. Im ganzen Overlay kam die Klasse genau einmal vor (im
+      // Stil-Overlay der Abendrunde, dort auf 1.05 hochgesetzt) — im normalen
+      // A→B (Profil 'car', leeres Stil-Overlay) traf sie also KEINE Regel und
+      // behielt Prioritaet 1.0. Eine Wohn- oder Spielstrasse stand damit
+      // gleichauf mit PRIMARY und ueber TERTIARY (0.45) und RESIDENTIAL
+      // (0.22) — das Gegenteil dessen, was diese Tabelle will. Eine
+      // Spielstrasse ist verkehrsberuhigter als eine Wohnstrasse, gehoert
+      // also eine Stufe UNTER RESIDENTIAL.
+      overlay.priority.push({ if: 'road_class == LIVING_STREET', multiply_by: '0.18' });
     } else {
       overlay.priority.push({ if: 'road_class == SECONDARY', multiply_by: '0.88' });
       overlay.priority.push({ if: 'road_class == TERTIARY', multiply_by: '0.55' });
       overlay.priority.push({ if: 'road_class == UNCLASSIFIED', multiply_by: '0.35' });
       overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.24' });
+      // Siehe Begruendung im Zweig darueber — auch hier eine Stufe unter
+      // RESIDENTIAL.
+      overlay.priority.push({ if: 'road_class == LIVING_STREET', multiply_by: '0.20' });
     }
   } else {
     // Scenic/Rundkurs bleibt wie bisher: Autobahn mild abwerten, außer sie ist
     // klar schneller. Standard-A→B bekommt diese Abwertung bewusst NICHT.
     overlay.priority.push({ if: 'road_class == MOTORWAY', multiply_by: '0.6' });
+  }
+  // 2026-08-26 (vucko, „Variante E"): Strassenqualitaet NUR verschaerfen, wenn
+  // wirklich eine Sperrflaeche im Spiel ist. Eine Umfahrung entsteht unter
+  // Zwang — GraphHopper nimmt dann bereitwillig die naechstbeste Wohn- oder
+  // Anrainerstrasse. Ohne Sperrflaeche bleibt alles wie bisher; das ist der
+  // Grund fuer die Bedingung und nicht Vorsicht.
+  //
+  // GEMESSEN an 76 Sperrpunkten (Vorarlberg, beide Mini-PCs):
+  //   Variante E senkt den Wohnstrassen-Anteil der Umfahrung von 3,5 % auf
+  //   2,6 %, bei IDENTISCHER Verfuegbarkeit (59 angeboten, 17 verworfen, 4
+  //   ohne Route) — Preis: 64 m und 32 s mehr im Median.
+  //   Die haertere Variante D kostet 5 brauchbare Umfahrungen und verdoppelt
+  //   die Umwegzeit fuer 1,1 Prozentpunkte — schlechter Handel.
+  //   Harte Nullen (Variante C) treiben „keine Route" von 5 % auf 19 %.
+  // Die Werte multiplizieren sich mit den Regeln oben (GraphHopper multipliziert
+  // alle zutreffenden priority-Statements): RESIDENTIAL wird also 0.22 * 0.35,
+  // SERVICE 0.15 * 0.3, DESTINATION 0.05 * 0.3. Genau so wurde gemessen.
+  if ((opts.avoidAreas?.length ?? 0) > 0) {
+    overlay.priority.push({ if: 'road_class == RESIDENTIAL', multiply_by: '0.35' });
+    overlay.priority.push({ if: 'road_class == LIVING_STREET', multiply_by: '0.2' });
+    overlay.priority.push({ if: 'road_class == SERVICE', multiply_by: '0.3' });
+    overlay.priority.push({ if: 'road_access == DESTINATION', multiply_by: '0.3' });
+    overlay.priority.push({ if: 'road_access == CUSTOMERS', multiply_by: '0.3' });
+    overlay.priority.push({ if: 'road_access == DELIVERY', multiply_by: '0.3' });
   }
   // 2026-06-10 (vucko GH-Default-Konformitaet): Der GH-Server lief bis heute
   // mit gelockerter Config; nach Neustart gelten die GH-Defaults: in
@@ -1708,6 +1906,47 @@ async function callGraphHopper(opts: {
       ghBody.profile = ersatz;
     }
   }
+  // ── Sperrflaechen anhaengen (gemeldete Baustellen/Unfaelle) ──────────────
+  //
+  // Bewusst HIER, nach der Normalisierung und nach dem Server-Zuschnitt:
+  //   * Die Normalisierung teilt alle Regeln durch den groessten Wert. 0/x ist
+  //     zwar auch 0, aber hier steht die Null garantiert unberuehrt — niemand
+  //     muss beim naechsten Umbau der Normalisierung daran denken.
+  //   * `overlayAufServerZuschneiden` wuerde die Regel `in_bau_…` nicht
+  //     entfernen (sie enthaelt keinen Vergleich, also findet
+  //     `bedingungsFelder` kein Feld). Trotzdem ist es sicherer, Regel und
+  //     Flaeche gemeinsam ausserhalb des Zuschnitts zu erzeugen: eine Regel
+  //     OHNE ihre Flaeche quittiert GraphHopper mit HTTP 400 „Area … wasn't
+  //     found" und die ganze Route waere weg.
+  const sperren = opts.avoidAreas ?? [];
+  // Nur-Sperren-Modell fuer den Overlay-Fallback weiter unten: wenn der Server
+  // das Stil-Modell ablehnt, wird ohne Stil wiederholt — die Baustelle muss
+  // aber auch dann umfahren werden.
+  // deno-lint-ignore no-explicit-any
+  let nurSperrenModell: Record<string, any> | null = null;
+  if (sperren.length > 0) {
+    const features = sperren.map((s) => ({
+      type: 'Feature',
+      // Die `id` MUSS auf Feature-Ebene stehen. In `properties` quittiert
+      // GraphHopper mit HTTP 400 „Unable to process JSON" (live gemessen).
+      id: s.flaechenId,
+      properties: {},
+      geometry: sperrflaechePolygon(s.lat, s.lng, s.radiusM),
+    }));
+    const sperrRegeln = sperren.map((s) => ({
+      // multiply_by MUSS <= 0.01 sein. Gemessen: 0 und 0.01 umfahren, 0.1 und
+      // 0.5 lassen die Route unveraendert durch die Baustelle.
+      if: `in_${s.flaechenId}`,
+      multiply_by: '0',
+    }));
+    overlay.areas = { type: 'FeatureCollection', features };
+    overlay.priority.push(...sperrRegeln);
+    nurSperrenModell = {
+      priority: sperrRegeln,
+      areas: { type: 'FeatureCollection', features },
+    };
+  }
+
   if (
     !opts._ohneOverlay &&
     (overlay.priority.length > 0 || overlay.distance_influence != null ||
@@ -1715,6 +1954,11 @@ async function callGraphHopper(opts: {
   ) {
     // Objekt, NICHT JSON.stringify — geht jetzt im POST-Body an GraphHopper.
     ghBody.custom_model = overlay;
+  } else if (nurSperrenModell != null) {
+    // Stil-Overlay ist raus (Retry-Stufe 3), Sperrflaechen bleiben. Eine Route
+    // ohne Stil ist besser als keine — eine Route DURCH die gemeldete
+    // Baustelle ist es nicht.
+    ghBody.custom_model = nurSperrenModell;
   }
 
   const url = `${baseUrl}/route`;
@@ -2158,6 +2402,26 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     }, 422);
   }
 
+  // ── Sperrflaechen aus gemeldeten Baustellen/Unfaellen ────────────────────
+  // 2026-08-26 (vucko): Ungueltige Eintraege fallen still weg, die Liste wird
+  // auf die SPERREN_MAX naechsten am Startpunkt gekuerzt. Ist sie leer, geht
+  // ab hier ALLES exakt wie vorher — kein Feld im Body, kein `areas` im
+  // Custom-Model, keine Verschaerfung der Strassenqualitaet.
+  const sperrflaechen = sperrflaechenAusAnfrage(
+    req.avoid_areas,
+    startLocation.latitude,
+    startLocation.longitude,
+  );
+  if (sperrflaechen.length > 0) {
+    console.log(
+      `[SPERRFLAECHEN] ${sperrflaechen.length} aktiv ` +
+      `(von ${Array.isArray(req.avoid_areas) ? req.avoid_areas.length : 0} gesendet): ` +
+      sperrflaechen
+        .map((s) => `${s.flaechenId}@${s.lat.toFixed(5)},${s.lng.toFixed(5)}/${s.radiusM}m`)
+        .join(' '),
+    );
+  }
+
   const countryPreference = normalizeCountryPreference(req.country_preference);
   // 2026-08-18 (D1b2): Das Heimatland wird SELBST aus dem Startpunkt
   // abgeleitet, nicht vom Client uebernommen. Grund: Client und Edge hatten
@@ -2433,6 +2697,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       const controllers = candidateSeeds.map(() => new AbortController());
       const calls = candidateSeeds.map((seed, i) =>
         callGraphHopper({
+          avoidAreas: sperrflaechen,
           startLat: req.start_location!.latitude + latOffset,
           startLng: req.start_location!.longitude + lngOffset,
           endLat: req.target_location?.latitude,
@@ -2612,6 +2877,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       };
       for (let attempt = 0; attempt < offsetVariants.length; attempt++) {
         const result = await callGraphHopper({
+          avoidAreas: sperrflaechen,
           ...wpCallShared,
           startLat: req.start_location!.latitude,
           startLng: req.start_location!.longitude,
@@ -2647,6 +2913,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       for (let i = 0; i < seRescue.length; i++) {
         const seOffset = seRescue[i];
         const result = await callGraphHopper({
+          avoidAreas: sperrflaechen,
           ...wpCallShared,
           startLat: req.start_location!.latitude + seOffset.sLat,
           startLng: req.start_location!.longitude + seOffset.sLng,
@@ -2662,6 +2929,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       for (let attempt = smallOffsetVariants.length; attempt < offsetVariants.length; attempt++) {
         const seOffset = seRescue[(attempt - smallOffsetVariants.length) % seRescue.length];
         const result = await callGraphHopper({
+          avoidAreas: sperrflaechen,
           ...wpCallShared,
           startLat: req.start_location!.latitude + seOffset.sLat,
           startLng: req.start_location!.longitude + seOffset.sLng,
@@ -2713,6 +2981,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         const tries = await Promise.all(
           segmentVariants.map(v =>
             callGraphHopper({
+              avoidAreas: sperrflaechen,
               startLat: seg.start.lat + v.sLatOff,
               startLng: seg.start.lng + v.sLngOff,
               endLat: seg.end.lat + v.eLatOff,
@@ -2836,6 +3105,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         const results = await Promise.all(
           runnablePhases[p].map((v, idx) =>
             callGraphHopper({
+              avoidAreas: sperrflaechen,
               startLat: req.start_location!.latitude + v.sLatOff,
               startLng: req.start_location!.longitude + v.sLngOff,
               endLat: req.target_location!.latitude + v.eLatOff,
@@ -2863,6 +3133,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     return await Promise.all(
       detourSpec.map((spec, idx) =>
         callGraphHopper({
+          avoidAreas: sperrflaechen,
           startLat: req.start_location!.latitude,
           startLng: req.start_location!.longitude,
           endLat: req.target_location!.latitude,
@@ -2953,6 +3224,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     for (const scenicServer of ultimateServers) {
       try {
         const scenicResult = await callGraphHopper({
+          avoidAreas: sperrflaechen,
           startLat: req.start_location!.latitude,
           startLng: req.start_location!.longitude,
           endLat: req.target_location.latitude,
@@ -2989,6 +3261,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
     for (const carServer of carServers) {
       try {
         const carResult = await callGraphHopper({
+          avoidAreas: sperrflaechen,
           startLat: req.start_location!.latitude,
           startLng: req.start_location!.longitude,
           endLat: req.target_location.latitude,
@@ -3119,6 +3392,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         for (let shrink = 0; shrink < 3 && !probeOk; shrink++) {
           const far = offsetPoint(sLat, sLng, pr, bearing);
           const probe = await callGraphHopper({
+            avoidAreas: sperrflaechen,
             startLat: sLat,
             startLng: sLng,
             endLat: far.lat,
@@ -3155,6 +3429,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // Rueckweg: W->start mit seitlichem Detour (anderer Weg zurueck).
         for (const detSide of [0]) {
           const back = await callGraphHopper({
+            avoidAreas: sperrflaechen,
             startLat: W.lat,
             startLng: W.lng,
             endLat: sLat,
@@ -3445,6 +3720,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         if (startOffsetM > 50) {
           console.log(`[START-GUARD] route starts ${startOffsetM.toFixed(0)}m from requested start — building access connector`);
           const connector = await callGraphHopper({
+            avoidAreas: sperrflaechen,
             startLat: sLatReq,
             startLng: sLngReq,
             endLat: mainCoords[0][1],
@@ -3489,6 +3765,7 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             if (isRoundTrip) {
               const lastPt = mainCoords[mainCoords.length - 1];
               const back = await callGraphHopper({
+                avoidAreas: sperrflaechen,
                 startLat: lastPt[1],
                 startLng: lastPt[0],
                 endLat: sLatReq,
@@ -3707,6 +3984,13 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         countries_touched: finalCountriesTouched,
         country_rejected_count: scored.filter(c => c.countryRejected).length,
         country_penalty: Number((selectedScored?.countryScorePenalty ?? 0).toFixed(1)),
+        // 2026-08-26 (vucko): Wie viele Sperrflaechen wirklich gewirkt haben.
+        // Ohne `avoid_areas` steht hier 0 und `avoid_areas_ids` fehlt — die
+        // Antwort sieht dann exakt aus wie vorher plus eine Null.
+        avoid_areas_applied: sperrflaechen.length,
+        avoid_areas_ids: sperrflaechen.length > 0
+          ? sperrflaechen.map((s) => s.meldungId)
+          : undefined,
       },
     });
   }
@@ -3736,7 +4020,27 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // 2026-05-27 (vucko v3): Cross-Border ist jetzt PC2-supported (PC2 hat
   // dach-italy-balkan.osm.pbf). Daher nur noch als Last-Resort-Message wenn
   // PC2 wirklich offline ist UND DACH-PC1 das auch nicht abdecken kann.
-  if (isCrossBorder && (lastError.includes('fetch failed') || lastError.includes('error sending request'))) {
+  // 2026-08-26 (vucko): Eine gemeldete Baustelle kann die einzige Verbindung
+  // sperren — typisch im Alpental oder in einer Sackgasse. GraphHopper meldet
+  // das als HTTP 400 „Connection between locations not found". OHNE diese
+  // Sonderbehandlung landet der Fall im 502-Zweig, und der Client sagt
+  // „temporaerer Serverfehler, gleich nochmal versuchen" — eine Luege, denn
+  // Wiederholen aendert nichts. 422 = so nicht erfuellbar (CLAUDE.md).
+  // Der Zweig greift NUR, wenn wirklich Sperrflaechen im Spiel waren; ohne
+  // `avoid_areas` bleibt die Fehlerbehandlung Zeichen fuer Zeichen wie vorher.
+  if (
+    sperrflaechen.length > 0 &&
+    /Connection between locations not found|ConnectionNotFound/i.test(lastError)
+  ) {
+    userMessage = sperrflaechen.length === 1
+      ? 'Die gemeldete Sperre liegt auf der einzigen Verbindung zu deinem Ziel. '
+        + 'Wir haben keine Umfahrung gefunden — setze das Ziel anders oder fahre '
+        + 'vorsichtig durch die Meldung.'
+      : 'Die gemeldeten Sperren lassen keine Umfahrung zu. Wir haben keinen Weg '
+        + 'gefunden, der an allen vorbeiführt — setze das Ziel anders oder fahre '
+        + 'vorsichtig durch eine der Meldungen.';
+    errCode = 'blocked_by_incident';
+  } else if (isCrossBorder && (lastError.includes('fetch failed') || lastError.includes('error sending request'))) {
     userMessage = 'Cross-Border-Routing-Server vorübergehend nicht erreichbar. Bleibe vorerst entweder im DACH-Raum ODER innerhalb Italien/Slowenien/Kroatien.';
     errCode = 'cross_border_server_offline';
   } else if (lastError.includes('out of bounds')) {
@@ -3768,7 +4072,8 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
   // `cross_border_server_offline` bleibt 5xx (503), denn da IST der Server weg.
   const fachlich = errCode === 'coverage_out_of_bounds' ||
     errCode === 'point_off_road' ||
-    errCode === 'no_land_route';
+    errCode === 'no_land_route' ||
+    errCode === 'blocked_by_incident';
   const status = fachlich ? 422 : (errCode === 'cross_border_server_offline' ? 503 : 502);
   if (errCode === 'coverage_out_of_bounds' && req.start_location) {
     merkeAbdeckungswunsch(

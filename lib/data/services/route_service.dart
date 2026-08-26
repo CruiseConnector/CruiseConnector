@@ -650,6 +650,10 @@ class RouteService {
     String subscriptionTier = 'premium',
     CountryPreference countryPreference = CountryPreference.any,
     String? homeCountryCode,
+    // 2026-08-26 (vucko, Aufgabe 2): Beim Rundkurs wird STILL umfahren — dort
+    // gibt es kein Ziel und keinen Zeitplan, eine Rueckfrage waere nur
+    // laestig. Bei A nach B fragt die App stattdessen.
+    List<Map<String, dynamic>>? avoidAreas,
   }) async {
     final styleConfig = RouteStyleConfig.forMode(mode);
     final isWaypointRequiredRoundTrip = planningType == 'Wegpunkte';
@@ -744,6 +748,7 @@ class RouteService {
     return RouteGenerationCoordinator.runSingleFlight(singleFlightKey, () async {
       if (isWaypointRequiredRoundTrip) {
         return _generateRequiredWaypointRoundTrip(
+          avoidAreas: avoidAreas,
           scenario: scenario,
           styleConfig: styleConfig,
           startPosition: startPosition,
@@ -1076,6 +1081,7 @@ class RouteService {
         );
         try {
           final candidate = await _requestRoundTripVariant(
+            avoidAreas: avoidAreas,
             scenario: scenario,
             styleConfig: styleConfig,
             startPosition: startPosition,
@@ -1757,6 +1763,8 @@ class RouteService {
   }
 
   Future<RouteResult> _generateRequiredWaypointRoundTrip({
+    // 2026-08-26 (vucko, Aufgabe 2): Sperrflaechen um gemeldete Baustellen.
+    List<Map<String, dynamic>>? avoidAreas,
     required RouteScenario scenario,
     required RouteStyleConfig styleConfig,
     required geo.Position startPosition,
@@ -1909,6 +1917,7 @@ class RouteService {
     List<Map<String, double>>? intermediateWaypoints,
     CountryPreference countryPreference = CountryPreference.any,
     String? homeCountryCode,
+    List<Map<String, dynamic>>? avoidAreas,
   }) async {
     // 2026-05-28 (vucko Task #83): direkter Modus → keine Detour/Scenic-Variante.
     if (forceAcceptDirect) {
@@ -2178,6 +2187,7 @@ class RouteService {
         try {
           final candidate = await _requestPointToPointVariant(
             scenario: scenario,
+            avoidAreas: avoidAreas,
             styleConfig: styleConfig,
             startPosition: startPosition,
             destinationLat: destinationLat,
@@ -2298,6 +2308,7 @@ class RouteService {
         try {
           final aggressive = await _requestPointToPointVariant(
             scenario: scenario,
+            avoidAreas: avoidAreas,
             styleConfig: styleConfig,
             startPosition: startPosition,
             destinationLat: destinationLat,
@@ -3261,6 +3272,8 @@ class RouteService {
   }
 
   Map<String, dynamic> _buildRoundTripRequest({
+    // 2026-08-26 (vucko, Aufgabe 2): Sperrflaechen um gemeldete Baustellen.
+    List<Map<String, dynamic>>? avoidAreas,
     required geo.Position startPosition,
     required int targetDistanceKm,
     required String mode,
@@ -3316,6 +3329,7 @@ class RouteService {
       'targetDistance': targetDistanceKm,
       'mode': mode,
       'route_type': 'ROUND_TRIP',
+      if (avoidAreas != null && avoidAreas.isNotEmpty) 'avoid_areas': avoidAreas,
       'planning_type': planningType,
       if (isRequiredWaypointRoundTrip) ...{
         'waypoint_mode': 'required_stops',
@@ -3378,6 +3392,10 @@ class RouteService {
     required geo.Position startPosition,
     required double destinationLat,
     required double destinationLng,
+    // 2026-08-26 (vucko, Aufgabe 2): Sperrflaechen um gemeldete Baustellen.
+    // Je Eintrag {id, lat, lng}; der Radius kommt serverseitig (60 m,
+    // gemessen). Null oder leer laesst die Anfrage unveraendert.
+    List<Map<String, dynamic>>? avoidAreas,
     required String mode,
     required bool scenic,
     required int normalizedVariant,
@@ -3414,6 +3432,7 @@ class RouteService {
         'longitude': destinationLng,
       },
       'route_type': 'POINT_TO_POINT',
+      if (avoidAreas != null && avoidAreas.isNotEmpty) 'avoid_areas': avoidAreas,
       'planning_type': 'Zufall',
       'mode': scenic ? mode : 'Standard',
       'avoid_highways': avoidHighways,
@@ -5244,6 +5263,8 @@ class RouteService {
   }
 
   Future<_RouteCandidate> _requestRoundTripVariant({
+    // 2026-08-26 (vucko, Aufgabe 2): Sperrflaechen um gemeldete Baustellen.
+    List<Map<String, dynamic>>? avoidAreas,
     required RouteScenario scenario,
     required RouteStyleConfig styleConfig,
     required geo.Position startPosition,
@@ -5268,6 +5289,7 @@ class RouteService {
     );
     final previousFingerprints = _recentFingerprintsForScenario(scenario);
     final body = _buildRoundTripRequest(
+      avoidAreas: avoidAreas,
       startPosition: startPosition,
       targetDistanceKm: adjustedTargetKm,
       mode: scenario.style,
@@ -5312,6 +5334,8 @@ class RouteService {
   Future<_RouteCandidate> _requestPointToPointVariant({
     required RouteScenario scenario,
     required RouteStyleConfig styleConfig,
+    // 2026-08-26 (vucko, Aufgabe 2): Sperrflaechen um gemeldete Baustellen.
+    List<Map<String, dynamic>>? avoidAreas,
     required geo.Position startPosition,
     required double destinationLat,
     required double destinationLng,
@@ -5349,6 +5373,7 @@ class RouteService {
       randomSeed: variant.seed,
     );
     final body = _buildPointToPointRequest(
+      avoidAreas: avoidAreas,
       startPosition: startPosition,
       destinationLat: destinationLat,
       destinationLng: destinationLng,

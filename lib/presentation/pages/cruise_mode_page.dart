@@ -106,6 +106,7 @@ import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.d
 import 'package:cruise_connect/domain/models/construction_report.dart';
 import 'package:cruise_connect/domain/models/road_incident.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/incident_alert_sheet.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/umleitung_entscheidung_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/incident_report_sheet.dart';
 import 'package:cruise_connect/data/services/construction_geofence.dart';
 import 'package:cruise_connect/data/services/construction_report_service.dart';
@@ -1900,6 +1901,134 @@ class _CruiseModePageState extends State<CruiseModePage>
     return aufRoute
         .where((i) => !_selbstGemeldetDieseFahrt.contains(i.id))
         .toList();
+  }
+
+  // ══════════════ Baustellen umfahren (Aufgabe 2, 26.08.) ══════════════
+  //
+  // Vuckos Entscheidung, woertlich: „Nur beim Rundkurs umfahren. Beim A nach B
+  // Modus oder Trip Modus soll auch bei der Meldung oben kommen: X Baustellen
+  // auf dem Weg, Umleitung nehmen oder mit den Baustellen? Und wie lange der
+  // Umweg um die Baustellen kosten wuerde an Zeit oder Zeit erspart."
+  //
+  // Der Unterschied ist bewusst: Im Rundkurs gibt es kein Ziel und keinen
+  // Zeitplan, dort waere eine Rueckfrage nur laestig. Bei A nach B kostet ein
+  // Umweg Zeit, die der Fahrer vielleicht nicht hat — und die Messung zeigt,
+  // wie sehr das schwanken kann: im Mittel etwa 2 km und 3 Minuten, im oberen
+  // Viertel aber ueber 22 km, wenn die Baustelle auf einer Passstrasse liegt.
+  // Ohne Zahl waere die Frage nicht ehrlich zu beantworten.
+
+  /// Aktive Meldungen rund um einen Punkt, im Format der Edge.
+  /// Baustellen und Unfaelle werden umfahren, ein Stau nicht: der loest sich
+  /// von selbst auf, und die Meldung ist ein Punkt, waehrend der Stau ein
+  /// Abschnitt ist.
+  Future<List<RoadIncident>> _meldungenZumUmfahren(
+    geo.Position start, {
+    double radiusKm = 60,
+  }) async {
+    try {
+      final gradBreite = radiusKm / 111.0;
+      final gradLaenge =
+          radiusKm / (111.0 * math.cos(start.latitude * math.pi / 180.0).abs());
+      final alle = await RoadIncidentService.instance.fetchInBbox(
+        southLat: start.latitude - gradBreite,
+        northLat: start.latitude + gradBreite,
+        westLng: start.longitude - gradLaenge,
+        eastLng: start.longitude + gradLaenge,
+      );
+      return alle
+          .where((i) => i.type != RoadIncidentType.stau)
+          .toList(growable: false);
+    } catch (e) {
+      // Meldungen sind eine Zugabe. Faellt der Abruf aus, wird ganz normal
+      // geroutet statt gar nicht.
+      debugPrint('[CruiseMode] Meldungen fuers Umfahren nicht ladbar: $e');
+      return const [];
+    }
+  }
+
+  /// Umsetzung ins Anfrageformat der Edge: `{id, lat, lng}`.
+  List<Map<String, dynamic>> _alsSperrflaechen(List<RoadIncident> meldungen) => [
+    for (final m in meldungen)
+      <String, dynamic>{'id': m.id, 'lat': m.latitude, 'lng': m.longitude},
+  ];
+
+  /// Welche dieser Meldungen liegen wirklich auf der fertigen Strecke?
+  /// Nutzt dieselbe exakte Abstandsrechnung wie die Vorwarnung.
+  List<RoadIncident> _meldungenAufStrecke(
+    List<RoadIncident> meldungen,
+    List<List<double>> coords,
+  ) {
+    if (meldungen.isEmpty || coords.length < 2) return const [];
+    return RoadIncidentService.instance.filterToRoute(
+      incidents: meldungen,
+      routeCoordinates: coords,
+      bufferMeters: 60,
+    );
+  }
+
+  /// Liegen Baustellen auf der fertigen A-nach-B-Strecke? Dann die Umfahrung
+  /// dazurechnen und den Fahrer entscheiden lassen.
+  ///
+  /// Gibt die gewaehlte Strecke zurueck, oder null wenn alles beim Alten
+  /// bleibt. Faellt irgendetwas aus, bleibt es ebenfalls beim Alten — eine
+  /// Zusatzfrage darf eine funktionierende Route nie kosten.
+  Future<RouteResult?> _vielleichtUmleitungAnbieten({
+    required RouteResult result,
+    required geo.Position startPosition,
+    required Future<RouteResult> Function(List<Map<String, dynamic>>)?
+    nochmalMitSperren,
+    required int generationId,
+  }) async {
+    if (nochmalMitSperren == null) return null;
+    if (result.coordinates.length < 2) return null;
+    try {
+      final nahe = await _meldungenZumUmfahren(startPosition);
+      if (nahe.isEmpty) return null;
+      final aufStrecke = _meldungenAufStrecke(nahe, result.coordinates);
+      if (aufStrecke.isEmpty) return null;
+      if (_isRouteGenerationCancelled(generationId)) return null;
+
+      debugPrint(
+        '[CruiseMode] ${aufStrecke.length} Meldung(en) auf der Strecke, '
+        'rechne die Umfahrung dazu.',
+      );
+      final RouteResult umfahren;
+      try {
+        umfahren = await nochmalMitSperren(_alsSperrflaechen(aufStrecke));
+      } catch (e) {
+        // Unumgehbar (die Edge antwortet dann mit blocked_by_incident) oder
+        // sonst ein Fehlschlag: dann gibt es schlicht keine Alternative, und
+        // die urspruengliche Strecke bleibt. Kein Grund, den Fahrer mit einer
+        // Frage zu behelligen, die nur eine Antwort hat.
+        debugPrint('[CruiseMode] Keine Umfahrung moeglich: $e');
+        return null;
+      }
+      if (!mounted || _isRouteGenerationCancelled(generationId)) return null;
+      if (umfahren.coordinates.length < 2) return null;
+
+      final dauerDirekt = result.durationSeconds?.round() ?? 0;
+      final dauerUmfahren = umfahren.durationSeconds?.round() ?? 0;
+      final wegDirekt = result.distanceMeters ?? 0;
+      final wegUmfahren = umfahren.distanceMeters ?? 0;
+      if (dauerDirekt <= 0 || dauerUmfahren <= 0) return null;
+
+      final nehmen = await UmleitungEntscheidung.zeigen(
+        context,
+        anzahlMeldungen: aufStrecke.length,
+        dauerDirekt: Duration(seconds: dauerDirekt),
+        dauerUmleitung: Duration(seconds: dauerUmfahren),
+        distanzDirektMeter: wegDirekt,
+        distanzUmleitungMeter: wegUmfahren,
+      );
+      if (nehmen == true) {
+        debugPrint('[CruiseMode] Fahrer nimmt die Umleitung.');
+        return umfahren;
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[CruiseMode] Umleitungsfrage uebersprungen: $e');
+      return null;
+    }
   }
 
   bool _reanchorRenderLockToDistance(double distanceM) {
@@ -10324,6 +10453,11 @@ class _CruiseModePageState extends State<CruiseModePage>
 
       // Eine Route generieren — kein Warmup/Skip mehr (spart Mapbox Tokens)
       RouteResult result;
+      // Wird in den Zweigen A nach B und Trip gesetzt: derselbe Aufruf noch
+      // einmal, aber mit Sperrflaechen. Beim Rundkurs bleibt es null, dort
+      // wird gleich beim ersten Anlauf umfahren.
+      Future<RouteResult> Function(List<Map<String, dynamic>>)?
+      nochmalMitSperren;
       if (_requiresDestination(_isRoundTrip)) {
         if (_selectedDestination != null) {
           destLat = _selectedDestination!.latitude;
@@ -10393,10 +10527,17 @@ class _CruiseModePageState extends State<CruiseModePage>
           'destDistance=${destinationDistanceMeters.toStringAsFixed(0)}m '
           'avoidHighways=$_avoidHighways',
         );
-        result = await _routeService.generatePointToPoint(
+        // Innerhalb der Closure greift die Nichtnull-Analyse nicht mehr,
+        // deshalb hier festhalten.
+        final zielBreite = destLat;
+        final zielLaenge = destLng;
+        Future<RouteResult> p2pAufruf(
+          List<Map<String, dynamic>> sperren,
+        ) => _routeService.generatePointToPoint(
+          avoidAreas: sperren.isEmpty ? null : sperren,
           startPosition: startPosition,
-          destinationLat: destLat,
-          destinationLng: destLng,
+          destinationLat: zielBreite,
+          destinationLng: zielLaenge,
           mode: scenicMode ? _selectedStyle : 'Standard',
           scenic: scenicMode,
           routeVariant: detourVariant,
@@ -10414,6 +10555,8 @@ class _CruiseModePageState extends State<CruiseModePage>
           countryPreference: effectiveCountryPreference,
           homeCountryCode: effectiveHomeCountryCode,
         );
+        nochmalMitSperren = p2pAufruf;
+        result = await p2pAufruf(const []);
       } else if (_isWaypointPlanning && waypointSnapshot.isNotEmpty) {
         // 2026-05-23 (vucko Task #22): Trip-Modus = A→B mit Multi-Stopps.
         // Letzter WP = Endziel, alle dazwischen = intermediates.
@@ -10527,7 +10670,18 @@ class _CruiseModePageState extends State<CruiseModePage>
         final subscriptionTier = RouteService.resolveEffectiveSubscriptionTier(
           isTesterOrBeta: true,
         );
+        // Rundkurs: still umfahren, ohne Rueckfrage. Kein Ziel, kein
+        // Zeitplan — hier waere eine Frage nur laestig.
+        final rundkursSperren = _alsSperrflaechen(
+          await _meldungenZumUmfahren(startPosition),
+        );
+        if (rundkursSperren.isNotEmpty) {
+          debugPrint(
+            '[CruiseMode] Rundkurs umfaehrt ${rundkursSperren.length} Meldungen.',
+          );
+        }
         result = await _routeService.generateRoundTrip(
+          avoidAreas: rundkursSperren,
           startPosition: startPosition,
           targetDistanceKm: distance,
           mode: _selectedStyle,
@@ -10586,6 +10740,17 @@ class _CruiseModePageState extends State<CruiseModePage>
         );
         return;
       }
+      // Bei A nach B und im Trip fragen, ob umfahren werden soll — samt der
+      // Zahl, die die Frage beantwortbar macht. Beim Rundkurs ist
+      // `nochmalMitSperren` null, dort wurde oben schon still umfahren.
+      final umleitung = await _vielleichtUmleitungAnbieten(
+        result: result,
+        startPosition: startPosition,
+        nochmalMitSperren: nochmalMitSperren,
+        generationId: generationId,
+      );
+      if (umleitung != null) result = umleitung;
+      if (_isRouteGenerationCancelled(generationId)) return;
       await _acceptGeneratedRouteResult(
         result: result,
         startPosition: startPosition,
