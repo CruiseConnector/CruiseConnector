@@ -116,6 +116,7 @@ import 'package:cruise_connect/data/services/road_incident_service.dart';
 import 'package:cruise_connect/data/services/stau_erkennung.dart';
 import 'package:cruise_connect/data/services/erwartetes_tempo.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
+import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart';
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/group_member.dart';
@@ -21049,10 +21050,20 @@ class _CruiseModePageState extends State<CruiseModePage>
       debugPrint('[CruiseMode] Abschluss im Hintergrund fehlgeschlagen: $error');
       if (kDebugMode) debugPrint('$stack');
       if (!mounted || _disposed) return;
+      // 2026-08-26 (Nutzerbericht „50 % meiner Fahrten kommen nicht an"):
+      // Liegt die Fahrt in der Warteschlange, ist sie NICHT verloren — dann
+      // waere „konnte nicht gespeichert werden" schlicht falsch und der
+      // Fahrer loescht die App, obwohl seine Kilometer gleich ankommen.
+      final wartetAufNetz = OfflineFahrtenWarteschlange.offeneFahrten.value > 0;
       TopToast.show(
         context,
-        message: 'Die Fahrt konnte nicht gespeichert werden.',
-        icon: Icons.error_outline_rounded,
+        message: wartetAufNetz
+            ? 'Kein Netz. Deine Fahrt ist gesichert und wird nachgetragen, '
+                  'sobald du wieder online bist.'
+            : 'Die Fahrt konnte nicht gespeichert werden.',
+        icon: wartetAufNetz
+            ? Icons.cloud_off_rounded
+            : Icons.error_outline_rounded,
         duration: const Duration(seconds: 4),
       );
     } finally {

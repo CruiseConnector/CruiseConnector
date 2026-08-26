@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/domain/models/badge.dart';
@@ -860,11 +861,28 @@ class GamificationService {
     List<List<double>>? trackGeometry,
     String? photoUrl,
     DateTime? createdAt,
+    // 2026-08-26: Soll die Fahrt bei einem Fehlschlag in die
+    // OfflineFahrtenWarteschlange? Standard ja — sie ist sonst verloren.
+    //
+    // `false` gehoert dorthin, wo der Aufrufer BEREITS einen eigenen,
+    // dauerhaften zweiten Versuch hat (UnterbrocheneFahrtVerbuchung haelt den
+    // Schnappschuss und prueft ueber `route_fingerprint` vor dem Buchen).
+    // Zwei Nachtrage-Mechanismen fuer dieselbe Fahrt koennten sich sonst
+    // gegenseitig ueberholen und zwei Zeilen anlegen — der Fingerabdruck-Test
+    // dort kennt die Warteschlange nicht.
+    bool beiFehlerNachtragen = true,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
     if (distanceKm <= 0 && (xpAwarded ?? 0) <= 0) return null;
 
+    // 2026-08-26 (Nutzerbericht „50 % der Fahrten kommen nicht an"): Die id
+    // vergibt der CLIENT, nicht `gen_random_uuid()` auf dem Server. Nur so
+    // kann dieselbe Fahrt nach einem Funkloch gefahrlos ein zweites Mal
+    // geschickt werden: Steht sie schon, lehnt Postgres den Insert mit 23505
+    // ab, statt eine zweite Zeile anzulegen (CLAUDE.md: „Eine gefahrene Fahrt
+    // = GENAU EINE Zeile"). Siehe OfflineFahrtenWarteschlange.
+    final sessionId = neueSessionId();
     final row = buildDriveSessionInsert(
       userId: userId,
       distanceKm: distanceKm,
@@ -882,6 +900,7 @@ class GamificationService {
       photoUrl: photoUrl,
       createdAt: createdAt,
     );
+    row['id'] = sessionId;
 
     try {
       final data = await _db
@@ -897,8 +916,32 @@ class GamificationService {
       debugPrint(
         '[Gamification] Drive-Session konnte nicht gespeichert werden: $e',
       );
+      // 2026-08-26: Bis hierhin war die Fahrt an dieser Stelle verloren — der
+      // Aufrufer raeumt gleich danach den Fahrt-Schnappschuss weg. Sie wandert
+      // deshalb ZUERST in die Warteschlange und wird nachgetragen, sobald es
+      // wieder Netz gibt. Das `await` ist Absicht: Erst wenn die Fahrt auf der
+      // Platte liegt, darf der Fehler weiterlaufen.
+      if (beiFehlerNachtragen) {
+        await OfflineFahrtenWarteschlange.stelleAn(row);
+      }
       rethrow;
     }
+  }
+
+  /// Zufaellige UUID v4 fuer die Zeile in `user_drive_sessions`.
+  ///
+  /// Bewusst ohne das Paket `uuid`: Es haengt bereits als indirekte
+  /// Abhaengigkeit im Baum, ist hier aber nicht direkt verfuegbar, und fuer
+  /// sechzehn Zufallsbytes lohnt keine neue Zeile in der pubspec.
+  @visibleForTesting
+  static String neueSessionId() {
+    final zufall = math.Random.secure();
+    final bytes = List<int>.generate(16, (_) => zufall.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variante 1 (RFC 4122)
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
   }
 
   /// 2026-06-25 (vucko Routen-Detail-Page): Foto einer Fahrt nachträglich setzen
@@ -1504,9 +1547,7 @@ class GamificationService {
   /// Posts des Nutzers: [gesamt] fuer die Starter-Aufgabe „der erste post",
   /// [mitRoute] fuer die Routen-Badges. 2026-08-19 aus `_countRoutePosts`
   /// hervorgegangen; die Abfrage ist dieselbe geblieben.
-  static Future<({int gesamt, int mitRoute})> _countPosts(
-    String userId,
-  ) async {
+  static Future<({int gesamt, int mitRoute})> _countPosts(String userId) async {
     try {
       final rows = await _db
           .from('posts')

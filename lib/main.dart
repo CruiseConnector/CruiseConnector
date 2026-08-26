@@ -33,6 +33,7 @@ import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/app_speicher_wache.dart';
+import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart';
 import 'package:cruise_connect/data/services/camera_settings_service.dart';
 import 'package:cruise_connect/data/services/poi_settings_service.dart';
 import 'package:cruise_connect/presentation/pages/auth_page.dart';
@@ -104,6 +105,12 @@ void main() {
       // nicht auf einer Seite: Der Cruise-Tab wird erst beim ersten Besuch
       // gebaut, ein Behandler dort liefe auf der Startseite nie.
       AppSpeicherWache.instance.starten();
+      // 2026-08-26 (Nutzerbericht "50 % meiner Fahrten kommen nicht an"):
+      // Fahrten, die im Funkloch nicht gebucht werden konnten, nachtragen.
+      // Muss HIER stehen und nicht in der Fahransicht: Wer nach der Fahrt die
+      // App schliesst und sie zu Hause im WLAN wieder oeffnet, landet auf der
+      // Startseite - die Fahransicht wird dabei nie gebaut.
+      OfflineFahrtenWarteschlange.starteNetzWache();
       MapStyleService.instance.ensureAutoDownloadScheduled(
         delay: const Duration(seconds: 10),
         reason: 'app_start',

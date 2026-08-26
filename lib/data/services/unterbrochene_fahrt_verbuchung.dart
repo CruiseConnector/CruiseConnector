@@ -147,6 +147,11 @@ class UnterbrocheneFahrtVerbuchung {
           source: 'navigation_unterbrochen',
           xpAwarded: p.xp,
           createdAt: s.savedAt,
+          // 2026-08-26: NICHT zusaetzlich in die Offline-Warteschlange. Diese
+          // Fahrt hat hier schon ihren zweiten Versuch (Schnappschuss bleibt
+          // liegen, Vorabpruefung ueber `route_fingerprint`). Beides zusammen
+          // koennte zwei Zeilen fuer eine Fahrt anlegen.
+          beiFehlerNachtragen: false,
         );
         if (session == null) {
           await ActiveRideSnapshotService.clear();
