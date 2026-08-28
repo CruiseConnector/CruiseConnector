@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/input_limits.dart';
+import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
@@ -313,9 +314,19 @@ class SavedRoutesService {
     bool completedAtEnd = false,
     String? groupId,
     String? photoUrl,
+    // 2026-08-28 (Fehler 8, Community-Routenkarte): Hoechsttempo der Fahrt
+    // in km/h. Kommt kein Wert mit, holt sich saveRoute den der soeben
+    // aufgezeichneten Fahrt aus [GamificationService], denn der Abschluss in
+    // cruise_mode_page ruft erst recordDriveSession und direkt danach diese
+    // Methode. Bleibt beides leer, bleibt routes.top_speed_kmh null und die
+    // Anzeige laesst die Tempo-Kachel weg.
+    double? topSpeedKmh,
   }) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return null;
+
+    final hoechsttempoKmh =
+        topSpeedKmh ?? GamificationService.uebernimmHoechsttempoLetzterFahrt();
 
     final routeType = isRoundTrip ? 'ROUND_TRIP' : 'POINT_TO_POINT';
     final name = (customName?.trim().isNotEmpty == true)
@@ -353,6 +364,8 @@ class SavedRoutesService {
       'quality_tier': result.edgeMeta['quality_tier']?.toString(),
       'route_meta': result.edgeMeta,
       'completed_at_end': completedAtEnd,
+      if (hoechsttempoKmh != null && hoechsttempoKmh > 0)
+        'top_speed_kmh': double.parse(hoechsttempoKmh.toStringAsFixed(1)),
       if (groupId != null && groupId.trim().isNotEmpty)
         'group_id': groupId.trim(),
       if (xpDistance != null) 'xp_distance': xpDistance,
@@ -402,6 +415,7 @@ class SavedRoutesService {
           ..remove('route_meta')
           ..remove('completed_at_end')
           ..remove('group_id')
+          ..remove('top_speed_kmh')
           ..remove('xp_distance')
           ..remove('xp_curve_bonus')
           ..remove('xp_style_bonus')

@@ -1,4 +1,11 @@
+import 'package:cruise_connect/core/routen_kappung.dart';
+
 /// Eine gespeicherte Route aus der Supabase `routes` Tabelle.
+///
+/// Die Kappungs-Masse (1 km je Ende fuer Fremdfahrten, Mindestrest) stehen
+/// EINMAL in `lib/core/routen_kappung.dart` — hier gab es kurz eine
+/// gleichnamige Klassen-Konstante, die die importierte verschattete.
+/// Abnahmefund vom 28.08.: Driftrisiko, deshalb entfernt.
 class SavedRoute {
   const SavedRoute({
     required this.id,
@@ -31,6 +38,7 @@ class SavedRoute {
     this.completionRate,
     this.completedAtEnd = false,
     this.photoUrl,
+    this.topSpeedKmh,
   });
 
   final String id;
@@ -63,6 +71,12 @@ class SavedRoute {
   final double? completionRate;
   final bool completedAtEnd;
   final String? photoUrl;
+
+  // 2026-08-28 (vucko Fehler 8, Teilen-Design): Hoechsttempo der Fahrt, mit
+  // der der Besitzer die Route eingefahren hat (`routes.top_speed_kmh`).
+  // Kann null sein — die Spalte ist neu, alte Routen und reine Planungen
+  // haben keinen Wert. Die Anzeige laesst die Kachel dann WEG (kein Strich).
+  final double? topSpeedKmh;
 
   factory SavedRoute.fromJson(Map<String, dynamic> json) {
     return SavedRoute(
@@ -100,6 +114,7 @@ class SavedRoute {
       completionRate: (json['completion_rate'] as num?)?.toDouble(),
       completedAtEnd: json['completed_at_end'] == true,
       photoUrl: json['photo_url'] as String?,
+      topSpeedKmh: (json['top_speed_kmh'] as num?)?.toDouble(),
     );
   }
 
@@ -208,6 +223,83 @@ class SavedRoute {
         .toList(growable: false);
   }
 
+  /// 2026-08-28 (vucko Fehler 8, Stalking-Schutz): DER gemeinsame Weg fuer
+  /// jede Fremdfahrt. Liefert die Fassung der Route, die der angemeldete
+  /// Nutzer fahren darf:
+  ///
+  /// * Besitzer (oder Route ohne Besitzer, z. B. Pool und lokale
+  ///   Wiederaufnahme): das Original, unveraendert.
+  /// * Fremder Nutzer: eine Kopie, der vorn und hinten je
+  ///   [fremdfahrtKappungMeter] (1 km) fehlen — Start und Ziel des
+  ///   Besitzers liegen meist an dessen Haustuer und bleiben so privat.
+  ///   Geometrie und Distanz werden ersetzt (Distanz neu aus der
+  ///   Punktliste gerechnet), die Dauer proportional mitgekuerzt; Name,
+  ///   Stil und alles andere bleiben. Der offene Bogen laedt als
+  ///   POINT_TO_POINT — dasselbe Muster wie die Wiederaufnahme in
+  ///   home_content_page (Anfahrt schliesst vorwaerts an, Ankunft zaehlt
+  ///   am Ende).
+  /// * Zu kurze Route (unter 2 km bliebe nichts uebrig): null — der
+  ///   Aufrufer zeigt einen ehrlichen Hinweis und startet NICHT.
+  ///
+  /// JEDER Einstieg, der `CruiseModePage.pendingRoute` mit einer fremden
+  /// Route setzt, MUSS durch diese Methode gehen. Ein Waechtertest
+  /// (test/route/fremdfahrt_kappung_waechter_test.dart) erzwingt das.
+  SavedRoute? fuerFremdfahrt(String? eigeneId) {
+    final besitzer = userId;
+    if (besitzer == null || besitzer == eigeneId) return this;
+
+    final coords = flattenGeometryCoordinates(geometry);
+    final gekappt = kappeEndstuecke(
+      coords,
+      fremdfahrtKappungMeter,
+      fremdfahrtKappungMeter,
+    );
+    if (gekappt.isEmpty) return null;
+
+    final neueKm = linienLaengeKm(gekappt);
+    double? neueDauer = durationSeconds;
+    if (neueDauer != null && neueDauer > 0 && distanceKm > 0) {
+      neueDauer = neueDauer * (neueKm / distanceKm);
+    }
+
+    return SavedRoute(
+      id: id,
+      createdAt: createdAt,
+      style: style,
+      distanceKm: neueKm,
+      geometry: <String, dynamic>{
+        'type': 'LineString',
+        'coordinates': gekappt,
+      },
+      userId: userId,
+      name: name,
+      durationSeconds: neueDauer,
+      routeType: 'POINT_TO_POINT',
+      rating: rating,
+      distanceTargetKm: distanceTargetKm,
+      drivenKm: drivenKm,
+      sourceRouteId: sourceRouteId ?? id,
+      groupId: groupId,
+      xpDistance: xpDistance,
+      xpCurveBonus: xpCurveBonus,
+      xpStyleBonus: xpStyleBonus,
+      xpBase: xpBase,
+      xpMultiplier: xpMultiplier,
+      xpStreakDays: xpStreakDays,
+      xpAwarded: xpAwarded,
+      routeSource: routeSource,
+      routeFingerprint: routeFingerprint,
+      qualityTier: qualityTier,
+      routeMeta: routeMeta,
+      averageRating: averageRating,
+      ratingCount: ratingCount,
+      completionRate: completionRate,
+      completedAtEnd: completedAtEnd,
+      photoUrl: photoUrl,
+      topSpeedKmh: topSpeedKmh,
+    );
+  }
+
   /// Serialisiert die Route für den lokalen Cache (shared_preferences).
   Map<String, dynamic> toJson() {
     return {
@@ -241,6 +333,7 @@ class SavedRoute {
       'completion_rate': completionRate,
       'completed_at_end': completedAtEnd,
       'photo_url': photoUrl,
+      'top_speed_kmh': topSpeedKmh,
     };
   }
 

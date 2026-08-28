@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart' as ll;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/routen_kappung.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/group_leaderboard_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
@@ -12,6 +13,7 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_verlauf_sketch.dart';
 
 /// Strava-artige Detailansicht einer abgeschlossenen Fahrt.
 ///
@@ -27,6 +29,7 @@ class RideDetailPage extends StatefulWidget {
     required this.session,
     this.allowPhoto = true,
     this.savedRouteId,
+    this.ohneKarte = false,
   });
 
   /// Detailansicht für eine GESPEICHERTE Route (statt einer gefahrenen Session).
@@ -34,12 +37,25 @@ class RideDetailPage extends StatefulWidget {
   /// hinzugefügt/geändert werden (persistiert an routes.photo_url); zusätzlich
   /// zeigt sie das Foto der zugehörigen gefahrenen Fahrt (per Fingerprint).
   factory RideDetailPage.fromSavedRoute(SavedRoute route) {
-    final coords = route.flatCoordinates;
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final isOwn = route.userId != null && route.userId == currentUserId;
+    // 2026-08-28 (vucko Fehler 7, Stalking-Schutz): Bei einer FREMDEN Route
+    // werden die Endstuecke gekappt, BEVOR sie in die Anzeige-Session geht.
+    // Alles stromabwaerts (Skizze, Kurvenzahl, Share-Composer) sieht damit
+    // nie die echte Haustuer des Besitzers. Eigene Routen bleiben komplett.
+    final coords = isOwn
+        ? route.flatCoordinates
+        : kappeEndstuecke(
+            route.flatCoordinates,
+            anzeigeKappungMeter,
+            anzeigeKappungMeter,
+          );
     return RideDetailPage(
       allowPhoto: isOwn,
       savedRouteId: isOwn ? route.id : null,
+      // Fremde Route: nachgezeichnete Strecke statt Karte — keine Basemap,
+      // keine Ortsnamen, kein Massstab (Fehler 7).
+      ohneKarte: !isOwn,
       session: UserDriveSession(
         id: route.id,
         userId: route.userId ?? '',
@@ -58,6 +74,9 @@ class RideDetailPage extends StatefulWidget {
         routeFingerprint: route.routeFingerprint,
         // Eigenes Foto der Route (falls direkt gesetzt).
         photoUrl: route.photoUrl,
+        // Hoechsttempo der Fahrt des Besitzers (routes.top_speed_kmh).
+        // Kann null sein — die Kachel wird dann weggelassen.
+        topSpeedKmh: route.topSpeedKmh,
       ),
     );
   }
@@ -68,6 +87,12 @@ class RideDetailPage extends StatefulWidget {
   /// Wenn gesetzt: dies ist eine eigene GESPEICHERTE Route — Foto wird an
   /// routes.photo_url persistiert (nicht an einer Drive-Session).
   final String? savedRouteId;
+
+  /// 2026-08-28 (vucko Fehler 7): true bei einer FREMDEN geteilten Route.
+  /// Statt der interaktiven Karte (CruiseMapLibreMap) zeichnet die Seite die
+  /// Strecke dann nur nach — ohne Basemap, Ortsnamen und Massstab, mit
+  /// gekappten Endstuecken. Eigene Routen behalten Karte und Zoom.
+  final bool ohneKarte;
 
   @override
   State<RideDetailPage> createState() => _RideDetailPageState();
@@ -324,7 +349,12 @@ class _RideDetailPageState extends State<RideDetailPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 36),
         children: [
-          if (hasTrack) _buildMapHero(track, accent) else _buildGradientHero(accent),
+          if (hasTrack && !widget.ohneKarte)
+            _buildMapHero(track, accent)
+          else if (hasTrack)
+            _buildSketchHero(track, accent)
+          else
+            _buildGradientHero(accent),
           if (widget.allowPhoto || _photoUrl != null) ...[
             const SizedBox(height: 16),
             _buildPhotoSection(accent),
@@ -389,6 +419,78 @@ class _RideDetailPageState extends State<RideDetailPage> {
               },
             ),
             // Lese-Schutz oben/unten für Pille + Titel.
+            IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.32),
+                      Colors.transparent,
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.62),
+                    ],
+                    stops: const [0.0, 0.22, 0.62, 1.0],
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 12,
+              top: 12,
+              child: _statusPill(),
+            ),
+            Positioned(
+              left: 14,
+              right: 14,
+              bottom: 12,
+              child: IgnorePointer(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _shadowed(
+                      _styleLabel,
+                      size: 22,
+                      weight: FontWeight.w900,
+                    ),
+                    const SizedBox(height: 2),
+                    _shadowed(
+                      _formatDate(_s.createdAt),
+                      size: 12.5,
+                      weight: FontWeight.w600,
+                      color: Colors.white.withValues(alpha: 0.9),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Skizzen-Hero (fremde geteilte Route, Fehler 7) ─────────────────────────
+  /// Nachgezeichnete Strecke statt Karte: neutraler dunkler Grund,
+  /// Verlaufslinie im Stil des Export-Composers, dezente Endpunkte ohne
+  /// Beschriftung. Der Track ist an dieser Stelle BEREITS gekappt
+  /// (fromSavedRoute), deshalb kappungMeter: 0 — sonst fehlte doppelt.
+  Widget _buildSketchHero(List<List<double>> track, Color accent) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: SizedBox(
+        height: 286,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            RouteVerlaufSketch(
+              punkte: track,
+              accent: accent,
+              kappungMeter: 0,
+              borderRadius: BorderRadius.zero,
+            ),
             IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(

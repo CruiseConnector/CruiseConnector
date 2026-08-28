@@ -1658,7 +1658,25 @@ class _ProfilePageState extends State<ProfilePage>
                     const Color(0xFF34D399),
                     () {
                       Navigator.pop(ctx);
-                      CruiseModePage.pendingRoute.value = route;
+                      // 2026-08-28 (vucko Fehler 8, Stalking-Schutz): Auch
+                      // hier koennen gemerkte FREMDE Routen liegen — vor dem
+                      // Fahren vorn und hinten je 1 km kappen.
+                      final eigeneId =
+                          Supabase.instance.client.auth.currentUser?.id;
+                      final fahrbareRoute = route.fuerFremdfahrt(eigeneId);
+                      if (fahrbareRoute == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Diese Route ist zu kurz, um sie geteilt zu fahren.',
+                            ),
+                            backgroundColor: Color(0xFF301B20),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                        return;
+                      }
+                      CruiseModePage.pendingRoute.value = fahrbareRoute;
                     },
                   ),
                   if (isOwnRoute)

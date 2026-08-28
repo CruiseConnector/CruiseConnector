@@ -172,7 +172,11 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     try {
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid == null) return;
-      final profil = await SocialService.getUserProfile(uid);
+      // Zeitgrenze wie ueberall am Post-Auth-Tor: ein haengender Server darf
+      // das Onboarding nicht blockieren (Waechtertest post_auth_tor_kein_haenger).
+      final profil = await SocialService.getUserProfile(
+        uid,
+      ).timeout(const Duration(seconds: 6));
       if (!mounted || profil == null) return;
       final un = (profil['username'] as String?)?.trim();
       if (un != null && un.isNotEmpty && _usernameCtrl.text.trim().isEmpty) {

@@ -6693,6 +6693,28 @@ class _HomeContentPageState extends State<HomeContentPage>
     return '';
   }
 
+  /// 2026-08-28 (vucko Fehler 8, Stalking-Schutz): Empfohlene Routen kommen
+  /// heute aus dem Pool (ohne Besitzer, bleibt unveraendert), koennten aber
+  /// jederzeit fremde Community-Routen werden. Deshalb geht auch dieser
+  /// Einstieg durch den gemeinsamen Weg: fremde Routen werden vorn und
+  /// hinten je 1 km gekappt, zu kurze starten nicht.
+  void _starteEmpfohleneRoute(SavedRoute route) {
+    final eigeneId = Supabase.instance.client.auth.currentUser?.id;
+    final fahrbareRoute = route.fuerFremdfahrt(eigeneId);
+    if (fahrbareRoute == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Diese Route ist zu kurz, um sie geteilt zu fahren.'),
+          backgroundColor: Color(0xFF301B20),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    CruiseModePage.pendingRoute.value = fahrbareRoute;
+    widget.onTabChange?.call(2);
+  }
+
   Widget _buildSuggestedRouteCard(HomeRouteRecommendation recommendation) {
     final route = recommendation.route;
     final coordinates = _extractCoordinates(route.geometry);
@@ -6717,10 +6739,7 @@ class _HomeContentPageState extends State<HomeContentPage>
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () {
-            CruiseModePage.pendingRoute.value = route;
-            widget.onTabChange?.call(2);
-          },
+          onTap: () => _starteEmpfohleneRoute(route),
           child: Container(
             width: double.infinity,
             decoration: BoxDecoration(
@@ -6865,10 +6884,7 @@ class _HomeContentPageState extends State<HomeContentPage>
                     children: [
                       Expanded(
                         child: _buildDriveCta(
-                          onTap: () {
-                            CruiseModePage.pendingRoute.value = route;
-                            widget.onTabChange?.call(2);
-                          },
+                          onTap: () => _starteEmpfohleneRoute(route),
                         ),
                       ),
                       const SizedBox(width: 8),

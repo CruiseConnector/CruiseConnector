@@ -846,6 +846,47 @@ class GamificationService {
     return out;
   }
 
+  // ── Hoechsttempo-Uebergabe an das Routen-Speichern ──────────────────────
+  //
+  // 2026-08-28 (Fehler 8, Community-Routenkarte): Die geteilte Route zeigt
+  // das Hoechsttempo der Fahrt, also braucht `routes.top_speed_kmh` beim
+  // Speichern den Wert aus GENAU DIESER Fahrt. Der Abschluss-Flow in
+  // cruise_mode_page ruft erst [recordDriveSession] (mit topSpeedKmh) und
+  // unmittelbar danach SavedRoutesService.saveRoute. Damit saveRoute den
+  // Wert bekommt, ohne dass die Fahransicht angefasst werden muss, wird er
+  // hier kurz zwischengelagert.
+  //
+  // Absichtlich eng gefasst:
+  //  * Einmal abholen leert den Speicher (kein Nachzuegler erbt ihn).
+  //  * Nach [_hoechsttempoUebergabeFenster] verfaellt er, damit ein
+  //    verworfener Abschluss nie in eine SPAETERE Route sickert.
+  //  * Jeder Aufzeichnungs-Versuch ueberschreibt ihn, auch mit null.
+  static double? _hoechsttempoLetzterFahrtKmh;
+  static DateTime? _hoechsttempoLetzterFahrtZeit;
+  static const Duration _hoechsttempoUebergabeFenster = Duration(minutes: 3);
+
+  /// Holt das Hoechsttempo der zuletzt aufgezeichneten Fahrt ab und leert
+  /// den Zwischenspeicher. Liefert null, wenn keine frische Fahrt vorliegt.
+  static double? uebernimmHoechsttempoLetzterFahrt({DateTime? jetzt}) {
+    final tempo = _hoechsttempoLetzterFahrtKmh;
+    final zeit = _hoechsttempoLetzterFahrtZeit;
+    _hoechsttempoLetzterFahrtKmh = null;
+    _hoechsttempoLetzterFahrtZeit = null;
+    if (tempo == null || zeit == null) return null;
+    final alter = (jetzt ?? DateTime.now()).difference(zeit);
+    if (alter > _hoechsttempoUebergabeFenster) return null;
+    return tempo;
+  }
+
+  @visibleForTesting
+  static void setzeHoechsttempoLetzterFahrtFuerTest(
+    double? kmh, {
+    DateTime? zeit,
+  }) {
+    _hoechsttempoLetzterFahrtKmh = kmh;
+    _hoechsttempoLetzterFahrtZeit = kmh == null ? null : (zeit ?? DateTime.now());
+  }
+
   static Future<UserDriveSession?> recordDriveSession({
     required double distanceKm,
     required int durationSeconds,
@@ -882,6 +923,14 @@ class GamificationService {
     // geschickt werden: Steht sie schon, lehnt Postgres den Insert mit 23505
     // ab, statt eine zweite Zeile anzulegen (CLAUDE.md: „Eine gefahrene Fahrt
     // = GENAU EINE Zeile"). Siehe OfflineFahrtenWarteschlange.
+    // Hoechsttempo fuer das direkt folgende Routen-Speichern bereitlegen.
+    // VOR dem Insert, damit auch der Offline-Pfad (Insert scheitert, Fahrt
+    // wandert in die Warteschlange) den Wert an saveRoute weitergibt.
+    _hoechsttempoLetzterFahrtKmh = (topSpeedKmh != null && topSpeedKmh > 0)
+        ? topSpeedKmh
+        : null;
+    _hoechsttempoLetzterFahrtZeit = DateTime.now();
+
     final sessionId = OfflineFahrtenWarteschlange.neueZeilenId();
     final row = buildDriveSessionInsert(
       userId: userId,

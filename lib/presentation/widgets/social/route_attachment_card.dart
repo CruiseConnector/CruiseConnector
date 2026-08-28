@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/kurven_zaehler.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_verlauf_sketch.dart';
 
 /// Einheitliche Darstellung einer geteilten Route in Posts und Composer.
+///
+/// 2026-08-28 (vucko Fehler 7 und 8): Statt eines Kartenausschnitts zeigt die
+/// Karte den VERLAUF der Strecke als Skizze auf neutralem, dunklem Grund —
+/// ohne Basemap, Ortsnamen oder Massstab, und mit gekappten Endstuecken
+/// (Stalking-Schutz). Darunter stehen die Eckdaten wie beim Exportieren:
+/// Distanz, Dauer, Kurven, Stil und, falls vorhanden, das Hoechsttempo.
 class RouteAttachmentCard extends StatefulWidget {
   const RouteAttachmentCard({
     super.key,
@@ -17,6 +26,7 @@ class RouteAttachmentCard extends StatefulWidget {
     this.fallbackStyle,
     this.fallbackDistanceKm,
     this.fallbackDurationSeconds,
+    this.vorgeladeneRoute,
   });
 
   final String routeId;
@@ -26,6 +36,10 @@ class RouteAttachmentCard extends StatefulWidget {
   final String? fallbackStyle;
   final double? fallbackDistanceKm;
   final double? fallbackDurationSeconds;
+
+  /// Bereits geladene Route — dann fragt die Karte Supabase nicht mehr.
+  /// Fuer Vorschauen und Widget-Tests, in denen kein Backend existiert.
+  final SavedRoute? vorgeladeneRoute;
 
   @override
   State<RouteAttachmentCard> createState() => _RouteAttachmentCardState();
@@ -58,6 +72,14 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
   }
 
   Future<void> _loadRoute() async {
+    final vorgeladen = widget.vorgeladeneRoute;
+    if (vorgeladen != null) {
+      setState(() {
+        _route = vorgeladen;
+        _loading = false;
+      });
+      return;
+    }
     try {
       final route = await SavedRoutesService.getRouteById(widget.routeId);
       final saved = route == null
@@ -76,10 +98,24 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
   }
 
   Future<void> _startRide() async {
-    if (_opening || _route == null) return;
+    final route = _route;
+    if (_opening || route == null) return;
     setState(() => _opening = true);
     try {
-      CruiseModePage.pendingRoute.value = _route;
+      // 2026-08-28 (vucko Fehler 8, Stalking-Schutz): NIE die rohe fremde
+      // Route uebergeben. Fremde Routen werden vorn und hinten um je 1 km
+      // gekappt, damit niemand an der Haustuer des Besitzers startet.
+      // Waechtertest: test/route/fremdfahrt_kappung_waechter_test.dart.
+      final eigeneId = Supabase.instance.client.auth.currentUser?.id;
+      final fahrbareRoute = route.fuerFremdfahrt(eigeneId);
+      if (fahrbareRoute == null) {
+        _showSnack(
+          'Diese Route ist zu kurz, um sie geteilt zu fahren.',
+          error: true,
+        );
+        return;
+      }
+      CruiseModePage.pendingRoute.value = fahrbareRoute;
     } finally {
       if (mounted) setState(() => _opening = false);
     }
@@ -257,75 +293,161 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
     );
   }
 
+  // 2026-06-25 (vucko Routen-Detail-Page): Tippen auf Titel oder Skizze
+  // öffnet die ästhetische Detailseite. Fuer fremde Routen zeigt die dort
+  // ebenfalls nur die nachgezeichnete Strecke ohne Karte (Fehler 7).
+  void _openDetail() {
+    final route = _route;
+    if (route == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => RideDetailPage.fromSavedRoute(route)),
+    );
+  }
+
   Widget _buildRoute(SavedRoute route, bool isCompact) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        _RouteIconBox(compact: isCompact, muted: false),
-        const SizedBox(width: 12),
-        Expanded(
-          // 2026-06-25 (vucko Routen-Detail-Page): Tippen auf die Info
-          // öffnet die ästhetische Detailseite (Karte + Eckdaten).
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => RideDetailPage.fromSavedRoute(route),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _openDetail,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${route.styleEmoji} ${route.name ?? route.style}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isCompact ? 13 : 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    _RouteTrustBadges(route: route, compact: isCompact),
+                  ],
+                ),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '${route.styleEmoji} ${route.name ?? route.style}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: isCompact ? 13 : 14,
-                    fontWeight: FontWeight.w600,
+            if (widget.showRideButton) ...[
+              const SizedBox(width: 8),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _RouteSquareAction(
+                    compact: isCompact,
+                    loading: _saving,
+                    active: _saved,
+                    icon: _saved
+                        ? Icons.bookmark_added_rounded
+                        : Icons.bookmark_add_outlined,
+                    onTap: _saved ? null : _saveRoute,
                   ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  '${route.formattedDistance} · ${route.formattedDuration}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Colors.grey[500],
-                    fontSize: isCompact ? 11 : 12,
+                  const SizedBox(height: 6),
+                  _RouteDriveAction(
+                    compact: isCompact,
+                    loading: _opening,
+                    onTap: _startRide,
                   ),
-                ),
-                const SizedBox(height: 7),
-                _RouteTrustBadges(route: route, compact: isCompact),
-              ],
+                ],
+              ),
+            ],
+          ],
+        ),
+        SizedBox(height: isCompact ? 8 : 10),
+        // 2026-08-28 (vucko Fehler 7, Stalking-Schutz): Nachgezeichnete
+        // Strecke statt Kartenausschnitt. Keine Basemap, keine Ortsnamen,
+        // kein Massstab — und die Endstuecke sind gekappt, damit niemand
+        // die Wohngegend des Besitzers abliest.
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _openDetail,
+          child: SizedBox(
+            height: isCompact ? 84 : 128,
+            width: double.infinity,
+            child: RouteVerlaufSketch(
+              punkte: route.flatCoordinates,
+              accent: AppAccentColors.accent,
             ),
           ),
         ),
-        if (widget.showRideButton) ...[
-          const SizedBox(width: 8),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _RouteSquareAction(
-                compact: isCompact,
-                loading: _saving,
-                active: _saved,
-                icon: _saved
-                    ? Icons.bookmark_added_rounded
-                    : Icons.bookmark_add_outlined,
-                onTap: _saved ? null : _saveRoute,
-              ),
-              const SizedBox(height: 6),
-              _RouteDriveAction(
-                compact: isCompact,
-                loading: _opening,
-                onTap: _startRide,
-              ),
-            ],
+        SizedBox(height: isCompact ? 8 : 10),
+        RouteAttachmentStats(route: route, compact: isCompact),
+      ],
+    );
+  }
+}
+
+/// Eckdaten „wie beim Exportieren" (route_share_page): Distanz, Dauer,
+/// Kurven, Stil und, NUR wenn ein Wert existiert, das Hoechsttempo.
+/// Fehlt ein Wert, wird die Kachel weggelassen — nie ein Strich.
+class RouteAttachmentStats extends StatelessWidget {
+  const RouteAttachmentStats({
+    super.key,
+    required this.route,
+    this.compact = false,
+  });
+
+  final SavedRoute route;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = AppAccentColors.accent;
+    bool ok(String? s) => s != null && s.trim().isNotEmpty && s.trim() != '--';
+    final coords = route.flatCoordinates;
+    final kurven = coords.length >= 3 ? KurvenZaehler.zaehle(coords) : 0;
+    final dauer = route.durationLabelOrEstimate;
+    final top = route.topSpeedKmh;
+    final chips = <(IconData, String)>[
+      if (route.distanceKm > 0) (Icons.map_rounded, route.formattedDistance),
+      if (ok(dauer)) (Icons.timer_rounded, dauer),
+      if (kurven > 0) (Icons.moving_rounded, '$kurven Kurven'),
+      if (ok(route.displayStyleLabel))
+        (Icons.tune_rounded, route.displayStyleLabel),
+      if (top != null && top > 0)
+        (Icons.speed_rounded, '${top.toStringAsFixed(0)} km/h'),
+    ];
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [for (final c in chips) _chip(c.$1, c.$2, accent)],
+    );
+  }
+
+  Widget _chip(IconData icon, String label, Color accent) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 9,
+        vertical: compact ? 5 : 6,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: accent, size: compact ? 12 : 13),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: compact ? 11.5 : 12.5,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ],
-      ],
+      ),
     );
   }
 }
@@ -476,12 +598,8 @@ class _RouteTrustBadges extends StatelessWidget {
           compact: compact,
           accent: AppAccentColors.accent,
         ),
-      _RouteTrustBadge(
-        icon: Icons.tune_rounded,
-        label: route.displayStyleLabel,
-        compact: compact,
-        accent: const Color(0xFF7DD3FC),
-      ),
+      // 2026-08-28: Der Stil steht jetzt in den Eckdaten-Chips unter der
+      // Skizze (RouteAttachmentStats) — hier nicht mehr doppelt.
     ];
 
     return Wrap(spacing: 6, runSpacing: 6, children: badges);
