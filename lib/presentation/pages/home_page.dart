@@ -12,6 +12,7 @@ import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
 import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
 import 'package:cruise_connect/data/services/offline_map_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
+import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/push_notification_service.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
@@ -73,6 +74,12 @@ class _HomePageState extends State<HomePage> {
       // in einem anderen Reiter landet, sah den Punkt sonst gar nicht.
       unawaited(CommunityNeuigkeitService.instance.aktualisieren());
       await _runFirstLoginGuidance();
+
+      // 2026-08-28 (Fehler 11): Die Zustimmungsfrage zur Offlinekarte kommt
+      // beim ERSTEN Oeffnen der Startseite — vor Changelog und Sternen,
+      // nach der Erstanmeldungs-Fuehrung. Solange sie nicht beantwortet
+      // ist, laedt der Automatik-Pfad nichts (Tor in maybeAutoDownloadDach).
+      await _pruefeKartenZustimmung();
 
       // 2026-08-12: Auch beim APP-START prüfen, nicht nur beim Antippen.
       //
@@ -180,6 +187,21 @@ class _HomePageState extends State<HomePage> {
         }
       } catch (_) {
         // Standort nicht verfügbar — Default-Heimatregion bleibt.
+      }
+      if (!mounted) return;
+      // 2026-08-28 (Fehler 11): Auch der Kachel-Vorrat (bis zu 8000 Kacheln
+      // rund um den Standort) ist ein ungefragter Download. Er wartet auf
+      // dieselbe beantwortete Zustimmungsfrage wie die grosse DACH-Datei und
+      // unterbleibt ganz, wenn der Nutzer "Keine Offlinekarte" gewaehlt hat.
+      // Was der Nutzer beim normalen Kartenschauen laedt, cached MapLibre
+      // ohnehin — das hier ist nur das VORAUSEILENDE Laden.
+      if (!await MapStyleService.instance.hasSeenAutoDownloadPrompt()) {
+        return;
+      }
+      await MapStyleService.instance.loadAutoDownloadSettings();
+      if (MapStyleService.instance.autoDownloadPolicy ==
+          MapAutoDownloadPolicy.aus) {
+        return;
       }
       if (!mounted) return;
       unawaited(
@@ -409,6 +431,23 @@ class _HomePageState extends State<HomePage> {
   /// Vorrang vor der Sterne-Abfrage — wer gerade ein Update bekommen hat, soll
   /// erst sehen, was neu ist, und nicht direkt nach Sternen gefragt werden.
   bool _neuerungenOffen = false;
+
+  /// 2026-08-28 (Fehler 11, Vucko): "ganz wichtig, dass der Nutzer die
+  /// Option hat gleich am Anfang, wenn er die App installiert, dass nichts
+  /// ohne seiner Zustimmung gedownloadet wird."
+  ///
+  /// Zeigt die Zustimmungsfrage zur Offlinekarte genau EINMAL (das
+  /// Gesehen-Flag setzt das Blatt beim Speichern). Bis dahin blockt
+  /// [MapStyleService.maybeAutoDownloadDach] jeden automatischen Download.
+  Future<void> _pruefeKartenZustimmung() async {
+    if (kIsWeb) return;
+    if (await MapStyleService.instance.hasSeenAutoDownloadPrompt()) return;
+    if (!mounted || _selectedIndex != 0) return;
+    if (CruiseModePage.isFullscreen.value) return;
+    await MapStyleService.instance.loadAutoDownloadSettings();
+    if (!mounted) return;
+    await showMapDownloadPreferenceSheet(context);
+  }
 
   Future<bool> _pruefeNeuerungen() async {
     if (_neuerungenOffen) return false;

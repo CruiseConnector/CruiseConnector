@@ -82,9 +82,13 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   String get _mapAutoDownloadSubtitle {
-    return _mapAutoDownloadPolicy == MapAutoDownloadPolicy.wifiOnly
-        ? 'Automatisch nur im WLAN'
-        : 'Automatisch auch mit mobilen Daten';
+    return switch (_mapAutoDownloadPolicy) {
+      MapAutoDownloadPolicy.wifiOnly => 'Automatisch nur im WLAN',
+      MapAutoDownloadPolicy.wifiAndMobile =>
+        'Automatisch auch mit mobilen Daten',
+      // 2026-08-28 (Fehler 11): dritte Stellung — gar nicht.
+      MapAutoDownloadPolicy.aus => 'Kein automatischer Download',
+    };
   }
 
   Future<void> _openMapDownloadPreference() async {

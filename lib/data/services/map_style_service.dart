@@ -23,7 +23,11 @@ import 'package:cruise_connect/data/services/offline_map_service.dart';
 ///
 /// MapLibre Native (iOS-SDK ≥6.14) liest `pmtiles://<url>` sowohl remote als auch
 /// für lokale Dateien (`pmtiles://file://…`).
-enum MapAutoDownloadPolicy { wifiOnly, wifiAndMobile }
+// 2026-08-28 (Fehler 11, Vucko): "ganz wichtig, dass der Nutzer die Option
+// hat gleich am Anfang, wenn er die App installiert, dass nichts ohne seiner
+// Zustimmung gedownloadet wird." Deshalb gibt es jetzt drei Stellungen —
+// die dritte heisst: gar nicht.
+enum MapAutoDownloadPolicy { wifiOnly, wifiAndMobile, aus }
 
 class MapStyleService {
   MapStyleService._();
@@ -73,9 +77,10 @@ class MapStyleService {
     if (_settingsLoaded) return;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_autoDownloadPolicyKey);
-    _autoDownloadPolicy = raw == MapAutoDownloadPolicy.wifiAndMobile.name
-        ? MapAutoDownloadPolicy.wifiAndMobile
-        : MapAutoDownloadPolicy.wifiOnly;
+    _autoDownloadPolicy = MapAutoDownloadPolicy.values.firstWhere(
+      (p) => p.name == raw,
+      orElse: () => MapAutoDownloadPolicy.wifiOnly,
+    );
     _settingsLoaded = true;
   }
 
@@ -178,6 +183,22 @@ class MapStyleService {
     try {
       await loadAutoDownloadSettings();
       if (await isDachDownloaded()) return;
+      // 2026-08-28 (Fehler 11): OHNE beantwortete Zustimmungsfrage laedt der
+      // Automatik-Pfad NICHTS — egal, von welchem Einstiegspunkt er kommt
+      // (App-Start, Home-Prewarm, erste Karte). Das Blatt kommt beim ersten
+      // Oeffnen der Startseite; erst die dort gespeicherte Wahl schaltet
+      // frei. Der manuelle Download in den Einstellungen bleibt unberuehrt,
+      // ein Fingertipp dort IST die Zustimmung.
+      if (!await hasSeenAutoDownloadPrompt()) {
+        debugPrint(
+          '[MapStyle] Auto-DACH-Download wartet auf die Zustimmungsfrage.',
+        );
+        return;
+      }
+      if (_autoDownloadPolicy == MapAutoDownloadPolicy.aus) {
+        debugPrint('[MapStyle] Auto-DACH-Download ist abgeschaltet (aus).');
+        return;
+      }
       final conn = await Connectivity().checkConnectivity();
       final hasWifi = conn.contains(ConnectivityResult.wifi);
       final hasNetwork = conn.any(

@@ -51,11 +51,15 @@ class _MapDownloadPreferenceSheetState
     setState(() => _saving = true);
     await MapStyleService.instance.setAutoDownloadPolicy(_policy);
     await MapStyleService.instance.markAutoDownloadPromptSeen();
-    MapStyleService.instance.ensureAutoDownloadScheduled(
-      reason: _policy == MapAutoDownloadPolicy.wifiOnly
-          ? 'map_preference_wifi'
-          : 'map_preference_mobile_allowed',
-    );
+    // 2026-08-28 (Fehler 11): "Keine Offlinekarte" heisst genau das — es
+    // wird kein Download angestossen. Nur eine zustimmende Wahl startet ihn.
+    if (_policy != MapAutoDownloadPolicy.aus) {
+      MapStyleService.instance.ensureAutoDownloadScheduled(
+        reason: _policy == MapAutoDownloadPolicy.wifiOnly
+            ? 'map_preference_wifi'
+            : 'map_preference_mobile_allowed',
+      );
+    }
     if (!mounted) return;
     Navigator.of(context).pop(_policy);
   }
@@ -64,7 +68,9 @@ class _MapDownloadPreferenceSheetState
   Widget build(BuildContext context) {
     final accent = AppAccentColors.accent;
     final media = MediaQuery.of(context);
-    final height = (media.size.height * 0.64).clamp(470.0, 560.0).toDouble();
+    // 2026-08-28 (Fehler 11): etwas hoeher, seit die dritte Karte und der
+    // laengere Erklaertext dazukamen; die Kartenliste scrollt zur Not.
+    final height = (media.size.height * 0.72).clamp(520.0, 640.0).toDouble();
 
     return Align(
       alignment: Alignment.bottomCenter,
@@ -129,7 +135,12 @@ class _MapDownloadPreferenceSheetState
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Cruise Connector kann die Karte für DACH automatisch im Hintergrund laden. Die Datei ist mehrere GB groß.',
+                              // 2026-08-28 (Fehler 11): Das Blatt kommt jetzt
+                              // beim ersten App-Start und muss ALLES sagen:
+                              // was geladen wird, wie gross es ist, dass nur
+                              // der deutschsprachige Raum gemeint ist, und
+                              // dass ohne Zustimmung nichts passiert.
+                              'Cruise Connector kann die Straßenkarte für Österreich, Deutschland und die Schweiz einmalig aufs Handy laden. Damit bleibt die Karte auch ohne Empfang gestochen scharf. Die Datei ist mehrere GB groß. Ohne deine Zustimmung wird nichts heruntergeladen, und du kannst deine Wahl in den Einstellungen jederzeit ändern.',
                               style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.70),
                                 fontSize: 14,
@@ -173,6 +184,23 @@ class _MapDownloadPreferenceSheetState
                                   onTap: () => setState(
                                     () => _policy =
                                         MapAutoDownloadPolicy.wifiAndMobile,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                // 2026-08-28 (Fehler 11): die echte Wahl,
+                                // NEIN zu sagen. Ohne sie war das Blatt nur
+                                // die Frage, WIE geladen wird, nicht OB.
+                                _PolicyCard(
+                                  selected:
+                                      _policy == MapAutoDownloadPolicy.aus,
+                                  accent: accent,
+                                  icon: CupertinoIcons.xmark_circle,
+                                  title: 'Keine Offlinekarte',
+                                  body:
+                                      'Nichts wird heruntergeladen. Die Karte lädt wie gewohnt über das Internet.',
+                                  onTap: () => setState(
+                                    () =>
+                                        _policy = MapAutoDownloadPolicy.aus,
                                   ),
                                 ),
                               ],
