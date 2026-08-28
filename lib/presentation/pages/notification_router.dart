@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/services/notification_service.dart';
 import '../../data/services/social_service.dart';
+import 'community_chat_detail_page.dart';
 import 'cruise_mode_page.dart';
 import 'group_join_gate.dart';
 import 'post_detail_page.dart';
@@ -63,8 +64,24 @@ class NotificationRouter {
       return;
     }
 
-    // Post-bezogen (Like/Kommentar/Repost) → Post-Detail oder „weg".
-    if (type == 'like' || type == 'comment' || type == 'repost') {
+    // 2026-08-28 (Fehler 6): Community-Chat → direkt in den Chat.
+    if (type == 'community_message') {
+      if (ref == null) return;
+      await nav.push(
+        MaterialPageRoute<void>(
+          builder: (_) => CommunityChatDetailPage(communityId: ref),
+        ),
+      );
+      return;
+    }
+
+    // Post-bezogen (Like/Kommentar/Repost/neuer Beitrag) → Post-Detail
+    // oder „weg". feed_post (Fehler 6) traegt die Post-Id als reference_id
+    // und laeuft denselben Weg.
+    if (type == 'like' ||
+        type == 'comment' ||
+        type == 'repost' ||
+        type == 'feed_post') {
       if (ref == null) return;
       final post = await SocialService.getPostById(ref);
       if (!nav.mounted) return;

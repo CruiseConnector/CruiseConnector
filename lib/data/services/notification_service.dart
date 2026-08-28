@@ -382,6 +382,25 @@ class AppNotification {
         );
       case 'weather_recommendation':
         return _weatherTexts();
+      // 2026-08-28 (Fehler 6): Beitraege von Gefolgten. Die Vorschau kommt
+      // aus dem Trigger-Payload (erste 80 Zeichen des Beitrags).
+      case 'feed_post':
+        final vorschau = (payload['preview'] as String? ?? '').trim();
+        return (
+          '$name hat etwas gepostet',
+          vorschau.isNotEmpty ? vorschau : 'Schau dir den neuen Beitrag an',
+        );
+      // 2026-08-28 (Fehler 6): Community-Chat, gebuendelt je Community.
+      case 'community_message':
+        final cname = payload['community_name'] as String? ?? 'Community';
+        final vorschau = (payload['preview'] as String? ?? '').trim();
+        if (aggregateCount > 1) {
+          return (
+            cname,
+            '$aggregateCount neue Nachrichten, zuletzt: $vorschau',
+          );
+        }
+        return (cname, '$name: $vorschau');
       case 'trip_reminder':
         return (
           pick(const [

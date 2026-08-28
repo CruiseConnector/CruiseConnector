@@ -1588,6 +1588,46 @@ class CommunityChatService {
     }
   }
 
+  // ── 2026-08-28 (Fehler 6): Stummschalten je Community ─────────────────────
+  //
+  // Der Wert lebt SERVERSEITIG in community_members.stumm, weil der
+  // Push-Fanout (Trigger notify_on_community_message) ihn dort liest. Ein
+  // lokaler Schalter wuerde nur die Anzeige beruhigen, das Handy brummt
+  // trotzdem.
+
+  /// Eigenen Stumm-Status lesen. null = nicht Mitglied oder nicht angemeldet.
+  static Future<bool?> fetchStumm(String communityId) async {
+    final uid = _userId;
+    if (uid == null) return null;
+    try {
+      final row = await _db
+          .from('community_members')
+          .select('stumm')
+          .eq('community_id', communityId)
+          .eq('user_id', uid)
+          .maybeSingle();
+      if (row == null) return null;
+      return row['stumm'] as bool? ?? false;
+    } catch (e) {
+      debugPrint('[CommunityChat] Stumm-Status nicht ladbar: $e');
+      return null;
+    }
+  }
+
+  /// Stummschalten oder wieder laut stellen. true = gespeichert.
+  static Future<bool> setStumm(String communityId, bool stumm) async {
+    try {
+      final res = await _db.rpc('set_community_stumm', params: {
+        'p_community_id': communityId,
+        'p_stumm': stumm,
+      });
+      return res is Map && res['ok'] == true;
+    } catch (e) {
+      debugPrint('[CommunityChat] Stummschalten fehlgeschlagen: $e');
+      return false;
+    }
+  }
+
   /// Emoji-Reaktion setzen (idempotent — doppeltes Setzen ist ein No-Op).
   /// Gespiegelt von GroupChatService.addReaction.
   static Future<void> addReaction(String messageId, String emoji) async {

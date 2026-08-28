@@ -724,6 +724,21 @@ class _SettingsPageState extends State<SettingsPage> {
                             (v) => s.setGroupInvites(v),
                           ),
                           const Divider(color: Colors.white10, height: 1),
+                          // 2026-08-28 (Fehler 6): Beitraege von Gefolgten und
+                          // Community-Chat. Der Chat laesst sich zusaetzlich JE
+                          // Community stummschalten (Glocke im Chat).
+                          _buildSwitchTile(
+                            'Neue Beiträge von Leuten, denen du folgst',
+                            s.feedPosts,
+                            (v) => s.setFeedPosts(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
+                          _buildSwitchTile(
+                            'Nachrichten im Community Chat',
+                            s.communityChat,
+                            (v) => s.setCommunityChat(v),
+                          ),
+                          const Divider(color: Colors.white10, height: 1),
                           _buildSwitchTile(
                             'Empfehlungen zu Strecke und Wetter',
                             s.dailyWeather,

@@ -220,6 +220,9 @@ class _AvatarOrIcon extends StatelessWidget {
         'group_invite' => Icons.group_add_outlined,
         'weather_recommendation' => Icons.wb_sunny_outlined,
         'trip_reminder' => Icons.route_outlined,
+        // 2026-08-28 (Fehler 6)
+        'feed_post' => Icons.dynamic_feed_outlined,
+        'community_message' => Icons.forum_outlined,
         _ => Icons.notifications_active_outlined,
       };
 
@@ -229,6 +232,9 @@ class _AvatarOrIcon extends StatelessWidget {
         'group_invite' || 'friend_request' => const Color(0xFF8B5CF6),
         'weather_recommendation' => const Color(0xFFFFA94D),
         'trip_reminder' => accent,
+        // 2026-08-28 (Fehler 6)
+        'feed_post' => const Color(0xFF10B981),
+        'community_message' => const Color(0xFF8B5CF6),
         _ => Colors.white70,
       };
 

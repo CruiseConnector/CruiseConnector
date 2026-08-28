@@ -72,6 +72,11 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
   /// muessen.
   ChatDarstellung _darstellung = ChatDarstellung.standard;
 
+  /// 2026-08-28 (Fehler 6): Stummschalten je Community. null = noch nicht
+  /// geladen; die Glocke erscheint erst mit bekanntem Zustand, sonst wuerde
+  /// sie beim Laden kurz falsch stehen.
+  bool? _stumm;
+
   /// True, sobald in dieser Sitzung selbst umgeschaltet wurde. Danach darf
   /// eine spaet eintreffende Antwort vom Konto die Wahl nicht mehr umwerfen.
   bool _wahlGetroffen = false;
@@ -92,6 +97,13 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     _subscribeCommunity();
     _subscribeVerlauf();
     unawaited(_ladeDarstellung());
+    // Fehler 6: eigenen Stumm-Status holen (eine winzige Einzelzeilen-Abfrage,
+    // bewusst nicht im _load-Buendel — die Glocke darf spaeter erscheinen).
+    unawaited(
+      CommunityChatService.fetchStumm(widget.communityId).then((wert) {
+        if (mounted && wert != null) setState(() => _stumm = wert);
+      }),
+    );
     // Die Serveruhr EINMAL messen. Sie entscheidet ueber nichts (das tut die
     // Datenbank), aber ohne sie kann die Seite nicht ehrlich anzeigen, wie
     // lange noch bearbeitet werden darf.
@@ -927,6 +939,40 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     );
   }
 
+  /// 2026-08-28 (Fehler 6): Glocke umschalten. Optimistisch — die Anzeige
+  /// kippt sofort, der Server zieht nach; scheitert er, kippt sie zurueck
+  /// und sagt es ehrlich.
+  Future<void> _toggleStumm() async {
+    final vorher = _stumm;
+    if (vorher == null) return;
+    final neu = !vorher;
+    HapticFeedback.selectionClick();
+    setState(() => _stumm = neu);
+    final ok = await CommunityChatService.setStumm(widget.communityId, neu);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() => _stumm = vorher);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Konnte gerade nicht gespeichert werden.'),
+          backgroundColor: Color(0xFF333333),
+        ),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          neu
+              ? 'Community stummgeschaltet. Du bekommst keine Benachrichtigungen mehr aus diesem Chat.'
+              : 'Benachrichtigungen fuer diese Community sind wieder an.',
+        ),
+        backgroundColor: const Color(0xFF333333),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Future<void> _confirmLeaveCommunity() async {
     final isAdmin = _amAdmin;
     final shouldLeave = await showDialog<bool>(
@@ -1132,6 +1178,23 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
           ),
         ),
         actions: [
+          // 2026-08-28 (Fehler 6): Stummschalten je Community — die Glocke
+          // direkt am Chat, ein Tipp. Serverseitig gespeichert, damit auch
+          // der Push-Fanout sie respektiert. Erscheint erst, wenn der
+          // Zustand geladen ist.
+          if (_stumm != null)
+            IconButton(
+              tooltip: _stumm!
+                  ? 'Stumm. Tippen, um Benachrichtigungen wieder zu bekommen'
+                  : 'Benachrichtigungen an. Tippen zum Stummschalten',
+              onPressed: _toggleStumm,
+              icon: Icon(
+                _stumm!
+                    ? Icons.notifications_off_outlined
+                    : Icons.notifications_outlined,
+                color: _stumm! ? Colors.white38 : Colors.white,
+              ),
+            ),
           // 2026-08-24 (Auftrag Vucko „chat art optimieren"): Der Wechsel
           // gehoert dorthin, wo der Chat ist, und nicht in ein
           // Einstellungsmenue drei Ebenen tiefer. Ein Tipp, sofort sichtbar.

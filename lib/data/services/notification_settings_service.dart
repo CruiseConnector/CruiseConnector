@@ -30,6 +30,9 @@ class NotificationSettingsService extends ChangeNotifier {
   static const _keyFriendRequests = 'friend_requests';
   static const _keyGroupInvites = 'group_invites';
   static const _keyDailyWeather = 'daily_weather';
+  // 2026-08-28 (Fehler 6): Beitraege von Gefolgten + Community-Chat.
+  static const _keyFeedPosts = 'feed_posts';
+  static const _keyCommunityChat = 'community_chat';
 
   /// Prefix für den lokalen SharedPreferences-Cache.
   static const _spPrefix = 'notif_pref_';
@@ -46,6 +49,8 @@ class NotificationSettingsService extends ChangeNotifier {
     _keyFriendRequests: true,
     _keyGroupInvites: true,
     _keyDailyWeather: true,
+    _keyFeedPosts: true,
+    _keyCommunityChat: true,
   };
 
   bool get isLoaded => _loaded;
@@ -56,6 +61,8 @@ class NotificationSettingsService extends ChangeNotifier {
   bool get friendRequests => _prefs[_keyFriendRequests]!;
   bool get groupInvites => _prefs[_keyGroupInvites]!;
   bool get dailyWeather => _prefs[_keyDailyWeather]!;
+  bool get feedPosts => _prefs[_keyFeedPosts]!;
+  bool get communityChat => _prefs[_keyCommunityChat]!;
 
   /// Notification-Typ -> Einstellungs-Kategorie. Spiegel von send-push.
   /// Unbekannter Typ (z. B. trip_reminder) = immer an.
@@ -78,6 +85,10 @@ class NotificationSettingsService extends ChangeNotifier {
         return _keyGroupInvites;
       case 'weather_recommendation':
         return _keyDailyWeather;
+      case 'feed_post':
+        return _keyFeedPosts;
+      case 'community_message':
+        return _keyCommunityChat;
       default:
         return null;
     }
@@ -163,6 +174,8 @@ class NotificationSettingsService extends ChangeNotifier {
   Future<void> setFriendRequests(bool v) => _set(_keyFriendRequests, v);
   Future<void> setGroupInvites(bool v) => _set(_keyGroupInvites, v);
   Future<void> setDailyWeather(bool v) => _set(_keyDailyWeather, v);
+  Future<void> setFeedPosts(bool v) => _set(_keyFeedPosts, v);
+  Future<void> setCommunityChat(bool v) => _set(_keyCommunityChat, v);
 
   Future<void> _set(String key, bool v) async {
     if (_prefs[key] == v) return;

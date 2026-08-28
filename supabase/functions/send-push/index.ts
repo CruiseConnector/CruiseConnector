@@ -363,6 +363,26 @@ function renderPush(
         title: 'Trip wartet',
         body: 'Dein gestarteter Trip wartet auf Fortsetzung',
       };
+    // 2026-08-28 (Fehler 6): Beitraege von Leuten, denen man folgt.
+    case 'feed_post': {
+      const preview = String(payload.preview ?? '').trim();
+      return {
+        title: `${name} hat etwas gepostet`,
+        body: preview.length > 0 ? preview : 'Schau dir den neuen Beitrag an',
+      };
+    }
+    // 2026-08-28 (Fehler 6): Community-Chat. Titel ist die Community, der
+    // Text traegt Absender und Vorschau; gebuendelte Zeilen zaehlen mit.
+    case 'community_message': {
+      const cname = String(payload.community_name ?? 'Community');
+      const preview = String(payload.preview ?? '').trim();
+      return agg > 1
+        ? {
+            title: cname,
+            body: `${agg} neue Nachrichten, zuletzt: ${preview}`,
+          }
+        : { title: cname, body: `${name}: ${preview}` };
+    }
     // 2026-08-07 (vucko Monitoring-Zugangsschutz): Der Alarm bringt seinen
     // Text selbst mit — er beschreibt einen Vorfall, nicht eine soziale
     // Aktion, und passt in kein Muster der Faelle darueber.
@@ -399,6 +419,12 @@ function categoryForType(type: string): string | null {
       return 'group_invites';
     case 'weather_recommendation':
       return 'daily_weather';
+    // 2026-08-28 (Fehler 6): zwei neue Kategorien, Schluessel identisch mit
+    // NotificationSettingsService im Client.
+    case 'feed_post':
+      return 'feed_posts';
+    case 'community_message':
+      return 'community_chat';
     default:
       return null;
   }
