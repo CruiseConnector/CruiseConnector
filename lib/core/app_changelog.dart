@@ -76,6 +76,42 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.29',
+      anzeigeName: '1.4',
+      titel: 'Genauer, privater und ganz Deutschland',
+      schrittTitel: <String>[
+        'Hinter dir ist vorbei',
+        'Die Ankunftszeit stimmt jetzt',
+        'Ganz Deutschland an Bord',
+        'Meldungen schon vor der Fahrt',
+        'Stau weg heißt weg',
+        'Teilen ohne Wohnort',
+        'Bescheid bei Neuigkeiten',
+        'Offline nur mit deinem Ja',
+      ],
+      punkte: <String>[
+        'Die Anweisung blieb manchmal stehen, obwohl du längst abgebogen '
+            'warst. Gefahrene Manöver verschwinden jetzt sofort.',
+        'Die Fahrzeit war zu zuversichtlich gerechnet, auf langen Strecken '
+            'um fast ein Drittel. Jetzt ist sie an echten Fahrten geeicht.',
+        'Im Norden Deutschlands kamen keine Routen. Jetzt gibt es Rundkurse '
+            'und Strecken im ganzen Land.',
+        'Baustellen, Unfälle und Staus siehst du schon vor dem Losfahren '
+            'auf der Karte. Der neue Schalter blendet alle Meldungen aus '
+            'und ein.',
+        'Meldet jemand einen Stau oder Unfall als vorbei, ist er sofort '
+            'weg. Baustellen verschwinden erst, wenn es mehrere melden.',
+        'Geteilte Fahrten zeigen nur den Streckenverlauf, ohne Karte und '
+            'Ortsnamen. Start und Ziel werden gekürzt, dein Zuhause bleibt '
+            'privat.',
+        'Du bekommst Bescheid, wenn Gefolgte posten und in deinen '
+            'Communities geschrieben wird. Die Glocke im Chat schaltet je '
+            'Community stumm.',
+        'Die Offlinekarte für Österreich, Deutschland und die Schweiz lädt '
+            'erst nach deiner Zustimmung. Ohne dein Ja lädt nichts.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.28',
       anzeigeName: '1.3',
       titel: 'Ruhigere Navigation',
