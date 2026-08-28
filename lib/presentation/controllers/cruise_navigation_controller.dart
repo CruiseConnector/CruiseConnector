@@ -26,6 +26,10 @@ class CruiseNavigationController {
     required double? remainingRouteDistanceMeters,
     required double? distanceToFinalTargetMeters,
     required double arrivalRadiusMeters,
+    // 2026-08-28 (Fehler 9): stetige Strecke, damit ein gefahrenes Manoever
+    // nicht als „Jetzt" kleben bleibt, bis der diskrete Index nachkommt.
+    double? passiertBisRouteMeter,
+    List<double>? cumulativeDistances,
   }) {
     return selectActiveGuidanceManeuverIndex(
       maneuvers: maneuvers,
@@ -34,6 +38,8 @@ class CruiseNavigationController {
       distanceToFinalTargetMeters: distanceToFinalTargetMeters,
       startIndex: activeManeuverIndex,
       arrivalRadiusMeters: arrivalRadiusMeters,
+      passiertBisRouteMeter: passiertBisRouteMeter,
+      cumulativeDistances: cumulativeDistances,
     );
   }
 
@@ -44,6 +50,8 @@ class CruiseNavigationController {
     required double? remainingRouteDistanceMeters,
     required double? distanceToFinalTargetMeters,
     required double arrivalRadiusMeters,
+    double? passiertBisRouteMeter,
+    List<double>? cumulativeDistances,
   }) {
     final index = activeVisibleManeuverIndex(
       maneuvers: maneuvers,
@@ -52,6 +60,8 @@ class CruiseNavigationController {
       remainingRouteDistanceMeters: remainingRouteDistanceMeters,
       distanceToFinalTargetMeters: distanceToFinalTargetMeters,
       arrivalRadiusMeters: arrivalRadiusMeters,
+      passiertBisRouteMeter: passiertBisRouteMeter,
+      cumulativeDistances: cumulativeDistances,
     );
     if (index == null) return null;
     return maneuvers[index.clamp(0, maneuvers.length - 1).toInt()];

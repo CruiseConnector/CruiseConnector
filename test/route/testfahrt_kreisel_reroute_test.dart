@@ -230,7 +230,10 @@ void main() {
       final cm = File('lib/presentation/pages/cruise_mode_page.dart').readAsStringSync();
       final wd = cm.indexOf('Frozen-Progress-Watchdog. Die Render-Lock-Distanz');
       expect(wd, greaterThan(0));
-      final block = cm.substring(wd, wd + 3500);
+      // 2026-08-28: Fenster geweitet — zwischen Kommentar und Aufruf stehen
+      // inzwischen die Lock-Freigabe-Heilung (26.08.) und die Stillstands-
+      // Entwaffnung des Teleport-Budgets (28.08.).
+      final block = cm.substring(wd, wd + 6500);
       expect(block.contains('if (watchdogSpeedMps < 5.0) {'), isTrue);
       expect(block.contains('drivenSinceProgressChangedM: _watchdogDrivenM'), isTrue);
       expect(block.contains('inRoundabout: _puckNaheKreisverkehr(position)'), isTrue);

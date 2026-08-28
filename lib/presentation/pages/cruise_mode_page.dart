@@ -826,6 +826,13 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<RouteManeuver> _maneuvers = [];
   int _activeManeuverIndex = 0;
   int _currentRouteIndex = 0;
+
+  /// 2026-08-28 (Fehler 9): Stetige Fahrstrecke entlang der Route in Metern,
+  /// aus der Projektion des letzten Fixes IM Korridor. Der diskrete Index
+  /// rueckt erst bei 92 Prozent des Folgesegments vor — fuer die Frage „ist
+  /// dieses Manoever schon gefahren?" ist er deshalb zu traege. Diese Zahl
+  /// nicht: sie waechst mit jedem Meter. Null bei neuer Route.
+  double? _stetigeRoutenMeter;
   final Set<int> _announcedManeuverIndices = <int>{};
   // 2026-05-24 (vucko Task #44): POI-Layer (Tankstellen etc.)
   bool _poisVisible = false;
@@ -2823,6 +2830,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _maneuvers = route.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
+      _stetigeRoutenMeter = null;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
@@ -11397,6 +11405,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _maneuvers = result.maneuvers;
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
+      _stetigeRoutenMeter = null;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
@@ -12335,6 +12344,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _maneuvers = [];
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
+      _stetigeRoutenMeter = null;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _advanceCapRejects = 0;
@@ -14082,6 +14092,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _dimRemainingLatLngs = const [];
       _lastDimHead = null;
       _currentRouteIndex = 0;
+      _stetigeRoutenMeter = null;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _advanceCapRejects = 0;
@@ -14405,6 +14416,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _isRouteConfirmed = true;
       if (!preserveCurrentProgress) {
         _currentRouteIndex = 0;
+      _stetigeRoutenMeter = null;
         _lastDrawnRouteIndex = 0;
         _remainingRouteCoordinates = _fullRouteCoordinates;
       } else {
@@ -15470,6 +15482,29 @@ class _CruiseModePageState extends State<CruiseModePage>
             globalDecision,
             position,
           );
+          // 2026-08-28 (Fehler 9, Rang 2): Es gab keinen Weg ZURUECK. Sprang
+          // der Index durch einen Ausreisser zu weit vor, fand der Re-Snap
+          // den Fahrer zwar im Korridor, verweigerte aber den Rueckwaerts-
+          // Commit — und zwar fuer immer: Banner und Distanz klebten an einem
+          // Punkt hunderte Meter voraus, bis man ihn physisch erreichte.
+          // Nach fuenf Verweigerungen in Folge mit In-Korridor-Treffer wird
+          // der Index jetzt ehrlich rueckverankert. Der Treffer kommt aus
+          // findNearestOnRoutePreferIndex, ist auf Rundkursen also schon
+          // gegen den Selbstueberlapp geschuetzt.
+          if (_advanceCapRejects >= 5 &&
+              globalMatch.index < _currentRouteIndex) {
+            debugPrint(
+              '[CruiseMode] Rueckwaerts-Anker: Index $_currentRouteIndex -> '
+              '${globalMatch.index} nach $_advanceCapRejects Verweigerungen.',
+            );
+            _currentRouteIndex = globalMatch.index;
+            _lastRouteIndexAdvanceAt = position.timestamp;
+            _advanceCapRejects = 0;
+            routeProgressMatch = globalMatch;
+            if (globalDecision.matchDist.isFinite) {
+              _stetigeRoutenMeter = globalDecision.matchDist;
+            }
+          }
         }
         isOutsideCorridor =
             false; // doch auf der Route — nur Fenster nachgehinkt
@@ -15759,6 +15794,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     // rückt <2 Punkte/Tick vor, der Cap blockt also nur anomale Sprünge.
     _ensureRouteMetrics();
     final advanceDecision = _routeProgressDecision(match, position);
+    // Fehler 9: die stetige Strecke pflegen, solange der Fix im Korridor ist.
+    if (!isOutsideCorridor && advanceDecision.matchDist.isFinite) {
+      _stetigeRoutenMeter = advanceDecision.matchDist;
+    }
     final stableMatchIndex = advanceDecision.stableIndex;
     if (stableMatchIndex > _currentRouteIndex &&
         stableMatchIndex - _currentRouteIndex <= 60 &&
@@ -15855,6 +15894,14 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (watchdogSpeedMps < 5.0) {
       _renderDistChangedAt = position.timestamp;
       _watchdogDrivenM = 0.0;
+    }
+    // 2026-08-28 (Fehler 9, Rang 2): Im Stand kann kein legitimer Fortschritt
+    // anfallen — die Uhr des Teleport-Budgets (plausibleRouteAdvanceLimit
+    // waechst mit der Zeit seit dem letzten Accept) lief an der Ampel aber
+    // weiter. Nach 75 Sekunden Rot durfte der erste Reakquise-Ausreisser
+    // dann 740 m springen. Im Stand mitziehen haelt das Budget klein.
+    if (watchdogSpeedMps < 1.0) {
+      _lastRouteIndexAdvanceAt = position.timestamp;
     }
     final frozenFor = _renderDistChangedAt == null
         ? Duration.zero
@@ -19532,6 +19579,8 @@ class _CruiseModePageState extends State<CruiseModePage>
       remainingRouteDistanceMeters: _remainingDistance,
       distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
       arrivalRadiusMeters: _arrivalRadiusMeters,
+      passiertBisRouteMeter: _stetigeRoutenMeter,
+      cumulativeDistances: _routeCumDistM,
     );
   }
 
@@ -19568,10 +19617,17 @@ class _CruiseModePageState extends State<CruiseModePage>
       remainingRouteDistanceMeters: _remainingDistance,
       distanceToFinalTargetMeters: _distanceToFinalTargetMeters,
       arrivalRadiusMeters: _arrivalRadiusMeters,
+      passiertBisRouteMeter: _stetigeRoutenMeter,
+      cumulativeDistances: _routeCumDistM,
     );
   }
 
   double? _calculateDistanceToManeuver([RouteManeuver? visibleManeuver]) {
+    // Fehler 9: Die Distanz muss zum SELBEN Manoever gehoeren wie das Banner.
+    // Ohne diese Aufloesung wuerde die interne Auswahl (ohne stetige Strecke)
+    // noch das gefahrene Manoever messen, waehrend das Banner schon das
+    // naechste zeigt.
+    visibleManeuver ??= _activeVisibleManeuver();
     return _navigationController.calculateDistanceToManeuver(
       maneuvers: _maneuvers,
       routeCoordinates: _fullRouteCoordinates,
@@ -19589,6 +19645,8 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// noch visuelle Monotonie, damit der Text innerhalb desselben Manövers nicht
   /// nach oben springt.
   double? _displayManeuverDistanceMeters([RouteManeuver? visibleManeuver]) {
+    // Fehler 9: siehe _calculateDistanceToManeuver.
+    visibleManeuver ??= _activeVisibleManeuver();
     return _navigationController.displayManeuverDistanceMeters(
       maneuvers: _maneuvers,
       routeCoordinates: _fullRouteCoordinates,

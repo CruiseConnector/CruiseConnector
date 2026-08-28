@@ -288,6 +288,26 @@ bool violatesNoHighwayPolicy({
   return false;
 }
 
+/// 2026-08-28 (Fehler 9, kritisch): Ein Manoever gilt als PASSIERT, sobald die
+/// stetige Fahrstrecke entlang der Route mehr als [manoeverPassiertHysterese]
+/// hinter seinem Punkt liegt — unabhaengig vom diskreten Routenindex.
+///
+/// Der Index rueckt erst vor, wenn 92 Prozent des FOLGE-Segments gefahren
+/// sind (stableRouteIndexForMatch). Auf einer langen geraden Strasse steht er
+/// nach dem Abbiegen deshalb sekunden- bis minutenlang AUF dem Manoeverpunkt,
+/// die Auswahl hielt bei Gleichheit das soeben GEFAHRENE Manoever aktiv, und
+/// das Banner zeigte „Jetzt · Links abbiegen", obwohl laengst abgebogen war.
+/// Durchgerechnet: Folgesegment 620 m bei 47 km/h ergibt 44 Sekunden, bei
+/// 22 km/h im Stadtverkehr 95 Sekunden Geisterbanner. Woertlich der Befund
+/// des Betreibers: „da steht schon die ganze Zeit ich muss links abbiegen,
+/// obwohl ich schon links abgebogen bin."
+///
+/// Die Hysterese von 20 m verhindert Zappeln am Manoeverpunkt selbst; die
+/// Kreisverkehr-Logik vom 26.08. (Gleichheit heisst „jetzt") bleibt fuer die
+/// ANFAHRT unveraendert, weil die stetige Strecke dort noch VOR dem Punkt
+/// liegt.
+const double manoeverPassiertHysterese = 20.0;
+
 int? selectActiveGuidanceManeuverIndex({
   required List<RouteManeuver> maneuvers,
   required int currentRouteIndex,
@@ -295,13 +315,41 @@ int? selectActiveGuidanceManeuverIndex({
   required double? distanceToFinalTargetMeters,
   int startIndex = 0,
   double arrivalRadiusMeters = 50.0,
+  // 2026-08-28 (Fehler 9): stetige Fahrstrecke entlang der Route in Metern
+  // und die kumulierten Distanzen je Routenpunkt. Beide optional — alte
+  // Aufrufer verhalten sich unveraendert.
+  double? passiertBisRouteMeter,
+  List<double>? cumulativeDistances,
 }) {
   if (maneuvers.isEmpty) return null;
+
+  bool stetigPassiert(RouteManeuver m) {
+    if (passiertBisRouteMeter == null || cumulativeDistances == null) {
+      return false;
+    }
+    final idx = m.routeIndex;
+    if (idx < 0 || idx >= cumulativeDistances.length) return false;
+    return passiertBisRouteMeter >
+        cumulativeDistances[idx] + manoeverPassiertHysterese;
+  }
 
   final safeStart = startIndex.clamp(0, maneuvers.length - 1).toInt();
   for (var i = safeStart; i < maneuvers.length; i++) {
     final maneuver = maneuvers[i];
     if (maneuver.routeIndex < currentRouteIndex) continue;
+    // Fehler 9: hinter der stetigen Fahrstrecke liegende Manoever sind
+    // gefahren, auch wenn der diskrete Index noch auf ihnen steht.
+    //
+    // AUSNAHME Kreisverkehr: sein Punkt ist die EINFAHRT, und die stetige
+    // Strecke waechst schon beim Kreisen im Ring. Ohne Ausnahme verloere das
+    // Banner die Ausfahrt-Ansage, waehrend man sie noch braucht. Im Ring
+    // rueckt der diskrete Index ohnehin fluessig vor (Ringpunkte liegen 4 bis
+    // 13 m auseinander, gemessen am 25.08.) — die alte Regel reicht dort.
+    if (!maneuver.isArrival &&
+        maneuver.maneuverType != ManeuverType.roundabout &&
+        stetigPassiert(maneuver)) {
+      continue;
+    }
     // 2026-08-26 (vucko Testfahrt-Video 25.08., 22:22 bis 22:31): Das Banner
     // war NEUN MINUTEN am Stueck komplett weg, mitten in der Bergstrecke,
     // obwohl Manoever anstanden. Ursache: Nach einem Reroute wird die
