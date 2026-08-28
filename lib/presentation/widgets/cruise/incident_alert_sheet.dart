@@ -185,6 +185,28 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
           duration: const Duration(seconds: 3),
         ),
       );
+      return;
+    }
+    // 2026-08-28 (Fehler 10): Nach "Schon weg" sagt das Blatt, was jetzt
+    // passiert — je Art verschieden. Stau und Unfall entfernt der Server
+    // sofort fuer alle. Eine Baustelle verschwindet erst fuer diesen Nutzer
+    // (lokale Ausblendliste im Service) und fuer alle, sobald mehrere Fahrer
+    // sie wegstimmen. Ohne diesen Satz saehe der Baustellen-Fall wie ein
+    // Fehler aus: Marker weg, bei anderen noch da.
+    if (!stillThere) {
+      final istBaustelle =
+          widget.incident.type == RoadIncidentType.baustelle;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            istBaustelle
+                ? 'Fuer dich ausgeblendet. Ganz entfernt wird die Baustelle, sobald mehrere Fahrer sie als weg melden.'
+                : 'Danke, die Meldung ist entfernt.',
+          ),
+          backgroundColor: Colors.grey.shade800,
+          duration: Duration(seconds: istBaustelle ? 5 : 3),
+        ),
+      );
     }
   }
 

@@ -893,6 +893,31 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// dass jemand die Zeile angefasst hat (dabei feuert kein Realtime-Ereignis).
   static const Duration _meldungsNachladeTakt = Duration(minutes: 5);
 
+  // ── 2026-08-28 (Fehler 10, Vucko): „Es soll schon auf der Cruise Seite
+  // angezeigt werden und auch bei dem POV, dass ich es ein oder ausschalten
+  // kann." Zwei Dinge, beide neu:
+  //
+  //  1. Meldungen SCHON VOR der Fahrt: bisher lud die Seite Meldungen erst
+  //     mit einer berechneten Route. Wer die Karte nur offen hatte, sah
+  //     nichts. Jetzt gibt es eine zweite Liste rund um den eigenen Standort.
+  //  2. Ein SCHALTER, der die Anzeige komplett stummschaltet — Marker,
+  //     Ansage und Nachfragen. Persistiert, damit die Wahl den Neustart
+  //     ueberlebt.
+  /// Aktive Meldungen rund um den Standort, solange KEINE Route bestaetigt
+  /// ist. Waehrend der Fahrt zaehlt weiterhin nur [_routeIncidents] — alles
+  /// abseits der Strecke waere dort nur Rauschen.
+  List<RoadIncident> _umgebungsMeldungen = const [];
+  DateTime? _letzterUmgebungsLadeVersuch;
+
+  /// Der Schalter. true = Meldungen sichtbar (Standard).
+  bool _meldungenAnzeigen = true;
+  static const String _meldungenAnzeigenKey = 'meldungen_anzeigen_v1';
+
+  /// Halbe Kantenlaenge der Umgebungs-BBox in Grad Breite (~15 km). Gross
+  /// genug fuer den Kartenausschnitt, mit dem man eine Fahrt plant, klein
+  /// genug fuer das 200-Zeilen-Limit der Abfrage.
+  static const double _umgebungsBoxGrad = 0.14;
+
   /// 2026-08-20 (Vucko zu den Abfragen: „jetzt nicht, wenn es ja ein [unklar]
   /// oder so"): Obergrenze fuer Bestaetigungsfragen je Fahrt. Gewarnt wird
   /// weiterhin vor JEDER Meldung, gefragt wird hoechstens dreimal.
@@ -2711,6 +2736,11 @@ class _CruiseModePageState extends State<CruiseModePage>
     _startLocationFocusNode.addListener(_onDestinationFocusChanged);
     unawaited(_loadCountryPreference());
     unawaited(_loadWaypointTutorialShown());
+    // 2026-08-28 (Fehler 10): Meldungen sind jetzt schon VOR der Fahrt
+    // sichtbar. Schalterstellung laden und den Live-Kanal sofort oeffnen —
+    // vorher ging er erst mit der Routen-Bestaetigung auf.
+    unawaited(_ladeMeldungenSchalter());
+    _startIncidentLiveSync();
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeShowRoutingOnboarding(),
     );
@@ -7026,6 +7056,19 @@ class _CruiseModePageState extends State<CruiseModePage>
                       );
                     },
                   ),
+                  // 2026-08-28 (Fehler 10): derselbe Meldungs-Schalter wie in
+                  // der FAB-Spalte, damit er auch in der Wegpunkt-Planung
+                  // erreichbar bleibt.
+                  _buildWaypointMapAction(
+                    icon: _meldungenAnzeigen
+                        ? Icons.warning_amber_rounded
+                        : Icons.report_off_outlined,
+                    label: 'Meldungen',
+                    overrideAccent: _meldungenAnzeigen
+                        ? const Color(0xFFFF9500)
+                        : null,
+                    onTap: _meldungenSchalterUmschalten,
+                  ),
                   _buildWaypointMapAction(
                     icon: _isCameraLocked ? Icons.explore : Icons.explore_off,
                     label: 'Kamera',
@@ -9070,11 +9113,13 @@ class _CruiseModePageState extends State<CruiseModePage>
             ],
           ),
         // ── Verkehrsmeldungs-Marker (2026-07-24, "+-Button") ───────────────
-        if (_routeIncidents.isNotEmpty)
+        // 2026-08-28 (Fehler 10): _sichtbareMeldungen statt _routeIncidents —
+        // damit greifen der Schalter und die Umgebungsliste auch hier.
+        if (_sichtbareMeldungen.isNotEmpty)
           MarkerLayer(
             rotate: true,
             markers: [
-              for (final incident in _routeIncidents)
+              for (final incident in _sichtbareMeldungen)
                 Marker(
                   point: LatLng(incident.latitude, incident.longitude),
                   width: 40,
@@ -9701,6 +9746,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (position != null) {
           _userLocation = position;
           _setCameraToPosition(position);
+          // Fehler 10: Sobald es einen Standort gibt, gibt es auch Meldungen.
+          unawaited(_ladeUmgebungsMeldungen());
         }
       }
 
@@ -9720,6 +9767,9 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
         _setCameraToPosition(freshPosition);
         _safeSetState(() {}); // Marker-Refresh
+        // Fehler 10: Mit dem frischen Fix erzwungen nachladen — der Aufruf
+        // vom letzten bekannten Standort oben kann Kilometer daneben liegen.
+        unawaited(_ladeUmgebungsMeldungen(erzwingen: true));
       } catch (e) {
         debugPrint('[CruiseMode] Frische GPS-Position nicht verfügbar: $e');
       }
@@ -9827,6 +9877,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       final lng = prefs.getDouble(_prefsLastCenterLng);
       if (lat != null && lng != null) {
         _cachedUserCenter ??= LatLng(lat, lng);
+        // Fehler 10: Auch der Kaltstart ohne GPS-Freigabe zeigt Meldungen —
+        // eben rund um den zuletzt bekannten Standort.
+        unawaited(_ladeUmgebungsMeldungen());
         // Karte schon offen, aber noch kein Live-Fix → sofort grob hin zentrieren.
         if (mounted && _mapReady && _userLocation == null) {
           _camMove(lat, lng, 13.0);
@@ -14944,6 +14997,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     _incidentRefreshTimer = null;
     _incidentChannel?.unsubscribe();
     _incidentChannel = null;
+    // 2026-08-28 (Fehler 10): Meldungen sind jetzt auch OHNE Fahrt sichtbar.
+    // Der Kanal geht deshalb sofort wieder auf — nur eben im Umgebungs-Modus
+    // (siehe _startIncidentLiveSync). dispose() raeumt ihn endgueltig ab.
+    if (!_disposed) {
+      _startIncidentLiveSync();
+      unawaited(_ladeUmgebungsMeldungen(erzwingen: true));
+    }
     // 2026-08-20: Die Stau-Erkennung rechnet aus einer LÜCKENLOSEN Fixfolge.
     // Dieser Funnel deckt auch die Pause ab, und über eine Pause hinweg weiß
     // niemand, ob gefahren oder geparkt wurde. Also verwerfen statt weiter
@@ -16201,7 +16261,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       keys.add(_poiIconKey(poi));
     }
     if (_routeConstructions.isNotEmpty) keys.add(_constructionIconKey);
-    for (final incident in _routeIncidents) {
+    for (final incident in _sichtbareMeldungen) {
       keys.add(_incidentIconKey(incident.type));
     }
     return keys;
@@ -16349,9 +16409,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     // liefert der Early-Return eine leere Liste, sobald eine Route weder POIs
     // noch Baustellen hat, und Verkehrsmeldungen erscheinen auf der NATIVEN
     // Karte nie (der Normalfall bei ausgeschaltetem POI-Filter).
+    // 2026-08-28 (Fehler 10): einmal auswerten — der Getter baut ggf. eine
+    // zusammengefuehrte Liste.
+    final meldungen = _sichtbareMeldungen;
     if (_routePois.isEmpty &&
         _routeConstructions.isEmpty &&
-        _routeIncidents.isEmpty) {
+        meldungen.isEmpty) {
       return const [];
     }
     final features = <Map<String, dynamic>>[];
@@ -16390,7 +16453,7 @@ class _CruiseModePageState extends State<CruiseModePage>
     // 2026-07-24 (vucko "+-Button"): Verkehrsmeldungen im selben nativen
     // Symbol-Layer — nur mit bereits gerastertem Icon (nie eine fehlende
     // Bild-Referenz im Layer, gleiche Regel wie POIs/Baustellen oben).
-    for (final incident in _routeIncidents) {
+    for (final incident in meldungen) {
       final key = _incidentIconKey(incident.type);
       if (!_poiIconImages.containsKey(key)) continue;
       features.add({
@@ -16424,7 +16487,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         }
       }
     } else if (id.startsWith('inc-')) {
-      for (final incident in _routeIncidents) {
+      for (final incident in _sichtbareMeldungen) {
         if ('inc-${incident.id}' == id) {
           IncidentAlertSheet.show(context, incident);
           return;
@@ -16870,7 +16933,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     _incidentChannel ??= RoadIncidentService.instance.subscribeIncidents(() {
       _incidentRefetchDebounce?.cancel();
       _incidentRefetchDebounce = Timer(const Duration(seconds: 1), () {
-        if (!mounted || _fullRouteCoordinates.length < 2) return;
+        if (!mounted) return;
+        // 2026-08-28 (Fehler 10): Ohne Route wird die Umgebungsliste
+        // aufgefrischt — der Kanal lebt jetzt schon ab dem Oeffnen der Seite.
+        if (_fullRouteCoordinates.length < 2) {
+          unawaited(_ladeUmgebungsMeldungen(erzwingen: true));
+          return;
+        }
         unawaited(_loadRoadIncidents(_fullRouteCoordinates));
       });
     });
@@ -16900,7 +16969,19 @@ class _CruiseModePageState extends State<CruiseModePage>
   ///     Abfrage auf eine Bounding-Box sind zwölf Abfragen pro Stunde.
   void _meldungenAufraeumenUndNachladen() {
     if (!mounted || _disposed) return;
-    if (!_isRouteConfirmed) return;
+    // 2026-08-28 (Fehler 10): Vor der Fahrt haelt derselbe Takt die
+    // Umgebungsliste frisch — Abgelaufenes raus, Nachladen im eigenen,
+    // gedrosselten Takt (die Drossel sitzt in _ladeUmgebungsMeldungen).
+    if (!_isRouteConfirmed) {
+      if (_umgebungsMeldungen.isNotEmpty) {
+        final lebendig = nurGueltigeMeldungen(_umgebungsMeldungen);
+        if (lebendig.length != _umgebungsMeldungen.length) {
+          _safeSetState(() => _umgebungsMeldungen = lebendig);
+        }
+      }
+      unawaited(_ladeUmgebungsMeldungen());
+      return;
+    }
 
     if (_routeIncidents.isNotEmpty) {
       final lebendig = nurGueltigeMeldungen(_routeIncidents);
@@ -16922,6 +17003,100 @@ class _CruiseModePageState extends State<CruiseModePage>
     }
     _letzterMeldungsNachladeVersuch = jetzt;
     unawaited(_loadRoadIncidents(_fullRouteCoordinates));
+  }
+
+  // ── 2026-08-28 (Fehler 10): Meldungen schon vor der Fahrt + Schalter ──────
+
+  /// Was tatsaechlich gezeichnet und antippbar ist — die EINE Stelle, an der
+  /// der Schalter und die beiden Listen zusammenlaufen. Native Karte
+  /// (_buildPoiFeatures), Web-Fallback (MarkerLayer), Icon-Rasterung und
+  /// Tap-Aufloesung lesen alle hier.
+  List<RoadIncident> get _sichtbareMeldungen {
+    if (!_meldungenAnzeigen) return const [];
+    // Waehrend der Fahrt nur, was auf der Strecke liegt — wie bisher.
+    if (_isRouteConfirmed) return _routeIncidents;
+    if (_umgebungsMeldungen.isEmpty) return _routeIncidents;
+    // Vor der Fahrt beides: die Umgebung plus das, was eine schon berechnete
+    // (aber noch nicht bestaetigte) Route geladen hat.
+    final schonDa = {for (final i in _routeIncidents) i.id};
+    return [
+      ..._routeIncidents,
+      for (final i in _umgebungsMeldungen)
+        if (!schonDa.contains(i.id)) i,
+    ];
+  }
+
+  /// Aktive Meldungen rund um den letzten bekannten Standort laden. Laeuft
+  /// nur, solange keine Route bestaetigt ist; waehrend der Fahrt uebernimmt
+  /// [_loadRoadIncidents] mit der Routen-BBox.
+  ///
+  /// [erzwingen] uebergeht die Fuenf-Minuten-Drossel — fuer den ersten
+  /// frischen GPS-Fix, den Realtime-Kanal und das Wiedereinschalten.
+  Future<void> _ladeUmgebungsMeldungen({bool erzwingen = false}) async {
+    if (!mounted || _disposed) return;
+    if (!_meldungenAnzeigen) return;
+    if (_isRouteConfirmed) return;
+    final zentrum = _userLocation != null
+        ? LatLng(_userLocation!.latitude, _userLocation!.longitude)
+        : _cachedUserCenter;
+    if (zentrum == null) return;
+    final jetzt = DateTime.now();
+    final letzter = _letzterUmgebungsLadeVersuch;
+    if (!erzwingen &&
+        letzter != null &&
+        jetzt.difference(letzter) < _meldungsNachladeTakt) {
+      return;
+    }
+    _letzterUmgebungsLadeVersuch = jetzt;
+    // Laengengrade werden zum Pol hin schmaler; ohne den Kosinus waere die
+    // Box in Kiruna nur noch halb so breit wie gedacht.
+    final breitenFaktor =
+        math.cos(zentrum.latitude * math.pi / 180.0).abs().clamp(0.2, 1.0);
+    final halbeBreite = _umgebungsBoxGrad / breitenFaktor;
+    final geladen = await RoadIncidentService.instance.fetchInBbox(
+      southLat: zentrum.latitude - _umgebungsBoxGrad,
+      northLat: zentrum.latitude + _umgebungsBoxGrad,
+      westLng: zentrum.longitude - halbeBreite,
+      eastLng: zentrum.longitude + halbeBreite,
+    );
+    if (!mounted || _disposed) return;
+    _safeSetState(() => _umgebungsMeldungen = geladen);
+    debugPrint(
+      '[CruiseMode] Umgebungsmeldungen geladen: ${geladen.length}.',
+    );
+  }
+
+  Future<void> _ladeMeldungenSchalter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final gespeichert = prefs.getBool(_meldungenAnzeigenKey);
+      if (gespeichert != null &&
+          mounted &&
+          gespeichert != _meldungenAnzeigen) {
+        setState(() => _meldungenAnzeigen = gespeichert);
+      }
+    } catch (_) {
+      // Best-effort — Default bleibt: anzeigen.
+    }
+  }
+
+  void _meldungenSchalterUmschalten() {
+    HapticFeedback.selectionClick();
+    setState(() => _meldungenAnzeigen = !_meldungenAnzeigen);
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_meldungenAnzeigenKey, _meldungenAnzeigen);
+      } catch (_) {}
+    }());
+    if (_meldungenAnzeigen) {
+      // Beim Einschalten sofort fuellen — die Listen koennen leer oder alt
+      // sein, wenn der Schalter laenger aus war.
+      if (_fullRouteCoordinates.length >= 2) {
+        unawaited(_loadRoadIncidents(_fullRouteCoordinates));
+      }
+      unawaited(_ladeUmgebungsMeldungen(erzwingen: true));
+    }
   }
 
   /// 2026-05-28 (vucko Task #66): Construction-Reports für die Route laden.
@@ -17061,6 +17236,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// liegt.
   void _processIncidentGeofence(double lat, double lng) {
     if (!_isRouteConfirmed) return;
+    // 2026-08-28 (Fehler 10): Der Schalter schaltet ALLES stumm — Marker,
+    // Haptik, Ansage und Nachfragen. Wer die Anzeige nicht will, will erst
+    // recht keine Stimme dazu.
+    if (!_meldungenAnzeigen) return;
     if (_routeIncidents.isEmpty) return;
     final entered = _incidentGeofence.processPosition(
       latitude: lat,
@@ -17756,6 +17935,19 @@ class _CruiseModePageState extends State<CruiseModePage>
                       onPressed: () => _handleVoiceModeCycle(context),
                     );
                   },
+                ),
+                // 2026-08-28 (Fehler 10): Meldungen ein und aus — IMMER
+                // sichtbar, auf der Cruise-Seite wie im POV. Orange = an,
+                // grau = aus. Schaltet Marker, Ansage und Nachfragen zugleich.
+                _FabBubble(
+                  heroTag: 'incidents_toggle_fab',
+                  icon: _meldungenAnzeigen
+                      ? Icons.warning_amber_rounded
+                      : Icons.report_off_outlined,
+                  color: _meldungenAnzeigen
+                      ? const Color(0xFFFF9500)
+                      : const Color(0xFF2D3138),
+                  onPressed: _meldungenSchalterUmschalten,
                 ),
                 // Camera-Lock / Recenter — IMMER sichtbar
                 _FabBubble(

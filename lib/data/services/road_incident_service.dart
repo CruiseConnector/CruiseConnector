@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/domain/models/road_incident.dart';
@@ -92,6 +93,55 @@ class RoadIncidentService {
   static final RoadIncidentService instance = RoadIncidentService._();
 
   static SupabaseClient get _db => Supabase.instance.client;
+
+  // ── 2026-08-28 (Fehler 10): "Wenn ein Nutzer eine Baustelle als geloescht
+  // meldet, wird fuer Sie die Meldung vorerst geloescht. Sollten mehrere
+  // Nutzer die Baustelle als geloescht makieren, wird sie komplett entfernt."
+  //
+  // Fuer Stau und Unfall deaktiviert der Server EIN "Schon weg" sofort, da
+  // braucht es nichts Lokales. Eine Baustelle bleibt fuer alle anderen
+  // stehen, bis die gewichtete Mehrfach-Bestaetigung greift — nur wer selbst
+  // "Schon weg" gedrueckt hat, soll sie ab da nicht mehr sehen und nicht
+  // wieder danach gefragt werden. Das ist eine reine Anzeige-Entscheidung
+  // dieses Geraets, deshalb SharedPreferences und nicht die Datenbank.
+  static const String _selbstWeggemeldetKey =
+      'road_incidents_selbst_weggemeldet_v1';
+
+  /// Hoechstens so viele Eintraege behalten. Die Meldungen selbst leben
+  /// hoechstens 90 Tage; eine unbegrenzte Liste waere nur ein Datengrab.
+  static const int _selbstWeggemeldetLimit = 300;
+
+  Set<String>? _selbstWeggemeldetCache;
+
+  Future<Set<String>> _selbstWeggemeldeteIds() async {
+    final cache = _selbstWeggemeldetCache;
+    if (cache != null) return cache;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final geladen = prefs.getStringList(_selbstWeggemeldetKey) ?? const [];
+      return _selbstWeggemeldetCache = geladen.toSet();
+    } catch (e) {
+      debugPrint('[RoadIncident] Ausblendliste nicht ladbar: $e');
+      // Nicht cachen — der naechste Aufruf darf es erneut versuchen.
+      return const <String>{};
+    }
+  }
+
+  Future<void> _merkeSelbstWeggemeldet(String incidentId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final liste = prefs.getStringList(_selbstWeggemeldetKey) ?? <String>[];
+      liste.remove(incidentId);
+      liste.add(incidentId);
+      while (liste.length > _selbstWeggemeldetLimit) {
+        liste.removeAt(0);
+      }
+      await prefs.setStringList(_selbstWeggemeldetKey, liste);
+      _selbstWeggemeldetCache = liste.toSet();
+    } catch (e) {
+      debugPrint('[RoadIncident] Ausblendliste nicht speicherbar: $e');
+    }
+  }
 
   /// Meldet eine neue Verkehrslage. Der Server entscheidet ueber Annahme,
   /// Lebensdauer und Sichtbarkeit; abgelehnt wird mit einer Begruendung, die
@@ -230,7 +280,16 @@ class RoadIncidentService {
       }
       // Dieselbe Pruefung wie im Auffrisch-Takt der Fahransicht — eine Quelle,
       // damit beide nicht auseinanderlaufen.
-      return nurGueltigeMeldungen(out);
+      //
+      // 2026-08-28 (Fehler 10): Was dieser Nutzer selbst als "Schon weg"
+      // gemeldet hat, bleibt fuer ihn draussen — Marker, Vorwarnung und
+      // erneutes Nachfragen laufen alle ueber diesen Ladeweg.
+      final versteckt = await _selbstWeggemeldeteIds();
+      return nurGueltigeMeldungen(
+        versteckt.isEmpty
+            ? out
+            : out.where((i) => !versteckt.contains(i.id)),
+      );
     } catch (e) {
       debugPrint('[RoadIncident] fetch failed: $e');
       return const [];
@@ -336,6 +395,13 @@ class RoadIncidentService {
           'p_vote': stillThere ? 'confirm' : 'dismiss',
         },
       );
+      // 2026-08-28 (Fehler 10): Stau und Unfall raeumt der Server nach einem
+      // "Schon weg" sofort ab. Eine Baustelle bleibt fuer die anderen stehen,
+      // bis mehrere sie wegstimmen — fuer DIESEN Nutzer verschwindet sie ab
+      // jetzt trotzdem (siehe _selbstWeggemeldeteIds).
+      if (!stillThere) {
+        await _merkeSelbstWeggemeldet(incidentId);
+      }
       return true;
     } catch (e) {
       debugPrint('[RoadIncident] vote failed: $e');
