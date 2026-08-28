@@ -16,10 +16,12 @@
 //
 // 1) EIN EINZELNER FEHLSCHLAG IST KEIN AUSFALL.
 //    Der Weg zu den PCs laeuft ueber Tailscale Funnel. Ein einzelner
-//    Relay-Haenger darf nicht „ausgefallen" bedeuten. Deshalb bis zu drei
-//    Versuche; erst wenn ALLE drei scheitern, gilt der Host als unten.
-//    Genauso macht es der Waechter auf PC2 selbst (gh_guardian_pc2.sh:
-//    3 Fehlschlaege noetig).
+//    Relay-Haenger darf nicht „ausgefallen" bedeuten. Deshalb VIER
+//    Versuche, ueber rund 14 Sekunden GESTAFFELT; erst wenn alle vier
+//    scheitern, gilt der Host als unten.
+//    ⚠ 27.08.: vorher waren es drei Versuche im Abstand von 400 ms, also
+//    alles in einer Sekunde. Das reichte nicht — siehe die Messung bei
+//    den Konstanten weiter unten.
 //
 // 2) HTTP 200 IST NICHT „GESUND".
 //    /health liefert Klartext „OK" (kein JSON, entgegen der alten Doku).
@@ -27,7 +29,12 @@
 //    GraphHopper mit kaputtem Graph antwortet weiter mit 200, hat aber keine
 //    Profile mehr. Das faellt nur hier auf.
 //
-// 3) GEMELDET WIRD NUR DER WECHSEL.
+// 3) ZWEI RECHNER STERBEN NICHT GLEICHZEITIG.
+//    Fallen beide im selben Lauf aus, liegt der gemeinsame Weg brach
+//    (Internet am Standort, Funnel, Supabase). Der Alarm sagt das dann
+//    auch, statt zwei Server anzuklagen.
+//
+// 4) GEMELDET WIRD NUR DER WECHSEL.
 //    Bei jedem Lauf entsteht eine Verlaufszeile (2 Hosts * 24 = 48 am Tag,
 //    nach 35 Tagen geraeumt). Ein Alarm geht aber nur raus, wenn sich der
 //    Zustand AENDERT — Ausfall und Rueckkehr. Sonst waere es Laerm und man
@@ -39,8 +46,37 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const db = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
 
-const VERSUCHE = 3;
-const ZEITLIMIT_MS = 9000;      // gh_guardian_pc2.sh nutzt 10 s; 6 s war zu eng
+// ⚠ 27.08.2026: DAS FLATTERN KAM VOM MESSWEG, NICHT VON DEN SERVERN.
+// Ausgewertet ueber 480 Pruefungen je Host seit 07.08.:
+//   PC1  36 Fehler (7,5 %)   PC2  12 Fehler (2,5 %)
+//   Antwortzeit im Schnitt 530 ms, p95 rund 750 ms, Spitze knapp 6 s
+// Zum Vergleich direkt ueber Tailscale gemessen: 92 ms. Die 440 ms
+// Unterschied sind der Funnel — die Anfrage laeuft von Supabase ueber
+// Tailscales oeffentlichen Eingang und erst von dort zur Maschine.
+//
+// Die Fehler zerfallen in zwei Gruppen:
+//   · lange Strecken (14, 7, 5 Pruefungen am Stueck) = echte Ausfaelle
+//   · EINZELNE Pruefungen, verteilt ueber alle 24 Stunden, einmal bei
+//     BEIDEN Hosts in derselben Sekunde = der Weg, nicht die Server.
+//
+// Die alte Staffelung war zu eng: drei Versuche im Abstand von 400 ms,
+// also alles innerhalb einer Sekunde. Ein Relay-Haenger dauert laenger
+// als das. Jetzt vier Versuche ueber rund 14 Sekunden verteilt — damit
+// faellt ein kurzer Aussetzer durch, ein echter Ausfall nicht.
+//
+// ⚠⚠ DIE OBERGRENZE IST NICHT FREI WAEHLBAR.
+// Der Cron-Auftrag `infra-health-hourly` ruft mit
+// `timeout_milliseconds := 55000` auf. Wer die Staffelung laenger macht
+// als das, bekommt keinen langsamen Lauf, sondern einen ABGEBROCHENEN —
+// und dann steht im Dashboard der alte Stand, ohne dass es auffaellt.
+// Rechnung fuer den schlimmsten Fall, alle vier Versuche laufen ins
+// Zeitlimit:  22 s Zeitlimite + 14,2 s Pausen = 36,2 s je Host.
+// Beide Hosts laufen parallel, dazu /info und die Schreibvorgaenge:
+// rund 40 s. Bleibt Luft bis 55.
+const PAUSEN_MS = [1200, 4000, 9000];    // zwischen Versuch 1/2, 2/3, 3/4
+const ZEITLIMITE_MS = [5000, 5000, 6000, 6000];
+const CRON_GRENZE_MS = 55000;            // muss zu cron.job passen
+const VERSUCHE = ZEITLIMITE_MS.length;
 const LANGSAM_AB_MS = 2500;     // gemessen normal: 150 bis 560 ms
 const VERLAUF_TAGE = 35;
 const ALARM_RUHE_MIN = 180;     // fuer nicht-kritische Meldungen (langsam)
@@ -55,24 +91,48 @@ type Messung = {
   profile: string[] | null;
 };
 
+/** Aus einem Ausnahmenamen einen Satz machen, den man lesen kann.
+ *
+ * ⚠ Der Kunde hat 13 Stunden lang „TypeError" im Dashboard gesehen und
+ * daraufhin am falschen Ende gesucht. `TypeError` ist der Name, den Deno
+ * jeder fehlgeschlagenen Verbindung gibt — er sagt nichts ueber die
+ * Ursache. Diese Tabelle sagt etwas. */
+function klartext(name: string, http: number | null): string {
+  if (http === 502) return 'Funnel erreicht, dahinter antwortet niemand (502)';
+  if (http === 503) return 'Funnel meldet Dienst nicht verfuegbar (503)';
+  if (http !== null && http >= 400) return 'HTTP ' + http + ' vom Server';
+  // HTTP 200, aber im Text steht nicht „OK": der Dienst antwortet, sagt
+  // aber etwas anderes als erwartet. Das ist ein eigener Fall.
+  if (http !== null && http < 400 && !name) {
+    return 'HTTP ' + http + ', aber die Antwort war nicht „OK"';
+  }
+  switch (name) {
+    case 'TimeoutError': return 'Zeitueberschreitung, keine Antwort im Zeitlimit';
+    case 'TypeError':    return 'Verbindung kam nicht zustande (Funnel oder Netz)';
+    case 'AbortError':   return 'Anfrage abgebrochen';
+    default:             return name || 'keine Antwort';
+  }
+}
+
 /** Ein Versuch. Misst nur um den fetch herum, damit der Kaltstart der
  *  Edge Function die Zahl nicht verfaelscht. */
-async function einVersuch(url: string): Promise<{ ok: boolean; ms: number; http: number | null; text: string }> {
+async function einVersuch(url: string, zeitlimit: number): Promise<{ ok: boolean; ms: number; http: number | null; text: string }> {
   const start = performance.now();
   try {
     const r = await fetch(url + '/health', {
-      signal: AbortSignal.timeout(ZEITLIMIT_MS),
+      signal: AbortSignal.timeout(zeitlimit),
       headers: { 'cache-control': 'no-cache' },
     });
     const ms = Math.round(performance.now() - start);
     const text = (await r.text()).trim().slice(0, 120);
-    return { ok: r.ok && text.toUpperCase().startsWith('OK'), ms, http: r.status, text };
+    const ok = r.ok && text.toUpperCase().startsWith('OK');
+    return { ok, ms, http: r.status, text: ok ? text : klartext('', r.status) };
   } catch (e) {
     return {
       ok: false,
       ms: Math.round(performance.now() - start),
       http: null,
-      text: String((e as Error)?.name ?? e).slice(0, 120),
+      text: klartext(String((e as Error)?.name ?? e), null).slice(0, 160),
     };
   }
 }
@@ -81,7 +141,7 @@ async function einVersuch(url: string): Promise<{ ok: boolean; ms: number; http:
  *  weiter mit 200 auf /health, hat hier aber eine leere Liste. */
 async function profileLesen(url: string): Promise<string[] | null> {
   try {
-    const r = await fetch(url + '/info', { signal: AbortSignal.timeout(ZEITLIMIT_MS) });
+    const r = await fetch(url + '/info', { signal: AbortSignal.timeout(ZEITLIMITE_MS[0]) });
     if (!r.ok) return null;
     const j = await r.json();
     const p = j?.profiles;
@@ -97,21 +157,29 @@ async function messen(h: Host): Promise<Messung> {
   let letzteHttp: number | null = null;
   let letzterText = '';
 
+  let gebraucht = 0;
   for (let i = 0; i < VERSUCHE; i++) {
-    const v = await einVersuch(h.url);
+    gebraucht = i + 1;
+    const v = await einVersuch(h.url, ZEITLIMITE_MS[i]);
     letzteHttp = v.http;
     letzterText = v.text;
     if (v.ok) {
       // Die schnellste erfolgreiche Antwort ist die ehrlichste Zahl: sie
       // enthaelt am wenigsten fremdes Rauschen (Relay-Umweg, Warteschlange).
       besteMs = besteMs === null ? v.ms : Math.min(besteMs, v.ms);
-      if (i === 0) break;            // gleich beim ersten Versuch gut: fertig
+      break;                          // geglueckt, mehr braucht es nicht
     }
-    if (i < VERSUCHE - 1) await new Promise((r) => setTimeout(r, 400));
+    if (i < VERSUCHE - 1) await new Promise((r) => setTimeout(r, PAUSEN_MS[i]));
   }
 
   if (besteMs === null) {
-    return { up: false, ms: null, http: letzteHttp, detail: letzterText || 'keine Antwort', profile: null };
+    const gesamt = Math.round((PAUSEN_MS.reduce((a, b) => a + b, 0)
+                             + ZEITLIMITE_MS.reduce((a, b) => a + b, 0)) / 1000);
+    return {
+      up: false, ms: null, http: letzteHttp, profile: null,
+      detail: (letzterText || 'keine Antwort')
+            + ' — ' + VERSUCHE + ' Versuche ueber bis zu ' + gesamt + ' s',
+    };
   }
 
   const profile = await profileLesen(h.url);
@@ -120,7 +188,10 @@ async function messen(h: Host): Promise<Messung> {
     : (profile.length === 0 ? 'OK, aber KEINE Profile geladen' : 'OK, ' + profile.length + ' Profile');
 
   // Kein Profil geladen heisst: der Dienst antwortet, kann aber nicht routen.
-  return { up: profile !== null && profile.length === 0 ? false : true, ms: besteMs, http: letzteHttp, detail, profile };
+  // Wie viele Anlaeufe es gebraucht hat, steht mit dabei: eine Antwort im
+  // vierten Versuch ist kein Ausfall, aber auch nicht gesund.
+  const mitVersuch = gebraucht > 1 ? detail + ' (erst im ' + gebraucht + '. Versuch)' : detail;
+  return { up: profile !== null && profile.length === 0 ? false : true, ms: besteMs, http: letzteHttp, detail: mitVersuch, profile };
 }
 
 /** Meldung an alle verknuepften Dashboard-Konten. Der Trigger auf
@@ -145,8 +216,12 @@ async function melden(titel: string, text: string) {
   );
 }
 
-async function pruefeHost(h: Host, alt: Record<string, unknown> | undefined) {
-  const m = await messen(h);
+async function pruefeHost(
+  h: Host,
+  alt: Record<string, unknown> | undefined,
+  m: Messung,
+  beideUnten: boolean,
+) {
   const jetzt = new Date().toISOString();
 
   await db.from('infra_health_checks').insert({
@@ -169,9 +244,20 @@ async function pruefeHost(h: Host, alt: Record<string, unknown> | undefined) {
 
   if (wechsel) {
     if (!m.up) {
+      // ⚠ Fallen BEIDE im selben Lauf aus, sind nicht zwei Rechner
+      // gleichzeitig gestorben - dann liegt der gemeinsame Weg brach:
+      // Internet am Standort, Tailscale-Funnel oder Supabase selbst.
+      // Am 24.08. ist genau das passiert, und es standen zwei
+      // Server-Alarme da, die beide in die falsche Richtung zeigten.
       await melden(
-        'Routing-Server ausgefallen',
-        h.anzeige + ' antwortet nicht mehr. Grund: ' + m.detail + '. Drei Versuche, alle fehlgeschlagen.',
+        beideUnten ? 'Beide Routing-Server weg — vermutlich der Weg'
+                   : 'Routing-Server ausgefallen',
+        beideUnten
+          ? 'PC1 und PC2 antworten im selben Lauf nicht. Zwei Rechner fallen '
+            + 'nicht gleichzeitig aus. Zuerst Internet am Standort, '
+            + 'Tailscale-Funnel und Supabase pruefen, erst danach die '
+            + 'Maschinen. Grund: ' + m.detail
+          : h.anzeige + ' antwortet nicht mehr. Grund: ' + m.detail,
       );
     } else {
       await melden(
@@ -195,6 +281,17 @@ async function pruefeHost(h: Host, alt: Record<string, unknown> | undefined) {
   return { host: h.host, up: m.up, ms: m.ms, detail: m.detail, wechsel };
 }
 
+// Sicherung gegen ein Auseinanderlaufen von Staffelung und Cron-Grenze.
+// Faellt beim ersten Lauf auf, nicht erst beim naechsten Ausfall.
+{
+  const schlimmst = PAUSEN_MS.reduce((a, b) => a + b, 0)
+                  + ZEITLIMITE_MS.reduce((a, b) => a + b, 0);
+  if (schlimmst > CRON_GRENZE_MS - 12000) {
+    console.error('[infra-health] Staffelung ' + schlimmst
+      + ' ms ist zu lang fuer die Cron-Grenze ' + CRON_GRENZE_MS + ' ms.');
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204 });
   if (req.method !== 'POST') return new Response('Nur POST.', { status: 405 });
@@ -210,14 +307,23 @@ Deno.serve(async (req) => {
     host: z.host as string, anzeige: z.anzeige as string, url: z.url as string,
   }));
 
+  // ⚠ ERST MESSEN, DANN BEWERTEN. Vorher hat jeder Host fuer sich gemessen
+  // und sofort Alarm geschlagen. Damit war die Frage „sind beide weg?"
+  // nicht beantwortbar, obwohl genau sie den Unterschied macht zwischen
+  // einem Serverausfall und einem Wegproblem.
   // Beide parallel: der Lauf soll nicht doppelt so lange dauern wie noetig.
-  const ergebnis = await Promise.all(hosts.map((h) => pruefeHost(h, nachHost.get(h.host))));
+  const messungen = await Promise.all(hosts.map((h) => messen(h)));
+  const beideUnten = hosts.length > 1 && messungen.every((m) => !m.up);
+
+  const ergebnis = await Promise.all(
+    hosts.map((h, i) => pruefeHost(h, nachHost.get(h.host), messungen[i], beideUnten)),
+  );
 
   // Verlauf raeumen. 48 Zeilen am Tag, 35 Tage = rund 1700 Zeilen.
   const grenze = new Date(Date.now() - VERLAUF_TAGE * 86400000).toISOString();
   await db.from('infra_health_checks').delete().lt('geprueft', grenze);
 
-  return new Response(JSON.stringify({ ok: true, ergebnis }), {
+  return new Response(JSON.stringify({ ok: true, beideUnten, ergebnis }), {
     headers: { 'content-type': 'application/json' },
   });
 });

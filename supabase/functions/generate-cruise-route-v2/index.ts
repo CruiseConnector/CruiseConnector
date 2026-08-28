@@ -30,6 +30,16 @@ const GRAPHHOPPER_DE_URL = Deno.env.get('GRAPHHOPPER_DE_URL') ?? GRAPHHOPPER_URL
 // wenn PC1 stark belastet. Falls ENV nicht gesetzt → wir fallen auf
 // PC1-DE-Server zurück (graceful degradation).
 const GRAPHHOPPER_EU_URL = Deno.env.get('GRAPHHOPPER_EU_URL') ?? GRAPHHOPPER_DE_URL;
+// 2026-08-28 (Nutzer in Duesseldorf): Der Nordgraph (PC1 Port 8991,
+// Funnel-Port 8443, germany-latest). WICHTIG: NICHT GRAPHHOPPER_DE_URL
+// benutzen — das Secret heisst zwar DE, zeigt in Produktion aber auf
+// PC1-SUED (:443 auf 8989) und dient als Maschinen-Ausweich. Ueber die
+// Pruefsumme des Secrets verifiziert am 28.08.
+const GRAPHHOPPER_NORD_URL = Deno.env.get('GRAPHHOPPER_NORD_URL') ?? '';
+// 2026-08-28 (Nutzer in Schweden): dritte Instanz auf PC1 (Port 8993,
+// Funnel-Port 10000). Leer = noch nicht freigeschaltet; dann bleibt fuer
+// Schweden das heutige Verhalten (Abdeckungsfehler mit Vormerkung).
+const GRAPHHOPPER_SE_URL = Deno.env.get('GRAPHHOPPER_SE_URL') ?? '';
 // 2026-06-02 (vucko Routing-Stabilität): Harte Obergrenze pro GraphHopper-Call.
 // Ohne Timeout konnte ein hängender Round-Trip-Request die ganze Funktion bis
 // zum Plattform-Limit blockieren → Client sah „Keine Verbindung zum Routing-
@@ -44,7 +54,7 @@ const ALLOWED_ORIGINS = '*';
 ///   - EU-SOUTH (PC2 Italien, Spanien, Portugal, Süd-Frankreich)
 ///   - EU-EAST (PC2 Polen, Tschechien, Slowakei, Ungarn, Balkan)
 ///   - UNKNOWN (außerhalb, z.B. Skandinavien-Nord oder weit außerhalb EU)
-enum GeoRegion { dach = 'dach', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
+enum GeoRegion { dach = 'dach', deNord = 'de_nord', schweden = 'schweden', euWest = 'eu_west', euSouth = 'eu_south', euEast = 'eu_east', unknown = 'unknown' }
 
 const ONLY_HOME_MAX_FOREIGN_FRACTION = 0.10;
 const ONLY_HOME_MAX_FOREIGN_SEGMENT_METERS = 500;
@@ -71,6 +81,23 @@ function classifyPoint(lat: number, lng: number): GeoRegion {
   // Spanien + Portugal + Süd-Frankreich (Lat <44 = klar süd der DACH-Box)
   if (lat >= 36.0 && lat <= 44.0 && lng >= -10.0 && lng <= 7.5) {
     return GeoRegion.euSouth;
+  }
+  // 2026-08-28 (Nutzer in Duesseldorf, gemessen): Der Hauptgraph endet bei
+  // Breite 50.574 — Duesseldorf, Koeln, Berlin, Hamburg lagen AUSSERHALB,
+  // wurden aber als 'dach' auf die 8989er geschickt und bekamen dort
+  // "Cannot find point". Der Nordgraph (PC1:8991, germany-latest, seit 18.08.)
+  // deckt GANZ Deutschland ab. Alles noerdlich 50.5 in der Deutschland-Box
+  // geht deshalb als eigene Region dorthin.
+  if (lat > 50.5 && lat <= 55.1 && lng >= 5.8 && lng <= 15.1) {
+    return GeoRegion.deNord;
+  }
+  // Schweden: eigene Instanz (PC1:8993). Die Westkante ist bewusst zweistufig,
+  // damit Kopenhagen (12.57) NICHT hineinfaellt — Daenemark ist in keinem
+  // Graph, dort bleibt der ehrliche Abdeckungsfehler. Goeteborg (11.97) liegt
+  // noerdlich von 57.2 und faellt in die zweite Stufe.
+  if (lat >= 55.2 && lat <= 69.3 &&
+      (lng >= 12.75 && lng <= 24.5 || (lng >= 10.8 && lat >= 57.2))) {
+    return GeoRegion.schweden;
   }
   // DACH (DE + AT + CH + LI) — nach den kleineren Ländern
   if (lat >= 45.8 && lat <= 55.1 && lng >= 5.86 && lng <= 17.2) {
@@ -347,6 +374,16 @@ function chooseGraphhopperUrlForRoute(points: Array<{ lat: number; lng: number }
     return { primary: GRAPHHOPPER_URL, fallback: GRAPHHOPPER_DE_URL };
   }
   const regions = new Set(points.map(p => classifyPoint(p.lat, p.lng)));
+  // 2026-08-28: Schweden zuerst — nur wenn die Instanz freigeschaltet ist.
+  if (regions.has(GeoRegion.schweden) && GRAPHHOPPER_SE_URL !== '') {
+    return { primary: GRAPHHOPPER_SE_URL, fallback: GRAPHHOPPER_SE_URL };
+  }
+  // Deutschland-Nord: der Nordgraph deckt GANZ Deutschland ab, also gilt er
+  // auch fuer gemischte Routen wie Frankfurt nach Koeln. Es gibt keine zweite
+  // Maschine mit diesem Graph — der Ausweichwert ist bewusst derselbe.
+  if (regions.has(GeoRegion.deNord) && GRAPHHOPPER_NORD_URL !== '') {
+    return { primary: GRAPHHOPPER_NORD_URL, fallback: GRAPHHOPPER_NORD_URL };
+  }
   // Alle Punkte in DACH → DACH-Server primary (PC1 ist schneller, weniger
   // Daten zu durchsuchen)
   if (regions.size === 1 && regions.has(GeoRegion.dach)) {
@@ -2246,7 +2283,10 @@ const BBOX_FALLBACK: GhBbox = { minLng: -5.52, minLat: 32.90, maxLng: 41.66, max
 async function graphhopperBboxes(): Promise<GhBbox[]> {
   const now = Date.now();
   if (_bboxCache && now - _bboxCache.at < BBOX_CACHE_MS) return _bboxCache.boxes;
-  const urls = [...new Set([GRAPHHOPPER_URL, GRAPHHOPPER_DE_URL, GRAPHHOPPER_EU_URL])];
+  const urls = [...new Set(
+    [GRAPHHOPPER_URL, GRAPHHOPPER_DE_URL, GRAPHHOPPER_EU_URL, GRAPHHOPPER_NORD_URL, GRAPHHOPPER_SE_URL]
+      .filter((u) => u !== ''),
+  )];
   const boxes: GhBbox[] = [];
   await Promise.all(urls.map(async (u) => {
     try {
