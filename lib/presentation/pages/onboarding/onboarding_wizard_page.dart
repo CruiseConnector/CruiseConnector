@@ -157,6 +157,34 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
     if (un != null && un.isNotEmpty) {
       _usernameCtrl.text = un;
       _onUsernameChanged(un);
+    } else {
+      // 2026-08-28 (Fehler 3, Nutzer Justin): Wer das Onboarding abgebrochen
+      // hatte, kam ueber das Tor OHNE Vorbelegung zurueck — leeres Feld,
+      // obwohl sein Name laengst im Profil steht. Er tippte ihn neu, und die
+      // 30-Tage-Sperre schlug zu (serverseitig seit heute mit Gleichheits-
+      // Kurzschluss repariert). Die Vorbelegung macht den Wiedereinstieg
+      // selbsterklaerend: Name steht da, Weiter druecken, fertig.
+      unawaited(_ladeBestehendesProfilVor());
+    }
+  }
+
+  Future<void> _ladeBestehendesProfilVor() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      final profil = await SocialService.getUserProfile(uid);
+      if (!mounted || profil == null) return;
+      final un = (profil['username'] as String?)?.trim();
+      if (un != null && un.isNotEmpty && _usernameCtrl.text.trim().isEmpty) {
+        _usernameCtrl.text = un;
+        _onUsernameChanged(un);
+      }
+      final dn = (profil['display_name'] as String?)?.trim();
+      if (dn != null && dn.isNotEmpty && _displayCtrl.text.trim().isEmpty) {
+        _displayCtrl.text = dn;
+      }
+    } catch (_) {
+      // Vorbelegung ist Komfort. Scheitert sie, tippt man wie bisher.
     }
   }
 
@@ -1462,8 +1490,12 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       // 2026-08-25: „Schon vergeben" allein verwirrt, seit Umlaute erlaubt
       // sind. Wer „müller" tippt und „mueller" nie gesehen hat, versteht
       // sonst nicht, womit sein Name kollidiert.
+      // 2026-08-28 (Fehler 3, Wunsch des Betreibers): Wer hier landet, ist
+      // oft der INHABER des Namens mit einem zweiten Anlauf zur
+      // Registrierung. Die Meldung sagt ihm jetzt den richtigen Weg.
       _UNameState.taken => (
-        'Schon vergeben, probier einen Vorschlag.'
+        'Diesen Namen gibt es schon. Wenn du das bist, melde dich mit deinem '
+            'bestehenden Konto an, statt dich neu zu registrieren.'
             '${AppInputLimits.usernameFoldingHint(_usernameCtrl.text)}',
         _err,
       ),
