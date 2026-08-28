@@ -2173,7 +2173,16 @@ async function callGraphHopper(opts: {
     return {
       geometry: p.points,
       distanceKm,
-      durationSeconds: p.time / 1000,
+      // 2026-08-28 (Fehler 1 der Meldungen: „die Zeit akkurater auflisten,
+      // vor allem bei laengeren Strecken"): GraphHoppers Zeitmodell ist
+      // SYSTEMATISCH zu optimistisch. Auf fuenf Strecken (122 bis 221 km,
+      // Vorarlberg bis NRW) gegen eine unabhaengige Engine (OSRM) auf
+      // ZEICHENGLEICHER Geometrie gemessen: Faktor 0.83 bis 0.88, Mittel
+      // 0.855. OSRM wiederum liegt fast exakt auf Apple Karten (Feldkirch
+      // nach Muenchen: OSRM 2.36 h, Apple 2.53 h mit Verkehr, GraphHopper
+      // roh 1.98 h). Deshalb hier EINMAL zentral kalibriert; alle
+      // nachgelagerten Zahlen (ETA, Fusszeile, Umleitungsdialog) erben das.
+      durationSeconds: (p.time / 1000) * 1.17,
       ascent: p.ascend ?? 0,
       coordinateCount: coords.length,
       fingerprint: buildFingerprint(coords, distanceKm),
