@@ -306,7 +306,7 @@ Future<void> showChangelogAusEinstellungen(BuildContext context) async {
   if (!context.mounted) return;
   if (eintrag == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Fuer diese Version gibt es keine Notizen.')),
+      const SnackBar(content: Text('Für diese Version gibt es keine Notizen.')),
     );
     return;
   }

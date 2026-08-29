@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/domain/models/route_maneuver.dart';
 import 'package:flutter/material.dart';
@@ -101,6 +102,49 @@ void main() {
       expect(i, 0, reason: 'im Ring braucht man die Ausfahrt-Ansage');
     });
 
+    // 2026-08-28 (Abnahmefund): Der Kreisverkehr war GANZ ausgenommen. Bei
+    // einem Mini-Kreisverkehr (in OSM ein einzelner Knoten, keine Ringpunkte)
+    // rueckt der diskrete Index nicht nach, und die Ansage blieb hunderte
+    // Meter dahinter stehen. Jetzt gilt auch fuer ihn eine Grenze, nur eine
+    // viel grosszuegigere.
+    test('grosser Ring: auch nach einem vollen Umlauf steht die Ansage', () {
+      final ring = <RouteManeuver>[
+        _m(10, typ: ManeuverType.roundabout, text: 'Ausfahrt 2 nehmen'),
+        _m(40, text: 'Rechts abbiegen'),
+      ];
+      final i = selectActiveGuidanceManeuverIndex(
+        maneuvers: ring,
+        currentRouteIndex: 10,
+        remainingRouteDistanceMeters: 2500,
+        distanceToFinalTargetMeters: 2500,
+        startIndex: 0,
+        // 240 m hinter der Einfahrt, also mehr als ein voller Umlauf eines
+        // sehr grossen Kreisverkehrs. Muss noch stehen.
+        passiertBisRouteMeter: 500 + 240,
+        cumulativeDistances: cum,
+      );
+      expect(i, 0);
+    });
+
+    test('Mini-Kreisverkehr: weit dahinter verschwindet die Ansage doch', () {
+      final ring = <RouteManeuver>[
+        _m(10, typ: ManeuverType.roundabout, text: 'Ausfahrt 2 nehmen'),
+        _m(40, text: 'Rechts abbiegen'),
+      ];
+      final i = selectActiveGuidanceManeuverIndex(
+        maneuvers: ring,
+        currentRouteIndex: 10,
+        remainingRouteDistanceMeters: 2200,
+        distanceToFinalTargetMeters: 2200,
+        startIndex: 0,
+        // 300 m hinter dem Knoten. So lange kreist niemand — hier ist der
+        // Fahrer laengst durch, und der naechste Abbieger gehoert ins Banner.
+        passiertBisRouteMeter: 500 + 300,
+        cumulativeDistances: cum,
+      );
+      expect(i, 1, reason: 'der naechste Abbieger uebernimmt');
+    });
+
     test('das echte Ziel wird nie durch die Hysterese uebersprungen', () {
       // Stetig weit hinter dem Ziel (GPS-Auslauf am Ende): Ankunft bleibt.
       final i = selectActiveGuidanceManeuverIndex(
@@ -127,6 +171,66 @@ void main() {
         cumulativeDistances: cum,
       );
       expect(i, 0, reason: 'Index ausserhalb der Kumulierten: keine Wertung');
+    });
+  });
+
+  _waechter();
+
+}
+
+/// 2026-08-28 (Abnahmekriterium des Betreibers: „der Zustand, dass gar keine
+/// Anweisung da ist, darf nie auftreten"): Quelltext-Waechter fuer den
+/// Banner-Rueckfall.
+///
+/// Die Auswahl selbst DARF weiter null liefern — daran haengen Sprachansage,
+/// Haptik und Overshoot-Erkennung, die auf der letzten Geraden nichts zu
+/// melden haben. Nur die ANZEIGE bekommt einen Rueckfall. Genau diese
+/// Trennung haelt der Waechter fest.
+void _waechter() {
+  group('Banner-Rueckfall auf der letzten Geraden', () {
+    final quelle = File(
+      'lib/presentation/pages/cruise_mode_page.dart',
+    ).readAsStringSync();
+
+    test('das Banner benutzt den Rueckfall, nicht die nackte Auswahl', () {
+      final overlay = quelle.indexOf('Widget _buildNavigationOverlay()');
+      expect(overlay, greaterThan(0));
+      final kopf = quelle.substring(overlay, overlay + 400);
+      expect(
+        kopf.contains('_bannerManoeverMitRueckfall()'),
+        isTrue,
+        reason:
+            'Sonst steht der Fahrer zwischen dem letzten Abbieger und dem '
+            'Ziel wieder vor einem leeren Banner.',
+      );
+    });
+
+    test('Ansage und Haptik haengen weiter an der nackten Auswahl', () {
+      // Der Rueckfall ist ein Platzhalter ohne echtes Manoever. Kaeme er in
+      // die Ansage, wuerde „Dem Strassenverlauf folgen" gesprochen oder
+      // schlimmer: die Ankunft Kilometer zu frueh gemeldet.
+      final rueckfallStellen = RegExp(
+        r'_bannerManoeverMitRueckfall\(\)',
+      ).allMatches(quelle).length;
+      expect(
+        rueckfallStellen,
+        2,
+        reason:
+            'Genau zwei Vorkommen erwartet: die Definition und der eine '
+            'Aufruf im Overlay. Jede weitere Stelle muss geprueft werden.',
+      );
+    });
+
+    test('der Rueckfall greift nur bei einer Route mit Ziel', () {
+      final start = quelle.indexOf('RouteManeuver? _bannerManoeverMitRueckfall');
+      expect(start, greaterThan(0));
+      final rumpf = quelle.substring(start, start + 1400);
+      expect(rumpf.contains('if (!letztes.isArrival) return null;'), isTrue,
+          reason:
+              'Ohne Ankunftsmanoever bleibt es beim alten Verhalten, statt '
+              'einen Platzhalter auf eine Route ohne Ziel zu setzen.');
+      expect(rumpf.contains('_isRouteConfirmed'), isTrue,
+          reason: 'Vor der Fahrt gibt es kein Banner und keinen Rueckfall.');
     });
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
@@ -40,10 +41,32 @@ class _MapDownloadPreferenceSheetState
   MapAutoDownloadPolicy _policy = MapAutoDownloadPolicy.wifiOnly;
   bool _saving = false;
 
+  /// 2026-08-28 (Abnahmefund zu Fehler 11): Wie viel Platz schon belegt ist.
+  /// Entscheidet den Text der dritten Karte: liegt nichts da, verspricht sie
+  /// nur, nichts zu laden; liegt etwas da, sagt sie ehrlich, dass es geloescht
+  /// wird und wie viel dabei frei wird.
+  int _belegtBytes = 0;
+
+  bool get _etwasLiegtDa => _belegtBytes > 0;
+
+  String get _belegtText {
+    final gb = _belegtBytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return '${gb.toStringAsFixed(1)} GB';
+    final mb = _belegtBytes / (1024 * 1024);
+    return '${mb.round()} MB';
+  }
+
   @override
   void initState() {
     super.initState();
     _policy = MapStyleService.instance.autoDownloadPolicy;
+    unawaited(
+      MapStyleService.instance.belegterSpeicherBytes().then((bytes) {
+        if (mounted && bytes != _belegtBytes) {
+          setState(() => _belegtBytes = bytes);
+        }
+      }),
+    );
   }
 
   Future<void> _save() async {
@@ -59,6 +82,13 @@ class _MapDownloadPreferenceSheetState
             ? 'map_preference_wifi'
             : 'map_preference_mobile_allowed',
       );
+    } else if (_etwasLiegtDa) {
+      // Abnahmefund: Ohne das hier blieb eine angefangene .part fuer immer
+      // liegen — mehrere Gigabyte, die nie wieder angefasst werden, und zwar
+      // ausgerechnet bei dem Nutzer, der "Keine Offlinekarte" waehlt, weil
+      // ihm der Platz ausgeht. Die Karte selbst faellt damit auf die
+      // Netzquelle zurueck (buildStyleString prueft die Datei bei jedem Bau).
+      await MapStyleService.instance.deleteOffline();
     }
     if (!mounted) return;
     Navigator.of(context).pop(_policy);
@@ -196,8 +226,9 @@ class _MapDownloadPreferenceSheetState
                                   accent: accent,
                                   icon: CupertinoIcons.xmark_circle,
                                   title: 'Keine Offlinekarte',
-                                  body:
-                                      'Nichts wird heruntergeladen. Die Karte lädt wie gewohnt über das Internet.',
+                                  body: _etwasLiegtDa
+                                      ? 'Nichts wird geladen. Die schon gespeicherte Karte wird gelöscht, das gibt $_belegtText frei. Die Karte lädt dann über das Internet.'
+                                      : 'Nichts wird heruntergeladen. Die Karte lädt wie gewohnt über das Internet.',
                                   onTap: () => setState(
                                     () =>
                                         _policy = MapAutoDownloadPolicy.aus,

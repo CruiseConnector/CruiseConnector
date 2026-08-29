@@ -965,7 +965,7 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
         content: Text(
           neu
               ? 'Community stummgeschaltet. Du bekommst keine Benachrichtigungen mehr aus diesem Chat.'
-              : 'Benachrichtigungen fuer diese Community sind wieder an.',
+              : 'Benachrichtigungen für diese Community sind wieder an.',
         ),
         backgroundColor: const Color(0xFF333333),
         duration: const Duration(seconds: 2),

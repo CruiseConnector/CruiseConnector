@@ -26,14 +26,14 @@ extension FeedbackKategorieX on FeedbackKategorie {
   String get vorlage => switch (this) {
     FeedbackKategorie.fehler =>
       'Was ist passiert?\n\n\n'
-          'Was haettest du erwartet?\n\n\n'
-          'Wann ist es passiert (z. B. waehrend der Fahrt, beim Start)?\n',
+          'Was hättest du erwartet?\n\n\n'
+          'Wann ist es passiert (z. B. während der Fahrt, beim Start)?\n',
     FeedbackKategorie.idee =>
       'Was fehlt dir?\n\n\n'
-          'Wobei wuerde es dir helfen?\n',
+          'Wobei würde es dir helfen?\n',
     FeedbackKategorie.lob =>
-      'Was gefaellt dir besonders?\n\n\n'
-          'Was sollen wir auf keinen Fall aendern?\n',
+      'Was gefällt dir besonders?\n\n\n'
+          'Was sollen wir auf keinen Fall ändern?\n',
     FeedbackKategorie.sonstiges => '',
   };
 }
@@ -124,7 +124,7 @@ class FeedbackService {
         // anhaengt, haelt es fuer den wichtigsten Teil. Er soll selbst
         // entscheiden, ob er es ohne abschickt.
         throw const FeedbackFehler(
-          'Das Foto konnte nicht hochgeladen werden. Schick die Rueckmeldung '
+          'Das Foto konnte nicht hochgeladen werden. Schick die Rückmeldung '
           'gern ohne Foto ab. Der Text hilft uns schon weiter.',
         );
       }

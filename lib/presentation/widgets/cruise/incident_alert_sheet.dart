@@ -120,7 +120,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          ok ? 'Meldung zurueckgenommen.' : 'Konnte gerade nicht gespeichert werden.',
+          ok ? 'Meldung zurückgenommen.' : 'Konnte gerade nicht gespeichert werden.',
         ),
         backgroundColor: Colors.grey.shade800,
         duration: const Duration(seconds: 3),
@@ -200,7 +200,7 @@ class _IncidentAlertSheetState extends State<IncidentAlertSheet>
         SnackBar(
           content: Text(
             istBaustelle
-                ? 'Fuer dich ausgeblendet. Ganz entfernt wird die Baustelle, sobald mehrere Fahrer sie als weg melden.'
+                ? 'Für dich ausgeblendet. Ganz entfernt wird die Baustelle, sobald mehrere Fahrer sie als weg melden.'
                 : 'Danke, die Meldung ist entfernt.',
           ),
           backgroundColor: Colors.grey.shade800,

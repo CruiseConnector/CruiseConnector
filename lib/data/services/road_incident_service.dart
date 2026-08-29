@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/data/services/nutzer_prefs_schluessel.dart';
 import 'package:cruise_connect/domain/models/road_incident.dart';
 
 /// 2026-07-24 (vucko "+-Button: Unfall/Baustelle/Stau melden"): Service für
@@ -102,9 +103,14 @@ class RoadIncidentService {
   // braucht es nichts Lokales. Eine Baustelle bleibt fuer alle anderen
   // stehen, bis die gewichtete Mehrfach-Bestaetigung greift — nur wer selbst
   // "Schon weg" gedrueckt hat, soll sie ab da nicht mehr sehen und nicht
-  // wieder danach gefragt werden. Das ist eine reine Anzeige-Entscheidung
-  // dieses Geraets, deshalb SharedPreferences und nicht die Datenbank.
-  static const String _selbstWeggemeldetKey =
+  // wieder danach gefragt werden. Das ist eine reine Anzeige-Entscheidung,
+  // deshalb SharedPreferences und nicht die Datenbank.
+  // 2026-08-28 (Abnahmefund): Der Schluessel haengt am KONTO, nicht am Geraet.
+  // Vorher war es ein fester Schluessel: meldete A eine Baustelle als weg und
+  // meldete sich danach B auf demselben Handy an (Testgeraet, Familienauto,
+  // zweites Konto), sah B diese Baustelle nie — keinen Marker, keine
+  // Vorwarnung. Und das bei einer serverseitig noch aktiven Warnung.
+  static const String _selbstWeggemeldetBasis =
       'road_incidents_selbst_weggemeldet_v1';
 
   /// Hoechstens so viele Eintraege behalten. Die Meldungen selbst leben
@@ -113,12 +119,23 @@ class RoadIncidentService {
 
   Set<String>? _selbstWeggemeldetCache;
 
+  /// Zu welchem Konto der Zwischenspeicher gehoert. Wechselt das Konto im
+  /// laufenden Prozess, ist er ungueltig — der Singleton lebt weiter, und
+  /// ohne diese Pruefung wuerde die Liste des Vorgaengers weitergelten.
+  String? _cacheGehoertZu;
+
   Future<Set<String>> _selbstWeggemeldeteIds() async {
+    final uid = NutzerPrefsSchluessel.aktuelleNutzerId();
     final cache = _selbstWeggemeldetCache;
-    if (cache != null) return cache;
+    if (cache != null && _cacheGehoertZu == uid) return cache;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final geladen = prefs.getStringList(_selbstWeggemeldetKey) ?? const [];
+      final geladen =
+          prefs.getStringList(NutzerPrefsSchluessel.fuer(
+                _selbstWeggemeldetBasis,
+              )) ??
+              const [];
+      _cacheGehoertZu = uid;
       return _selbstWeggemeldetCache = geladen.toSet();
     } catch (e) {
       debugPrint('[RoadIncident] Ausblendliste nicht ladbar: $e');
@@ -129,14 +146,17 @@ class RoadIncidentService {
 
   Future<void> _merkeSelbstWeggemeldet(String incidentId) async {
     try {
+      final uid = NutzerPrefsSchluessel.aktuelleNutzerId();
+      final schluessel = NutzerPrefsSchluessel.fuer(_selbstWeggemeldetBasis);
       final prefs = await SharedPreferences.getInstance();
-      final liste = prefs.getStringList(_selbstWeggemeldetKey) ?? <String>[];
+      final liste = prefs.getStringList(schluessel) ?? <String>[];
       liste.remove(incidentId);
       liste.add(incidentId);
       while (liste.length > _selbstWeggemeldetLimit) {
         liste.removeAt(0);
       }
-      await prefs.setStringList(_selbstWeggemeldetKey, liste);
+      await prefs.setStringList(schluessel, liste);
+      _cacheGehoertZu = uid;
       _selbstWeggemeldetCache = liste.toSet();
     } catch (e) {
       debugPrint('[RoadIncident] Ausblendliste nicht speicherbar: $e');
@@ -165,7 +185,7 @@ class RoadIncidentService {
       final id = map['incident_id'] as String?;
       if (id == null) {
         return const RoadIncidentReportResult(
-          message: 'Melden fehlgeschlagen. Bitte spaeter erneut versuchen.',
+          message: 'Melden fehlgeschlagen. Bitte später erneut versuchen.',
         );
       }
       final row = await _db
@@ -188,7 +208,7 @@ class RoadIncidentService {
     } catch (e) {
       debugPrint('[RoadIncident] report failed: $e');
       return const RoadIncidentReportResult(
-        message: 'Melden fehlgeschlagen. Bitte spaeter erneut versuchen.',
+        message: 'Melden fehlgeschlagen. Bitte später erneut versuchen.',
       );
     }
   }

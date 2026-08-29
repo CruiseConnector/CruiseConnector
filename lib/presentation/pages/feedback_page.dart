@@ -106,7 +106,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
           backgroundColor: const Color(0xFF1C1C1C),
           title: const Text('Danke dir', style: TextStyle(color: Colors.white)),
           content: const Text(
-            'Deine Rueckmeldung ist angekommen. Wir lesen jede einzelne.',
+            'Deine Rückmeldung ist angekommen. Wir lesen jede einzelne.',
             style: TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -149,7 +149,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
           children: [
             const Text(
-              'Schreib uns direkt. Je konkreter, desto schneller koennen wir '
+              'Schreib uns direkt. Je konkreter, desto schneller können wir '
               'es abstellen oder einbauen.',
               style: TextStyle(color: Colors.white60, fontSize: 14, height: 1.4),
             ),
@@ -173,7 +173,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
             const SizedBox(height: 16),
             _feld(
               controller: _text,
-              label: 'Deine Rueckmeldung',
+              label: 'Deine Rückmeldung',
               hint: null,
               maxLines: 12,
               accent: accent,

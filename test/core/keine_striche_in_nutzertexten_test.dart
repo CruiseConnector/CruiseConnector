@@ -167,6 +167,100 @@ void main() {
     }
   });
 
+  // ── Ersatzschreibungen statt echter Umlaute ──────────────────────────────
+  // 2026-08-28: Genau dieselbe Geschichte wie beim Strich. Seit dem 12.08.
+  // prueft test/release_hygiene_test.dart „ue statt ü" — aber NUR im
+  // Update-Blatt. In der uebrigen App sind seither wieder solche Texte
+  // gelandet; gemessen am 28.08. acht Stellen, darunter „Deine Rueckmeldung"
+  // im Formular, „Bitte spaeter erneut versuchen" beim Melden und „Meldung
+  // zurueckgenommen". Auf dem Handy sieht das unfertig aus.
+  //
+  // Geprueft wird gegen eine LISTE konkreter Ersatzschreibungen, nicht gegen
+  // blosses „ue": sonst schlaegt der Test bei „neue" und „Leute" an. Die
+  // Literal-Erkennung von oben wird mitbenutzt, damit Kommentare,
+  // Protokollzeilen und Kennungen wie gehabt draussen bleiben.
+  const ersatzschreibungen = <String>[
+    'ueber', 'fuer', 'Fuer', 'koenn', 'moecht', 'waehr', 'zurueck', 'Zurueck',
+    'schoen', 'gruen', 'muess', 'laesst', 'aendern', 'geaendert', 'Laenge',
+    'laenge', 'Vorschlaege', 'vorschlaege', 'ruecken', 'fuehr', 'gemuetlich',
+    'fluessig', 'zuverlaessig', 'kuerzer', 'groesse', 'strasse', 'Strasse',
+    'schlaegt', 'gezaehlt', 'Rueck', 'rueck', 'naechst', 'spaeter', 'Spaeter',
+    'haeuf', 'taeglich', 'maessig', 'bloss', 'grosse', 'Grosse',
+  ];
+
+  // Texte, die eine Ersatzschreibung behalten MUESSEN. Wie oben: ohne
+  // Begruendung kein Eintrag.
+  const ersatzAusnahmen = <String, String>{
+    '__uebernommen_von':
+        'Ein Schluessel in den SharedPreferences, kein Bildschirmtext. Wird '
+            'er umbenannt, halten Geraete die einmalige Wertuebernahme ins '
+            'Konto fuer noch nicht erledigt und fuehren sie erneut aus. Siehe '
+            'NutzerPrefsSchluessel.uebernahmeMarke.',
+    'Zu viele Rueckmeldungen':
+        'Kein Bildschirmtext, sondern der Vergleich mit dem Wortlaut, den der '
+            'Trigger in 20260809150000_feedback_aus_einstellungen.sql wirft. '
+            'Wird er hier geaendert, erkennt die App das Stundenlimit nicht '
+            'mehr und zeigt dem Nutzer die rohe Datenbankmeldung.',
+  };
+
+  final umlautFunde = <_Fund>[];
+  for (final pfad in dateien) {
+    if (dateiAusnahmen.containsKey(pfad)) continue;
+    final quelle = File(pfad).readAsStringSync();
+    for (final literal in _literale(quelle)) {
+      if (literal.roh) continue;
+      final text = literal.text;
+      if (_istTechnisch(text)) continue;
+      // Nur Saetze pruefen. Einzelwoerter ohne Leerzeichen sind fast immer
+      // Kennungen, Schluessel oder Dateinamen.
+      if (!text.contains(' ')) continue;
+
+      var rest = text;
+      for (final ausnahme in ersatzAusnahmen.keys) {
+        rest = rest.replaceAll(ausnahme, ' ');
+      }
+      final treffer = ersatzschreibungen.firstWhere(
+        rest.contains,
+        orElse: () => '',
+      );
+      if (treffer.isEmpty) continue;
+
+      umlautFunde.add(
+        _Fund(
+          datei: pfad,
+          zeile: literal.zeile,
+          art: 'Ersatzschreibung „$treffer"',
+          text: text,
+        ),
+      );
+    }
+  }
+
+  test('kein ue statt ü in Texten, die der Nutzer sieht', () {
+    if (umlautFunde.isEmpty) return;
+    final zeilen = umlautFunde
+        .map((f) => '  ${f.datei}:${f.zeile}  [${f.art}]  „${f.text}"')
+        .join('\n');
+    fail(
+      '${umlautFunde.length} Nutzertext(e) mit Ersatzschreibung:\n$zeilen\n\n'
+      'Bitte den echten Umlaut schreiben: ü, ö, ä, ß. Das ist Text, den '
+      'jemand auf dem Handy liest.\n'
+      'Muss die Ersatzschreibung ausnahmsweise bleiben (etwa weil sie mit '
+      'einer Servermeldung verglichen wird), gehoert sie in ersatzAusnahmen '
+      'oben in dieser Datei, mit Begruendung.',
+    );
+  });
+
+  test('jede Umlaut-Ausnahme hat eine Begruendung', () {
+    for (final eintrag in ersatzAusnahmen.entries) {
+      expect(
+        eintrag.value.trim().length,
+        greaterThanOrEqualTo(20),
+        reason: 'Ausnahme „${eintrag.key}" ohne brauchbare Begruendung',
+      );
+    }
+  });
+
   // ── Der Push kommt nicht aus lib/, sondern vom Server ────────────────────
   // Genau das war der Anlass am 25.08.: Auf dem Sperrbildschirm stand
   // „Bestes Cruise-Wetter" und „22 Grad und gut — Zeit fuer eine Runde",

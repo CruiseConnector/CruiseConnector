@@ -103,5 +103,32 @@ void main() {
               'einzige Ort, den jeder neue Nutzer sicher sieht.');
       expect(home.contains('showMapDownloadPreferenceSheet'), isTrue);
     });
+
+    // 2026-08-28 (Abnahmefunde): zwei Ehrlichkeitsregeln, die beim ersten
+    // Bauen gefehlt haben.
+    test('wer die Karte schon hat, wird nicht gefragt', () {
+      final start = home.indexOf('Future<void> _pruefeKartenZustimmung');
+      expect(start, greaterThan(0));
+      final rumpf = home.substring(start, start + 1200);
+      final geprueft = rumpf.indexOf('isDachDownloaded');
+      final gefragt = rumpf.indexOf('showMapDownloadPreferenceSheet');
+      expect(geprueft, greaterThan(0),
+          reason:
+              'Ein Bestandsnutzer mit vollstaendiger Karte darf die Frage '
+              'nicht sehen: sie kuendigt einen Download an, der nie kommt.');
+      expect(gefragt, greaterThan(geprueft),
+          reason: 'Die Pruefung muss VOR dem Blatt stehen.');
+    });
+
+    test('die Wahl aus raeumt angefangene Dateien weg', () {
+      expect(blatt.contains('deleteOffline'), isTrue,
+          reason:
+              'Sonst bleibt eine halb geladene .part fuer immer liegen, '
+              'mehrere Gigabyte, genau bei dem Nutzer, dem der Platz ausgeht.');
+      final ausZweig = blatt.indexOf('MapAutoDownloadPolicy.aus');
+      final loeschen = blatt.indexOf('deleteOffline');
+      expect(loeschen, greaterThan(ausZweig),
+          reason: 'Geloescht wird nur im aus-Zweig, nie bei einer Zusage.');
+    });
   });
 }

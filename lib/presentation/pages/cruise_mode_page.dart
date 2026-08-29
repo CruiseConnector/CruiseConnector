@@ -3176,6 +3176,14 @@ class _CruiseModePageState extends State<CruiseModePage>
         _lastDimHead = null;
         _maneuvers = activeResult.maneuvers;
         _currentRouteIndex = groupRouteIndex;
+        // 2026-08-28 (Abnahmefund zu Fehler 9): Die stetig gefahrenen Meter
+        // gehoeren zur ALTEN Geometrie. Uebernimmt ein Mitfahrer die neue
+        // Route des Anfuehrers, waeren sie an der neuen Strecke gemessen
+        // Unsinn: bei 30 km Vorlauf gaelte jedes Manoever unterhalb von 30 km
+        // als gefahren, und das Banner spraenge weit voraus oder bliebe leer.
+        // null heisst "noch unbekannt" — der naechste Fix im Korridor setzt
+        // den Wert an der neuen Route neu, bis dahin gilt die Index-Logik.
+        _stetigeRoutenMeter = null;
         _lastDrawnRouteIndex = _currentRouteIndex;
         // Konnte kein echter Index gefunden werden, ist die Tangente wertlos —
         // ehrlich als off-route markieren statt eine Falschpeilung zu rechnen.
@@ -8158,9 +8166,43 @@ class _CruiseModePageState extends State<CruiseModePage>
     );
   }
 
+  /// 2026-08-28 (Abnahmekriterium des Betreibers zu Fehler 9: „der Zustand,
+  /// dass gar keine Anweisung da ist, darf nie auftreten"): Rueckfall NUR
+  /// fuer das Banner.
+  ///
+  /// Zwischen dem letzten Abbieger und dem Ziel gibt es nichts anzusagen, und
+  /// [selectActiveGuidanceManeuverIndex] liefert dort seit dem 15.08. bewusst
+  /// null. Fuer die ANSAGE ist das richtig: nichts sagen ist besser als etwas
+  /// Falsches. Fuer die ANZEIGE ist es das nicht — der Fahrer sah auf der
+  /// letzten Geraden bis 50 m vor dem Ziel ein leeres Banner. Jede grosse
+  /// Navi zeigt in dieser Phase das Ziel mit Entfernung; genau das tut dieser
+  /// Rueckfall, mit einem Text, der in keiner Entfernung falsch ist.
+  ///
+  /// Bewusst NUR hier und nicht in der Auswahl selbst: an ihr haengen auch
+  /// Sprachansage, Haptik und die Overshoot-Erkennung. Die duerfen von diesem
+  /// Platzhalter nichts wissen, sonst kaeme „Ziel erreicht" Kilometer zu frueh.
+  RouteManeuver? _bannerManoeverMitRueckfall() {
+    final gewaehlt = _activeVisibleManeuver();
+    if (gewaehlt != null) return gewaehlt;
+    if (!_isRouteConfirmed || _maneuvers.isEmpty) return null;
+    final letztes = _maneuvers.last;
+    // Nur wenn die Route wirklich auf ein Ziel zulaeuft. Fehlt das
+    // Ankunftsmanoever, bleibt es beim alten Verhalten.
+    if (!letztes.isArrival) return null;
+    return RouteManeuver(
+      latitude: letztes.latitude,
+      longitude: letztes.longitude,
+      routeIndex: letztes.routeIndex,
+      icon: Icons.straight_rounded,
+      announcement: 'Dem Straßenverlauf folgen',
+      instruction: 'Dem Straßenverlauf folgen',
+      maneuverType: ManeuverType.normal,
+    );
+  }
+
   Widget _buildNavigationOverlay() {
     final topInset = MediaQuery.of(context).padding.top;
-    final visibleManeuver = _activeVisibleManeuver();
+    final visibleManeuver = _bannerManoeverMitRueckfall();
     final reroutingActive = _isReroutingBannerActive;
     final reroutingDuration = _rerouteStartedAt == null
         ? null
@@ -14467,9 +14509,15 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isLoading || _fullRouteCoordinates.isEmpty) return;
     setState(() {
       _isRouteConfirmed = true;
+      // 2026-08-28 (Abnahmefund zu Fehler 9): In BEIDEN Zweigen zuruecksetzen.
+      // Auch mit preserveCurrentProgress wird hier eine frisch geladene
+      // Geometrie bestaetigt (Wiederaufnahme einer unterbrochenen Fahrt,
+      // Routenuebernahme in der Gruppe) — an ihr gemessen waeren die Meter der
+      // alten Strecke Unsinn. null heisst "noch unbekannt": der naechste Fix
+      // im Korridor fuellt den Wert neu, bis dahin gilt die Index-Logik.
+      _stetigeRoutenMeter = null;
       if (!preserveCurrentProgress) {
         _currentRouteIndex = 0;
-      _stetigeRoutenMeter = null;
         _lastDrawnRouteIndex = 0;
         _remainingRouteCoordinates = _fullRouteCoordinates;
       } else {

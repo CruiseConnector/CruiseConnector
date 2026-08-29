@@ -453,6 +453,25 @@ class MapStyleService {
     }
   }
 
+  /// Wie viel Platz die Offlinekarte auf dem Geraet belegt, in Bytes.
+  ///
+  /// 2026-08-28 (Abnahmefund zu Fehler 11): Zaehlt die fertige Datei UND eine
+  /// angefangene `.part` mit. Genau die war das Problem: wer bei halb
+  /// geladener Karte „Keine Offlinekarte" waehlte, behielt mehrere Gigabyte,
+  /// die nie wieder angefasst wurden, und erfuhr nichts davon.
+  Future<int> belegterSpeicherBytes() async {
+    var summe = 0;
+    try {
+      final f = await _localFile();
+      if (await f.exists()) summe += await f.length();
+      final part = File('${f.path}.part');
+      if (await part.exists()) summe += await part.length();
+    } catch (e) {
+      debugPrint('[MapStyle] Belegten Speicher nicht ermittelbar: $e');
+    }
+    return summe;
+  }
+
   /// Löscht die lokale Offline-Datei (Speicher freigeben).
   Future<void> deleteOffline() async {
     try {

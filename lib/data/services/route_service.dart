@@ -7723,7 +7723,7 @@ class RouteService {
       case 'warming_up':
       case 'empty':
       default:
-        return 'Für diese Laenge und diesen Stil gibt es in deiner Umgebung noch zu wenige gute Varianten. Wir erstellen gerade neue Vorschlaege. Bitte versuche es in ein paar Minuten erneut.';
+        return 'Für diese Länge und diesen Stil gibt es in deiner Umgebung noch zu wenige gute Varianten. Wir erstellen gerade neue Vorschläge. Bitte versuche es in ein paar Minuten erneut.';
     }
   }
 

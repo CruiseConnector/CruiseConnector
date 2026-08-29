@@ -308,6 +308,27 @@ bool violatesNoHighwayPolicy({
 /// liegt.
 const double manoeverPassiertHysterese = 20.0;
 
+/// Wie weit hinter seiner Einfahrt ein Kreisverkehr noch im Banner stehen
+/// darf, bevor auch er als gefahren gilt.
+///
+/// 2026-08-28 (Abnahmefund zu Fehler 9): Kreisverkehre waren von der stetigen
+/// Pruefung GANZ ausgenommen, weil ihr Manoeverpunkt die Einfahrt ist und die
+/// gefahrenen Meter schon beim Kreisen im Ring wachsen. Das stimmt nur fuer
+/// Kreisel MIT Ringgeometrie: dort liegen die Punkte 4 bis 13 m auseinander,
+/// der diskrete Index rueckt fluessig vor, und die Zeile
+/// `maneuver.routeIndex < currentRouteIndex` raeumt das Manoever ohnehin weg
+/// — diese Grenze wird dabei nie erreicht.
+///
+/// Ein MINI-Kreisverkehr ist in OSM dagegen ein einzelner Knoten ohne Ring.
+/// Dort gibt es keine dichten Punkte, der Index bleibt bis 92 Prozent des
+/// Folgesegments stehen, und ohne Grenze bliebe „im Kreisverkehr die zweite
+/// Ausfahrt" mehrere hundert Meter dahinter stehen — genau der gemeldete
+/// Fehler 9, nur fuer diese Bauform.
+///
+/// 250 m sind bewusst grosszuegig: mehr als ein voller Umlauf selbst grosser
+/// Kreisverkehre, damit die Ausfahrt-Ansage nie zu frueh verschwindet.
+const double kreiselNachlaufMeter = 250.0;
+
 int? selectActiveGuidanceManeuverIndex({
   required List<RouteManeuver> maneuvers,
   required int currentRouteIndex,
@@ -329,8 +350,12 @@ int? selectActiveGuidanceManeuverIndex({
     }
     final idx = m.routeIndex;
     if (idx < 0 || idx >= cumulativeDistances.length) return false;
-    return passiertBisRouteMeter >
-        cumulativeDistances[idx] + manoeverPassiertHysterese;
+    // Der Kreisverkehr bekommt den grosszuegigen Nachlauf, alles andere die
+    // enge Hysterese. Siehe [kreiselNachlaufMeter].
+    final zugabe = m.maneuverType == ManeuverType.roundabout
+        ? kreiselNachlaufMeter
+        : manoeverPassiertHysterese;
+    return passiertBisRouteMeter > cumulativeDistances[idx] + zugabe;
   }
 
   final safeStart = startIndex.clamp(0, maneuvers.length - 1).toInt();
@@ -340,14 +365,13 @@ int? selectActiveGuidanceManeuverIndex({
     // Fehler 9: hinter der stetigen Fahrstrecke liegende Manoever sind
     // gefahren, auch wenn der diskrete Index noch auf ihnen steht.
     //
-    // AUSNAHME Kreisverkehr: sein Punkt ist die EINFAHRT, und die stetige
-    // Strecke waechst schon beim Kreisen im Ring. Ohne Ausnahme verloere das
-    // Banner die Ausfahrt-Ansage, waehrend man sie noch braucht. Im Ring
-    // rueckt der diskrete Index ohnehin fluessig vor (Ringpunkte liegen 4 bis
-    // 13 m auseinander, gemessen am 25.08.) — die alte Regel reicht dort.
-    if (!maneuver.isArrival &&
-        maneuver.maneuverType != ManeuverType.roundabout &&
-        stetigPassiert(maneuver)) {
+    // Der Kreisverkehr bekommt dabei viel mehr Nachlauf als alles andere: sein
+    // Punkt ist die EINFAHRT, und die stetige Strecke waechst schon beim
+    // Kreisen im Ring. Die Ausfahrt-Ansage darf deshalb nicht verschwinden,
+    // solange man noch kreist. Siehe [kreiselNachlaufMeter] — bis zum
+    // 28.08. war der Kreisverkehr ganz ausgenommen, was bei Mini-Kreiseln
+    // ohne Ringgeometrie zum Dauerbanner fuehrte.
+    if (!maneuver.isArrival && stetigPassiert(maneuver)) {
       continue;
     }
     // 2026-08-26 (vucko Testfahrt-Video 25.08., 22:22 bis 22:31): Das Banner

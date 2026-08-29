@@ -442,6 +442,15 @@ class _HomePageState extends State<HomePage> {
   Future<void> _pruefeKartenZustimmung() async {
     if (kIsWeb) return;
     if (await MapStyleService.instance.hasSeenAutoDownloadPrompt()) return;
+    // 2026-08-28 (Abnahmefund): Wer die Karte laengst vollstaendig auf dem
+    // Handy hat, wird nicht gefragt. Bei ihm gibt es nichts mehr zu
+    // genehmigen, und die Frage waere irrefuehrend: sie kuendigt einen
+    // Download an, der nie kommt (isDachDownloaded blockt ihn ohnehin).
+    // Loeschen kann er die Karte weiter ueber die Einstellungen.
+    if (await MapStyleService.instance.isDachDownloaded()) {
+      await MapStyleService.instance.markAutoDownloadPromptSeen();
+      return;
+    }
     if (!mounted || _selectedIndex != 0) return;
     if (CruiseModePage.isFullscreen.value) return;
     await MapStyleService.instance.loadAutoDownloadSettings();
