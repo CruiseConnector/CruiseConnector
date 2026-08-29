@@ -76,10 +76,12 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
-      version: '1.5.29',
+      version: '1.5.30',
       anzeigeName: '1.4',
       titel: 'Genauer, privater und ganz Deutschland',
       schrittTitel: <String>[
+        'Die Navigation weiß, wo du bist',
+        'Kurze Fahrten zählen jetzt',
         'Hinter dir ist vorbei',
         'Die Ankunftszeit stimmt jetzt',
         'Ganz Deutschland an Bord',
@@ -90,6 +92,10 @@ class AppChangelog {
         'Offline nur mit deinem Ja',
       ],
       punkte: <String>[
+        'Startest du nicht am Routenanfang, hängt die Anzeige nicht mehr '
+            'fest. Entfernung und Reststrecke stimmen ab dem ersten Meter.',
+        'Eine Fahrt zählt ab drei Kilometern, egal wie lang die geplante '
+            'Route war. Vorher brauchte eine 100 km Runde volle 20 km.',
         'Die Anweisung blieb manchmal stehen, obwohl du längst abgebogen '
             'warst. Gefahrene Manöver verschwinden jetzt sofort.',
         'Die Fahrzeit war zu zuversichtlich gerechnet, auf langen Strecken '
