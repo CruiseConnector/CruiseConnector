@@ -215,18 +215,40 @@ class OfflineFahrtenWarteschlange {
   /// fliegt sie raus. Netzfehler zaehlen nicht mit.
   static const int maxVersuche = 3;
 
+  /// Fehler, die NUR an der Anmeldung liegen und morgen von selbst weg sind.
+  ///
+  /// 2026-08-29 (Vucko: „auch wenn's mehrere Tage dauert, es soll gespeichert
+  /// bleiben"): Diese Codes zaehlten bisher als fachliche Ablehnung — und
+  /// damit flogen wartende Fahrten nach drei Versuchen raus. Der Ablauf, der
+  /// dabei Fahrten kostet: Der Fahrer ist offline unterwegs, seine Sitzung
+  /// laeuft in der Zwischenzeit ab. `currentUser` steht lokal noch, der
+  /// Insert wird also versucht und scheitert an der Berechtigung. Nach drei
+  /// App-Starts waere die Fahrt endgueltig weg gewesen, obwohl sie beim
+  /// naechsten Anmelden anstandslos durchgelaufen waere.
+  ///
+  ///  * `PGRST301` und `PGRST302`: Token abgelaufen oder ungueltig.
+  ///  * `42501`: fehlende Berechtigung. Fahrten fremder Konten werden schon
+  ///    vorher aussortiert, hier bleibt praktisch nur die tote Sitzung.
+  static const Set<String> _anmeldeFehler = <String>{
+    'PGRST301',
+    'PGRST302',
+    '42501',
+  };
+
   /// Hat der Server geantwortet und die Zeile fachlich abgelehnt?
   ///
-  /// Unterscheidet den dauerhaften Fehler (fehlende Pflichtspalte, RLS,
-  /// kaputter Wert — kommt als [PostgrestException] mit Code zurueck) vom
-  /// voruebergehenden (Funkloch, Zeitueberschreitung). Nur der dauerhafte darf
-  /// mitgezaehlt werden, sonst verbraucht eine lange Fahrt ohne Empfang die
-  /// Versuche, obwohl mit der Zeile alles in Ordnung ist.
+  /// Unterscheidet den dauerhaften Fehler (fehlende Pflichtspalte, kaputter
+  /// Wert — kommt als [PostgrestException] mit Code zurueck) vom
+  /// voruebergehenden (Funkloch, Zeitueberschreitung, abgelaufene Sitzung).
+  /// Nur der dauerhafte darf mitgezaehlt werden, sonst verbraucht eine lange
+  /// Fahrt ohne Empfang die Versuche, obwohl mit der Zeile alles in Ordnung
+  /// ist.
   @visibleForTesting
   static bool istServerAblehnung(Object fehler) =>
       fehler is PostgrestException &&
       (fehler.code ?? '').isNotEmpty &&
-      !istSchonGebucht(fehler);
+      !istSchonGebucht(fehler) &&
+      !_anmeldeFehler.contains(fehler.code);
 
   /// Ist dieser Fehler der Beweis, dass die Zeile schon gespeichert IST?
   ///

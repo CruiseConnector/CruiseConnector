@@ -139,6 +139,42 @@ void main() {
       );
     });
 
+    // 2026-08-29 (Vucko: „auch wenn's mehrere Tage dauert, es soll
+    // gespeichert bleiben, auch wenn man die App schliesst"):
+    // Der Ablauf, der bisher Fahrten kostete: offline gefahren, die Sitzung
+    // laeuft in der Zwischenzeit ab, `currentUser` steht lokal aber noch. Der
+    // Insert wird versucht und scheitert an der Berechtigung. Das zaehlte als
+    // fachliche Ablehnung — nach drei App-Starts war die Fahrt endgueltig
+    // weg, obwohl sie nach dem naechsten Anmelden durchgelaufen waere.
+    test('eine abgelaufene Sitzung zaehlt NICHT mit', () {
+      for (final code in <String>['PGRST301', 'PGRST302', '42501']) {
+        expect(
+          OfflineFahrtenWarteschlange.istServerAblehnung(
+            PostgrestException(message: 'JWT expired', code: code),
+          ),
+          isFalse,
+          reason:
+              'Code $code liegt an der Anmeldung, nicht an der Zeile. Nach '
+              'dem naechsten Anmelden laeuft dieselbe Fahrt durch.',
+        );
+      }
+    });
+
+    test('ein echter Datenfehler zaehlt weiterhin mit', () {
+      // Gegenprobe zur Zeile darueber: Was der Server wegen der ZEILE
+      // ablehnt, geht beim naechsten Mal genauso aus und darf die
+      // Warteschlange nicht dauerhaft verstopfen.
+      for (final code in <String>['23502', '22P02', '23514']) {
+        expect(
+          OfflineFahrtenWarteschlange.istServerAblehnung(
+            PostgrestException(message: 'kaputte Zeile', code: code),
+          ),
+          isTrue,
+          reason: 'Code $code beschreibt einen Fehler in den Daten selbst.',
+        );
+      }
+    });
+
     test('nach drei Ablehnungen fliegt der Eintrag raus', () {
       expect(OfflineFahrtenWarteschlange.maxVersuche, 3);
       final wq = File(
