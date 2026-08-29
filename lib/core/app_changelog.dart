@@ -77,7 +77,7 @@ class AppChangelog {
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
       version: '1.5.30',
-      anzeigeName: '1.4',
+      anzeigeName: '1.3.1',
       titel: 'Genauer, privater und ganz Deutschland',
       schrittTitel: <String>[
         'Die Navigation weiß, wo du bist',
