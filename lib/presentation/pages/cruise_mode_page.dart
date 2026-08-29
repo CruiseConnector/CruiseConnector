@@ -1274,8 +1274,10 @@ class _CruiseModePageState extends State<CruiseModePage>
   final Set<int> _passedWaypointIndices = <int>{};
 
   // Schwellenwerte für Completion-Status. XP basiert auf real gefahrenen km.
-  static const double _minProgressForXpCredit =
-      GamificationService.minRouteProgressForXp;
+  // 2026-08-29: Die Schwelle steht nicht mehr hier. Ob eine Fahrt zaehlt,
+  // entscheidet GamificationService.fahrtZaehlt — der Anteil ODER eine
+  // absolute Mindeststrecke. So kann die Anzeige im Abschluss-Blatt nie etwas
+  // anderes sagen als die Verbuchung.
   static const double _minProgressForFullCredit =
       1.0; // Nur echte Zielankunft zählt als abgeschlossen.
   static const double _minProgressForAutomaticCompletion = 0.95;
@@ -21097,7 +21099,10 @@ class _CruiseModePageState extends State<CruiseModePage>
     final progressFraction = _calculateCompletionProgressFraction(
       adjustedResult?.distanceMeters,
     );
-    final creditEligible = progressFraction >= _minProgressForXpCredit;
+    final creditEligible = GamificationService.fahrtZaehlt(
+      gefahreneKm: drivenKm,
+      fortschrittAnteil: progressFraction,
+    );
     final previewCoordinates = adjustedResult?.coordinates ?? <List<double>>[];
     final previewSegments = _buildCompletionSegments();
     final xpCoordinates = _buildCompletionCoordinates();
@@ -21593,8 +21598,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       final adjustedResult = _buildAdjustedCompletionResult();
       if (adjustedResult != null) {
         final progressFraction = _abschlussFortschritt(adjustedResult);
-        final creditEligible = progressFraction >= _minProgressForXpCredit;
         final drivenKm = adjustedResult.distanceKm ?? 0;
+        final creditEligible = GamificationService.fahrtZaehlt(
+          gefahreneKm: drivenKm,
+          fortschrittAnteil: progressFraction,
+        );
         final xpCurves = _abschlussXpKurven;
         final xpBreakdown = _calculateCompletionXpBreakdown(
           creditedDistanceKm: creditEligible ? drivenKm : 0.0,
@@ -21910,7 +21918,12 @@ class _CruiseModePageState extends State<CruiseModePage>
     final drivenKm = adjustedResult.distanceKm ?? 0;
     if (drivenKm <= 0) return;
     final progressFraction = _abschlussFortschritt(adjustedResult);
-    if (progressFraction < _minProgressForXpCredit) return;
+    if (!GamificationService.fahrtZaehlt(
+      gefahreneKm: drivenKm,
+      fortschrittAnteil: progressFraction,
+    )) {
+      return;
+    }
 
     // 2026-06-15 (vucko): Streak-Multiplikator FIX aufs Konto anrechnen — die
     // boosted XP werden hier in user_drive_sessions.xp_awarded geschrieben (Summe
@@ -21960,7 +21973,10 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   bool _completionProgressBelowXpMinimum({required bool completed}) {
     final adjustedResult = _buildAdjustedCompletionResult();
-    return _abschlussFortschritt(adjustedResult) < _minProgressForXpCredit;
+    return !GamificationService.fahrtZaehlt(
+      gefahreneKm: adjustedResult?.distanceKm ?? 0,
+      fortschrittAnteil: _abschlussFortschritt(adjustedResult),
+    );
   }
 
   Future<void> _recordRouteCompletionCandidate({

@@ -236,6 +236,40 @@ class GamificationService {
 
   static const int xpPerDrivenKm = 10;
   static const double minRouteProgressForXp = 0.20;
+
+  /// 2026-08-29 (Vucko: „schau, dass du vielleicht eine Regelung machst, dass
+  /// man nicht so weit fahren muss").
+  ///
+  /// [minRouteProgressForXp] ist ein ANTEIL, und das bestraft lange Routen:
+  /// Wer 100 km plant, musste 20 km fahren, damit die Fahrt ueberhaupt
+  /// verbucht wird — sonst gab es keine Kilometer, keine XP und keinen
+  /// Eintrag. Bei 200 km waren es 40 km. Genau das ist der Grund, warum
+  /// abgebrochene Touren wirkten, als haette die App sie nicht wahrgenommen.
+  ///
+  /// Ab dieser Strecke zaehlt eine Fahrt IMMER, unabhaengig davon, wie lang
+  /// die geplante Route war. Die beiden Regeln sind mit ODER verknuepft, die
+  /// Huerde wird also nie hoeher: Bei einer 10-km-Route reichen weiterhin die
+  /// 2 km aus dem Anteil.
+  ///
+  /// Drei Kilometer, weil darunter ein versehentlich gestarteter Cruise
+  /// liegt (die Offline-Warteschlange zieht ihre Grenze schon bei einem
+  /// Kilometer) und darueber eine Fahrt, die jemand bewusst gefahren ist.
+  /// Missbrauch entsteht dadurch nicht: die XP richten sich nach der
+  /// GEFAHRENEN Strecke, nicht nach der geplanten.
+  static const double mindestKmFuerVerbuchung = 3.0;
+
+  /// Zaehlt diese Fahrt fuer Kilometer, XP und Abzeichen?
+  ///
+  /// Reine Entscheidung, damit Anzeige und Verbuchung nie auseinanderlaufen
+  /// koennen — beide fragen hier.
+  static bool fahrtZaehlt({
+    required double gefahreneKm,
+    required double fortschrittAnteil,
+  }) {
+    if (gefahreneKm <= 0) return false;
+    if (gefahreneKm >= mindestKmFuerVerbuchung) return true;
+    return fortschrittAnteil >= minRouteProgressForXp;
+  }
   static const double minRouteProgressForFullXp = 0.95;
   static const Map<String, String> _legacyBadgeIds = {'route_1': 'badge_02'};
 
