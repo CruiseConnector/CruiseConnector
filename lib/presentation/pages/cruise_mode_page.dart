@@ -1038,6 +1038,25 @@ class _CruiseModePageState extends State<CruiseModePage>
   // bleiben blockiert.
   int _advanceCapRejects = 0;
   DateTime? _lastRouteIndexAdvanceAt;
+
+  /// 2026-08-29 (Videobefund 28.08. 22:24, „950 m und 57 km stehen still"):
+  /// Hat diese Fahrt sich schon EINMAL an der Route verankert?
+  ///
+  /// Der Fahrer startete kilometerweit vom Routenanfang entfernt (die geplante
+  /// Anfahrt dorthin konnte ohne Netz nicht berechnet werden und scheiterte
+  /// stumm). `_currentRouteIndex` blieb deshalb auf 0, das Suchfenster reicht
+  /// nur 80 Punkte voraus und fand ihn nie, und der globale Re-Snap fand ihn
+  /// zwar, verweigerte aber den Sprung: das Teleport-Budget erlaubt beim
+  /// ERSTEN Fix nur rund 95 Meter. Ergebnis: Banner, Restweg und Leitlinie
+  /// standen 90 Minuten lang auf dem Startwert, obwohl der Fahrer fuhr.
+  ///
+  /// Das Budget schuetzt einen bereits angenommenen Index gegen einen Sprung.
+  /// Beim ersten Fix gibt es keinen zu schuetzen — deshalb darf und muss die
+  /// ERSTE Verankerung bedingungslos sein, solange der Treffer im Korridor
+  /// liegt. Danach gilt das Budget wieder unveraendert; genau deshalb ist es
+  /// ein einmaliges Recht und kein Dauerfreibrief (siehe Teleport-Schutz vom
+  /// 18.06.).
+  bool _hatJeVerankert = false;
   // 2026-06-23 (vucko 2-Geräte-Video „Banner+Rest-km frieren nach verpasstem
   // Turn ein"): Frozen-Progress-Watchdog. Friert die Distanz-entlang-der-Route
   // (Render-Lock) trotz klarer Fahrt zu lange ein (Map-Matcher klebt am
@@ -2861,6 +2880,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
@@ -3184,6 +3204,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // null heisst "noch unbekannt" — der naechste Fix im Korridor setzt
         // den Wert an der neuen Route neu, bis dahin gilt die Index-Logik.
         _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
         _lastDrawnRouteIndex = _currentRouteIndex;
         // Konnte kein echter Index gefunden werden, ist die Tangente wertlos —
         // ehrlich als off-route markieren statt eine Falschpeilung zu rechnen.
@@ -11501,6 +11522,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _announcedManeuverIndices.clear();
@@ -12440,6 +12462,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _advanceCapRejects = 0;
@@ -13270,7 +13293,26 @@ class _CruiseModePageState extends State<CruiseModePage>
       // Lieber dem User klar sagen, dass er erst zum Routenstart muss, als
       // eine sichtbar kaputte Route mit Luftlinien-Sprung anzuzeigen.
       debugPrint('[CruiseMode] Access-Leg konnte nicht generiert werden: $e');
-      // Die gespeicherte Route bleibt sichtbar; kein harter Fehler-Banner.
+      // 2026-08-29 (Videobefund 28.08. 22:24): Genau hier war es still. Die
+      // Anfahrt braucht das Netz; ohne Netz landete der Fahrer wortlos in
+      // einer Navigation, die auf den Routenanfang zeigte, waehrend er
+      // woanders stand. Er sah zwei Minuten lang unveraendert "950 m" und
+      // "57 km", ohne jeden Hinweis darauf, dass etwas nicht stimmt.
+      //
+      // Die Fahrt selbst ist nicht verloren: die Erstverankerung im
+      // Positions-Tick setzt den Fortschritt jetzt auf den Punkt, an dem der
+      // Fahrer wirklich ist. Genau das sagt dieser Hinweis auch.
+      if (mounted) {
+        TopToast.show(
+          context,
+          message:
+              'Die Anfahrt zum Startpunkt konnte nicht berechnet werden. '
+              'Die Navigation beginnt an deinem Standort.',
+          icon: Icons.wrong_location_outlined,
+          duration: const Duration(seconds: 6),
+          topOffset: _isRouteConfirmed ? 96.0 : 0.0,
+        );
+      }
       return;
     }
 
@@ -14188,6 +14230,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastDimHead = null;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
       _advanceCapRejects = 0;
@@ -14516,6 +14559,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // alten Strecke Unsinn. null heisst "noch unbekannt": der naechste Fix
       // im Korridor fuellt den Wert neu, bis dahin gilt die Index-Logik.
       _stetigeRoutenMeter = null;
+      _hatJeVerankert = false;
       if (!preserveCurrentProgress) {
         _currentRouteIndex = 0;
         _lastDrawnRouteIndex = 0;
@@ -15462,6 +15506,69 @@ class _CruiseModePageState extends State<CruiseModePage>
       speedMps: position.speed,
     );
 
+    // ── 2026-08-29: ERSTVERANKERUNG AM FAHRER (Videobefund 28.08. 22:24) ────
+    //
+    // Beginnt eine Fahrt NICHT am Routenanfang, stand bisher alles still:
+    // `_currentRouteIndex` bleibt auf 0, das Fenster unten sucht nur 80 Punkte
+    // voraus und findet den Fahrer nie, und der globale Re-Snap weiter unten
+    // findet ihn zwar, verweigert den Sprung aber am Teleport-Budget (beim
+    // ersten Fix rund 95 Meter gegen einen echten Versatz von Kilometern).
+    // Folge: Banner, Restweg und Leitlinie zeigen 90 Minuten lang den
+    // Startwert. Genau das ist auf den Aufnahmen zu sehen.
+    //
+    // Der Fahrer kommt so nur an den Routenanfang, wenn die App ihm eine
+    // Anfahrt dorthin berechnet — und die braucht Netz. Ohne Netz (im Video
+    // fehlte die SIM) scheiterte sie, und es gab keinen Ersatz.
+    //
+    // Hier ist er: Die ERSTE Verankerung einer Fahrt sucht auf der GANZEN
+    // Route und nimmt den Treffer bedingungslos, solange er im Korridor liegt.
+    // Das Budget schuetzt einen bereits angenommenen Index gegen Spruenge —
+    // beim ersten Fix gibt es keinen zu schuetzen. Danach gilt es wieder
+    // unveraendert (Teleport-Schutz vom 18.06. bleibt also erhalten), denn
+    // `_hatJeVerankert` macht daraus ein einmaliges Recht.
+    //
+    // findNearestOnRoutePreferIndex statt des global naechsten Punktes: auf
+    // Rundkursen, die dieselbe Strasse zweimal benutzen, waehlt es den im
+    // Index naeheren Treffer und verhindert den 26-km-Sprung vom 13.06.
+    if (!_hatJeVerankert &&
+        _fullRouteCoordinates.length >= 2 &&
+        position.accuracy > 0 &&
+        position.accuracy <= _lockOnMaxAccuracyMeters) {
+      final erstTreffer = findNearestOnRoutePreferIndex(
+        position: position,
+        coordinates: _fullRouteCoordinates,
+        referenceIndex: _currentRouteIndex,
+        corridorMeters: offRouteCorridor,
+      );
+      if (erstTreffer.distanceMeters <= offRouteCorridor) {
+        _hatJeVerankert = true;
+        if (erstTreffer.index != _currentRouteIndex) {
+          debugPrint(
+            '[CruiseMode] Erstverankerung: Index $_currentRouteIndex -> '
+            '${erstTreffer.index} '
+            '(${erstTreffer.distanceMeters.toStringAsFixed(0)} m zur Linie).',
+          );
+          _ensureRouteMetrics();
+          _currentRouteIndex = erstTreffer.index;
+          _lastRouteIndexAdvanceAt = position.timestamp;
+          _advanceCapRejects = 0;
+          // Linie und Puck im selben Tick mitziehen, sonst bliebe die helle
+          // Leitlinie am Routenanfang haengen.
+          final startDistanz = routeDistanceForMatchMeters(
+            cumulativeDistances: _routeCumDist,
+            match: erstTreffer,
+          );
+          if (startDistanz.isFinite) {
+            _reanchorRenderLockToDistance(startDistanz);
+            _stetigeRoutenMeter = startDistanz;
+          }
+          _lastTrimDistM = -1;
+          _lastDrivenHead = null;
+          _lastDimHead = null;
+        }
+      }
+    }
+
     final prevRouteIndex = _currentRouteIndex;
     // windowSize 40→80 + maxJumpMeters an den Korridor gekoppelt: der Index folgt
     // dem Puck auch über lange GraphHopper-Segmente, statt einzufrieren.
@@ -15575,9 +15682,16 @@ class _CruiseModePageState extends State<CruiseModePage>
             globalDecision.plausible &&
             globalIsForwardOrCurrent &&
             globalDecision.stableIndex >= _currentRouteIndex;
+        // 2026-08-29: Hat der Neu-Anker unten gegriffen? Dann muss die Linie
+        // genauso mitziehen wie nach einem regulaeren Commit — sonst bleibt
+        // die helle Leitlinie an der alten Stelle stehen, waehrend Banner und
+        // Restweg schon stimmen. Genau diese Halbheit war auf den Aufnahmen
+        // zu sehen: die Linie klebte am Routenanfang.
+        var neuVerankert = false;
         if (canCommitGlobalProgress) {
           _currentRouteIndex = globalDecision.stableIndex;
           _lastRouteIndexAdvanceAt = position.timestamp;
+          _hatJeVerankert = true;
           routeProgressMatch = globalMatch;
         } else {
           routeProgressMatch = RouteWindowMatch(
@@ -15596,19 +15710,28 @@ class _CruiseModePageState extends State<CruiseModePage>
           // Commit — und zwar fuer immer: Banner und Distanz klebten an einem
           // Punkt hunderte Meter voraus, bis man ihn physisch erreichte.
           // Nach fuenf Verweigerungen in Folge mit In-Korridor-Treffer wird
-          // der Index jetzt ehrlich rueckverankert. Der Treffer kommt aus
+          // der Index jetzt ehrlich neu verankert. Der Treffer kommt aus
           // findNearestOnRoutePreferIndex, ist auf Rundkursen also schon
           // gegen den Selbstueberlapp geschuetzt.
+          //
+          // 2026-08-29 (Videobefund 28.08. 22:24): Die Bedingung lautete
+          // `globalMatch.index < _currentRouteIndex`, fing also NUR den Fall,
+          // dass der Index zu weit VORAUS sprang. Im Video lag der umgekehrte
+          // Fall vor: der Index klebte am Routenanfang, der Fahrer war
+          // kilometerweit VORAUS — und wurde nie eingeholt. Jetzt greift der
+          // Anker in beide Richtungen.
           if (_advanceCapRejects >= 5 &&
-              globalMatch.index < _currentRouteIndex) {
+              globalMatch.index != _currentRouteIndex) {
             debugPrint(
-              '[CruiseMode] Rueckwaerts-Anker: Index $_currentRouteIndex -> '
+              '[CruiseMode] Neu-Anker: Index $_currentRouteIndex -> '
               '${globalMatch.index} nach $_advanceCapRejects Verweigerungen.',
             );
             _currentRouteIndex = globalMatch.index;
             _lastRouteIndexAdvanceAt = position.timestamp;
+            _hatJeVerankert = true;
             _advanceCapRejects = 0;
             routeProgressMatch = globalMatch;
+            neuVerankert = true;
             if (globalDecision.matchDist.isFinite) {
               _stetigeRoutenMeter = globalDecision.matchDist;
             }
@@ -15625,7 +15748,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         // re-gesnappten Index ankern + Trim-Push-Caches leeren, damit der
         // Schnitt diesen Tick neu vom echten Puck aus aufgebaut wird. Nur bei
         // echtem Versatz (>20m) — Mini-Jitter bleibt auf dem monotonen Glide.
-        if (canCommitGlobalProgress &&
+        if ((canCommitGlobalProgress || neuVerankert) &&
             _reanchorRenderLockToDistance(globalDecision.matchDist)) {
           _lastTrimDistM = -1;
           _lastDrivenHead = null;
@@ -15924,6 +16047,7 @@ class _CruiseModePageState extends State<CruiseModePage>
         _distanceSinceLastRedraw += committedAdvanceMeters;
         _currentRouteIndex = stableMatchIndex;
         _lastRouteIndexAdvanceAt = position.timestamp;
+        _hatJeVerankert = true;
         needsRebuild = true;
         _maybeFinalizeAccessLegPhase();
         // 2026-06-09 (vucko Voll-Route-Sichtbar): KEIN 3km-Sliding-Window-Redraw
@@ -15937,7 +16061,17 @@ class _CruiseModePageState extends State<CruiseModePage>
     } else {
       // Kein Vorwärts-Match (Puck nicht vor dem Index) → Reject-Zähler nullen,
       // damit sich kein veralteter Stand zu einem späteren Fehl-Force summiert.
-      _advanceCapRejects = 0;
+      //
+      // 2026-08-29 (Videobefund 28.08. 22:24, Anzeige eingefroren): NUR, wenn
+      // der Fenster-Treffer wirklich im Korridor lag. Sonst nullte diese Zeile
+      // den Zähler, den der globale Re-Snap wenige Zeilen zuvor erhöht hatte —
+      // im selben Tick. Der Rueckwaerts-Anker unten konnte die 5 damit NIE
+      // erreichen, er war toter Code. Genau der Fall lag im Video vor: der
+      // Fahrer war Kilometer voraus, der Fenster-Treffer klebte am alten Index
+      // und lag weit ausserhalb des Korridors.
+      if (match.distanceMeters <= offRouteCorridor) {
+        _advanceCapRejects = 0;
+      }
       _lastRouteIndexAdvanceAt ??= position.timestamp;
     }
 
