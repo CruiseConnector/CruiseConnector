@@ -238,24 +238,12 @@ void main() {
       expect(hinweis.contains('–'), isFalse);
     });
 
-    test('der Hinweis haengt an allen drei Andock-Pfaden', () {
-      // Vorschau, Fahrtstart und Gruppen-Uebernahme bauen alle drei eine
-      // Anfahrt zum Original-Start — und alle drei sagen es jetzt.
-      expect(
-        cruise.contains(
-          'if (nieKuerzen &&\n'
-          '        !_istGeometrischGeschlossen(result) &&\n'
-          '        accessPlan.hasAccessLeg) {\n'
-          '      _zeigeStartpunktHinweis();',
-        ),
-        isTrue,
-        reason: 'Vorschau-Pfad',
-      );
-      expect(
-        cruise.contains('message: (geladen && !geschlossen)'),
-        isTrue,
-        reason: 'Fahrtstart-Pfad',
-      );
+    test('der Hinweis haengt am Gruppen-Pfad, wo der Zwang noch gilt', () {
+      // 2026-08-31: Solo gibt es den Zwang zum Original-Start nicht mehr
+      // (Vucko: „man nicht extra zu einem Startpunkt fahren muss"), also
+      // gehoert der Hinweis dort auch nicht mehr hin — er waere schlicht
+      // falsch. In der GRUPPE bleibt beides: der Zwang, damit alle dieselbe
+      // Strecke fahren, und der Hinweis, der ihn erklaert.
       expect(
         cruise.contains(
           'if (regel.hinweisZumOriginalStart && plan.hasAccessLeg) {\n'
@@ -263,6 +251,23 @@ void main() {
         ),
         isTrue,
         reason: 'Gruppen-Pfad',
+      );
+    });
+
+    test('solo verspricht kein Fuehren zum Startpunkt mehr', () {
+      // Der Satz darf in den Solo-Pfaden nicht wieder auftauchen: dort
+      // stimmt er nicht mehr.
+      final vorschauStelle = cruise.indexOf('_zeigeStartpunktHinweis();');
+      final gruppenStelle = cruise.indexOf(
+        'if (regel.hinweisZumOriginalStart && plan.hasAccessLeg) {',
+      );
+      expect(gruppenStelle, greaterThan(0));
+      expect(
+        RegExp(r'_zeigeStartpunktHinweis\(\);').allMatches(cruise).length,
+        1,
+        reason:
+            'genau ein Aufruf, und der gehoert dem Gruppen-Pfad '
+            '(gefunden bei $vorschauStelle)',
       );
     });
   });

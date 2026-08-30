@@ -33,17 +33,21 @@ void main() {
           reason: '15 gefahrene Kilometer sind eine echte Fahrt.');
     });
 
-    test('sehr lange Route: 40 km waren noetig, jetzt reichen 3', () {
+    test('sehr lange Route: 40 km waren noetig, jetzt reicht 1', () {
       expect(zaehlt(4, 200), isTrue);
       expect(4 / 200, lessThan(anteil));
     });
   });
 
   group('Die Huerde wird nie hoeher', () {
-    test('kurze Route: der Anteil reicht weiterhin', () {
-      // 10-km-Route, 2 km gefahren: genau 20 Prozent. Unter der absoluten
-      // Grenze von 3 km, muss aber weiterhin zaehlen.
-      expect(zaehlt(2, 10), isTrue,
+    test('kurze Route: der Anteil allein reicht weiterhin', () {
+      // Der Fall, der NUR ueber den Anteil geht: 3-km-Route, 0,7 km
+      // gefahren. Das sind 23 Prozent, also ueber der Anteilsgrenze, aber
+      // UNTER der absoluten Grenze von einem Kilometer. Ohne das ODER waere
+      // die Regel fuer kurze Routen strenger geworden als vorher.
+      expect(0.7, lessThan(grenze));
+      expect(0.7 / 3, greaterThan(anteil));
+      expect(zaehlt(0.7, 3), isTrue,
           reason: 'sonst waere die Regel fuer kurze Routen strenger geworden');
     });
 
@@ -64,7 +68,7 @@ void main() {
     });
 
     test('knapp unter beiden Schwellen', () {
-      // 2,9 km auf einer 50-km-Route: 5,8 Prozent, und unter 3 km.
+      // Knapp unter der absoluten Grenze, und weit unter dem Anteil.
       expect(zaehlt(grenze - 0.1, 50), isFalse);
       // Ein Meter mehr als die Grenze reicht.
       expect(zaehlt(grenze, 50), isTrue);

@@ -11715,10 +11715,23 @@ class _CruiseModePageState extends State<CruiseModePage>
         // Start, wenn die Route am User vorbeiläuft. Stattdessen schleichend an
         // den nächsten Vorwärts-Punkt anschließen (joinNearestForward); Rundkurse
         // behalten die Loop-Rotation (rebaseClosedLoop, Ende = Original-Start).
-        // — Gilt seit P3 NUR noch fuer frische Suchen, siehe nieKuerzen oben.
-        preferredJoinIndex:
-            nieKuerzen && !_istGeometrischGeschlossen(result) ? 0 : null,
-        joinNearestForward: nieKuerzen ? false : !isRoundTrip,
+        //
+        // 2026-08-31 (Vucko: „man nicht extra zu einem Startpunkt fahren
+        // muss"): Seit P3 zwang `nieKuerzen` eine offene GELADENE Route
+        // zusaetzlich auf Index 0. Damit wurde jeder, der eine geteilte
+        // Strecke fahren wollte, erst zum Startpunkt des Erstellers gefuehrt,
+        // oft vor dessen Haustuer. Dieser Zwang faellt: die Vorschau dockt
+        // jetzt genauso vorwaerts an wie der Fahrtstart. Beide Stellen
+        // muessen dieselbe Regel benutzen, sonst kommt das alte
+        // widerspruechliche Verhalten zurueck.
+        //
+        // Die Rotation geschlossener Runden bleibt unangetastet
+        // (returnToSessionOrigin und rebaseClosedLoop darueber): dort wird
+        // weiterhin jeder Meter gefahren, nur der Einstieg rotiert.
+        preferredJoinIndex: null,
+        joinNearestForward: nieKuerzen
+            ? !_istGeometrischGeschlossen(result)
+            : !isRoundTrip,
       );
     } catch (e) {
       // 2026-06-06 (vucko P9-Fix): Schlägt die Access-Leg-Berechnung fehl
@@ -11731,14 +11744,9 @@ class _CruiseModePageState extends State<CruiseModePage>
       return result;
     }
     _logAccessLegMeta(accessPlan);
-    // 2026-08-19 (Aufgabe 3.1): Eine offene geladene Route wird hier
-    // kommentarlos zum Original-Start gefuehrt — genau das wirkt wie der von
-    // vucko gemeldete komische Sprung. Also einmal kurz sagen, was passiert.
-    if (nieKuerzen &&
-        !_istGeometrischGeschlossen(result) &&
-        accessPlan.hasAccessLeg) {
-      _zeigeStartpunktHinweis();
-    }
+    // 2026-08-31: Der Hinweis „du wirst zuerst zum Startpunkt gefuehrt"
+    // entfaellt — es gibt diesen Zwang nicht mehr. Die Route beginnt dort,
+    // wo der Fahrer steht.
     final prepared = _withMergedRouteMeta(accessPlan.activeRoute, {
       'route_source':
           result.edgeMeta['route_source'] ?? result.edgeMeta['source'],
@@ -13276,8 +13284,28 @@ class _CruiseModePageState extends State<CruiseModePage>
         avoidHighways: _effectiveNavigationAvoidHighways,
         returnToSessionOrigin: geschlossen,
         rebaseClosedLoop: geschlossen,
-        preferredJoinIndex: geladen && !geschlossen ? 0 : null,
-        joinNearestForward: _istWiederaufnahme,
+        // 2026-08-31 (Vucko: „man nicht extra zu einem Startpunkt fahren
+        // muss, was halt wesentlich angenehmer waere"):
+        //
+        // Hier stand `geladen && !geschlossen ? 0 : null` — eine geladene
+        // offene Route dockte IMMER am Original-Start an. Wer eine geteilte
+        // Strecke fahren wollte, wurde erst kilometerweit dorthin gefuehrt,
+        // wo der Ersteller losgefahren war, oft vor dessen Haustuer. Genau
+        // das hat der Betreiber auf seiner Runde erlebt.
+        //
+        // Jetzt steigt der Fahrer dort ein, wo er steht, und die Strecke
+        // laeuft ab dem naechstgelegenen Punkt vorwaerts weiter.
+        //
+        // Der urspruengliche Grund fuer den Zwang war die Abkuerzung: sonst
+        // koennte jemand eine 100-km-Route „fahren", indem er die letzten
+        // 500 m mitnimmt. Das ist heute anders abgesichert — die XP und die
+        // Kilometer richten sich nach der GEFAHRENEN Strecke, und als
+        // abgeschlossen gilt eine Route weiterhin nur bei echter Ankunft
+        // (_minProgressForFullCredit). In der GRUPPE bleibt der Zwang
+        // dagegen bestehen (siehe andockRegelFuerGeteilteRoute), denn dort
+        // sollen alle dieselbe Strecke fahren.
+        preferredJoinIndex: null,
+        joinNearestForward: _istWiederaufnahme || (geladen && !geschlossen),
         // 2026-07-29 (vucko „beim Rundkurs-Fortsetzen soll der Endpunkt
         // trotzdem zuhause sein"): Bei einer FORTGESETZTEN Runde ist der
         // Startpunkt der Fahrt nicht dort, wo man gerade steht, sondern dort,
@@ -13371,14 +13399,11 @@ class _CruiseModePageState extends State<CruiseModePage>
       // über die Pause/Beenden-Buttons legen.
       TopToast.show(
         context,
-        // 2026-08-19 (Aufgabe 3.1): Bei einer OFFENEN geladenen Route geht es
-        // zuerst zum Original-Start. Der alte Satz („Anfahrts-Abschnitt
-        // aktiv") sagte nicht WOHIN — und ohne das Wohin wirkt die Anfahrt
-        // wie der gemeldete komische Sprung.
-        message: (geladen && !geschlossen)
-            ? 'Du wirst zuerst zum Startpunkt der Route geführt. '
-                  'So fährst du die Strecke komplett.'
-            : 'Die Anfahrt läuft. Danach geht es auf die gespeicherte Route.',
+        // 2026-08-31: Der Satz „Du wirst zuerst zum Startpunkt der Route
+        // geführt" stimmt nicht mehr — seit heute steigt der Fahrer dort
+        // ein, wo er steht. Der Hinweis sagt jetzt, was wirklich passiert:
+        // ein kurzes Stueck bis zur Strecke, dann laeuft sie.
+        message: 'Kurze Anfahrt bis zur Strecke, dann geht es los.',
         icon: Icons.route_rounded,
         // 2026-06-24 (vucko Video): bei aktiver Navigation UNTER das Manöver-
         // Banner, damit es z.B. eine Kreisverkehr-Ansage nicht verdeckt.

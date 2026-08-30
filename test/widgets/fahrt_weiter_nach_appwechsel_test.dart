@@ -295,7 +295,16 @@ void main() {
     test('Wiederaufnahme: vorwaerts anschliessen (Vorschau UND Start), Auto-Weiterfahrt', () {
       expect(cm.contains("nieKuerzen: route.routeSource != 'resume'"), isTrue);
       expect(cm.contains('final geladen = _isExistingRouteSession && !_istWiederaufnahme;'), isTrue);
-      expect(cm.contains('joinNearestForward: _istWiederaufnahme,'), isTrue);
+      // 2026-08-31: Der Ausdruck ist gewachsen — seit heute schliessen
+      // AUCH geladene offene Routen vorwaerts an (Vucko: „man nicht extra
+      // zu einem Startpunkt fahren muss"). Die Zusicherung fuer die
+      // Wiederaufnahme bleibt dieselbe: sie schliesst vorwaerts an.
+      expect(
+        cm.contains(
+          'joinNearestForward: _istWiederaufnahme || (geladen && !geschlossen),',
+        ),
+        isTrue,
+      );
       final i = cm.indexOf('Future<void> _uebernehmeAusstehendeRoute(');
       final rumpf = cm.substring(i, i + 5000);
       expect(rumpf.contains('_istWiederaufnahme = true;'), isTrue);

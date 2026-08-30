@@ -273,8 +273,28 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         .toList(growable: false);
   }
 
+  /// 2026-08-31 (Nutzer zsago888 kam nicht durch die Registrierung, Screenshot
+  /// „Konnte gerade nicht prüfen", mehrere Namen erfolglos probiert):
+  ///
+  /// Diese Bedingung verlangte [_UNameState.available] — und sperrte den
+  /// Nutzer damit AUS, sobald die Vorabprüfung den Server nicht erreichte.
+  /// In den Serverprotokollen des 30.08. stehen 531 Zeitüberschreitungen und
+  /// 465 Überlastungen; genau in so einem Moment ist er hängengeblieben, mit
+  /// einem gültigen und freien Namen.
+  ///
+  /// Die Vorabprüfung ist reiner Komfort. Verbindlich entscheidet
+  /// [_commitUsername] beim Tippen auf „Weiter": `set_username` prüft
+  /// serverseitig gegen denselben eindeutigen Schlüssel und meldet „taken"
+  /// oder „reserved" zurück, die der Assistent anzeigt. Ein nicht erreichbarer
+  /// Vorab-Dienst darf deshalb nie der Grund sein, warum jemand kein Konto
+  /// bekommt.
+  ///
+  /// Bekannte Absagen (belegt, reserviert, ungültiges Format) sperren
+  /// unverändert — die sind ja beantwortet.
   bool get _canLeaveUsernamePage =>
-      _uState == _UNameState.available || _committedUsername != null;
+      _committedUsername != null ||
+      _uState == _UNameState.available ||
+      _uState == _UNameState.error;
 
   Future<bool> _commitUsername() async {
     final v = _usernameCtrl.text.trim();
@@ -1510,7 +1530,14 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
         _muted,
       ),
       _UNameState.checking => ('Prüfe Verfügbarkeit…', _muted),
-      _UNameState.error => ('Konnte gerade nicht prüfen.', _muted),
+      // 2026-08-31: Der alte Text liess offen, wie es weitergeht — und weil
+      // „Weiter" gesperrt war, sass der Nutzer fest. Jetzt sagt er, was zu
+      // tun ist, und der Knopf funktioniert.
+      _UNameState.error => (
+        'Wir konnten den Namen gerade nicht prüfen. Tippe auf Weiter, wir '
+            'versuchen es dann.',
+        _muted,
+      ),
       _UNameState.idle => ('', _muted),
     };
     if (text.isEmpty) return const SizedBox(height: 4);

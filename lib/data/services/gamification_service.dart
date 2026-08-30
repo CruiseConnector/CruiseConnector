@@ -251,12 +251,20 @@ class GamificationService {
   /// Huerde wird also nie hoeher: Bei einer 10-km-Route reichen weiterhin die
   /// 2 km aus dem Anteil.
   ///
-  /// Drei Kilometer, weil darunter ein versehentlich gestarteter Cruise
-  /// liegt (die Offline-Warteschlange zieht ihre Grenze schon bei einem
-  /// Kilometer) und darueber eine Fahrt, die jemand bewusst gefahren ist.
+  /// 2026-08-31 (Vucko: „dass man keine Mindeststrecke fahren muss
+  /// beziehungsweise vielleicht 1 km oder so das waere ideal oder 1/2 km"):
+  /// von drei auf einen Kilometer gesenkt.
+  ///
+  /// Ein Kilometer und nicht ein halber, weil die Offline-Warteschlange ihre
+  /// Grenze bei genau einem Kilometer zieht
+  /// ([OfflineFahrtenWarteschlange.mindestKmOffline]). Waere die Verbuchung
+  /// grosszuegiger, entstuende ein Widerspruch: eine 700-Meter-Fahrt zaehlte
+  /// online, ginge im Funkloch aber verloren, weil sie gar nicht erst
+  /// aufbewahrt wird. Beide Grenzen gehoeren auf denselben Wert.
+  ///
   /// Missbrauch entsteht dadurch nicht: die XP richten sich nach der
   /// GEFAHRENEN Strecke, nicht nach der geplanten.
-  static const double mindestKmFuerVerbuchung = 3.0;
+  static const double mindestKmFuerVerbuchung = 1.0;
 
   /// Zaehlt diese Fahrt fuer Kilometer, XP und Abzeichen?
   ///

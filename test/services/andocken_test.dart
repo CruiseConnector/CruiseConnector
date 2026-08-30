@@ -16,9 +16,20 @@ import 'package:flutter_test/flutter_test.dart';
 ///    VOLLE Runde rotiert. Einstieg bei km 12 heisst km 12 bis Ende plus
 ///    km 0 bis 12. Keine Abkuerzung, jeder Meter wird gefahren.
 ///
-///  * OFFENE Route: Einstieg IMMER am Original-Start. Jeder Mittel-Einstieg
-///    einer offenen Route WAERE die Abkuerzung — es gibt keinen sinnvollen
-///    Weg, den uebersprungenen Anfang spaeter nachzuholen.
+///  * OFFENE Route: Einstieg am naechsten Vorwaertspunkt.
+///
+///    2026-08-31 (Vucko: „man nicht extra zu einem Startpunkt fahren muss,
+///    was halt wesentlich angenehmer waere"): Bis heute war hier der
+///    Original-Start erzwungen, damit niemand abkuerzt. In der Praxis hiess
+///    das: Wer eine geteilte Strecke fahren wollte, wurde erst kilometerweit
+///    zum Startpunkt des Erstellers gefuehrt, oft vor dessen Haustuer. Der
+///    Zwang faellt deshalb fuer SOLO-Fahrten.
+///
+///    Die Abkuerzung ist damit nicht zurueck: Kilometer und XP richten sich
+///    nach der GEFAHRENEN Strecke, und als abgeschlossen gilt eine Route
+///    weiterhin nur bei echter Ankunft. In der GRUPPE bleibt der Zwang
+///    bestehen (andockRegelFuerGeteilteRoute), damit alle dieselbe Strecke
+///    fahren.
 ///
 /// Das „komische" Verhalten hatte zwei Wurzeln: Vorschau und Fahrtstart
 /// benutzten VERSCHIEDENE Regelwerke (Vorschau: naechster Vorwaertspunkt mit
@@ -47,22 +58,31 @@ void main() {
     );
   });
 
-  test('Vorschau: geladene Routen werden nie gekuerzt', () {
+  test('Vorschau: geschlossene Runden werden nie gekuerzt', () {
     expect(cruise.contains('bool nieKuerzen = false'), isTrue);
     expect(
-      cruise.contains(
-        'preferredJoinIndex:\n'
-        '            nieKuerzen && !_istGeometrischGeschlossen(result) ? 0 : null,',
-      ),
-      isTrue,
-      reason: 'offene geladene Route dockt am Original-Start an',
-    );
-    expect(
-      cruise.contains('joinNearestForward: nieKuerzen ? false : !isRoundTrip'),
+      cruise.contains('preferredJoinIndex: null,'),
       isTrue,
       reason:
-          'das Vorwaerts-Andocken (8 %-Rest-Minimum) bleibt frischen Suchen '
-          'vorbehalten',
+          'seit 31.08. kein Zwang mehr zum Original-Start — der Fahrer '
+          'steigt dort ein, wo er steht',
+    );
+    expect(
+      cruise.contains(
+        'joinNearestForward: nieKuerzen\n'
+        '            ? !_istGeometrischGeschlossen(result)\n'
+        '            : !isRoundTrip,',
+      ),
+      isTrue,
+      reason:
+          'offene geladene Route dockt vorwaerts an, die GESCHLOSSENE Runde '
+          'behaelt ihre Rotation (jeder Meter wird gefahren)',
+    );
+    expect(
+      cruise.contains('rebaseClosedLoop: nieKuerzen'),
+      isTrue,
+      reason:
+          'die Rotation geschlossener Runden haengt weiter an der Geometrie',
     );
   });
 
@@ -91,9 +111,13 @@ void main() {
     );
     expect(
       cruise.contains(
-        'preferredJoinIndex: geladen && !geschlossen ? 0 : null,',
+        'joinNearestForward: _istWiederaufnahme || (geladen && !geschlossen),',
       ),
       isTrue,
+      reason:
+          'Fahrtstart dockt bei offenen geladenen Routen vorwaerts an — '
+          'genau wie die Vorschau. Zwei verschiedene Regelwerke fuer '
+          'denselben Vorgang waren das gemeldete komische Verhalten.',
     );
     expect(
       cruise.contains('returnToSessionOrigin: geschlossen,'),
