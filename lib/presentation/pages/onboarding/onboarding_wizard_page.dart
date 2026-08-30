@@ -1517,13 +1517,22 @@ class _OnboardingWizardPageState extends State<OnboardingWizardPage> {
       // 2026-08-28 (Fehler 3, Wunsch des Betreibers): Wer hier landet, ist
       // oft der INHABER des Namens mit einem zweiten Anlauf zur
       // Registrierung. Die Meldung sagt ihm jetzt den richtigen Weg.
+      // 2026-08-31 (Vucko: „wenn der Nutzername schon vergeben ist, dann soll
+      // eine gute Meldung unter dem Textfeld sein"): Die Absage steht jetzt
+      // im ERSTEN Satz und ist auf einen Blick lesbar. Der Hinweis fuer den
+      // Inhaber kommt danach, er hilft nur einem Teil der Leute. Vorschlaege
+      // stehen ohnehin direkt darunter.
       _UNameState.taken => (
-        'Diesen Namen gibt es schon. Wenn du das bist, melde dich mit deinem '
-            'bestehenden Konto an, statt dich neu zu registrieren.'
+        'Der Name ist schon vergeben. Nimm einen der Vorschläge, oder melde '
+            'dich an, falls das dein Konto ist.'
             '${AppInputLimits.usernameFoldingHint(_usernameCtrl.text)}',
         _err,
       ),
-      _UNameState.reserved => ('Dieser Name ist reserviert.', _err),
+      _UNameState.reserved => (
+        'Der Name ist reserviert und kann nicht vergeben werden. Nimm einen '
+            'der Vorschläge.',
+        _err,
+      ),
       _UNameState.invalid => (
         '3 bis 20 Zeichen: Buchstaben (auch ä ö ü ß), Zahlen, _ '
             '(kein __, nicht mit _ beginnen oder enden).',
