@@ -80,26 +80,40 @@ class AppChangelog {
       anzeigeName: '1.3.1',
       titel: 'Genauer, privater und ganz Deutschland',
       schrittTitel: <String>[
+        'Registrieren geht wieder',
         'Die Navigation weiß, wo du bist',
+        'Steig ein, wo du stehst',
         'Kurze Fahrten zählen jetzt',
         'Hinter dir ist vorbei',
         'Die Ankunftszeit stimmt jetzt',
+        'Neuberechnung bleibt nicht hängen',
         'Ganz Deutschland an Bord',
         'Meldungen schon vor der Fahrt',
         'Stau weg heißt weg',
         'Teilen ohne Wohnort',
+        'Anmelden mit Benutzernamen',
+        'Communities weitersagen',
         'Bescheid bei Neuigkeiten',
         'Offline nur mit deinem Ja',
+        'Die Karte bleibt beim Abmelden',
+        'Datenschutz nur einmal',
+        'Die App lädt schneller',
       ],
       punkte: <String>[
+        'Bei der Namenswahl kam eine Fehlermeldung, obwohl der Name frei '
+            'war. Jetzt wird jeder freie Name sofort angenommen.',
         'Startest du nicht am Routenanfang, hängt die Anzeige nicht mehr '
             'fest. Entfernung und Reststrecke stimmen ab dem ersten Meter.',
-        'Eine Fahrt zählt ab drei Kilometern, egal wie lang die geplante '
+        'Bei einer geteilten Strecke fährst du nicht mehr erst zum '
+            'Startpunkt des Erstellers. Sie übernimmt dich dort, wo du bist.',
+        'Eine Fahrt zählt ab einem Kilometer, egal wie lang die geplante '
             'Route war. Vorher brauchte eine 100 km Runde volle 20 km.',
         'Die Anweisung blieb manchmal stehen, obwohl du längst abgebogen '
             'warst. Gefahrene Manöver verschwinden jetzt sofort.',
         'Die Fahrzeit war zu zuversichtlich gerechnet, auf langen Strecken '
             'um fast ein Drittel. Jetzt ist sie an echten Fahrten geeicht.',
+        'Die Anzeige „Route wird neu berechnet" blieb manchmal stehen. '
+            'Jetzt endet sie zuverlässig, auch bei schlechtem Netz.',
         'Im Norden Deutschlands kamen keine Routen. Jetzt gibt es Rundkurse '
             'und Strecken im ganzen Land.',
         'Baustellen, Unfälle und Staus siehst du schon vor dem Losfahren '
@@ -108,13 +122,22 @@ class AppChangelog {
         'Meldet jemand einen Stau oder Unfall als vorbei, ist er sofort '
             'weg. Baustellen verschwinden erst, wenn es mehrere melden.',
         'Geteilte Fahrten zeigen nur den Streckenverlauf, ohne Karte und '
-            'Ortsnamen. Start und Ziel werden gekürzt, dein Zuhause bleibt '
-            'privat.',
+            'Ortsnamen. Vor dem Teilen sagen wir dir, was sichtbar wird.',
+        'Du kannst dich jetzt mit deinem Namen und Passwort anmelden, nicht '
+            'nur mit deiner Adresse oder über Google.',
+        'Teile eine Community als Beitrag oder als Link. Wer ihn öffnet, '
+            'sieht Titel und Beschreibung und kann direkt beitreten.',
         'Du bekommst Bescheid, wenn Gefolgte posten und in deinen '
             'Communities geschrieben wird. Die Glocke im Chat schaltet je '
             'Community stumm.',
         'Die Offlinekarte für Österreich, Deutschland und die Schweiz lädt '
             'erst nach deiner Zustimmung. Ohne dein Ja lädt nichts.',
+        'Nach dem Abmelden lädt die Offlinekarte nicht mehr von vorne. Sie '
+            'gehört zum Gerät, nicht zum Konto.',
+        'Die Datenschutzerklärung bestätigst du einmal beim Erstellen des '
+            'Kontos. Danach fragt die App nicht mehr danach.',
+        'Startseite und Feed laden deutlich weniger Daten. Das spart '
+            'Datenvolumen und macht den Start spürbar schneller.',
       ],
     ),
     ChangelogEintrag(
