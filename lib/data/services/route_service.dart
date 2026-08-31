@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geladene_route_manoever.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
 import 'package:cruise_connect/data/services/prepared_route_buffer.dart';
@@ -12085,12 +12086,50 @@ RouteWindowMatch findNearestOnRoutePreferIndex({
 }
 
 /// Sucht den nächsten Routenpunkt im Suchfenster ab dem aktuellen Index.
+/// Wie nah ein Kandidat am geometrisch besten liegen darf, um bei der
+/// Richtungspruefung noch mitzuzaehlen.
+///
+/// 2026-09-01: Auf einer Strasse, die hin UND zurueck befahren wird, liegen
+/// beide Spuren praktisch uebereinander — der Abstand unterscheidet sie also
+/// nicht. Zwoelf Meter decken den GPS-Fehler und die Fahrbahnbreite ab, ohne
+/// weit entfernte Punkte hereinzuholen.
+const double routenTrefferRichtungsToleranzMeter = 12.0;
+
+/// Wie weit die Fahrtrichtung von der Segmentrichtung abweichen darf, damit
+/// ein Kandidat als "in Fahrtrichtung" gilt. Neunzig Grad trennt sauber
+/// zwischen Hin- und Rueckweg und laesst Kurven zu.
+const double routenTrefferRichtungsFensterGrad = 90.0;
+
 RouteWindowMatch findNearestInWindow({
   required geo.Position position,
   required List<List<double>> coordinates,
   required int currentIndex,
   int windowSize = 20,
   double maxJumpMeters = 45.0,
+
+  /// Fahrtrichtung in Grad, oder null.
+  ///
+  /// 2026-09-01 (Vucko, Bildschirmaufnahme „die anzeige wo ich abbiegen muss
+  /// hat die ganze zeit herumgewechselt"): Ohne diesen Wert waehlt die
+  /// Funktion schlicht den geometrisch naechsten Punkt im Fenster. Faehrt die
+  /// Route eine Strasse hinauf, oben eine Haarnadel und dieselbe Strasse
+  /// zurueck, liegen Hinweg- und Rueckweg-Punkt beide unter dem Auto. Welcher
+  /// gewinnt, entschied dann allein das GPS-Rauschen — also bei jedem Fix neu.
+  /// Gemessen an der Aufnahme: das Banner sprang im Sekundentakt zwischen zwei
+  /// Manoevern, die 1,75 km auseinanderliegen.
+  ///
+  /// Der Abstand kann die beiden Spuren nicht trennen, die RICHTUNG schon:
+  /// auf dem Rueckweg zeigt das Auto genau entgegengesetzt zur Hinweg-Spur.
+  /// Ist die Richtung bekannt, gewinnt unter den praktisch gleich nahen
+  /// Kandidaten derjenige, dessen Segment in Fahrtrichtung liegt.
+  ///
+  /// Bewusst NICHT die Loesung „nimm den Kandidaten mit dem naeheren Index":
+  /// der Hinweg-Punkt ist auf dem Rueckweg IMMER null Meter entfernt, das Auto
+  /// kaeme also nie ueber die Stichstrasse hinaus.
+  ///
+  /// null schaltet die Pruefung ab und stellt das fruehere Verhalten
+  /// zeichengleich wieder her (z. B. im Stand, wo es keine Richtung gibt).
+  double? fahrtrichtungGrad,
 }) {
   if (coordinates.isEmpty) {
     return const RouteWindowMatch(index: 0, distanceMeters: double.infinity);
@@ -12134,6 +12173,80 @@ RouteWindowMatch findNearestInWindow({
       nearestSegmentIndex = i;
       nearestSegmentFraction = projection.fraction;
       nearestIndex = projection.fraction >= 0.5 ? i + 1 : i;
+    }
+  }
+
+  // 2026-09-01: Richtungspruefung. Laeuft nur, wenn eine Fahrtrichtung
+  // uebergeben wurde, und aendert am Ergebnis nur dann etwas, wenn mehrere
+  // Kandidaten praktisch gleich nah liegen — also genau im Ueberlappungsfall.
+  if (fahrtrichtungGrad != null && nearestDistance.isFinite) {
+    final schwelle = nearestDistance + routenTrefferRichtungsToleranzMeter;
+    int? besterInRichtung;
+    var besteDistanzInRichtung = double.infinity;
+    int? besterSegmentIndex;
+    double? besteSegmentFraction;
+
+    for (var i = start; i <= end; i++) {
+      final c = coordinates[i];
+      if (c.length < 2) continue;
+      final d = geo.Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        c[1],
+        c[0],
+      );
+      if (d > schwelle) continue;
+
+      // Richtung des Wegstuecks AN dieser Stelle. Am Routenende gibt es kein
+      // Folgesegment mehr, dann zaehlt das vorhergehende.
+      final vonIdx = i < end ? i : math.max(start, i - 1);
+      final bisIdx = i < end ? i + 1 : i;
+      if (vonIdx == bisIdx) continue;
+      final von = coordinates[vonIdx];
+      final bis = coordinates[bisIdx];
+      if (von.length < 2 || bis.length < 2) continue;
+      final segmentGrad = GeoBearing.bearingDegrees(
+        von[1],
+        von[0],
+        bis[1],
+        bis[0],
+      );
+      final abweichung = GeoBearing.angleDiff(
+        segmentGrad,
+        fahrtrichtungGrad,
+      ).abs();
+      if (abweichung > routenTrefferRichtungsFensterGrad) continue;
+
+      if (d < besteDistanzInRichtung) {
+        besteDistanzInRichtung = d;
+        besterInRichtung = i;
+        // Feinabgleich auf dem Segment, damit die Streckenmeter so genau
+        // bleiben wie ohne die Pruefung.
+        final projektion = _projectPositionOnRouteSegment(
+          position: position,
+          from: von,
+          to: bis,
+        );
+        if (projektion.distanceMeters <= d) {
+          besteDistanzInRichtung = projektion.distanceMeters;
+          besterSegmentIndex = vonIdx;
+          besteSegmentFraction = projektion.fraction;
+          besterInRichtung = projektion.fraction >= 0.5 ? vonIdx + 1 : vonIdx;
+        }
+      }
+    }
+
+    // Nur uebernehmen, wenn wirklich ein Kandidat in Fahrtrichtung gefunden
+    // wurde. Findet sich keiner (etwa direkt in der Haarnadel, wo beide
+    // Segmente quer zur Fahrtrichtung stehen), bleibt es beim geometrisch
+    // naechsten — schlechter als vorher wird es also nie.
+    if (besterInRichtung != null &&
+        besteDistanzInRichtung.isFinite &&
+        besteDistanzInRichtung <= schwelle) {
+      nearestIndex = besterInRichtung;
+      nearestDistance = besteDistanzInRichtung;
+      nearestSegmentIndex = besterSegmentIndex;
+      nearestSegmentFraction = besteSegmentFraction;
     }
   }
 

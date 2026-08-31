@@ -13702,6 +13702,23 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// 15-20s dauern) — der Watchdog soll NUR im echten Hänger feuern, nicht eine
   /// noch laufende, normal-langsame Neuberechnung abwürgen. Ein evtl. doch noch
   /// committender Spät-Zyklus wird vom 65m-Stale-Check abgefangen.
+  /// Ab welchem Tempo die Fahrtrichtung die Spur entscheiden darf.
+  ///
+  /// 2026-09-01: Unter Schrittgeschwindigkeit ist der Kurs Rauschen — dann
+  /// waere die Richtungspruefung schlechter als gar keine. Zwei Meter je
+  /// Sekunde sind gut sieben km/h; darunter steht das Auto praktisch, und der
+  /// Wechsel zwischen Hin- und Rueckweg faellt ohnehin nicht auf.
+  /// Wie viele Punkte ein einzelner Takt hoechstens vorruecken darf.
+  ///
+  /// Echtes Fahren rueckt unter zwei Punkte je Takt vor; der Deckel blockt
+  /// also nur anomale Spruenge, etwa auf die Rueckweg-Spur einer sich selbst
+  /// ueberlappenden Route. Steht als Konstante, weil ihn seit dem 01.09. der
+  /// Index UND die stetige Strecke benutzen muessen — vorher galt er nur fuer
+  /// den Index, und die Anzeige lief daran vorbei.
+  static const int _antiUeberlappCapPunkte = 60;
+
+  static const double _mindestTempoFuerRichtungMps = 2.0;
+
   static const Duration _rerouteWatchdogTimeout = Duration(seconds: 22);
 
   String _classifyRerouteError(Object e) {
@@ -15615,12 +15632,31 @@ class _CruiseModePageState extends State<CruiseModePage>
     final prevRouteIndex = _currentRouteIndex;
     // windowSize 40→80 + maxJumpMeters an den Korridor gekoppelt: der Index folgt
     // dem Puck auch über lange GraphHopper-Segmente, statt einzufrieren.
+    //
+    // 2026-09-01 (Vucko, Bildschirmaufnahme „die anzeige wo ich abbiegen muss
+    // hat die ganze zeit herumgewechselt"): Genau dieses Fenster war die
+    // Ursache. Faehrt die Route eine Strasse hinauf, oben eine Haarnadel und
+    // dieselbe Strasse zurueck, liegen Hinweg- und Rueckweg-Punkt beide unter
+    // dem Auto. Der Abstand trennt sie nicht, also entschied das GPS-Rauschen
+    // — bei jedem Fix neu. Auf der Aufnahme sprang das Banner im Sekundentakt
+    // zwischen zwei Manoevern, die 1,75 km auseinanderliegen (875 m hin plus
+    // 875 m zurueck, die Stichstrasse).
+    //
+    // Die Fahrtrichtung trennt die beiden Spuren zuverlaessig: auf dem
+    // Rueckweg zeigt das Auto entgegengesetzt. Sie wird nur uebergeben, wenn
+    // sie etwas taugt — im Stand gibt es keine Fahrtrichtung, und dann bleibt
+    // es beim frueheren Verhalten.
+    final richtungTaugt =
+        _nativeSmoother.hasValidHeading &&
+        _nativeSmoother.speed.isFinite &&
+        _nativeSmoother.speed >= _mindestTempoFuerRichtungMps;
     final rawMatch = findNearestInWindow(
       position: position,
       coordinates: _fullRouteCoordinates,
       currentIndex: _currentRouteIndex,
       windowSize: 80,
       maxJumpMeters: math.max(offRouteCorridor + 15, 60.0),
+      fahrtrichtungGrad: richtungTaugt ? _nativeSmoother.heading : null,
     );
     final match = _guardRoundTripFinishMatch(rawMatch);
     // 2026-08-20 (vucko, Aufgabe 4): Der Abstand zur Routenlinie ist das
@@ -16069,12 +16105,37 @@ class _CruiseModePageState extends State<CruiseModePage>
     _ensureRouteMetrics();
     final advanceDecision = _routeProgressDecision(match, position);
     // Fehler 9: die stetige Strecke pflegen, solange der Fix im Korridor ist.
+    //
+    // 2026-09-01 (Vucko, Bildschirmaufnahme): Hier stand die Zuweisung NACKT —
+    // ohne die beiden Bremsen, die zehn Zeilen weiter unten den Index
+    // schuetzen, und ohne Monotonie. Das war der zweite Teil des Fehlers.
+    //
+    // Diese Zahl entscheidet ueber `stetigPassiert` in
+    // selectActiveGuidanceManeuverIndex, also darueber, WELCHES Manoever im
+    // Banner steht. Sprang der Treffer auf die Rueckweg-Spur, sprang das
+    // Banner mit — waehrend Puck und Linie ruhig blieben, weil die den
+    // geschuetzten Index benutzen. Genau diese Halbheit war auf der Aufnahme
+    // zu sehen: die Karte stand still, die Ansage wechselte im Sekundentakt.
+    //
+    // Jetzt gelten dieselben drei Bedingungen wie fuer den Index: im
+    // Korridor, plausibler Meterzuwachs, und nicht mehr als der
+    // Anti-Ueberlapp-Cap an Punkten voraus. Zusaetzlich waechst der Wert nur
+    // noch — der Name sagt „stetig", der Code war es nicht. Zurueckgesetzt
+    // wird er weiterhin ausdruecklich beim Routenwechsel und beim Neu-Anker.
     if (!isOutsideCorridor && advanceDecision.matchDist.isFinite) {
-      _stetigeRoutenMeter = advanceDecision.matchDist;
+      final nichtZuWeitVoraus =
+          advanceDecision.stableIndex - _currentRouteIndex <=
+          _antiUeberlappCapPunkte;
+      final bisher = _stetigeRoutenMeter;
+      if (advanceDecision.plausible &&
+          nichtZuWeitVoraus &&
+          (bisher == null || advanceDecision.matchDist >= bisher)) {
+        _stetigeRoutenMeter = advanceDecision.matchDist;
+      }
     }
     final stableMatchIndex = advanceDecision.stableIndex;
     if (stableMatchIndex > _currentRouteIndex &&
-        stableMatchIndex - _currentRouteIndex <= 60 &&
+        stableMatchIndex - _currentRouteIndex <= _antiUeberlappCapPunkte &&
         match.distanceMeters <= offRouteCorridor) {
       // 2026-06-18 (vucko Standort-Teleport): Den Fortschritt nicht mehr nach N
       // Rejects erzwingen. Das erlaubte Meterbudget wächst mit echter Zeit seit dem
