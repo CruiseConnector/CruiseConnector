@@ -1302,17 +1302,26 @@ const KEHRTWENDE_ZELLE_M = 120;
 // Zwei Trefferlaeufe gehoeren zur selben Wende, solange ihre Partner-Indizes
 // nicht weiter als 12 Rasterpunkte (300 m) auseinanderrutschen.
 const KEHRTWENDE_BUENDEL_TOLERANZ = 12;
+// 2026-09-01 (Vucko: "niemals in keiner situation dazu auffordert irgendwo auf
+// einer strasse umzudrehen"): Eine Wende MITTEN auf der Strecke ist ein
+// Routenfehler. Eine Wende am Anfang oder am Ende ist dagegen oft schlicht die
+// Lage: liegt das Ziel in einer Sackgasse, MUSS man dort umkehren. Ein hartes
+// Tor ohne diese Unterscheidung wuerde aus "musste wenden" ein "keine Route"
+// machen. Dreihundert Meter decken eine typische Stichstrasse ab.
+const KEHRTWENDE_RAND_M = 300;
 
 /// Zaehlt Kehrtwenden (raus und auf derselben Fahrbahn zurueck) und liefert
 /// die laengste davon in Metern. Koordinaten sind [longitude, latitude].
 function kehrtwendenZaehler(
   coords: [number, number][],
-): { anzahl: number; maxLaengeM: number } {
-  if (!coords || coords.length < 2) return { anzahl: 0, maxLaengeM: 0 };
+): { anzahl: number; anzahlMitte: number; maxLaengeM: number } {
+  if (!coords || coords.length < 2) {
+    return { anzahl: 0, anzahlMitte: 0, maxLaengeM: 0 };
+  }
   const { xs, ys, n } = ueberlappRaster(coords, KEHRTWENDE_RASTER_M);
   const minSchritte = Math.round(KEHRTWENDE_MIN_WEG_M / KEHRTWENDE_RASTER_M);
   const maxSchritte = Math.round(KEHRTWENDE_MAX_WEG_M / KEHRTWENDE_RASTER_M);
-  if (n <= minSchritte + 2) return { anzahl: 0, maxLaengeM: 0 };
+  if (n <= minSchritte + 2) return { anzahl: 0, anzahlMitte: 0, maxLaengeM: 0 };
   // Fahrtrichtung je Rasterpunkt als Einheitsvektor (Nachbar davor/danach)
   const rx = new Float64Array(n);
   const ry = new Float64Array(n);
@@ -1366,8 +1375,10 @@ function kehrtwendenZaehler(
     partner[i] = bester;
   }
   let anzahl = 0;
-  let maxLaengeM = 0;
+  let anzahlMitte = 0;
+  const gesamtM = n * KEHRTWENDE_RASTER_M;
   let i = 0;
+  let maxLaengeM = 0;
   while (i < n) {
     if (partner[i] < 0) {
       i++;
@@ -1384,11 +1395,30 @@ function kehrtwendenZaehler(
     anzahl++;
     const laengeM = (partner[start] - start) * KEHRTWENDE_RASTER_M;
     if (laengeM > maxLaengeM) maxLaengeM = laengeM;
+    // Liegt die Wende am Rand der Strecke oder mittendrin?
+    //
+    // Nicht am Scheitel gemessen, sondern daran, WIE VIEL STRECKE davor und
+    // danach noch kommt. Eine 400-Meter-Sackgasse am Ziel hat ihren Scheitel
+    // 400 Meter vor dem Ende — eine Scheitelmessung wuerde sie faelschlich als
+    // "mittendrin" zaehlen und aus "musste wenden" ein "keine Route" machen.
+    //
+    // Kommt vor dem Stich oder nach der Rueckkehr fast nichts mehr, ist die
+    // Wende die Lage von Start oder Ziel und damit unvermeidbar. Liegt vor UND
+    // nach ihr echte Strecke, ist sie ein Routenfehler — genau der Fall, den
+    // Vucko gefahren ist.
+    const vorDemStichM = start * KEHRTWENDE_RASTER_M;
+    const nachDerRueckkehrM = gesamtM - partner[start] * KEHRTWENDE_RASTER_M;
+    if (
+      vorDemStichM > KEHRTWENDE_RAND_M &&
+      nachDerRueckkehrM > KEHRTWENDE_RAND_M
+    ) {
+      anzahlMitte++;
+    }
     // Bis zum Rueckkehrpunkt springen: sonst zaehlt der Rueckweg denselben
     // Stich ein zweites Mal.
     i = Math.max(i + 1, rueckkehr);
   }
-  return { anzahl, maxLaengeM: Math.round(maxLaengeM) };
+  return { anzahl, anzahlMitte, maxLaengeM: Math.round(maxLaengeM) };
 }
 
 // ─────────────────── Autobahn-Episoden ────────────────────────────────────
@@ -2197,6 +2227,7 @@ async function callGraphHopper(opts: {
         uses_trunk: usesTrunk,
         u_turn_count: uTurnCount,
         kehrtwenden_count: kehrtwenden.anzahl,
+        kehrtwenden_mitte: kehrtwenden.anzahlMitte,
         kehrtwende_max_laenge_m: kehrtwenden.maxLaengeM,
         motorway_episode_count: autobahn.anzahl,
         motorway_episode_gaps_km: autobahn.lueckenKm,
@@ -3150,6 +3181,25 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       const phaseNames = ['exact', 'end-offset-150m', 'end-offset-1km', 'start-offset-150m', 'start-offset-1km'];
       const runnablePhases = req.reroute_request === true ? phases.slice(0, 3) : phases;
       let lastResults: Array<{ result: RouteResult | { error: string }; seed: number }> = [];
+      // 2026-09-01 (Vucko: "niemals in keiner situation dazu auffordert
+      // irgendwo auf einer strasse umzudrehen"): Die Schleife lieferte aus,
+      // sobald IRGENDEIN Ergebnis ohne Fehler zurueckkam — Qualitaet spielte
+      // keine Rolle. Bei direktem A nach B erzeugt Phase A genau EINEN
+      // Kandidaten; die Kehrtwenden-Strafe im Best-of-N konnte deshalb nichts
+      // auswaehlen, weil es nichts zu waehlen gab. Genau so kam die Strecke
+      // zustande, auf der Vucko mitten auf der Fahrbahn umdrehen musste.
+      //
+      // Jetzt wird eine Phase nur dann angenommen, wenn mindestens ein
+      // Kandidat OHNE Wende mitten auf der Strecke dabei ist. Wenden am Anfang
+      // oder Ende bleiben erlaubt: liegt das Ziel in einer Sackgasse, muss man
+      // dort umkehren, und ein Tor darauf wuerde aus "musste wenden" ein
+      // "keine Route" machen.
+      //
+      // Findet KEINE Phase eine wendefreie Strecke, wird die erste brauchbare
+      // ausgeliefert — lieber eine Route mit Wende als gar keine.
+      let ergebnisseMitWende:
+        | Array<{ result: RouteResult | { error: string }; seed: number }>
+        | null = null;
       for (let p = 0; p < runnablePhases.length; p++) {
         const results = await Promise.all(
           runnablePhases[p].map((v, idx) =>
@@ -3168,13 +3218,36 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             }).then(result => ({ result, seed: p * 16 + idx })),
           ),
         );
-        if (results.some(r => !('error' in r.result))) {
-          if (p > 0) {
-            console.log(`Direct A→B: exact phase failed, ${phaseNames[p] ?? `phase-${p}`} succeeded`);
+        const brauchbar = results.filter(r => !('error' in r.result));
+        if (brauchbar.length > 0) {
+          const wendefrei = brauchbar.filter(r =>
+            (((r.result as RouteResult).meta.kehrtwenden_mitte as
+              | number
+              | undefined) ?? 0) === 0
+          );
+          if (wendefrei.length > 0) {
+            if (p > 0) {
+              console.log(
+                `Direct A→B: ${phaseNames[p] ?? `phase-${p}`} liefert ` +
+                  `${wendefrei.length} wendefreie Kandidaten`,
+              );
+            }
+            return results;
           }
-          return results;
+          if (!ergebnisseMitWende) ergebnisseMitWende = results;
+          console.log(
+            `Direct A→B: ${phaseNames[p] ?? `phase-${p}`} nur mit Kehrtwende ` +
+              `mitten auf der Strecke, versuche die naechste Phase`,
+          );
         }
         lastResults = results;
+      }
+      if (ergebnisseMitWende) {
+        console.log(
+          'Direct A→B: keine wendefreie Strecke gefunden, liefere die beste ' +
+            'mit Wende aus',
+        );
+        return ergebnisseMitWende;
       }
       return lastResults;
     }
