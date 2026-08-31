@@ -1486,6 +1486,8 @@ class _ProfilePageState extends State<ProfilePage>
       sharedRouteId: post['shared_route_id'] as String?,
       sharedGroupId: post['shared_group_id'] as String?,
       avatarUrl: profile?['avatar_url'] as String?,
+      likesCount: (post['likes_count'] as num?)?.toInt() ?? 0,
+      repostsCount: (post['reposts_count'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -1498,6 +1500,8 @@ class _ProfilePageState extends State<ProfilePage>
     String? sharedRouteId,
     String? sharedGroupId,
     String? avatarUrl,
+    int likesCount = 0,
+    int repostsCount = 0,
   }) {
     Navigator.push(
       context,
@@ -1511,6 +1515,8 @@ class _ProfilePageState extends State<ProfilePage>
           sharedRouteId: sharedRouteId,
           sharedGroupId: sharedGroupId,
           avatarUrl: avatarUrl,
+          likesCount: likesCount,
+          repostsCount: repostsCount,
         ),
       ),
     );

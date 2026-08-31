@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/favorite_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -978,6 +979,7 @@ class _UserProfilePageState extends State<UserProfilePage>
 
   Widget _buildPostItem(Map<String, dynamic> post) {
     final content = post['content'] ?? '';
+    final postId = post['id'] as String;
     final time = _formatTimeAgo(post['created_at']);
     final likes = post['likes_count'] ?? 0;
     final comments = post['comments_count'] ?? 0;
@@ -994,7 +996,9 @@ class _UserProfilePageState extends State<UserProfilePage>
 
     return InkWell(
       onTap: () => _openPostDetail(
-        postId: post['id'] as String,
+        postId: postId,
+        likesCount: likes is int ? likes : 0,
+        repostsCount: reposts is int ? reposts : 0,
         name: authorName,
         handle: authorHandle,
         content: content.toString(),
@@ -1044,22 +1048,26 @@ class _UserProfilePageState extends State<UserProfilePage>
               ),
             ],
             const SizedBox(height: 8),
+            // 2026-09-01 (Vucko: „wenn ich auf anderen profilen gehe ihre
+            // posts auch liken koennen. Ich sehe die interaktionen aber wenn
+            // ich draufklicke kann ich nichts machen"):
+            //
+            // Hier standen drei blosse Icon-Widgets ohne jedes onTap — Herz,
+            // Kommentar und Wiederholen waren reine Zahlen. Nur das umgebende
+            // InkWell reagierte und oeffnete die Beitragsseite, und die hatte
+            // ebenfalls keinen Like-Knopf. Genau das beschreibt seine Meldung
+            // woertlich.
+            //
+            // PostLikeButton und PostRepostButton wurden am 07.08. aus der
+            // Feed-Seite herausgeloest, damit nicht zwei Fassungen
+            // auseinanderlaufen. Feed und EIGENES Profil benutzen sie laengst;
+            // das FREMDE Profil wurde damals vergessen. Serverseitig stand
+            // nichts im Weg: die Regel auf post_likes erlaubt jedem
+            // angemeldeten Nutzer das Liken sichtbarer Beitraege.
             Row(
               children: [
-                Icon(
-                  Icons.favorite_border,
-                  size: 14,
-                  color: Colors.white.withValues(alpha: 0.4),
-                ),
+                PostLikeButton(postId: postId, initialCount: likes),
                 const SizedBox(width: 4),
-                Text(
-                  '$likes',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4),
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(width: 16),
                 Icon(
                   Icons.comment_outlined,
                   size: 14,
@@ -1073,20 +1081,8 @@ class _UserProfilePageState extends State<UserProfilePage>
                     fontSize: 12,
                   ),
                 ),
-                const SizedBox(width: 16),
-                Icon(
-                  Icons.repeat,
-                  size: 14,
-                  color: Colors.white.withValues(alpha: 0.4),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '$reposts',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4),
-                    fontSize: 12,
-                  ),
-                ),
+                const SizedBox(width: 8),
+                PostRepostButton(postId: postId, initialCount: reposts),
                 const Spacer(),
                 Text(
                   time,
@@ -1254,6 +1250,8 @@ class _UserProfilePageState extends State<UserProfilePage>
     String? sharedRouteId,
     String? sharedGroupId,
     String? avatarUrl,
+    int likesCount = 0,
+    int repostsCount = 0,
   }) {
     Navigator.push(
       context,
@@ -1267,6 +1265,8 @@ class _UserProfilePageState extends State<UserProfilePage>
           sharedRouteId: sharedRouteId,
           sharedGroupId: sharedGroupId,
           avatarUrl: avatarUrl,
+          likesCount: likesCount,
+          repostsCount: repostsCount,
         ),
       ),
     );

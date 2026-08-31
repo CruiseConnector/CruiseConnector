@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/presentation/widgets/mentions.dart';
@@ -18,6 +19,12 @@ class PostDetailPage extends StatefulWidget {
   final String? sharedGroupId;
   final String? avatarUrl;
 
+  /// 2026-09-01 (Vucko: „ich sehe die interaktionen aber wenn ich draufklicke
+  /// kann ich nichts machen"): Die Startzahlen fuer Herz und Wiederholen. Ohne
+  /// sie stuenden die Knoepfe kurz auf null und zuckten dann hoch.
+  final int likesCount;
+  final int repostsCount;
+
   const PostDetailPage({
     super.key,
     required this.postId,
@@ -25,6 +32,8 @@ class PostDetailPage extends StatefulWidget {
     required this.handle,
     required this.content,
     required this.time,
+    this.likesCount = 0,
+    this.repostsCount = 0,
     this.sharedRouteId,
     this.sharedGroupId,
     this.avatarUrl,
@@ -203,6 +212,25 @@ class _PostDetailPageState extends State<PostDetailPage> {
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  // 2026-09-01 (Vucko): Diese Seite hatte ueberhaupt keinen
+                  // Like- und keinen Wiederholen-Knopf, nur Kommentare. Wer
+                  // im Feed oder auf einem fremden Profil auf einen Beitrag
+                  // tippte, landete hier und konnte nichts tun — genau seine
+                  // Meldung. Es sind dieselben Knoepfe wie ueberall sonst.
+                  Row(
+                    children: [
+                      PostLikeButton(
+                        postId: widget.postId,
+                        initialCount: widget.likesCount,
+                      ),
+                      const SizedBox(width: 8),
+                      PostRepostButton(
+                        postId: widget.postId,
+                        initialCount: widget.repostsCount,
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   Row(
