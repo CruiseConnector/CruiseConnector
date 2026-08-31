@@ -167,6 +167,32 @@ class SavedRoute {
     return ratio >= 0.85;
   }
 
+  /// Die gefahrene Durchschnittsgeschwindigkeit, oder null.
+  ///
+  /// 2026-09-01 (Vucko: „bei gespeicherten routen und wenn man eine route
+  /// teilt in den communitys sollen auch noch top speed und
+  /// durchschnittsgeschwindigkeit sein"):
+  ///
+  /// Bewusst NUR, wenn echte Fahrdaten vorliegen. Bei einer bloss GEPLANTEN
+  /// Route waere `durationSeconds` die geschaetzte Reisezeit des Routers; das
+  /// daraus als „Durchschnitt" auszugeben waere eine erfundene Zahl. Lieber
+  /// keine Kachel als eine falsche.
+  ///
+  /// Es gibt dafuer bewusst KEINE Datenbankspalte: Strecke und Fahrzeit stehen
+  /// beide schon da, und eine dritte gespeicherte Zahl koennte von ihnen
+  /// abweichen.
+  double? get durchschnittKmh {
+    final km = drivenKm ?? (routeSource == 'driven_track' ? distanceKm : null);
+    final sekunden = durationSeconds;
+    if (km == null || km <= 0) return null;
+    if (sekunden == null || sekunden <= 0) return null;
+    final kmh = km / (sekunden / 3600.0);
+    // Plausibilitaet: unter 3 km/h war es keine Fahrt, ueber 300 km/h kein
+    // Auto auf oeffentlicher Strasse. Beides deutet auf kaputte Zeitwerte.
+    if (!kmh.isFinite || kmh < 3 || kmh > 300) return null;
+    return kmh;
+  }
+
   String get routeSignature {
     final coordinates = flattenGeometryCoordinates(geometry);
     if (coordinates.isEmpty) {

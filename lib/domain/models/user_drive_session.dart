@@ -1,3 +1,5 @@
+import 'package:cruise_connect/domain/models/saved_route.dart';
+
 class UserDriveSession {
   const UserDriveSession({
     required this.id,
@@ -44,6 +46,57 @@ class UserDriveSession {
   final String? photoUrl;
 
   bool get isGroupRide => groupId != null;
+
+  /// Diese gefahrene Fahrt als speicherbare Strecke.
+  ///
+  /// 2026-09-01 (Vucko: „routen die man gefahren ist im nachhinein noch
+  /// speichern kann"): Bis heute gab es dafuer genau EIN Zeitfenster — das
+  /// Abschluss-Blatt direkt nach der Fahrt. Wer dort „Verwerfen" tippte oder
+  /// wessen App vorher starb, hatte keinen zweiten Weg.
+  ///
+  /// Die Geometrie ist die GEFAHRENE Spur, nicht die geplante Route. Deshalb
+  /// traegt sie ausdruecklich `driven_track` als Quelle: eine spaeter daraus
+  /// gebaute Fremdfahrt soll wissen, dass sie einer echten Aufzeichnung folgt
+  /// und keinem Routenvorschlag.
+  ///
+  /// Der geplante Fingerprint wird bewusst NICHT uebernommen. Eine gefahrene
+  /// Spur ist nicht die geplante Route; sie als solche auszugeben wuerde die
+  /// Duplikatserkennung belasten. Die Verbindung zur Fahrt laeuft ueber
+  /// `source_route_id`.
+  SavedRoute? alsSpeicherbareStrecke({String? name}) {
+    final spur = trackGeometry;
+    if (spur == null || spur.length < 2) return null;
+    return SavedRoute(
+      id: id,
+      createdAt: createdAt,
+      style: routeStyle ?? 'Standard',
+      distanceKm: distanceKm,
+      geometry: <String, dynamic>{
+        'type': 'LineString',
+        'coordinates': spur,
+      },
+      userId: userId,
+      name: name,
+      durationSeconds: durationSeconds.toDouble(),
+      routeType: routeType ?? 'ROUND_TRIP',
+      drivenKm: distanceKm,
+      sourceRouteId: id,
+      groupId: groupId,
+      routeSource: 'driven_track',
+      completedAtEnd: completedAtEnd,
+      photoUrl: photoUrl,
+      topSpeedKmh: topSpeedKmh,
+      routeMeta: <String, dynamic>{
+        'saved_route_source': 'gefahrene_fahrt',
+        'drive_session_id': id,
+        'route_source': 'driven_track',
+        'geometry_source': 'gps_track',
+        'final_geometry_source': 'gps_track',
+        if (routeFingerprint != null && routeFingerprint!.isNotEmpty)
+          'planned_route_fingerprint': routeFingerprint,
+      },
+    );
+  }
 
   static List<List<double>>? _parseTrack(dynamic raw) {
     if (raw is! List) return null;

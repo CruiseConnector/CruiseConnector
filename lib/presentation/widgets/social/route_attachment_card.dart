@@ -406,14 +406,23 @@ class RouteAttachmentStats extends StatelessWidget {
     final kurven = coords.length >= 3 ? KurvenZaehler.zaehle(coords) : 0;
     final dauer = route.durationLabelOrEstimate;
     final top = route.topSpeedKmh;
+    final schnitt = route.durchschnittKmh;
     final chips = <(IconData, String)>[
       if (route.distanceKm > 0) (Icons.map_rounded, route.formattedDistance),
       if (ok(dauer)) (Icons.timer_rounded, dauer),
       if (kurven > 0) (Icons.moving_rounded, '$kurven Kurven'),
       if (ok(route.displayStyleLabel))
         (Icons.tune_rounded, route.displayStyleLabel),
+      // 2026-09-01 (Vucko): Zwei Kacheln mit blossem „km/h" waeren nicht
+      // auseinanderzuhalten. „Spitze" und „Schnitt" sind die Woerter, die
+      // Fahrer dafuer benutzen.
       if (top != null && top > 0)
-        (Icons.speed_rounded, '${top.toStringAsFixed(0)} km/h'),
+        (Icons.speed_rounded, 'Spitze ${top.toStringAsFixed(0)} km/h'),
+      // Der Schnitt erscheint nur bei einer wirklich gefahrenen Strecke. Bei
+      // einem blossen Vorschlag waere er die Schaetzung des Routers und nicht
+      // das, was jemand gefahren ist.
+      if (schnitt != null)
+        (Icons.trending_flat_rounded, 'Schnitt ${schnitt.toStringAsFixed(0)} km/h'),
     ];
     return Wrap(
       spacing: 6,

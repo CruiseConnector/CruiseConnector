@@ -1086,7 +1086,23 @@ class GamificationService {
   ///
   /// Läuft fire-and-forget nach dem Aufzeichnen einer neuen Fahrt — blockt also
   /// nie den Abschluss-Flow und schluckt Fehler still.
-  static Future<void> pruneRecentRidePhotos({int keep = 5}) async {
+  ///
+  /// 2026-09-01 (Vucko: „ganz wichtig fotos hinzufuegen kann" — nachtraeglich,
+  /// zu schon gefahrenen Strecken): Die Grenze lag bei FUENF. Wer einer alten
+  /// Fahrt ein Foto nachreichte, ohne die Route zu speichern, verlor es wieder,
+  /// sobald fuenf neuere Foto-Fahrten dazukamen. Genau die Funktion, die er
+  /// sich wuenscht, haette sich also selbst zerstoert.
+  ///
+  /// Gemessen an der Produktionsdatenbank am 01.09.: Es gibt DREI Fahrten mit
+  /// Foto, von einem einzigen Nutzer, und der ganze Bilderspeicher ist 4,9 MB
+  /// gross. Die Grenze raeumte also ein Problem weg, das es nicht gab.
+  ///
+  /// Fuenfzig ist bewusst grosszuegig und trotzdem eine Grenze: Bei rund einem
+  /// halben Megabyte je Bild sind das etwa 25 MB je Nutzer. Sollte der
+  /// Bilderspeicher spaeter wirklich wachsen, gehoert hier keine kleinere Zahl
+  /// hin, sondern ein ehrlicher Weg — den Nutzer fragen, statt ihm still seine
+  /// Erinnerung zu loeschen.
+  static Future<void> pruneRecentRidePhotos({int keep = 50}) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
     try {

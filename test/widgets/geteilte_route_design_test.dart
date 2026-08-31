@@ -165,7 +165,10 @@ void main() {
       await tester.pumpWidget(
         rahmen(RouteAttachmentStats(route: route(topSpeedKmh: 142))),
       );
-      expect(find.text('142 km/h'), findsOneWidget);
+      // 2026-09-01: Die Kachel heisst jetzt „Spitze 142 km/h". Es gibt
+      // seither auch eine Schnitt-Kachel, und zwei Kacheln mit blossem
+      // „km/h" waeren nicht auseinanderzuhalten.
+      expect(find.text('Spitze 142 km/h'), findsOneWidget);
       keineStriche(tester);
 
       await tester.pumpWidget(rahmen(RouteAttachmentStats(route: route())));

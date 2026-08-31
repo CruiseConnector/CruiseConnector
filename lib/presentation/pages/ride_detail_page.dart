@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/photo/ride_photo_picker.dart';
+import 'package:cruise_connect/presentation/widgets/top_toast.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -107,6 +108,11 @@ class _RideDetailPageState extends State<RideDetailPage> {
 
   String? _photoUrl;
   bool _photoBusy = false;
+
+  /// 2026-09-01 (Vucko: „routen die man gefahren ist im nachhinein noch
+  /// speichern kann"): laeuft gerade ein Speichern?
+  bool _speichernLaeuft = false;
+  bool _bereitsGespeichert = false;
   List<GroupLeaderboardEntry> _leaderboard = const [];
   bool _leaderboardLoading = false;
 
@@ -171,6 +177,55 @@ class _RideDetailPageState extends State<RideDetailPage> {
     final hh = l.hour.toString().padLeft(2, '0');
     final mm = l.minute.toString().padLeft(2, '0');
     return '${l.day}. ${_months[l.month - 1]} ${l.year} · $hh:$mm';
+  }
+
+  /// Speichert die GEFAHRENE Spur nachtraeglich als eigene Strecke.
+  ///
+  /// 2026-09-01 (Vucko): Der einzige bisherige Weg war das Abschluss-Blatt
+  /// direkt nach der Fahrt.
+  ///
+  /// saveExistingRoute prueft selbst gegen die ganze Bibliothek, ob es die
+  /// Strecke schon gibt, und legt dann nichts Doppeltes an. Deshalb ist ein
+  /// zweites Tippen harmlos, und deshalb wird hier bewusst NICHT vorher
+  /// gefragt: der Nutzer soll nicht zwei Dialoge wegtippen muessen.
+  Future<void> _alsStreckeSpeichern() async {
+    final strecke = _s.alsSpeicherbareStrecke(
+      name: 'Gefahren am ${_formatDate(_s.createdAt)}',
+    );
+    if (strecke == null) {
+      if (!mounted) return;
+      TopToast.show(
+        context,
+        message: 'Für diese Fahrt gibt es keine aufgezeichnete Spur.',
+        icon: Icons.info_outline_rounded,
+        isError: true,
+      );
+      return;
+    }
+    setState(() => _speichernLaeuft = true);
+    try {
+      await SavedRoutesService.saveExistingRoute(strecke);
+      if (!mounted) return;
+      setState(() {
+        _speichernLaeuft = false;
+        _bereitsGespeichert = true;
+      });
+      TopToast.show(
+        context,
+        message: 'Die Fahrt liegt jetzt in deinen Strecken.',
+        icon: Icons.bookmark_added_rounded,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _speichernLaeuft = false);
+      TopToast.show(
+        context,
+        message: 'Konnte gerade nicht speichern. Prüfe deine Verbindung.',
+        icon: Icons.error_outline_rounded,
+        isError: true,
+      );
+      debugPrint('[RideDetail] Speichern fehlgeschlagen: $e');
+    }
   }
 
   double? get _avgKmh => _s.durationSeconds > 0
@@ -351,6 +406,32 @@ class _RideDetailPageState extends State<RideDetailPage> {
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
         actions: [
+          // 2026-09-01 (Vucko: „routen die man gefahren ist im nachhinein noch
+          // speichern kann"): Bis heute gab es dafuer genau EIN Zeitfenster,
+          // das Abschluss-Blatt direkt nach der Fahrt. Wer dort „Verwerfen"
+          // tippte oder wessen App vorher starb, hatte keinen zweiten Weg.
+          if (hasTrack)
+            IconButton(
+              icon: _speichernLaeuft
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Icon(
+                      _bereitsGespeichert
+                          ? Icons.bookmark_rounded
+                          : Icons.bookmark_add_outlined,
+                      color: Colors.white,
+                    ),
+              tooltip: _bereitsGespeichert
+                  ? 'Schon in deinen Strecken'
+                  : 'Als Strecke speichern',
+              onPressed: _speichernLaeuft ? null : _alsStreckeSpeichern,
+            ),
           IconButton(
             icon: const Icon(Icons.ios_share_rounded, color: Colors.white),
             tooltip: 'Teilen',

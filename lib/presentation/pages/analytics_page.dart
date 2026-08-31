@@ -6,6 +6,7 @@ import 'package:cruise_connect/presentation/widgets/badge_stufen_stil.dart';
 import 'package:cruise_connect/presentation/widgets/badge_uebersicht_panel.dart';
 import 'package:cruise_connect/presentation/widgets/profile_badge_showcase.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/alle_fahrten_page.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
@@ -3188,6 +3189,48 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           for (var i = 0; i < recentRoutes.length; i++) ...[
             _buildRouteSummaryRow(recentRoutes[i]),
             if (i < recentRoutes.length - 1) const SizedBox(height: 10),
+          ],
+          // 2026-09-01 (Vucko: nachtraeglich speichern und Fotos hinzufuegen):
+          // Die Uebersicht bleibt bewusst bei fuenf Eintraegen — so wollte er
+          // sie am 25.06. ausdruecklich haben. Aber alles Aeltere war dadurch
+          // gar nicht mehr aufrufbar, und damit auch die Fahrten-Detailseite
+          // nicht, auf der man Fotos hinzufuegt und die Strecke speichert.
+          // Dieser Weg fuehrt zu allem dahinter.
+          if (_driveSessions.length > recentRoutes.length) ...[
+            const SizedBox(height: 12),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AlleFahrtenPage(fahrten: _driveSessions),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'Alle ${_driveSessions.length} Fahrten ansehen',
+                        style: TextStyle(
+                          color: AppAccentColors.accent,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppAccentColors.accent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ],
       ),

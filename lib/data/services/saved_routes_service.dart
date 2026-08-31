@@ -416,7 +416,14 @@ class SavedRoutesService {
           ..remove('route_source')
           ..remove('route_fingerprint')
           ..remove('quality_tier')
-          ..remove('route_meta');
+          ..remove('route_meta')
+          // 2026-09-01: Auch die vier neuen Felder. Eine App, die gegen eine
+          // aeltere Datenbank laeuft, soll die Strecke lieber ohne Tempo
+          // speichern als gar nicht.
+          ..remove('top_speed_kmh')
+          ..remove('driven_km')
+          ..remove('photo_url')
+          ..remove('completed_at_end');
         await _db.from('routes').insert(row);
         _meldeSpeichernAufgabe();
       } else if (e.code == '23505') {
@@ -458,6 +465,12 @@ class SavedRoutesService {
     final routeFingerprint = (route.routeFingerprint?.trim().isNotEmpty == true)
         ? route.routeFingerprint!.trim()
         : route.routeSignature;
+    // Gehoert die Strecke dem Speichernden selbst? Nur dann duerfen die
+    // Fahrdaten mitwandern. Eine fremde Strecke traegt die Kennung ihres
+    // Besitzers oder gar keine.
+    final istEigeneFahrt =
+        route.userId != null && route.userId!.isNotEmpty && route.userId == userId;
+
     final routeMeta = Map<String, dynamic>.from(route.routeMeta)
       ..['saved_route_source'] = 'existing_route_copy'
       ..['source_route_id'] = rawSourceRouteId
@@ -478,6 +491,31 @@ class SavedRoutesService {
       'quality_tier': route.qualityTier,
       'route_meta': routeMeta,
       if (route.rating != null && route.rating! > 0) 'rating': route.rating,
+      // 2026-09-01 (Vucko: „bei gespeicherten routen und wenn man eine route
+      // teilt in den communitys sollen auch noch top speed und
+      // durchschnittsgeschwindigkeit sein"):
+      //
+      // Diese vier Felder fielen beim Speichern still unter den Tisch. Deshalb
+      // war `routes.top_speed_kmh` in der Produktion bei 1 von 299 Zeilen
+      // gefuellt, und die Tempo-Kachel erschien nie — sie blendet sich bei
+      // null bewusst aus. Der Durchschnitt braucht `driven_km`, sonst kann er
+      // eine gefahrene Strecke nicht von einem Vorschlag unterscheiden.
+      //
+      // NUR bei der EIGENEN Fahrt. Kopiert jemand eine fremde Strecke aus der
+      // Community, sind Hoechsttempo und gefahrene Kilometer die Zahlen des
+      // ANDEREN; sie auf die eigene Kopie zu schreiben waere schlicht falsch.
+      // Der bestehende Test „speichert Community-Kopie ohne Drive-XP-Felder"
+      // haelt genau das fest und hat diesen Fehler beim ersten Anlauf sofort
+      // aufgedeckt.
+      if (istEigeneFahrt) ...<String, dynamic>{
+        if (route.topSpeedKmh != null && route.topSpeedKmh! > 0)
+          'top_speed_kmh': route.topSpeedKmh,
+        if (route.drivenKm != null && route.drivenKm! > 0)
+          'driven_km': route.drivenKm,
+        if (route.photoUrl != null && route.photoUrl!.trim().isNotEmpty)
+          'photo_url': route.photoUrl!.trim(),
+        if (route.completedAtEnd) 'completed_at_end': true,
+      },
     };
   }
 
