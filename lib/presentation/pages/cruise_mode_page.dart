@@ -22,7 +22,6 @@ import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
-import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
 import 'package:cruise_connect/data/services/compass_heading_service.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
@@ -21758,7 +21757,6 @@ class _CruiseModePageState extends State<CruiseModePage>
         if (buchungsFehler != null) throw buchungsFehler;
         if (mounted) {
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
-          unawaited(context.read<SavedRoutesProvider>().loadRoutes());
         }
         await RouteRatingService.saveRating(
           result: adjustedResult,

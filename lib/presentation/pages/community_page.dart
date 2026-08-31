@@ -9,7 +9,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
-import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
@@ -3789,7 +3788,6 @@ class _RouteBookmarkButtonState extends State<_RouteBookmarkButton> {
           widget.routeId,
         );
         if (!context.mounted || saved == null) return;
-        await context.read<SavedRoutesProvider>().loadRoutes();
         if (!context.mounted || saved != true) return;
         await GamificationService.calculateAndSync();
         // 2026-08-26 (Aufgabe 7): siehe zeigeOffeneAuszeichnungen.

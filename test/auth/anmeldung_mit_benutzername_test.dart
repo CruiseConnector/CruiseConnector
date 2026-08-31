@@ -20,8 +20,6 @@ import 'package:cruise_connect/data/services/auth_service.dart';
 /// `test/core/benutzername_umlaute_test.dart` die Faltung der Migration mit
 /// der in Dart vergleicht.
 void main() {
-  const migrationPfad =
-      'supabase/migrations/20260831120000_anmeldung_mit_benutzername.sql';
   const edgePfad = 'supabase/functions/username-login/index.ts';
   const configPfad = 'supabase/config.toml';
 
@@ -95,20 +93,37 @@ void main() {
   });
 
   group('Die E-Mail bleibt auf dem Server', () {
-    final migration = File(migrationPfad);
+    // 2026-08-31: Die Migration wird ueber ihren INHALT gesucht, nicht ueber
+    // ihren Dateinamen. Der Name traegt einen Zeitstempel, und der muss zu der
+    // Version passen, unter der die Migration tatsaechlich eingespielt wurde —
+    // beim Nachziehen dieses Zeitstempels ist dieser Test schon einmal
+    // gerissen, obwohl an der Sache nichts falsch war.
+    final migration = Directory('supabase/migrations')
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.sql'))
+        .where(
+          (f) => f.readAsStringSync().contains(
+            'function public.anmeldename_zu_benutzer_id',
+          ),
+        )
+        .fold<File?>(null, (a, b) => a == null || b.path.compareTo(a.path) > 0 ? b : a);
     final edge = File(edgePfad);
 
     test('Migration und Edge Function liegen im Repo', () {
       expect(
-        migration.existsSync(),
-        isTrue,
-        reason: 'Der Test muss aus dem Projektwurzelverzeichnis laufen.',
+        migration,
+        isNotNull,
+        reason:
+            'Keine Migration definiert public.anmeldename_zu_benutzer_id. '
+            'Der Test muss aus dem Projektwurzelverzeichnis laufen; wurde die '
+            'Funktion umbenannt, diesen Waechter mitziehen.',
       );
       expect(edge.existsSync(), isTrue);
     });
 
     test('die Aufloesung liefert eine Kennung, keine Adresse', () {
-      final sql = migration.readAsStringSync();
+      final sql = migration!.readAsStringSync();
       expect(
         sql.contains('returns uuid'),
         isTrue,
@@ -127,7 +142,7 @@ void main() {
     });
 
     test('nur service_role darf die Aufloesung aufrufen', () {
-      final sql = migration.readAsStringSync().toLowerCase();
+      final sql = migration!.readAsStringSync().toLowerCase();
       expect(sql.contains('security definer'), isTrue);
       expect(
         sql.contains('revoke all on function public.anmeldename_zu_benutzer_id')

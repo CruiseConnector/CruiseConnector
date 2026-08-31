@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:cruise_connect/data/services/starter_aufgaben_service.dart';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -17,134 +16,6 @@ class SavedRoutesService {
   static SupabaseClient get _db => Supabase.instance.client;
 
   // Cache für wöchentliche Top-Route (1 Stunde gültig)
-  static SavedRoute? _cachedWeeklyTopRoute;
-  static DateTime? _weeklyTopRouteCacheTime;
-  static String? _weeklyTopRouteCacheKey;
-
-  // ─── Wöchentliche Top-Route ──────────────────────────────────────────────
-
-  /// Haversine-Distanz zwischen zwei Koordinaten in Kilometern.
-  static double _haversineDistance(
-    double lat1,
-    double lon1,
-    double lat2,
-    double lon2,
-  ) {
-    const R = 6371.0; // Erdradius in km
-    final dLat = _toRadians(lat2 - lat1);
-    final dLon = _toRadians(lon2 - lon1);
-    final a =
-        math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_toRadians(lat1)) *
-            math.cos(_toRadians(lat2)) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-    return R * c;
-  }
-
-  static double _toRadians(double deg) => deg * (math.pi / 180);
-
-  /// Gibt die beste bewertete Route dieser Woche in der Nähe des Users zurück.
-  /// Sucht zuerst im 50km-Radius, dann 100km, dann ohne Distanzfilter.
-  /// Ergebnis wird 1 Stunde gecacht.
-  static Future<SavedRoute?> getWeeklyTopRoute({
-    required double userLat,
-    required double userLng,
-  }) async {
-    final cacheKey = _buildWeeklyTopCacheKey(
-      userLat: userLat,
-      userLng: userLng,
-    );
-    // Cache prüfen (1 Stunde)
-    if (_cachedWeeklyTopRoute != null &&
-        _weeklyTopRouteCacheTime != null &&
-        _weeklyTopRouteCacheKey == cacheKey) {
-      final age = DateTime.now().difference(_weeklyTopRouteCacheTime!);
-      if (age.inMinutes < 60) return _cachedWeeklyTopRoute;
-    }
-
-    try {
-      // Wochenstart berechnen (Montag 00:00)
-      final now = DateTime.now();
-      final weekStart = DateTime(
-        now.year,
-        now.month,
-        now.day,
-      ).subtract(Duration(days: now.weekday - 1));
-
-      // Alle Routen mit Rating >= 3 aus dieser Woche laden
-      final data = await _db
-          .from('routes')
-          .select()
-          .gte('rating', 3)
-          .gte('created_at', weekStart.toIso8601String())
-          .order('rating', ascending: false)
-          .order('created_at', ascending: false);
-
-      final weeklyRoutes = (data as List)
-          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-          .where((route) => route.isRecommendationEligible)
-          .toList();
-
-      // Beste Route im 50km-Radius finden
-      SavedRoute? best = _findBestInRadius(weeklyRoutes, userLat, userLng, 50);
-
-      // Fallback: 100km-Radius
-      best ??= _findBestInRadius(weeklyRoutes, userLat, userLng, 100);
-
-      // Fallback: beste Route der Woche ohne Distanzfilter
-      if (best == null && weeklyRoutes.isNotEmpty) {
-        best = weeklyRoutes.first;
-      }
-
-      // Letzter Fallback: insgesamt beste bewertete Route (kein Wochenfilter)
-      if (best == null) {
-        final allData = await _db
-            .from('routes')
-            .select()
-            .gte('rating', 3)
-            .order('rating', ascending: false)
-            .limit(1);
-
-        final allRoutes = (allData as List)
-            .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-            .toList();
-        if (allRoutes.isNotEmpty) best = allRoutes.first;
-      }
-
-      // Ergebnis cachen
-      _cachedWeeklyTopRoute = best;
-      _weeklyTopRouteCacheTime = DateTime.now();
-      _weeklyTopRouteCacheKey = cacheKey;
-
-      return best;
-    } catch (e) {
-      debugPrint('[SavedRoutes] getWeeklyTopRoute Fehler: $e');
-      return null;
-    }
-  }
-
-  static String _buildWeeklyTopCacheKey({
-    required double userLat,
-    required double userLng,
-  }) {
-    final now = DateTime.now();
-    final weekStart = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).subtract(Duration(days: now.weekday - 1));
-    final latBucket = userLat.toStringAsFixed(1);
-    final lngBucket = userLng.toStringAsFixed(1);
-    return '${weekStart.toIso8601String()}|$latBucket|$lngBucket';
-  }
-
-  static void invalidateWeeklyTopRouteCache() {
-    _cachedWeeklyTopRoute = null;
-    _weeklyTopRouteCacheTime = null;
-    _weeklyTopRouteCacheKey = null;
-  }
 
   static bool areEquivalentRoutes(SavedRoute first, SavedRoute second) {
     if (first.id == second.id) return true;
@@ -212,49 +83,6 @@ class SavedRoutesService {
     return dedupeEquivalentRoutes(routes);
   }
 
-  /// Findet die beste bewertete Route innerhalb eines Radius (in km).
-  static SavedRoute? _findBestInRadius(
-    List<SavedRoute> routes,
-    double userLat,
-    double userLng,
-    double radiusKm,
-  ) {
-    for (final route in routes) {
-      final coords = _getFirstCoordinate(route);
-      if (coords == null) continue;
-      // coords ist [longitude, latitude] (Mapbox-Format)
-      final distance = _haversineDistance(
-        userLat,
-        userLng,
-        coords[1],
-        coords[0],
-      );
-      if (distance <= radiusKm) return route;
-    }
-    return null;
-  }
-
-  /// Extrahiert die erste Koordinate aus der Route-Geometrie.
-  /// Gibt [longitude, latitude] zurück oder null.
-  static List<double>? _getFirstCoordinate(SavedRoute route) {
-    try {
-      final geometry = route.geometry;
-      final coordinates = geometry['coordinates'];
-      if (coordinates is List && coordinates.isNotEmpty) {
-        final first =
-            geometry['type'] == 'MultiLineString' &&
-                coordinates.first is List &&
-                (coordinates.first as List).isNotEmpty
-            ? (coordinates.first as List).first
-            : coordinates[0];
-        if (first is List && first.length >= 2) {
-          return [(first[0] as num).toDouble(), (first[1] as num).toDouble()];
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
   // ─── Speichern ────────────────────────────────────────────────────────────
 
   /// Fügt die Zeile ein und liefert die vergebene Routen-ID zurück.
@@ -270,7 +98,6 @@ class SavedRoutesService {
         .insert(row)
         .select('id')
         .maybeSingle();
-    invalidateWeeklyTopRouteCache();
     _meldeSpeichernAufgabe();
     return inserted?['id']?.toString();
   }
@@ -485,7 +312,6 @@ class SavedRoutesService {
 
     try {
       await _db.from('routes').insert(row);
-      invalidateWeeklyTopRouteCache();
       _meldeSpeichernAufgabe();
     } on PostgrestException catch (e) {
       if (e.code == 'PGRST204') {
@@ -499,7 +325,6 @@ class SavedRoutesService {
           ..remove('quality_tier')
           ..remove('route_meta');
         await _db.from('routes').insert(row);
-        invalidateWeeklyTopRouteCache();
         _meldeSpeichernAufgabe();
       } else if (e.code == '23505') {
         // Unique constraint: diese Route ist für den User bereits gespeichert.
@@ -691,30 +516,6 @@ class SavedRoutesService {
     return hasEquivalentSavedRoute(route, await getSavedRouteLibrary());
   }
 
-  static Future<List<SavedRoute>> getPopularRoutes({
-    String? style,
-    int limit = 10,
-  }) async {
-    try {
-      // Basisquery einmal aufbauen, dann optional nach Stil filtern (DRY)
-      var query = _db.from('routes').select().gte('rating', 3);
-      if (style != null) {
-        query = query.eq('style', style);
-      }
-      final data = await query
-          .order('rating', ascending: false)
-          .order('created_at', ascending: false)
-          .limit(limit);
-
-      return (data as List)
-          .map((row) => SavedRoute.fromJson(row as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      debugPrint('[SavedRoutes] getPopularRoutes Fehler: $e');
-      return const [];
-    }
-  }
-
   // ─── Einzelne Route laden ─────────────────────────────────────────────────
 
   /// Lädt eine einzelne Route anhand ihrer ID.
@@ -750,7 +551,6 @@ class SavedRoutesService {
           .update({'name': cleaned})
           .eq('id', id)
           .eq('user_id', userId);
-      invalidateWeeklyTopRouteCache();
     } catch (e) {
       debugPrint('[SavedRoutes] renameRoute Fehler: $e');
       rethrow;
@@ -812,7 +612,6 @@ class SavedRoutesService {
             .delete()
             .eq('user_id', userId)
             .inFilter('id', savedCopies.toList());
-        invalidateWeeklyTopRouteCache();
       }
     } catch (e) {
       debugPrint(
@@ -854,7 +653,6 @@ class SavedRoutesService {
       } else {
         await query;
       }
-      invalidateWeeklyTopRouteCache();
     } catch (e) {
       debugPrint('[SavedRoutes] deleteRoute Fehler: $e');
       rethrow; // UI soll informiert werden, dass Löschen fehlschlug

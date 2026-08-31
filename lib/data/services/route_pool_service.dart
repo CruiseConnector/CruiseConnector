@@ -1415,10 +1415,26 @@ class RoutePoolService {
       );
       if (nearestRegion == null) return const [];
 
-      Future<List<RoutePoolMatch>> lookupBucket(
-        int bucket, {
-        required bool relaxStyle,
-      }) async {
+      // 2026-08-31 (Serverlast): Die Kandidaten je Distanzband werden pro
+      // Suche nur noch EINMAL geholt.
+      //
+      // Vorher lief unten zweimal dieselbe Schleife ueber dieselben Baender —
+      // einmal mit relaxStyle: false, einmal mit true. Die SQL ist in beiden
+      // Faellen zeichengleich; relaxStyle wirkt erst danach in findMatches.
+      // Es wurden also saemtliche Kandidaten samt Geometrie ein zweites Mal
+      // vom Server geladen, nur um sie anders zu sortieren. Bei A nach B mit
+      // mehreren Baendern summierte sich das auf zweistellige Megabyte pro
+      // Routensuche.
+      //
+      // Der Zwischenspeicher lebt genau so lange wie diese eine Suche. Ein
+      // laengeres Gedaechtnis waere falsch: die Rotation ueber
+      // last_suggested_at soll bei der NAECHSTEN Suche wieder frische
+      // Vorschlaege liefern.
+      final kandidatenJeBand = <int, List<RoutePoolEntry>>{};
+
+      Future<List<RoutePoolEntry>> ladeKandidaten(int bucket) async {
+        final gemerkt = kandidatenJeBand[bucket];
+        if (gemerkt != null) return gemerkt;
         final routeSearchBounds = _boundingBoxFor(
           userLat,
           userLng,
@@ -1459,6 +1475,15 @@ class RoutePoolService {
         final candidates = (routeRows as List)
             .map((row) => RoutePoolEntry.fromJson(row as Map<String, dynamic>))
             .toList(growable: false);
+        kandidatenJeBand[bucket] = candidates;
+        return candidates;
+      }
+
+      Future<List<RoutePoolMatch>> lookupBucket(
+        int bucket, {
+        required bool relaxStyle,
+      }) async {
+        final candidates = await ladeKandidaten(bucket);
 
         return findMatches(
           query: RoutePoolQuery(

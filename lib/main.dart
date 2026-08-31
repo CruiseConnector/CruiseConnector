@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/foundation.dart'
     show kDebugMode, kIsWeb, defaultTargetPlatform, TargetPlatform;
@@ -21,7 +22,6 @@ import 'package:cruise_connect/application/providers/auth_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/application/providers/route_provider.dart';
-import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/legal_documents.dart';
@@ -157,6 +157,14 @@ void main() {
       // aus dem kalten Zustand starten kann.
       GruppenEinstieg.rootNavigatorSchluessel = rootNavigatorKey;
 
+      // 2026-08-31 (Serverlast): Der geloeschte SavedRoutesProvider hat die
+      // ganze Streckenbibliothek als JSON unter 'saved_routes_cache' abgelegt
+      // — mit voller Geometrie, beim schlimmsten gemessenen Nutzer 3,5 MB.
+      // Gelesen hat sie nie jemand. Ohne den Provider bliebe der Eintrag als
+      // Leiche auf dem Geraet liegen, deshalb raeumen wir ihn einmal weg.
+      // Laeuft im Hintergrund und haelt den Start nicht auf.
+      unawaited(_alteStreckenAblageWegraeumen());
+
       runApp(const MyApp());
     },
     (error, stack) {
@@ -170,6 +178,23 @@ void main() {
 /// 2026-06-15 (vucko M5): Dezentes Fallback statt rotem/grauem Crash-Screen,
 /// wenn ein Widget beim Bauen wirft. Die App lebt weiter, der User kann
 /// zurück/erneut — niemals ein toter Bildschirm.
+/// Entfernt den Zwischenspeicher des geloeschten SavedRoutesProvider.
+///
+/// Einmalige Aufraeumarbeit. Schlaegt sie fehl, ist das folgenlos: der
+/// Eintrag wird ohnehin nicht mehr gelesen, es geht nur um den Platz auf dem
+/// Geraet. Deshalb wird der Fehler geschluckt und nicht gemeldet.
+Future<void> _alteStreckenAblageWegraeumen() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.containsKey('saved_routes_cache')) {
+      await prefs.remove('saved_routes_cache');
+      debugPrint('[Start] Alte Streckenablage entfernt');
+    }
+  } catch (e) {
+    debugPrint('[Start] Alte Streckenablage nicht entfernbar: $e');
+  }
+}
+
 class _SafeErrorFallback extends StatelessWidget {
   const _SafeErrorFallback();
 
@@ -454,7 +479,6 @@ class _MyAppState extends State<MyApp> {
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => RouteProvider()),
         ChangeNotifierProvider(create: (_) => CommunityProvider()),
-        ChangeNotifierProvider(create: (_) => SavedRoutesProvider()),
         ChangeNotifierProvider(create: (_) => RouteBookmarkProvider()),
         ChangeNotifierProvider(create: (_) => AppAccentProvider()..load()),
         // 2026-08-03 (vucko Sprachumschaltung): Deutsch/English.

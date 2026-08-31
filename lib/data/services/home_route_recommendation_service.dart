@@ -166,11 +166,62 @@ class HomeRouteRecommendationService {
       final topWindow = ranked.take(math.min(8, ranked.length)).toList();
       final seed = _stableDailySeed(topWindow.map((item) => item.entry.id));
       final selected = topWindow[math.Random(seed).nextInt(topWindow.length)];
-      final recommendation = _toRecommendation(selected.entry, selected.score);
+
+      // 2026-08-31 (Serverlast): Erst JETZT steht fest, welche Strecke der
+      // Nutzer sieht. Bis hierher kam die Liste ohne Geometrie aus — die eine
+      // ausgewaehlte holen wir gezielt nach. Frueher wurden alle 120
+      // Geometrien mitgeladen und 119 davon weggeworfen.
+      final vollstaendig = await _ladeGeometrieNach(selected.entry);
+      if (vollstaendig == null) {
+        // Ohne Geometrie waere die Empfehlungskachel eine leere Karte, und ein
+        // Tippen auf „Losfahren" liefe ins Leere. Lieber keine Empfehlung als
+        // eine kaputte. Das Ergebnis wird NICHT zwischengespeichert, damit der
+        // naechste Versuch es erneut probiert.
+        debugPrint(
+          '[HomeRouteRecommendation] Geometrie zu ${selected.entry.id} '
+          'nicht nachladbar, keine Empfehlung',
+        );
+        return null;
+      }
+
+      final recommendation = _toRecommendation(vollstaendig, selected.score);
       _cacheRecommendation(recommendation, key, userLat, userLng);
       return recommendation;
     } catch (error) {
       debugPrint('[HomeRouteRecommendation] route_pool read failed: $error');
+      return null;
+    }
+  }
+
+  /// Holt Geometrie und Nutzlast fuer GENAU EINE Strecke nach.
+  ///
+  /// Gibt null zurueck, wenn nichts Brauchbares zurueckkommt — der Aufrufer
+  /// zeigt dann lieber keine Empfehlung als eine ohne Karte.
+  static Future<RoutePoolEntry?> _ladeGeometrieNach(RoutePoolEntry entry) async {
+    // Hat der Aufrufer die Geometrie schon (etwa aus einer Abfrage, die sie
+    // mitholt), sparen wir uns die Runde zum Server.
+    if (entry.geometry.isNotEmpty) return entry;
+    try {
+      final row = await _db
+          .from('route_pool')
+          .select(_routePoolGeometrieSelect)
+          .eq('id', entry.id)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+      if (row == null) return null;
+      final karte = Map<String, dynamic>.from(row);
+      final payload = karte['route_payload'] is Map
+          ? Map<String, dynamic>.from(karte['route_payload'] as Map)
+          : const <String, dynamic>{};
+      final geometry = karte['geometry'] is Map
+          ? Map<String, dynamic>.from(karte['geometry'] as Map)
+          : payload['geometry'] is Map
+          ? Map<String, dynamic>.from(payload['geometry'] as Map)
+          : const <String, dynamic>{};
+      if (geometry.isEmpty) return null;
+      return entry.mitGeometrie(geometry: geometry, routePayload: payload);
+    } catch (error) {
+      debugPrint('[HomeRouteRecommendation] Nachladen fehlgeschlagen: $error');
       return null;
     }
   }
@@ -194,13 +245,31 @@ class HomeRouteRecommendationService {
     _cachedAnchorLng = null;
   }
 
+  /// Kopfdaten fuer die Vorauswahl — OHNE `geometry` und `route_payload`.
+  ///
+  /// 2026-08-31 (Serverlast): Diese Liste enthielt beide grossen jsonb-Spalten.
+  /// Gemessen an der Produktionsdatenbank: dieselben 50 Zeilen kosten mit den
+  /// beiden Spalten 159 ms, ohne sie 2 ms — Faktor 80. Bei 120 geladenen
+  /// Zeilen waren das rund 3118 kB bei jedem Kaltstart der Startseite, um am
+  /// Ende GENAU EINE Empfehlung anzuzeigen. 119 Geometrien waren umsonst.
+  ///
+  /// Nicht der Abfrageplan war das Problem, sondern die Nutzlast: mit Filter
+  /// und Sortierung laeuft dieselbe Abfrage ohne die beiden Spalten in 2 ms
+  /// ueber alle 2778 Zeilen. Ein zusaetzlicher Index waere deshalb nutzlos.
+  ///
+  /// Die vier Kennzahlen am Ende ersetzen genau das, wofuer der Filter die
+  /// Geometrie brauchte. Sie werden serverseitig beim Speichern berechnet.
   static const String _routePoolSelect =
       'id,title,country_code,admin1_name,admin2_name,city_cluster,'
       'start_lat,start_lng,end_lat,end_lng,distance_km,distance_bucket,'
       'route_type,style_tags,avoids_highway,has_highway,quality_score,'
-      'verified,is_active,geometry,shape_score,user_rating,average_rating,'
+      'verified,is_active,shape_score,user_rating,average_rating,'
       'rating_count,completion_rate,weekly_rotation_score,deprecated_at,'
-      'usage_count,source,route_payload';
+      'usage_count,source,'
+      'punkt_anzahl,max_segment_meter,geometrie_quelle,autobahn_verstoss';
+
+  /// Was fuer die EINE ausgewaehlte Strecke nachgeholt wird.
+  static const String _routePoolGeometrieSelect = 'geometry,route_payload';
 
   static void _cacheRecommendation(
     HomeRouteRecommendation? recommendation,
@@ -243,22 +312,48 @@ class HomeRouteRecommendationService {
     return hash.abs();
   }
 
+  /// Nur fuer Tests: derselbe Sicherheitsfilter, den die Startseite benutzt.
+  ///
+  /// Der Filter entscheidet, ob eine Pool-Strecke ueberhaupt vorgeschlagen
+  /// werden darf. Seit dem 31.08. liest er vier vorberechnete Kennzahlen statt
+  /// der vollen Geometrie; der Test haelt fest, dass beide Wege zum selben
+  /// Urteil kommen.
+  @visibleForTesting
+  static bool istSichereStartseitenStrecke(RoutePoolEntry entry) =>
+      _isSafeHomePoolRoute(entry);
+
   static bool _isSafeHomePoolRoute(RoutePoolEntry entry) {
     if (!entry.verified || !entry.isActive || entry.deprecatedAt != null) {
       return false;
     }
     if (entry.qualityScore < 70 || entry.distanceKm < 5) return false;
 
-    final coords = _coordinatesFromGeometry(entry.geometry);
-    if (coords.length < _minCoordinateCount(entry.distanceBucket)) {
+    // 2026-08-31 (Serverlast): Die vier folgenden Pruefungen brauchten frueher
+    // die volle Geometrie und die Nutzlast — fuer ALLE 120 geladenen Strecken.
+    // Sie sind aber feste Eigenschaften einer gespeicherten Strecke und werden
+    // jetzt serverseitig einmal beim Speichern gemessen. Die SCHWELLEN stehen
+    // weiterhin hier, damit sie ohne Datenbank-Nachfuellung anpassbar bleiben.
+    //
+    // Der Rueckfall auf die Live-Berechnung bleibt bewusst stehen: Eine
+    // Abfrage, die die Kennzahlen nicht mitholt, oder eine Zeile, die vor der
+    // Nachfuellung geschrieben wurde, wird dann eben wie frueher geprueft.
+    // Fehlt BEIDES — Kennzahl und Geometrie — laesst der Filter die Strecke
+    // durch, statt sie stillschweigend zu verwerfen: Eine fehlende Messung ist
+    // kein Beweis fuer eine schlechte Strecke, und ein stiller Ausschluss
+    // waere hier der gefaehrlichere Fehler (leere Startseite statt einer
+    // Empfehlung).
+    final punkte = entry.punktAnzahl ?? _punkteAusGeometrie(entry);
+    if (punkte != null && punkte < _minCoordinateCount(entry.distanceBucket)) {
       return false;
     }
 
-    final source = _readString(entry.routePayload, const [
-      'final_geometry_source',
-      'geometry_source',
-      'source',
-    ]).toLowerCase();
+    final source = (entry.geometrieQuelle ??
+            _readString(entry.routePayload, const [
+              'final_geometry_source',
+              'geometry_source',
+              'source',
+            ]))
+        .toLowerCase();
     const unsafeSources = [
       'candidate_plan',
       'pre_hydration',
@@ -269,11 +364,33 @@ class HomeRouteRecommendationService {
     ];
     if (unsafeSources.any(source.contains)) return false;
 
-    final maxSegment = _maxSegmentMeters(coords);
-    if (maxSegment > _maxSegmentThreshold(entry.distanceBucket)) return false;
+    final maxSegment = entry.maxSegmentMeter ?? _maxSegmentAusGeometrie(entry);
+    if (maxSegment != null &&
+        maxSegment > _maxSegmentThreshold(entry.distanceBucket)) {
+      return false;
+    }
 
-    if (entry.routePayload['motorway_violation'] == true) return false;
+    final autobahn =
+        entry.autobahnVerstoss ??
+        (entry.routePayload['motorway_violation'] == true);
+    if (autobahn) return false;
     return true;
+  }
+
+  /// Punktzahl aus der Geometrie — nur der Rueckfall, wenn der Server keine
+  /// Kennzahl geliefert hat. Gibt null zurueck, wenn auch die Geometrie fehlt;
+  /// dann ist die Strecke nicht pruefbar und wird nicht verworfen.
+  static int? _punkteAusGeometrie(RoutePoolEntry entry) {
+    if (entry.geometry.isEmpty) return null;
+    return _coordinatesFromGeometry(entry.geometry).length;
+  }
+
+  /// Groesster Sprung aus der Geometrie — derselbe Rueckfall, dieselbe Regel.
+  static double? _maxSegmentAusGeometrie(RoutePoolEntry entry) {
+    if (entry.geometry.isEmpty) return null;
+    final coords = _coordinatesFromGeometry(entry.geometry);
+    if (coords.length < 2) return null;
+    return _maxSegmentMeters(coords);
   }
 
   static HomeRouteRecommendation _toRecommendation(

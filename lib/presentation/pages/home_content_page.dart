@@ -11,7 +11,6 @@ import 'package:provider/provider.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
-import 'package:cruise_connect/application/providers/saved_routes_provider.dart';
 import 'package:cruise_connect/data/services/app_tutorial_service.dart';
 import 'package:cruise_connect/data/services/gamification_service.dart';
 import 'package:cruise_connect/data/services/home_route_recommendation_service.dart';
@@ -2236,11 +2235,13 @@ class _HomeContentPageState extends State<HomeContentPage>
             backgroundColor: const Color(0xFF1A1E28),
             onRefresh: () async {
               // Re-fetch alle Home-Daten parallel
+              // 2026-08-31 (Serverlast): Hier stand zusaetzlich
+              // SavedRoutesProvider.loadRoutes(). Ein Herunterziehen loeste
+              // damit DREI volle Ladungen der Streckenbibliothek aus, obwohl
+              // niemand die Daten dieses Providers je gelesen hat. Was die
+              // Merkliste anzeigt, kommt vom RouteBookmarkProvider.
               await Future.wait([
                 GamificationService.calculateAndSync(),
-                context.read<SavedRoutesProvider>().loadRoutes().catchError(
-                  (_) {},
-                ),
                 context
                     .read<RouteBookmarkProvider>()
                     .loadSavedRoutes()
@@ -7197,7 +7198,6 @@ class _HomeContentPageState extends State<HomeContentPage>
             unawaited(SavedRoutesService.unsaveRouteEverywhere(route));
             if (!mounted) return;
             unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
-            unawaited(context.read<SavedRoutesProvider>().loadRoutes());
             return;
           }
 
@@ -7212,7 +7212,6 @@ class _HomeContentPageState extends State<HomeContentPage>
           await SavedRoutesService.saveExistingRoute(route);
           if (!mounted) return;
           unawaited(context.read<RouteBookmarkProvider>().loadSavedRoutes());
-          unawaited(context.read<SavedRoutesProvider>().loadRoutes());
           // Gamification + Badge-Popup async (kein UI-Block)
           unawaited(() async {
             await GamificationService.calculateAndSync();

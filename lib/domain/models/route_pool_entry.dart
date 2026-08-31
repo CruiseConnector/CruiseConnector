@@ -32,6 +32,10 @@ class RoutePoolEntry {
     this.usageCount = 0,
     this.source = 'curated',
     this.routePayload = const {},
+    this.punktAnzahl,
+    this.maxSegmentMeter,
+    this.geometrieQuelle,
+    this.autobahnVerstoss,
   });
 
   final String id;
@@ -73,6 +77,25 @@ class RoutePoolEntry {
   final int usageCount;
   final String source;
   final Map<String, dynamic> routePayload;
+
+  // 2026-08-31 (Serverlast): Vier Messwerte, die der Server einmal beim
+  // Speichern berechnet und in kleinen Spalten ablegt (Migration
+  // route_pool_kennzahlen_statt_geometrie). Sie sagen genau das ueber eine
+  // Strecke aus, wofuer der Client bisher die ganze Geometrie herunterladen
+  // musste: wie viele Punkte sie hat, wie gross ihr groesster Sprung ist,
+  // woher die Geometrie stammt und ob sie die Autobahn-Markierung traegt.
+  //
+  // Gemessen: Die Startseite zog dafuer 120 volle Geometrien, rund 3118 kB bei
+  // jedem Kaltstart, um am Ende EINE Empfehlung anzuzeigen.
+  //
+  // Bewusst nullbar: Abfragen, die diese Spalten nicht mitholen, liefern null,
+  // und der Aufrufer faellt dann auf die Live-Berechnung aus der Geometrie
+  // zurueck. Die SCHWELLEN bleiben im Client, nur die MESSUNG kommt vom
+  // Server — so braucht eine geaenderte Schwelle keine Datenbank-Nachfuellung.
+  final int? punktAnzahl;
+  final double? maxSegmentMeter;
+  final String? geometrieQuelle;
+  final bool? autobahnVerstoss;
 
   factory RoutePoolEntry.fromJson(Map<String, dynamic> json) {
     final payload = json['route_payload'] is Map
@@ -122,6 +145,60 @@ class RoutePoolEntry {
       usageCount: (json['usage_count'] as num?)?.toInt() ?? 0,
       source: (json['source'] as String?) ?? 'curated',
       routePayload: payload,
+      punktAnzahl: (json['punkt_anzahl'] as num?)?.toInt(),
+      maxSegmentMeter: (json['max_segment_meter'] as num?)?.toDouble(),
+      geometrieQuelle: json['geometrie_quelle'] as String?,
+      autobahnVerstoss: json['autobahn_verstoss'] as bool?,
+    );
+  }
+
+  /// Dieselbe Strecke, aber mit nachgeladener Geometrie und Nutzlast.
+  ///
+  /// Die Liste kommt ohne beides; erst wenn feststeht, WELCHE Strecke
+  /// tatsaechlich gebraucht wird, wird sie einzeln nachgeholt.
+  RoutePoolEntry mitGeometrie({
+    required Map<String, dynamic> geometry,
+    required Map<String, dynamic> routePayload,
+  }) {
+    return RoutePoolEntry(
+      id: id,
+      title: title,
+      countryCode: countryCode,
+      admin1Name: admin1Name,
+      admin2Name: admin2Name,
+      cityCluster: cityCluster,
+      startLat: startLat,
+      startLng: startLng,
+      endLat: endLat,
+      endLng: endLng,
+      distanceKm: distanceKm,
+      distanceBucket: distanceBucket,
+      routeType: routeType,
+      styleTags: styleTags,
+      avoidsHighway: avoidsHighway,
+      hasHighway: hasHighway,
+      qualityScore: qualityScore,
+      verified: verified,
+      isActive: isActive,
+      geometry: geometry,
+      durationSeconds:
+          durationSeconds ??
+          (routePayload['duration_seconds'] as num?)?.toDouble(),
+      shapeScore: shapeScore,
+      userRating: userRating,
+      averageRating: averageRating,
+      ratingCount: ratingCount,
+      completionRate: completionRate,
+      weeklyRotationScore: weeklyRotationScore,
+      lastSuggestedAt: lastSuggestedAt,
+      deprecatedAt: deprecatedAt,
+      usageCount: usageCount,
+      source: source,
+      routePayload: routePayload,
+      punktAnzahl: punktAnzahl,
+      maxSegmentMeter: maxSegmentMeter,
+      geometrieQuelle: geometrieQuelle,
+      autobahnVerstoss: autobahnVerstoss,
     );
   }
 
