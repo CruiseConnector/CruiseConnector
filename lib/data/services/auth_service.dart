@@ -11,6 +11,8 @@ import 'package:cruise_connect/core/constants.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
+import 'package:cruise_connect/data/services/map_style_service.dart';
+import 'package:cruise_connect/data/services/notification_settings_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_cache_service.dart';
 
 /// Wrapper um Supabase Auth: Login, Registrierung, Social Login und Abmelden.
@@ -37,6 +39,164 @@ class AuthService {
     await _db.auth.signInWithPassword(email: email, password: password);
     await ensureCurrentUserProfile();
     unawaited(AnalyticsService.instance.logLogin('email'));
+  }
+
+  // ── Anmelden mit dem @-Namen ──────────────────────────────────────────────
+  // 2026-08-31 (vucko): „dass man sich auch mit seinen Benutzernamen nur mit
+  // seinem Passwort anmelden kann."
+  //
+  // Supabase-Auth kennt nur die E-Mail. Die Aufloesung Name -> Adresse
+  // passiert deshalb SERVERSEITIG in der Edge Function `username-login`; die
+  // Adresse verlaesst den Server nie. Der Client schickt Name und Passwort
+  // und bekommt im Erfolgsfall genau ein refresh_token zurueck, das er hier
+  // gegen eine echte Sitzung eintauscht.
+  //
+  // Warum nicht einfach eine Datenbankfunktion „Name -> E-Mail"? Weil die
+  // @-Namen oeffentlich sind (Profil, Rangliste, Community) und die Adressen
+  // nicht. Eine solche Funktion machte aus jeder Namensliste eine
+  // Adressliste. Die Begruendung steht ausfuehrlich in
+  // supabase/migrations/20260831120000_anmeldung_mit_benutzername.sql.
+
+  static const String usernameLoginFunction = 'username-login';
+
+  /// Fehlerkennungen, die die Edge Function liefert. Die Oberflaeche
+  /// uebersetzt sie; hier stehen sie, damit Seite und Dienst dieselben
+  /// Zeichenketten benutzen.
+  static const String fehlerAnmeldedatenFalsch = 'anmeldedaten_falsch';
+  static const String fehlerEmailNichtBestaetigt = 'email_nicht_bestaetigt';
+  static const String fehlerZuVieleVersuche = 'zu_viele_versuche';
+
+  /// Der Namensweg selbst ist gerade nicht da: Edge Function nicht
+  /// ausgerollt (404) oder serverseitig kaputt (5xx).
+  ///
+  /// Diese Unterscheidung ist keine Feinheit, sondern verhindert den
+  /// schlimmsten denkbaren Fehlstart: Solange `username-login` nicht
+  /// deployt ist, antwortet das Gateway mit 404. Ohne diesen Zweig haette
+  /// die App daraus „Anmeldedaten stimmen nicht" gemacht — jeder Nutzer
+  /// haette geglaubt, sein Passwort sei falsch, und im schlimmsten Fall sein
+  /// funktionierendes Passwort zurueckgesetzt. Jetzt sagt sie stattdessen,
+  /// dass der Weg gerade nicht geht und die E-Mail weiterhin funktioniert.
+  static const String fehlerNamensanmeldungAus = 'namensanmeldung_nicht_da';
+
+  /// Ist die Eingabe eine E-Mail-Adresse oder ein @-Name?
+  ///
+  /// Das @ entscheidet, und zwar zuverlaessig: ein @-Name darf laut
+  /// [AppInputLimits.usernameAllowedChars] gar kein @ enthalten. Wer eine
+  /// Adresse tippt, geht damit weiter den GEWOHNTEN Weg direkt zu Supabase —
+  /// die Anmeldung mit Adresse laeuft also unveraendert und haengt nicht an
+  /// der Verfuegbarkeit der Edge Function.
+  static bool istEmailEingabe(String eingabe) => eingabe.contains('@');
+
+  /// Anmeldung mit E-Mail ODER @-Name, je nachdem, was der Nutzer getippt hat.
+  static Future<void> signInWithEmailOrUsername({
+    required String identifier,
+    required String password,
+  }) async {
+    final eingabe = identifier.trim();
+    if (istEmailEingabe(eingabe)) {
+      await signIn(email: eingabe, password: password);
+      return;
+    }
+    await signInWithUsername(username: eingabe, password: password);
+  }
+
+  /// Anmeldung mit @-Name und Passwort ueber die Edge Function.
+  ///
+  /// Wirft eine [AuthException] mit einer der Kennungen oben als `message`,
+  /// damit die Seite uebersetzen kann, ohne englische GoTrue-Texte zu raten.
+  static Future<void> signInWithUsername({
+    required String username,
+    required String password,
+  }) async {
+    final name = username.trim();
+    if (!AppInputLimits.isValidUsername(name)) {
+      // Gar nicht erst losschicken: was kein gueltiger Name sein KANN, kann
+      // auch kein Konto sein. Dieselbe Meldung wie bei falschem Passwort —
+      // die Oberflaeche soll nicht zwei verschiedene Fehler zeigen.
+      throw const AuthException(fehlerAnmeldedatenFalsch);
+    }
+
+    Map<String, dynamic> daten;
+    try {
+      final antwort = await _db.functions.invoke(
+        usernameLoginFunction,
+        body: {'benutzername': name, 'passwort': password},
+      );
+      daten = _alsKarte(antwort.data);
+    } on FunctionException catch (e) {
+      final status = e.status;
+      if (status == 404 || status == 405 || (status >= 500 && status < 600)) {
+        throw const AuthException(fehlerNamensanmeldungAus);
+      }
+      throw AuthException(_fehlerAus(e.details));
+    } catch (e) {
+      // Kein Netz, Zeitueberschreitung, kaputte Antwort: auch das ist ein
+      // Problem des Weges, nicht der Eingabe des Nutzers.
+      debugPrint('[AuthService] Namensanmeldung nicht erreichbar: $e');
+      throw const AuthException(fehlerNamensanmeldungAus);
+    }
+
+    final refreshToken = daten['refresh_token'];
+    if (refreshToken is! String || refreshToken.isEmpty) {
+      // 2xx ohne Token gibt es laut Edge nicht — wenn doch, ist es ein Fehler
+      // bei uns und keine falsche Eingabe des Nutzers.
+      throw const AuthException(fehlerNamensanmeldungAus);
+    }
+
+    // ACHTUNG, hier steckt ein Unterschied zu allen anderen Anmeldewegen:
+    // `setSession` meldet dem Auth-Strom `tokenRefreshed`, NICHT `signedIn`
+    // (gotrue 2.18, _callRefreshToken). Es gibt keinen Weg, das aus dem SDK
+    // heraus zu aendern — eine Sitzung, die woanders entstanden ist, kann der
+    // Client nur so uebernehmen.
+    //
+    // Wer am Auth-Strom auf `signedIn` wartet, laeuft bei diesem Weg also
+    // leer. Betroffen sind zwei Stellen, beide ausserhalb dieser Datei:
+    //   * `notification_settings_service.dart` zieht die
+    //     Benachrichtigungs-Einstellungen vom Server nach. Das holen wir hier
+    //     unten selbst nach.
+    //   * `main.dart` loest einen gemerkten Einladungslink ein. Das laesst
+    //     sich von hier aus nicht anstossen (es braucht einen Navigator); der
+    //     Link geht nicht verloren, sondern wird beim naechsten App-Start
+    //     ueber `initialSession` eingeloest. Wer es sofort will, nimmt in
+    //     `main.dart` zusaetzlich `AuthChangeEvent.tokenRefreshed` mit auf.
+    //
+    // Die Oberflaeche selbst haengt NICHT am Ereignis: die Anmeldeseite
+    // navigiert nach diesem Aufruf von sich aus weiter, und die AuthPage
+    // liest die Sitzung ohnehin aus `zustand.session ?? currentSession`.
+    await _db.auth.setSession(refreshToken);
+    await ensureCurrentUserProfile();
+    unawaited(
+      NotificationSettingsService.instance.refreshFromServer().catchError((
+        Object e,
+      ) {
+        debugPrint('[AuthService] Benachrichtigungen nicht nachgezogen: $e');
+      }),
+    );
+    unawaited(AnalyticsService.instance.logLogin('username'));
+  }
+
+  /// Liest die Fehlerkennung aus der Antwort der Edge Function.
+  /// Unlesbare Antworten gelten als „Anmeldedaten falsch" — das ist der
+  /// haeufigste Fall und die harmloseste Annahme.
+  static String _fehlerAus(dynamic details) {
+    final karte = _alsKarte(details);
+    final fehler = karte['fehler'];
+    if (fehler is String && fehler.isNotEmpty) return fehler;
+    return fehlerAnmeldedatenFalsch;
+  }
+
+  static Map<String, dynamic> _alsKarte(dynamic wert) {
+    if (wert is Map<String, dynamic>) return wert;
+    if (wert is Map) return wert.cast<String, dynamic>();
+    if (wert is String && wert.trim().startsWith('{')) {
+      try {
+        final decoded = jsonDecode(wert);
+        if (decoded is Map) return decoded.cast<String, dynamic>();
+      } catch (_) {
+        // Kein JSON — dann eben keine Kennung.
+      }
+    }
+    return const <String, dynamic>{};
   }
 
   /// Neuen Account anlegen. Supabase sendet dabei die Verification-Mail.
@@ -418,6 +578,23 @@ class AuthService {
     await _db.auth.unlinkIdentity(identity);
   }
 
+  /// Meldet ab und raeumt dabei NUR ab, was dem KONTO gehoert.
+  ///
+  /// 2026-08-31 (vucko): „wenn man sich ausloggen, moechte ich nicht, dass
+  /// wenn ich wieder zurueck in die App gehe, dass ich noch mal die ganzen
+  /// Map Daten herunterladen muss in den Einstellungen weil dann kommt das
+  /// Pop-up nicht mehr und dann muss ich das immer machen."
+  ///
+  /// WAS HIER AUFGERAEUMT WIRD: der Zwischenspeicher der gespeicherten Routen.
+  /// Der gehoert dem Konto und darf nicht ins naechste ueberlaufen.
+  ///
+  /// WAS HIER NICHT AUFGERAEUMT WIRD, UND ZWAR ABSICHTLICH: die Offlinekarte
+  /// und die Zustimmung dazu ([MapStyleService.geraeteSchluessel]). Beides
+  /// gehoert dem GERAET. Wer das hier je „mit aufraeumt", zwingt jeden Nutzer
+  /// nach jedem Abmelden zu einem mehrere Gigabyte grossen Download — und die
+  /// Zustimmungsfrage, die ihn anstossen wuerde, kommt nur einmal.
+  /// Nachgeprueft in
+  /// `test/auth/geraete_einstellungen_ueberleben_abmeldung_test.dart`.
   static Future<void> signOut() async {
     await SavedRoutesCacheService.clearAll();
     try {
@@ -426,6 +603,19 @@ class AuthService {
       // Google kann ungeinitialisiert sein; Supabase-Logout bleibt fuehrend.
     }
     await _db.auth.signOut();
+    // Eine angefangene Offlinekarte laeuft weiter, auch ohne angemeldetes
+    // Konto. Sonst steht der Download still, bis sich jemand neu anmeldet und
+    // die Startseite ihn nach zehn Sekunden wieder anstoesst — genau die
+    // Luecke, in der es so aussieht, als muesste man von vorn anfangen.
+    // Fire-and-forget und in sich abgesichert: der Bootstrap faengt jeden
+    // Fehler selbst ab und tut ohne beantwortete Zustimmungsfrage nichts.
+    try {
+      MapStyleService.instance.ensureAutoDownloadScheduled(
+        reason: 'nach_abmelden',
+      );
+    } catch (e) {
+      debugPrint('[AuthService] Karten-Download nicht angestossen: $e');
+    }
   }
 
   /// Deletes the signed-in user's full account via a restricted Supabase RPC.

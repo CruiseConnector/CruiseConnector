@@ -12,6 +12,7 @@ import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
+import 'package:cruise_connect/presentation/pages/community_teilen_blatt.dart';
 import 'package:cruise_connect/presentation/widgets/chat_emoji_picker.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_eckdaten_blatt.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_nachrichten_ansicht.dart';
@@ -418,6 +419,43 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
     await Clipboard.setData(ClipboardData(text: code));
     if (!mounted) return;
     _showToast('Code kopiert.');
+  }
+
+  /// 2026-08-31 (Auftrag Vucko „Communities teilen"): Der Einstieg zum Teilen.
+  ///
+  /// Er haengt am Einladungscode, und der kommt aus der RPC
+  /// `get_community_invite_code`, die nur Mitgliedern antwortet. Steht er
+  /// (noch) nicht bereit, sagt die App das ehrlich, statt einen Link ohne
+  /// Code zu bauen, der bei jedem Empfaenger ins Leere laeuft.
+  ///
+  /// Teilen darf JEDES Mitglied, nicht nur der Admin. Die Regel „nur Admin"
+  /// gilt fuer das Sichtbarmachen des Codes in der Kopfzeile bei privaten
+  /// Communities ([CommunityChatService.canInvite]); wer selbst drin ist,
+  /// kann seine Community auch weiterempfehlen. Bei einer PRIVATEN Community
+  /// entsteht daraus ohnehin kein Beitritt, sondern eine Anfrage beim Admin
+  /// (Entscheidung Vucko vom 23.08.2026, umgesetzt in
+  /// `join_community_with_code_v2`).
+  Future<void> _teilen() async {
+    final community = _community;
+    if (community == null) return;
+
+    var code = _inviteCode;
+    if (code == null || code.isEmpty) {
+      code = await CommunityChatService.inviteCodeFor(widget.communityId);
+      if (!mounted) return;
+      if (code != null && code.isNotEmpty) setState(() => _inviteCode = code);
+    }
+    if (!mounted) return;
+    if (code == null || code.isEmpty) {
+      _showToast('Der Link ist gerade nicht abrufbar.', error: true);
+      return;
+    }
+
+    await CommunityTeilenBlatt.zeigenUndAusfuehren(
+      context,
+      community: community,
+      einladungsCode: code,
+    );
   }
 
   void _showMembersSheet() {
@@ -1225,9 +1263,31 @@ class _CommunityChatDetailPageState extends State<CommunityChatDetailPage> {
                 _confirmDeleteCommunity();
               } else if (value == 'settings') {
                 _openSettings();
+              } else if (value == 'teilen') {
+                _teilen();
               }
             },
             itemBuilder: (_) => [
+              // 2026-08-31 (Auftrag Vucko „Communities teilen"): steht ganz
+              // oben. Es ist die einzige Sache in diesem Menue, die man
+              // regelmaessig machen will; darunter kommen Einstellungen,
+              // Verlassen und Loeschen, also Dinge, die man einmal macht.
+              const PopupMenuItem(
+                value: 'teilen',
+                child: Row(
+                  children: [
+                    Icon(Icons.ios_share, color: Colors.white70, size: 18),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Community teilen',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               if (_amAdmin)
                 const PopupMenuItem(
                   value: 'settings',

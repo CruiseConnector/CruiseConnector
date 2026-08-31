@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/emoji_guard.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
@@ -109,11 +110,57 @@ class CommunityJoinResult {
   }
 }
 
+/// 2026-08-31 (Auftrag Vucko „Communities teilen"): Wie eine Vorschau
+/// ausgegangen ist.
+///
+/// Warum ueberhaupt eine eigene Art und kein `Map?`: Der bisherige Weg
+/// [CommunityChatService.findCommunityByCode] verschluckt JEDEN Fehler und
+/// gibt `null` zurueck. Fuer die Suche im Eingabefeld reicht das („nichts
+/// gefunden"), fuer einen angetippten Link nicht. Dort sind „diese Community
+/// gibt es nicht mehr" und „du hast gerade kein Netz" zwei voellig
+/// verschiedene Nachrichten, und die falsche von beiden schickt den Nutzer
+/// weg, obwohl er nur kurz im Funkloch stand. Genau dieser Unterschied war am
+/// 23.08. das Problem beim Gruppen-Link.
+enum CommunityVorschauArt {
+  /// Community gefunden, [CommunityVorschauErgebnis.zeile] ist gefuellt.
+  gefunden,
+
+  /// Code stimmt nicht, oder die Community ist geloescht.
+  unbekannt,
+
+  /// Der Code sieht schon vom Format her nicht wie ein Einladungscode aus.
+  codeUngueltig,
+
+  /// Der Server war nicht erreichbar. NICHT dasselbe wie unbekannt.
+  netzfehler,
+}
+
+class CommunityVorschauErgebnis {
+  const CommunityVorschauErgebnis(this.art, {this.zeile});
+
+  final CommunityVorschauArt art;
+
+  /// Dieselbe Form, die auch [CommunityChatService.fetchCommunity] liefert:
+  /// `id`, `name`, `description`, `is_public`, `avatar_url`, `created_at`,
+  /// dazu `member_count` und `owner_profile` aus der RPC. Genau das, was
+  /// `CommunityVorschauBlatt` liest.
+  final Map<String, dynamic>? zeile;
+
+  bool get istGefunden =>
+      art == CommunityVorschauArt.gefunden && zeile != null;
+}
+
 class CommunityChatService {
   CommunityChatService._();
 
   static SupabaseClient get _db => Supabase.instance.client;
   static String? get _userId => _db.auth.currentUser?.id;
+
+  /// 2026-08-31: Der Link-Einstieg muss VOR jeder Abfrage wissen, ob jemand
+  /// angemeldet ist — ein geteilter Community-Link holt gerade die Leute, die
+  /// es noch nicht sind. Steht hier, damit die Oberflaeche dafuer nicht
+  /// Supabase selbst anfassen muss.
+  static bool get istAngemeldet => _userId != null;
   static const String duplicateRoutePostMessage =
       'Diese Route hast du in dieser Community schon gepostet.';
 
@@ -230,6 +277,33 @@ class CommunityChatService {
     final body = cleaned.substring(2);
     if (!RegExp(r'^[A-Z2-9]{6}$').hasMatch(body)) return null;
     return 'CM-$body';
+  }
+
+  /// 2026-08-31 (Auftrag Vucko „Communities teilen"): Nimmt entgegen, was
+  /// wirklich im Feld landet.
+  ///
+  /// Ab heute kursieren Links wie `https://cruiseconnector.at/c/CCC-ABC234`.
+  /// Wer so einen Link auf Instagram sieht, kopiert ihn und fuegt ihn in das
+  /// Suchfeld ein — der naheliegendste Weg, solange der Link die App noch
+  /// nicht selbst oeffnet (`assetlinks.json` und
+  /// `apple-app-site-association` fehlen am 31.08.2026 beide auf dem Server).
+  ///
+  /// [normalizeInviteCode] alleine scheitert daran: Es wirft alles weg, was
+  /// kein Buchstabe und keine Ziffer ist, aus dem Link wird
+  /// `HTTPSCRUISECONNECTORATCCCABC234`, und das faengt nicht mit `CCC` an.
+  /// Also `null`, und im Feld passiert nichts. Deshalb hier zuerst der Code,
+  /// dann der Link.
+  static String? einladungscodeAusEingabe(String roh) {
+    final direkt = normalizeInviteCode(roh);
+    if (direkt != null) return direkt;
+
+    final text = roh.trim();
+    if (text.isEmpty) return null;
+    final uri = Uri.tryParse(text);
+    if (uri == null) return null;
+    final ausLink = CruiseDeepLinks.communityCodeAus(uri);
+    if (ausLink == null) return null;
+    return normalizeInviteCode(ausLink);
   }
 
   static bool _isMissingColumn(PostgrestException e) {
@@ -855,6 +929,109 @@ class CommunityChatService {
     } catch (e) {
       debugPrint('[CommunityChatService] find_community_by_code Fehler: $e');
       return null;
+    }
+  }
+
+  /// 2026-08-31 (Auftrag Vucko „Communities teilen"): Dieselbe Abfrage wie
+  /// [findCommunityByCode], aber sie sagt, WARUM nichts kam. Begruendung steht
+  /// bei [CommunityVorschauArt].
+  ///
+  /// Sie ist bewusst der einzige Weg, den der Link-Einstieg benutzt. Die alte
+  /// Methode bleibt unveraendert, weil die Code-Eingabe in der Oberflaeche an
+  /// ihr haengt und dort ein „nichts gefunden" richtig ist.
+  static Future<CommunityVorschauErgebnis> vorschauZuCode(
+    String rawCode,
+  ) async {
+    final code = normalizeInviteCode(rawCode);
+    if (code == null) {
+      return const CommunityVorschauErgebnis(
+        CommunityVorschauArt.codeUngueltig,
+      );
+    }
+
+    try {
+      final row = await _db.rpc(
+        'find_community_by_code',
+        params: {'p_code': code},
+      );
+      if (row is Map) {
+        return CommunityVorschauErgebnis(
+          CommunityVorschauArt.gefunden,
+          zeile: Map<String, dynamic>.from(row),
+        );
+      }
+      // Die RPC gibt `null` zurueck, wenn kein Treffer da ist. Das ist eine
+      // Antwort, kein Fehler.
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.unbekannt);
+    } on PostgrestException catch (e) {
+      debugPrint('[CommunityChatService] vorschauZuCode Postgrest: $e');
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.netzfehler);
+    } catch (e) {
+      debugPrint('[CommunityChatService] vorschauZuCode Fehler: $e');
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.netzfehler);
+    }
+  }
+
+  /// Rueckfall fuer einen Link, der statt des Codes die KENNUNG traegt (alte
+  /// geteilte Links, von Hand gebaute Links).
+  ///
+  /// Er kann nur oeffentliche Communities zeigen: fuer private gibt die
+  /// Zeilenregel `communities_visible_public_or_member` nichts her, und das
+  /// laesst sich hier auch nicht reparieren. Deshalb baut [CruiseDeepLinks]
+  /// Links mit CODE. Ein privater Treffer landet hier ehrlich auf
+  /// [CommunityVorschauArt.unbekannt] statt auf einer leeren Vorschau.
+  static Future<CommunityVorschauErgebnis> vorschauZuId(
+    String communityId,
+  ) async {
+    try {
+      final zeile = await fetchCommunity(communityId);
+      return CommunityVorschauErgebnis(
+        CommunityVorschauArt.gefunden,
+        zeile: zeile,
+      );
+    } on CommunityChatServiceException {
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.unbekannt);
+    } on PostgrestException catch (e) {
+      // 42501 = die Lesepolitik gibt die Zeile nicht her (private Community).
+      // Das ist fachlich „nicht fuer dich da", kein Serverproblem.
+      if (e.code == '42501') {
+        return const CommunityVorschauErgebnis(CommunityVorschauArt.unbekannt);
+      }
+      debugPrint('[CommunityChatService] vorschauZuId Postgrest: $e');
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.netzfehler);
+    } catch (e) {
+      debugPrint('[CommunityChatService] vorschauZuId Fehler: $e');
+      return const CommunityVorschauErgebnis(CommunityVorschauArt.netzfehler);
+    }
+  }
+
+  /// 2026-08-31: Bin ICH in dieser Community?
+  ///
+  /// Braucht der Link-Einstieg, und zwar getrennt von der Zeile: Die RPC
+  /// `find_community_by_code` liefert `member_count` und `owner_profile`, aber
+  /// KEINE `community_members`-Liste. [isCurrentUserMember] wuerde deshalb bei
+  /// jedem Nicht-Besitzer `false` sagen, auch bei einem langjaehrigen
+  /// Mitglied, und der Link haette dem einen Beitreten-Knopf hingestellt.
+  ///
+  /// Die Abfrage ist in allen drei Faellen richtig, ohne Sonderweg:
+  ///   • oeffentliche Community  → Zeilen sind lesbar, Treffer oder nicht.
+  ///   • privat und ich bin drin → `is_community_member` ist wahr, lesbar.
+  ///   • privat und ich bin raus → nichts lesbar, also kein Treffer. Genau
+  ///     die richtige Antwort.
+  static Future<bool> istMitglied(String communityId) async {
+    final uid = _userId;
+    if (uid == null || communityId.trim().isEmpty) return false;
+    try {
+      final row = await _db
+          .from('community_members')
+          .select('user_id')
+          .eq('community_id', communityId)
+          .eq('user_id', uid)
+          .maybeSingle();
+      return row != null;
+    } catch (e) {
+      debugPrint('[CommunityChatService] istMitglied Fehler: $e');
+      return false;
     }
   }
 

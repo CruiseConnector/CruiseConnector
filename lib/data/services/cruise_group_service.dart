@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/input_limits.dart';
@@ -188,19 +190,32 @@ class CruiseGroupService {
         .eq('user_id', uid);
   }
 
+  /// Zeitgrenze fuer das Schreiben der Gruppenroute.
+  ///
+  /// 2026-08-31 (Vucko: „das rerouting ... manchmal haengt es"): Bei einer
+  /// Gruppenfahrt wartet der Reroute-Commit auf DIESEN Aufruf, bevor er die
+  /// neue Route lokal uebernimmt. Ohne Zeitgrenze haelt eine haengende
+  /// Verbindung die ganze Neuberechnung fest, bis der Wachhund nach 22 s
+  /// abbricht — der Fahrer sieht so lange „Route wird neu berechnet".
+  /// Acht Sekunden reichen fuer einen RPC ueber Mobilfunk und lassen dem
+  /// Wachhund reichlich Luft.
+  static const Duration schreibZeitgrenze = Duration(seconds: 8);
+
   static Future<GroupRouteUpdateResult?> updateCurrentRoute({
     required String groupId,
     required int expectedRevision,
     required Map<String, dynamic> routeData,
   }) async {
-    final rows = await _db.rpc(
-      'update_group_current_route',
-      params: {
-        'p_group_id': groupId,
-        'p_expected_revision': expectedRevision,
-        'p_route_data': routeData,
-      },
-    );
+    final rows = await _db
+        .rpc(
+          'update_group_current_route',
+          params: {
+            'p_group_id': groupId,
+            'p_expected_revision': expectedRevision,
+            'p_route_data': routeData,
+          },
+        )
+        .timeout(schreibZeitgrenze);
     if (rows is List && rows.isNotEmpty) {
       return GroupRouteUpdateResult.fromMap(
         Map<String, dynamic>.from(rows.first as Map),

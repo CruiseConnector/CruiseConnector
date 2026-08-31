@@ -5,9 +5,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
 import 'package:cruise_connect/presentation/pages/forgot_password_page.dart';
-import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/onboarding_wizard_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
@@ -32,7 +30,13 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _emailController = TextEditingController();
+  // 2026-08-31 (vucko): „dass man sich auch mit seinen Benutzernamen nur mit
+  // seinem Passwort anmelden kann." Das obere Feld nimmt deshalb BEIDES
+  // entgegen — die Adresse wie bisher, oder den @-Namen. Entschieden wird am
+  // @: ein @-Name darf laut AppInputLimits gar keines enthalten. Wer eine
+  // Adresse tippt, geht unveraendert den direkten Weg zu Supabase; nur der
+  // Namensweg laeuft ueber die Edge Function.
+  final _kennungController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _googleLoading = false;
@@ -41,19 +45,23 @@ class _LoginPageState extends State<LoginPage> {
   bool _emailNeedsVerification = false;
   String? _errorMsg;
 
+  /// Steht im oberen Feld eine Adresse (und nicht ein @-Name)?
+  bool get _kennungIstEmail =>
+      AuthService.istEmailEingabe(_kennungController.text.trim());
+
   @override
   void dispose() {
-    _emailController.dispose();
+    _kennungController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _signIn() async {
-    final email = _emailController.text.trim();
+    final kennung = _kennungController.text.trim();
     final password = _passwordController.text;
 
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _errorMsg = context.l10n.loginErrorMissingFields);
+    if (kennung.isEmpty || password.isEmpty) {
+      setState(() => _errorMsg = context.l10n.loginErrorMissingCredentials);
       return;
     }
 
@@ -64,7 +72,10 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     try {
-      await AuthService.signIn(email: email, password: password);
+      await AuthService.signInWithEmailOrUsername(
+        identifier: kennung,
+        password: password,
+      );
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
@@ -73,9 +84,14 @@ class _LoginPageState extends State<LoginPage> {
         (route) => false,
       );
     } on AuthException catch (e) {
-      final needsVerification = e.message.toLowerCase().contains(
-        'email not confirmed',
-      );
+      final roh = e.message.toLowerCase();
+      // 2026-08-31: Der Namensweg meldet eigene Kennungen (siehe
+      // AuthService), der Adressweg weiter die GoTrue-Texte. Beide muessen
+      // hier ankommen, sonst sieht der Nutzer „Login fehlgeschlagen", obwohl
+      // nur seine Mail unbestaetigt ist.
+      final needsVerification =
+          roh.contains('email not confirmed') ||
+          roh == AuthService.fehlerEmailNichtBestaetigt;
       setState(() {
         _errorMsg = _translateError(e.message);
         _emailNeedsVerification = needsVerification;
@@ -106,17 +122,26 @@ class _LoginPageState extends State<LoginPage> {
     required ValueChanged<bool> setLoading,
     required Future<void> Function() action,
   }) async {
-    // 2026-07-10 (vucko): Bereits bestätigte Rechtstexte (Pre-Auth-Pending,
-    // z. B. vom abgebrochenen ersten Versuch oder aus dem Wizard) nicht
-    // ERNEUT abfragen — sonst kommt das AGB-Fenster zweimal.
-    var accepted = await LegalAcceptanceService.pendingPreAuthAcceptance();
-    if (!mounted) return;
-    accepted ??= await LegalAcceptancePage.requestPreAuth(
-      context,
-      source: 'app_onboarding',
-    );
-    if (!mounted || accepted == null) return;
-
+    // 2026-08-31 (vucko): „ich moechte nicht, dass jemand die
+    // Datenschutzerklaerung ankreuzen muss … Ich moechte das nur wenn ich das
+    // Konto erstelle … und wenn man sich einloggt sollte man das nicht noch
+    // mal bestaetigen muessen."
+    //
+    // HIER STAND BIS HEUTE die Vorab-Abfrage der Rechtstexte. Sie lief VOR
+    // jeder Anmeldung mit Google oder Apple — also auch bei jemandem, der
+    // seit Monaten dabei ist und dessen Zustimmung laengst in
+    // `legal_acceptances` steht. Beim Weg ueber E-Mail und Passwort gab es
+    // sie nie; nur der Weg ueber Google und Apple fragte jedes Mal erneut.
+    //
+    // Zustaendig ist jetzt allein die LegalGatePage direkt hinter der
+    // Anmeldung: sie schaut in `legal_acceptances` nach und zeigt das Fenster
+    // GENAU DANN, wenn dort nichts steht. Fuer ein frisch erstelltes Konto
+    // ist das der erste Moment nach dem Anlegen (also „beim Erstellen"), fuer
+    // die wenigen Altkonten ohne Zeile das einmalige Nachholen, und fuer alle
+    // anderen passiert gar nichts mehr.
+    //
+    // Gemessen am 31.08.2026: 222 von 223 Konten haben ihre Zeile. Genau
+    // einem fehlt sie; der holt sie beim naechsten Start einmal nach.
     setLoading(true);
     setState(() {
       _errorMsg = null;
@@ -150,9 +175,13 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _resendVerificationEmail() async {
-    final email = _emailController.text.trim();
-    if (email.isEmpty) {
-      setState(() => _errorMsg = context.l10n.loginErrorEmailMissing);
+    final email = _kennungController.text.trim();
+    // 2026-08-31: Der erneute Versand geht nur mit der Adresse. Wer sich mit
+    // seinem @-Namen angemeldet hat, hat sie hier nicht stehen — und wir
+    // duerfen sie ihm auch nicht verraten (genau davor schuetzt die Edge
+    // Function). Also fragen wir danach, statt eine leere Anfrage zu schicken.
+    if (email.isEmpty || !AuthService.istEmailEingabe(email)) {
+      setState(() => _errorMsg = context.l10n.loginErrorEmailNeededForResend);
       return;
     }
 
@@ -176,7 +205,11 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _openForgotPassword() async {
-    final email = _emailController.text.trim();
+    // Nur eine echte Adresse mitnehmen. Ein @-Name im Feld waere im
+    // Passwort-Vergessen-Formular kein gueltiger Wert und wuerde den Nutzer
+    // in eine Fehlermeldung laufen lassen.
+    final kennung = _kennungController.text.trim();
+    final email = _kennungIstEmail ? kennung : '';
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ForgotPasswordPage(
@@ -190,6 +223,21 @@ class _LoginPageState extends State<LoginPage> {
     // Erkennung weiterhin an den Original-Meldungen (GoTrue englisch,
     // AuthService deutsch) — nur die Anzeige ist übersetzt.
     final m = msg.toLowerCase();
+    // 2026-08-31: Die Kennungen aus der Edge Function zuerst — sie sind
+    // eindeutig, waehrend die GoTrue-Texte nur ueber Teilzeichenketten
+    // erkennbar sind.
+    if (m == AuthService.fehlerAnmeldedatenFalsch) {
+      return context.l10n.loginErrorInvalidLogin;
+    }
+    if (m == AuthService.fehlerEmailNichtBestaetigt) {
+      return context.l10n.loginErrorEmailNotConfirmed;
+    }
+    if (m == AuthService.fehlerZuVieleVersuche) {
+      return context.l10n.authErrorTooManyAttempts;
+    }
+    if (m == AuthService.fehlerNamensanmeldungAus) {
+      return context.l10n.loginErrorUsernameLoginUnavailable;
+    }
     if (m.contains('invalid login') || m.contains('invalid credentials')) {
       return context.l10n.loginErrorInvalidCredentials;
     }
@@ -366,11 +414,15 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 30),
 
-                      _label(context.l10n.authEmailLabel),
+                      _label(context.l10n.authLoginIdentifierLabel),
                       _inputField(
-                        controller: _emailController,
-                        icon: Icons.email_outlined,
-                        hint: context.l10n.authEmailHint,
+                        controller: _kennungController,
+                        icon: Icons.person_outline,
+                        hint: context.l10n.authLoginIdentifierHint,
+                        // emailAddress bleibt richtig: die Tastatur zeigt @
+                        // und Punkt, und Buchstaben tippt man damit genauso.
+                        // Nur die Autokorrektur bleibt aus, sonst macht das
+                        // Handy aus einem @-Namen ein Wort.
                         keyboardType: TextInputType.emailAddress,
                         maxLength: AppInputLimits.emailMaxLength,
                       ),

@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:cruise_connect/presentation/widgets/skeletons/skeleton.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
+import 'package:cruise_connect/core/deep_links.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/data/services/community_chat_service.dart';
 import 'package:cruise_connect/data/services/community_neuigkeit_service.dart';
 import 'package:cruise_connect/presentation/pages/community_chat_detail_page.dart';
+import 'package:cruise_connect/presentation/pages/community_einstieg.dart';
 import 'package:cruise_connect/presentation/pages/community_settings_page.dart';
+import 'package:cruise_connect/presentation/pages/community_teilen_blatt.dart';
 import 'package:cruise_connect/presentation/widgets/community_avatar.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_filter_leiste.dart';
 import 'package:cruise_connect/presentation/widgets/community/community_vorschau_blatt.dart';
@@ -246,49 +249,29 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   /// - mit Einladungscode: die RPC entscheidet, und bei einer privaten
   ///   Community wird daraus eine Beitrittsanfrage beim Admin (Entscheidung
   ///   Vucko vom 23.08.), kein Beitritt.
+  /// 2026-08-31: Der Rumpf ist nach [communityBeitrittAusfuehren] in
+  /// community_einstieg.dart gewandert, unveraendert. Grund: Seit heute fuehrt
+  /// ein zweiter Weg in dieselbe Vorschau, naemlich ein geteilter Link von
+  /// aussen. Zwei Abschriften derselben Entscheidung waeren im ersten Monat
+  /// auseinandergelaufen, und es ist genau die Entscheidung, die ein
+  /// Mitglied erzeugt.
   Future<CommunityBeitrittsErgebnis> _beitrittAusfuehren(
     Map<String, dynamic> community, {
     String? inviteCode,
-  }) async {
-    final id = community['id']?.toString() ?? '';
-    try {
-      final code = inviteCode?.trim();
-      if (code != null && code.isNotEmpty) {
-        final result = await CommunityChatService.joinCommunityByCode(code);
-        final ausgang = switch (result.status) {
-          CommunityJoinStatus.joined => CommunityBeitrittAusgang.beigetreten,
-          CommunityJoinStatus.alreadyMember =>
-            CommunityBeitrittAusgang.schonMitglied,
-          _ => CommunityBeitrittAusgang.angefragt,
-        };
-        return CommunityBeitrittsErgebnis(
-          ausgang,
-          communityId: result.communityId.isNotEmpty ? result.communityId : id,
-          meldung: result.userMessage,
-        );
-      }
-      if (id.isEmpty) {
-        return const CommunityBeitrittsErgebnis(
-          CommunityBeitrittAusgang.fehler,
-          meldung: 'Diese Community gibt es nicht mehr.',
-        );
-      }
-      await CommunityChatService.joinCommunity(id);
-      return CommunityBeitrittsErgebnis(
-        CommunityBeitrittAusgang.beigetreten,
-        communityId: id,
-      );
-    } catch (e) {
-      return CommunityBeitrittsErgebnis(
-        CommunityBeitrittAusgang.fehler,
-        communityId: id,
-        meldung: beitrittsFehlerText(e),
-      );
-    }
+  }) {
+    return communityBeitrittAusfuehren(
+      communityId: community['id']?.toString() ?? '',
+      inviteCode: inviteCode,
+    );
   }
 
+  /// 2026-08-31 (Auftrag Vucko „Communities teilen"): Hier stand
+  /// `normalizeInviteCode`. Seit heute kursieren geteilte LINKS, und ein
+  /// eingefuegter Link kam an dieser Stelle als `null` an, das Feld tat
+  /// einfach nichts. [CommunityChatService.einladungscodeAusEingabe] nimmt
+  /// beides, den blossen Code und den ganzen Link. Begruendung steht dort.
   Future<void> _lookupCommunityCode(String raw) async {
-    final normalized = CommunityChatService.normalizeInviteCode(raw);
+    final normalized = CommunityChatService.einladungscodeAusEingabe(raw);
     if (normalized == null) {
       setState(() {
         _codeSearchResult = null;
@@ -343,6 +326,30 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   /// bekommt die Nadel und springt SOFORT nach oben, bevor der Server
   /// geantwortet hat. Geht es schief, rutscht sie zurück und es steht da,
   /// warum. Die 10er-Grenze der Datenbank ist genau so ein Fall.
+  /// 2026-08-31 (Auftrag Vucko „Communities teilen"): Teilen aus der Liste.
+  ///
+  /// Der Link braucht den Einladungscode, und der kommt aus der RPC
+  /// `get_community_invite_code`, die nur Mitgliedern antwortet. In der Liste
+  /// steht er nicht: `_communitySelect` hat die Spalte am 23.08. bewusst
+  /// verloren, weil sie sonst fuer jeden lesbar waere. Also wird er hier
+  /// einzeln geholt, und zwar erst beim Tippen und nicht fuer jede Kachel auf
+  /// Vorrat.
+  Future<void> _teilen(Map<String, dynamic> community) async {
+    final id = community['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    final code = await CommunityChatService.inviteCodeFor(id);
+    if (!mounted) return;
+    if (code == null || code.isEmpty) {
+      _showMessage('Der Link ist gerade nicht abrufbar.');
+      return;
+    }
+    await CommunityTeilenBlatt.zeigenUndAusfuehren(
+      context,
+      community: community,
+      einladungsCode: code,
+    );
+  }
+
   Future<void> _pinUmschalten(Map<String, dynamic> community) async {
     final id = community['id']?.toString();
     if (id == null || id.isEmpty) return;
@@ -417,6 +424,29 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
   /// jetzt der Status aus [CommunityJoinResult], ob geoeffnet oder nur
   /// gemeldet wird.
   Future<void> _joinCommunityWithCode(String rawCode) async {
+    // 2026-08-31 (Auftrag Vucko „Communities teilen"): Ein eingefuegter LINK
+    // nimmt hier NICHT den direkten Weg in die Mitgliedschaft, sondern den
+    // ueber die Vorschau. Vucko woertlich: „dass man wieder den Vorschau
+    // Bildschirm hat mit kurzer Beschreibung und dem Titel und dass man auf
+    // beitreten klicken kann oder nicht."
+    //
+    // Der blosse Code bleibt bewusst unveraendert beim direkten Weg: Wer
+    // einen Code abtippt, hat ihn von jemandem bekommen und weiss, wo er
+    // hinwill. Wer einen Link einfuegt, hat ihn irgendwo im Netz gesehen.
+    final ausLink = CruiseDeepLinks.communityCodeAus(
+      Uri.tryParse(rawCode.trim()) ?? Uri(),
+    );
+    if (ausLink != null) {
+      final code = CommunityChatService.normalizeInviteCode(ausLink);
+      if (code != null) {
+        _codeSearchController.clear();
+        setState(() => _codeSearchResult = null);
+        await CommunityEinstieg.oeffnen(code, context: context);
+        if (mounted) await _load();
+        return;
+      }
+    }
+
     try {
       final result = await CommunityChatService.joinCommunityByCode(rawCode);
       if (!mounted) return;
@@ -1262,6 +1292,8 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
       onSelected: (value) {
         if (value == 'pin') {
           _pinUmschalten(community);
+        } else if (value == 'teilen') {
+          _teilen(community);
         } else if (value == 'members') {
           _showMembers(community);
         } else if (value == 'leave') {
@@ -1292,6 +1324,20 @@ class _CommunityChatsTabState extends State<CommunityChatsTab> {
                 angepinnt ? 'Nicht mehr anpinnen' : 'Anpinnen',
                 style: const TextStyle(color: Colors.white),
               ),
+            ],
+          ),
+        ),
+        // 2026-08-31 (Auftrag Vucko „Communities teilen"): direkt unter
+        // Anpinnen. Die Liste ist die Stelle, an der man an seine eigenen
+        // Communities denkt; den Weg ueber Chat oeffnen und dann das Menue
+        // dort wuerde kaum jemand gehen.
+        const PopupMenuItem(
+          value: 'teilen',
+          child: Row(
+            children: [
+              Icon(Icons.ios_share, color: Colors.white70, size: 18),
+              SizedBox(width: 10),
+              Text('Teilen', style: TextStyle(color: Colors.white)),
             ],
           ),
         ),

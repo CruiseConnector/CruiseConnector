@@ -212,17 +212,41 @@ abstract class AppLocalizations {
   /// **'Bitte E-Mail und Passwort eingeben.'**
   String get loginErrorMissingFields;
 
+  /// No description provided for @loginErrorMissingCredentials.
+  ///
+  /// In de, this message translates to:
+  /// **'Bitte E-Mail oder Benutzernamen und Passwort eingeben.'**
+  String get loginErrorMissingCredentials;
+
   /// No description provided for @loginErrorEmailMissing.
   ///
   /// In de, this message translates to:
   /// **'Bitte E-Mail eintragen.'**
   String get loginErrorEmailMissing;
 
+  /// No description provided for @loginErrorEmailNeededForResend.
+  ///
+  /// In de, this message translates to:
+  /// **'Für den erneuten Versand brauchen wir deine E-Mail. Bitte trage sie oben ein.'**
+  String get loginErrorEmailNeededForResend;
+
   /// No description provided for @loginErrorInvalidCredentials.
   ///
   /// In de, this message translates to:
   /// **'E-Mail oder Passwort falsch.'**
   String get loginErrorInvalidCredentials;
+
+  /// No description provided for @loginErrorInvalidLogin.
+  ///
+  /// In de, this message translates to:
+  /// **'Anmeldedaten stimmen nicht. Prüfe E-Mail oder Benutzernamen und das Passwort.'**
+  String get loginErrorInvalidLogin;
+
+  /// No description provided for @loginErrorUsernameLoginUnavailable.
+  ///
+  /// In de, this message translates to:
+  /// **'Anmelden mit Benutzernamen geht gerade nicht. Bitte melde dich mit deiner E-Mail an.'**
+  String get loginErrorUsernameLoginUnavailable;
 
   /// No description provided for @loginErrorEmailNotConfirmed.
   ///
@@ -253,6 +277,18 @@ abstract class AppLocalizations {
   /// In de, this message translates to:
   /// **'deine@email.de'**
   String get authEmailHint;
+
+  /// No description provided for @authLoginIdentifierLabel.
+  ///
+  /// In de, this message translates to:
+  /// **'E-Mail oder Benutzername'**
+  String get authLoginIdentifierLabel;
+
+  /// No description provided for @authLoginIdentifierHint.
+  ///
+  /// In de, this message translates to:
+  /// **'deine@email.de oder deinname'**
+  String get authLoginIdentifierHint;
 
   /// No description provided for @authPasswordLabel.
   ///

@@ -70,10 +70,26 @@ class AppLocalizationsEn extends AppLocalizations {
   String get loginErrorMissingFields => 'Please enter your email and password.';
 
   @override
+  String get loginErrorMissingCredentials =>
+      'Please enter your email or username and your password.';
+
+  @override
   String get loginErrorEmailMissing => 'Please enter your email address.';
 
   @override
+  String get loginErrorEmailNeededForResend =>
+      'We need your email address to send it again. Please enter it above.';
+
+  @override
   String get loginErrorInvalidCredentials => 'Wrong email or password.';
+
+  @override
+  String get loginErrorInvalidLogin =>
+      'Those sign-in details do not match. Please check your email or username and your password.';
+
+  @override
+  String get loginErrorUsernameLoginUnavailable =>
+      'Signing in with a username is not working right now. Please sign in with your email address.';
 
   @override
   String get loginErrorEmailNotConfirmed =>
@@ -90,6 +106,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get authEmailHint => 'you@email.com';
+
+  @override
+  String get authLoginIdentifierLabel => 'Email or username';
+
+  @override
+  String get authLoginIdentifierHint => 'you@email.com or yourname';
 
   @override
   String get authPasswordLabel => 'Password';

@@ -55,10 +55,38 @@ class MapStyleService {
       'https://tiles.cruiseconnector.at/cruise_dark.json';
 
   static const String _localFileName = 'dach.pmtiles';
-  static const String _autoDownloadPolicyKey =
+
+  // ── Diese beiden Werte gehoeren dem GERAET, nicht dem Konto ──────────────
+  //
+  // 2026-08-31 (vucko): „wenn man sich ausloggen, moechte ich nicht, dass wenn
+  // ich wieder zurueck in die App gehe, dass ich noch mal die ganzen Map Daten
+  // herunterladen muss."
+  //
+  // Die Offlinekarte liegt als Datei auf dem Handy und belegt mehrere
+  // Gigabyte. Ob sie geladen werden darf und ob die Frage danach schon
+  // gestellt wurde, ist deshalb eine Eigenschaft DIESES HANDYS — nicht des
+  // Kontos, das gerade angemeldet ist. Wer sich abmeldet, verliert seine
+  // Fahrten aus dem Zwischenspeicher, aber nicht seine Karte.
+  //
+  // KONKRET heisst das: Diese beiden Schluessel duerfen NIEMALS durch
+  // [NutzerPrefsSchluessel.fuer] laufen. Bekaemen sie ein `::<Konto>`
+  // angehaengt, waere nach jedem Abmelden die Zustimmung wieder unbekannt,
+  // die Frage kaeme erneut, und der Download begaenne von vorn.
+  // `test/auth/geraete_einstellungen_ueberleben_abmeldung_test.dart` haelt
+  // das fest.
+  static const String autoDownloadPolicyKey =
       'offline_map_auto_download_policy_v1';
-  static const String _autoDownloadPromptSeenKey =
+  static const String autoDownloadPromptSeenKey =
       'offline_map_auto_download_prompt_v1_seen';
+
+  /// Alles, was beim Abmelden stehen bleiben MUSS. Fuer den Waechtertest.
+  static const List<String> geraeteSchluessel = <String>[
+    autoDownloadPolicyKey,
+    autoDownloadPromptSeenKey,
+  ];
+
+  static const String _autoDownloadPolicyKey = autoDownloadPolicyKey;
+  static const String _autoDownloadPromptSeenKey = autoDownloadPromptSeenKey;
 
   /// Mindestgröße, damit eine abgebrochene/teilweise Datei NICHT als „fertig"
   /// gilt (die echte DACH-Datei ist mehrere GB groß).
@@ -441,6 +469,38 @@ class MapStyleService {
         onProgress?.call(received, total);
       }
       await sink.close();
+
+      // 2026-08-31 (Vucko: „ich muss noch mal die ganzen Map Daten
+      // herunterladen … dann muss ich das immer machen."): NUR umbenennen,
+      // wenn wirklich alles da ist.
+      //
+      // WAS HIER SCHIEFGING. `await for` bricht nicht nur bei einem Fehler ab.
+      // Wenn eine Zwischenstelle (Mobilfunk-Proxy, WLAN mit Zeitgrenze, unser
+      // eigener CDN bei einer stundenlangen Range-Anfrage) den Strom
+      // vorzeitig SAUBER schliesst, laeuft die Schleife ganz normal zu Ende —
+      // nur mit weniger Bytes. Danach wurde die halbe `.part` bedenkenlos in
+      // `dach.pmtiles` umbenannt. Ab da war alles falsch: `isDachDownloaded`
+      // meldet „fertig", sobald 200 MB dastehen, der automatische Download
+      // laeuft deshalb nie wieder an, und die Karte rendert aus einer
+      // abgeschnittenen Datei. Der Integritaets-Check raeumt das genau EINMAL
+      // je Installation auf (er merkt sich sein Erledigt-Flag) — und dann
+      // faengt der ganze mehrere Gigabyte grosse Download wieder bei null an,
+      // statt an der abgebrochenen Stelle weiterzumachen.
+      //
+      // Jetzt bleibt die `.part` liegen, wenn die Laenge nicht stimmt. Der
+      // naechste Versuch setzt per Range-Anfrage genau dort fort. Kennt der
+      // Server keine Laenge (total < 0), bleibt es beim alten Verhalten — dann
+      // gibt es nichts zu vergleichen, und der Integritaets-Check ist weiter
+      // das Netz darunter.
+      if (total > 0 && received < total) {
+        debugPrint(
+          '[MapStyle] Download unvollstaendig: $received von $total Bytes. '
+          'Die angefangene Datei bleibt liegen, der naechste Versuch setzt '
+          'dort fort.',
+        );
+        return false;
+      }
+
       await part.rename(target.path);
       debugPrint('[MapStyle] DACH offline geladen: ${target.path}');
       return true;

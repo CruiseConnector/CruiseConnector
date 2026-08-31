@@ -4,8 +4,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/core/l10n_extension.dart';
 import 'package:cruise_connect/data/services/auth_service.dart';
-import 'package:cruise_connect/data/services/legal_acceptance_service.dart';
-import 'package:cruise_connect/presentation/pages/legal_acceptance_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/pages/login_page.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
@@ -53,17 +51,26 @@ class _WelcomePageState extends State<WelcomePage> {
     required ValueChanged<bool> setLoading,
     required Future<void> Function() action,
   }) async {
-    // 2026-07-10 (vucko): Bereits bestätigte Rechtstexte (Pre-Auth-Pending,
-    // z. B. vom abgebrochenen ersten Versuch oder aus dem Wizard) nicht
-    // ERNEUT abfragen — sonst kommt das AGB-Fenster zweimal.
-    var accepted = await LegalAcceptanceService.pendingPreAuthAcceptance();
-    if (!mounted) return;
-    accepted ??= await LegalAcceptancePage.requestPreAuth(
-      context,
-      source: 'app_onboarding',
-    );
-    if (!mounted || accepted == null) return;
-
+    // 2026-08-31 (vucko): „ich moechte nicht, dass jemand die
+    // Datenschutzerklaerung ankreuzen muss … Ich moechte das nur wenn ich das
+    // Konto erstelle … und wenn man sich einloggt sollte man das nicht noch
+    // mal bestaetigen muessen."
+    //
+    // HIER STAND BIS HEUTE die Vorab-Abfrage der Rechtstexte. Sie lief VOR
+    // jeder Anmeldung mit Google oder Apple — also auch bei jemandem, der
+    // seit Monaten dabei ist und dessen Zustimmung laengst in
+    // `legal_acceptances` steht. Beim Weg ueber E-Mail und Passwort gab es
+    // sie nie; nur der Weg ueber Google und Apple fragte jedes Mal erneut.
+    //
+    // Zustaendig ist jetzt allein die LegalGatePage direkt hinter der
+    // Anmeldung: sie schaut in `legal_acceptances` nach und zeigt das Fenster
+    // GENAU DANN, wenn dort nichts steht. Fuer ein frisch erstelltes Konto
+    // ist das der erste Moment nach dem Anlegen (also „beim Erstellen"), fuer
+    // die wenigen Altkonten ohne Zeile das einmalige Nachholen, und fuer alle
+    // anderen passiert gar nichts mehr.
+    //
+    // Gemessen am 31.08.2026: 222 von 223 Konten haben ihre Zeile. Genau
+    // einem fehlt sie; der holt sie beim naechsten Start einmal nach.
     setLoading(true);
     setState(() => _errorMsg = null);
     try {

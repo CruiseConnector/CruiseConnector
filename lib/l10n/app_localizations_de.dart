@@ -71,10 +71,26 @@ class AppLocalizationsDe extends AppLocalizations {
   String get loginErrorMissingFields => 'Bitte E-Mail und Passwort eingeben.';
 
   @override
+  String get loginErrorMissingCredentials =>
+      'Bitte E-Mail oder Benutzernamen und Passwort eingeben.';
+
+  @override
   String get loginErrorEmailMissing => 'Bitte E-Mail eintragen.';
 
   @override
+  String get loginErrorEmailNeededForResend =>
+      'Für den erneuten Versand brauchen wir deine E-Mail. Bitte trage sie oben ein.';
+
+  @override
   String get loginErrorInvalidCredentials => 'E-Mail oder Passwort falsch.';
+
+  @override
+  String get loginErrorInvalidLogin =>
+      'Anmeldedaten stimmen nicht. Prüfe E-Mail oder Benutzernamen und das Passwort.';
+
+  @override
+  String get loginErrorUsernameLoginUnavailable =>
+      'Anmelden mit Benutzernamen geht gerade nicht. Bitte melde dich mit deiner E-Mail an.';
 
   @override
   String get loginErrorEmailNotConfirmed =>
@@ -92,6 +108,12 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get authEmailHint => 'deine@email.de';
+
+  @override
+  String get authLoginIdentifierLabel => 'E-Mail oder Benutzername';
+
+  @override
+  String get authLoginIdentifierHint => 'deine@email.de oder deinname';
 
   @override
   String get authPasswordLabel => 'Passwort';

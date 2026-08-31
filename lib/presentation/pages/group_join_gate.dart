@@ -42,7 +42,7 @@ class GruppenEinstieg {
     NavigatorState? nav = (context != null && context.mounted)
         ? Navigator.of(context, rootNavigator: true)
         : null;
-    nav ??= await _wurzelNavigator();
+    nav ??= await wurzelNavigator();
     if (nav == null) return;
 
     final bescheid = await SocialService.pruefeGruppenZugang(gruppenId);
@@ -124,7 +124,13 @@ class GruppenEinstieg {
   /// Wartet kurz auf den Wurzel-Navigator. Beim Kaltstart aus einer Push oder
   /// einem Link ist er im ersten Moment noch nicht gebaut; ohne dieses Warten
   /// verschwand der Einstieg still.
-  static Future<NavigatorState?> _wurzelNavigator({
+  ///
+  /// 2026-08-31: Von `_wurzelNavigator` auf oeffentlich gestellt. Der
+  /// Community-Link-Einstieg (community_einstieg.dart) hat dasselbe Problem
+  /// und braucht dasselbe Warten; eine zweite Abschrift derselben Schleife
+  /// waere nur eine zweite Stelle zum Vergessen. Der Schluessel wird weiterhin
+  /// an genau EINER Stelle gesetzt, in main.dart.
+  static Future<NavigatorState?> wurzelNavigator({
     Duration hoechstens = const Duration(seconds: 12),
   }) async {
     final ende = DateTime.now().add(hoechstens);

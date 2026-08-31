@@ -12,6 +12,7 @@ import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/cruise_mode_page.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_teilen_hinweis_sheet.dart';
 
 class SavedRouteBookmarksPage extends StatefulWidget {
   const SavedRouteBookmarksPage({super.key});
@@ -285,6 +286,23 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
                       _shareRouteExternally(route);
                     },
                   ),
+                  // 2026-08-31 (Vucko, Hinweis vor dem Teilen): „danach nur
+                  // noch auf Wunsch". Der Hinweis erscheint von selbst nur
+                  // beim ersten Mal — ohne diesen Eintrag koennte ihn danach
+                  // niemand mehr nachlesen.
+                  _buildOptionTile(
+                    Icons.lock_outline,
+                    'Schutz beim Teilen',
+                    const Color(0xFF9AA7B8),
+                    () {
+                      Navigator.pop(ctx);
+                      zeigeRouteTeilenHinweis(
+                        context,
+                        ziel: RouteTeilenZiel.beitrag,
+                        force: true,
+                      );
+                    },
+                  ),
                   _buildOptionTile(
                     Icons.delete_outline,
                     'Löschen',
@@ -378,21 +396,45 @@ class _SavedRouteBookmarksPageState extends State<SavedRouteBookmarksPage> {
     );
   }
 
-  void _shareRouteAsPost(SavedRoute route) {
+  // 2026-08-31 (Vucko, Hinweis vor dem Teilen): „Kommt bevor jetzt jemand
+  // eine Strecke teilt, dass man sich keine Gedanken machen muss, dass die
+  // Strecke dann spaeter andockt." Der Hinweis kommt VOR dem Composer, nicht
+  // danach — wer abbricht, hat nichts angefangen. Beim zweiten Mal ist er
+  // weg (Merker in den SharedPreferences); nachlesen laesst er sich ueber
+  // „Schutz beim Teilen" im Optionsblatt.
+  Future<void> _shareRouteAsPost(SavedRoute route) async {
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.beitrag,
+    );
+    if (!weiter || !mounted) return;
     final routeText =
         '${route.styleEmoji} ${route.name ?? route.style}\n'
         '${route.formattedDistance} · ${route.formattedDuration}\n\n';
-    Navigator.push(
+    if (!mounted) return;
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) =>
             CreatePostPage(initialText: routeText, sharedRouteId: route.id),
       ),
-    ).then((_) => _refresh());
+    );
+    if (!mounted) return;
+    await _refresh();
   }
 
-  void _shareRouteExternally(SavedRoute route) {
-    Navigator.push(
+  // 2026-08-31 (Vucko, Hinweis vor dem Teilen): Auch hier, aber mit EIGENEM
+  // Text. Das Bild entsteht auf dem Geraet, und im Composer gibt es das
+  // Format „Karte" mit echter Basemap — die Zusicherungen aus dem Beitrag
+  // (keine Karte, gekappte Enden) gelten dort NICHT und duerfen deshalb
+  // nicht behauptet werden.
+  Future<void> _shareRouteExternally(SavedRoute route) async {
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.bild,
+    );
+    if (!weiter || !mounted) return;
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => RouteSharePage(

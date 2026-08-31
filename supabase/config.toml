@@ -442,3 +442,15 @@ entrypoint = "./functions/send-push/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/admin-monitor/index.ts"
+
+# 2026-08-31 (vucko): Anmeldung mit dem @-Namen statt der E-Mail.
+# KRITISCH verify_jwt = false — die Funktion IST die Anmeldung, es gibt zu
+# diesem Zeitpunkt also noch keine Sitzung. Mit verify_jwt = true wiese das
+# Gateway den Publishable-Key als „Invalid JWT" ab und niemand koennte sich
+# mit seinem Namen anmelden (dieselbe Falle wie bei generate-cruise-route-v2).
+# Eigene Absicherung: Deckel je Name und je Adresse ueber check_rate_limit,
+# und die E-Mail verlaesst die Funktion nie.
+[functions.username-login]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/username-login/index.ts"

@@ -120,6 +120,7 @@ import 'package:cruise_connect/data/services/offline_fahrten_warteschlange.dart'
 import 'package:cruise_connect/data/services/cruise_group_service.dart';
 import 'package:cruise_connect/data/services/route_quality_validator.dart';
 import 'package:cruise_connect/domain/models/group_member.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_teilen_hinweis_sheet.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/group_lobby_page.dart';
 
@@ -12090,7 +12091,15 @@ class _CruiseModePageState extends State<CruiseModePage>
       _onRouteLockStreak = _routeLockedOn ? _lockOnStreakNeeded : 0;
       _offRouteCount = snapshot.offRouteCount;
       _lastRerouteTime = snapshot.lastRerouteTime;
-      _isRerouting = snapshot.isRerouting;
+      // 2026-08-31 (Vucko: „das rerouting ... manchmal haengt es"): Der
+      // Schnappschuss trug den Reroute-Zustand mit. Wurde er WAEHREND einer
+      // laufenden Neuberechnung aufgenommen, kam beim Wiederherstellen ein
+      // `true` zurueck — fuer einen Zyklus, den es laengst nicht mehr gibt.
+      // Danach lehnt _rerouteToOriginalRoute jeden neuen Versuch mit
+      // `if (_isRerouting) return;` ab, und das Banner steht bis zum
+      // Fahrtende. Ein wiederhergestellter Zustand hat nie einen laufenden
+      // Zyklus hinter sich; false ist die einzige ehrliche Antwort.
+      _isRerouting = false;
       _originalRouteDistance = snapshot.originalRouteDistance;
       _originalRouteDuration = snapshot.originalRouteDuration;
       _totalDistanceDriven = snapshot.totalDistanceDriven;
@@ -13179,6 +13188,14 @@ class _CruiseModePageState extends State<CruiseModePage>
 
   Future<void> _publishRecordedRoute(String savedRouteId) async {
     if (!mounted || _disposed) return;
+    // 2026-08-31 (Vucko: der Hinweis gehoert VOR jedes Teilen, „dass man sich
+    // keine Gedanken machen muss"): dritter und letzter Weg, auf dem eine
+    // Strecke in den Feed geht — direkt nach einer aufgezeichneten Fahrt.
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.beitrag,
+    );
+    if (!weiter || !mounted || _disposed) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CreatePostPage(sharedRouteId: savedRouteId),
@@ -18612,15 +18629,28 @@ class _CruiseModePageState extends State<CruiseModePage>
     if (_isRerouting) return;
     _isRerouting = true;
     _rerouteGeneration++;
+    // 2026-08-31 (Vucko: „das rerouting ... manchmal haengt es"): Die eigene
+    // Generation merken. Ein Zyklus, den der Wachhund fuer tot erklaert hat,
+    // kann Minuten spaeter trotzdem noch zurueckkommen (Dart-Futures lassen
+    // sich nicht abbrechen). Sein finally raeumte bisher BLIND auf und nahm
+    // dabei Wachhund und Flagge des laengst laufenden NACHFOLGERS mit — der
+    // lief danach voellig ungeschuetzt weiter, und blieb er haengen, stand
+    // „Neuberechnung" bis zum Fahrtende. Mit dieser Nummer raeumt nur noch
+    // auf, wer auch wirklich der aktuelle Zyklus ist.
+    final meineRerouteGeneration = _rerouteGeneration;
     _rerouteStartedAt = DateTime.now();
     _pendingChainedReroute = false;
-    // 2026-06-22 (vucko Reroute-Hang): Harter Watchdog. Alle await-Stellen sind
-    // einzeln per .timeout() gedeckelt (Connectivity 2s, HTTP ≤10s, GPS 3s) →
-    // das finally läuft garantiert. Dieser Timer ist das Sicherheitsnetz für den
-    // pathologischen Fall, dass ein Future trotzdem hängt: nach _rerouteWatchdog
-    // Timeout wird der „Neuberechnung"-Status zwangsweise beendet. Ein evtl.
-    // spät zurückkommender Commit wird vom 80m-Stale-Check in
-    // _commitRerouteResult ohnehin verworfen (der Fahrer ist längst weiter).
+    // 2026-06-22 (vucko Reroute-Hang): Harter Watchdog. Jede einzelne
+    // await-Stelle ist per .timeout() gedeckelt (Connectivity 2s, HTTP <=10s,
+    // GPS 3s, Gruppen-Schreibvorgang 8s) — das finally laeuft also garantiert.
+    //
+    // 2026-08-31: Die SUMME ist trotzdem groesser als dieser Wachhund. Ein
+    // Zyklus stellt bis zu vier Routenanfragen nacheinander, im schlimmsten
+    // Fall rund 40 s. Der Wachhund beendet deshalb nur die ANZEIGE; der Zyklus
+    // selbst laeuft noch etwas weiter und steigt an seinem naechsten
+    // Generations-Pruefpunkt (zyklusAbgeloest) von selbst aus. Ein trotzdem
+    // spaet zurueckkommender Commit wird vom 80m-Stale-Check in
+    // _commitRerouteResult verworfen (der Fahrer ist laengst weiter).
     _rerouteWatchdog?.cancel();
     _rerouteWatchdog = Timer(_rerouteWatchdogTimeout, () {
       if (!_isRerouting || !mounted || _disposed) return;
@@ -18739,31 +18769,44 @@ class _CruiseModePageState extends State<CruiseModePage>
         etaBeforeSeconds: etaBeforeSeconds,
       );
     } finally {
-      // 2026-06-22 (vucko Reroute-Hang): Watchdog abräumen — der reguläre Pfad
-      // ist fertig, ein verspäteter Zwangs-Reset wäre jetzt nur störend.
-      _rerouteWatchdog?.cancel();
-      _rerouteWatchdog = null;
-      _isRerouting = false;
-      _rerouteStartedAt = null;
-      // 2026-06-13 (vucko Reroute-Videos): Der Commit landete nachweislich
-      // hinter dem Fahrer (Stale-Check in _commitRerouteResult) → SOFORT mit
-      // frischer Position nachrouten statt erst beim nächsten Off-Route-
-      // Zyklus (+3s Hysterese +3s Cooldown). Max 2 Ketten.
-      if (_pendingChainedReroute && mounted && !_disposed) {
-        _pendingChainedReroute = false;
-        if (_chainedRerouteCount < 2) {
-          _chainedRerouteCount++;
-          _lastRerouteTime = null;
-          _offRouteSince = null;
-          debugPrint(
-            '[CruiseMode][Reroute] Commit veraltet → Ketten-Reroute '
-            '#$_chainedRerouteCount mit frischer Position',
-          );
-          unawaited(
-            _rerouteToOriginalRoute(_freshRerouteStartPosition(position)),
-          );
-        } else {
-          _chainedRerouteCount = 0;
+      // 2026-08-31: NUR aufraeumen, wenn dieser Zyklus noch der aktuelle ist.
+      // Der Wachhund erhoeht die Generation, wenn er einen Zyklus aufgibt;
+      // ein spaet zurueckkommender Nachzuegler findet hier also eine fremde
+      // Nummer vor und laesst die Finger von allem. Siehe die Begruendung
+      // beim Merken der Nummer oben.
+      if (_rerouteGeneration == meineRerouteGeneration) {
+        // 2026-06-22 (vucko Reroute-Hang): Watchdog abräumen — der reguläre
+        // Pfad ist fertig, ein verspäteter Zwangs-Reset wäre jetzt nur
+        // störend.
+        _rerouteWatchdog?.cancel();
+        _rerouteWatchdog = null;
+        _isRerouting = false;
+        _rerouteStartedAt = null;
+        // 2026-06-13 (vucko Reroute-Videos): Der Commit landete nachweislich
+        // hinter dem Fahrer (Stale-Check in _commitRerouteResult) → SOFORT mit
+        // frischer Position nachrouten statt erst beim nächsten Off-Route-
+        // Zyklus (+3s Hysterese +3s Cooldown). Max 2 Ketten.
+        //
+        // 2026-08-31: steht bewusst INNERHALB des Generationszweigs. Ein
+        // Zyklus, den der Wachhund aufgegeben hat, darf keine neue Kette
+        // anstossen — sonst haengt der Nachzuegler dem laufenden Zyklus einen
+        // dritten hinterher.
+        if (_pendingChainedReroute && mounted && !_disposed) {
+          _pendingChainedReroute = false;
+          if (_chainedRerouteCount < 2) {
+            _chainedRerouteCount++;
+            _lastRerouteTime = null;
+            _offRouteSince = null;
+            debugPrint(
+              '[CruiseMode][Reroute] Commit veraltet → Ketten-Reroute '
+              '#$_chainedRerouteCount mit frischer Position',
+            );
+            unawaited(
+              _rerouteToOriginalRoute(_freshRerouteStartPosition(position)),
+            );
+          } else {
+            _chainedRerouteCount = 0;
+          }
         }
       }
     }
@@ -18780,6 +18823,24 @@ class _CruiseModePageState extends State<CruiseModePage>
     required double? remainingDistanceBeforeMeters,
     required double? etaBeforeSeconds,
   }) async {
+    // 2026-08-31 (Vucko: „das rerouting ... manchmal haengt es"): Ein Zyklus
+    // kann bis zu vier Routenanfragen nacheinander stellen (Ziel, erzwungenes
+    // Ziel, Kandidat, Verbinder), jede mit bis zu 10 s Zeitbudget. Das sind im
+    // schlimmsten Fall 40 s — deutlich mehr, als der Wachhund abwartet. Hat er
+    // den Zyklus laengst aufgegeben und der Fahrer eine neue Neuberechnung
+    // ausgeloest, liefen bisher ZWEI Zyklen parallel gegen den Routen-Server.
+    // Die Generation sagt, wer noch gebraucht wird: wessen Nummer nicht mehr
+    // passt, hoert vor der naechsten Anfrage auf.
+    final meineZyklusGeneration = _rerouteGeneration;
+    bool zyklusAbgeloest(String stelle) {
+      if (_rerouteGeneration == meineZyklusGeneration) return false;
+      debugPrint(
+        '[CruiseMode][Reroute] Zyklus abgeloest (Generation '
+        '$meineZyklusGeneration → $_rerouteGeneration) → Abbruch bei $stelle',
+      );
+      return true;
+    }
+
     // Ursachen-Protokoll dieses Zyklus — jede Fehlstelle trägt sich ein.
     final cycleFailures = <String>[];
     try {
@@ -19001,6 +19062,7 @@ class _CruiseModePageState extends State<CruiseModePage>
             debugPrint(
               '[CruiseMode] Ziel-Reroute QA-verworfen → Force-Accept direkt zum Ziel.',
             );
+            if (zyklusAbgeloest('erzwungenes Ziel')) return false;
             try {
               final forced = await _routeService.generatePointToPoint(
                 startPosition: position,
@@ -19278,6 +19340,7 @@ class _CruiseModePageState extends State<CruiseModePage>
           rerouteAvoidHighways,
           versuchNr,
         );
+        if (zyklusAbgeloest('Wiedereinstieg Versuch $versuchNr')) return false;
         RouteResult candidate;
         try {
           candidate = await _routeService.generatePointToPoint(
@@ -19490,6 +19553,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               .clamp(math.min(globalMatch.index + 1, rejoinUpper), rejoinUpper)
               .toInt();
           final rejoinPt = planningCoordinates[rejoinIdx];
+          if (zyklusAbgeloest('Verbinder zum Andocken')) return false;
           final connector = await _routeService.generatePointToPoint(
             startPosition: position,
             destinationLat: rejoinPt[1],

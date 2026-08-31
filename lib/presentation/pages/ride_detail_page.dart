@@ -13,6 +13,7 @@ import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/user_drive_session.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/cruise_maplibre_map.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_teilen_hinweis_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/social/route_verlauf_sketch.dart';
 
 /// Strava-artige Detailansicht einer abgeschlossenen Fahrt.
@@ -292,7 +293,18 @@ class _RideDetailPageState extends State<RideDetailPage> {
   }
 
   // ── Teilen ─────────────────────────────────────────────────────────────────
-  void _openShare() {
+  // 2026-08-31 (Vucko, Hinweis vor dem Teilen): „Kommt bevor jetzt jemand
+  // eine Strecke teilt, dass man sich keine Gedanken machen muss." Hier
+  // entsteht ein BILD im Composer, kein Beitrag — deshalb der Text
+  // RouteTeilenZiel.bild und nicht die Zusicherungen aus dem Feed. Der
+  // Hinweis erscheint einmal, danach nie wieder (Merker in den
+  // SharedPreferences).
+  Future<void> _openShare() async {
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.bild,
+    );
+    if (!weiter || !mounted) return;
     final track = _s.trackGeometry;
     final segments = (track != null && track.length >= 2)
         ? <List<Offset>>[

@@ -20,6 +20,7 @@ import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/saved_routes_service.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/presentation/pages/welcome_page.dart';
+import 'package:cruise_connect/presentation/widgets/social/route_teilen_hinweis_sheet.dart';
 import 'package:cruise_connect/presentation/pages/create_post_page.dart';
 import 'package:cruise_connect/presentation/pages/edit_profile_page.dart';
 import 'package:cruise_connect/presentation/pages/settings_page.dart';
@@ -1891,7 +1892,16 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
-  void _shareRouteAsPost(SavedRoute route) {
+  // 2026-08-31 (Vucko: der Hinweis „dass man sich keine Gedanken machen
+  // muss" gehoert VOR jedes Teilen): Dieselbe Abfrage wie in den gemerkten
+  // Routen und auf der Fahrt-Detailseite. Beim ersten Mal erklaert sie, was
+  // geschuetzt wird, danach kommt sie nicht wieder.
+  Future<void> _shareRouteAsPost(SavedRoute route) async {
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.beitrag,
+    );
+    if (!weiter || !mounted) return;
     final routeText =
         '${route.styleEmoji} ${route.name ?? route.style}\n'
         '${route.formattedDistance} · ${route.formattedDuration}\n\n';
@@ -1907,7 +1917,12 @@ class _ProfilePageState extends State<ProfilePage>
   // 2026-06-25 (vucko): „Extern teilen" öffnet jetzt den Strava-artigen Share-
   // Composer (Foto/Selfie-Hintergrund + transparente Eckdaten-Karte + Formate
   // Story/Quadrat/Sticker) statt direkt eine PNG zu teilen.
-  void _shareRouteExternally(SavedRoute route) {
+  Future<void> _shareRouteExternally(SavedRoute route) async {
+    final weiter = await zeigeRouteTeilenHinweis(
+      context,
+      ziel: RouteTeilenZiel.bild,
+    );
+    if (!weiter || !mounted) return;
     final coords = route.flatCoordinates;
     final curves = coords.length >= 3
         ? GamificationService.countCurves(coords)

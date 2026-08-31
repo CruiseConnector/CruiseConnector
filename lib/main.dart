@@ -40,6 +40,7 @@ import 'package:cruise_connect/presentation/pages/auth_page.dart';
 import 'package:cruise_connect/presentation/pages/legal_gate_page.dart';
 import 'package:cruise_connect/presentation/widgets/force_update_gate.dart';
 import 'package:cruise_connect/presentation/pages/onboarding/post_auth_gate.dart';
+import 'package:cruise_connect/presentation/pages/community_einstieg.dart';
 import 'package:cruise_connect/presentation/pages/group_join_gate.dart';
 import 'package:cruise_connect/presentation/pages/post_detail_page.dart';
 import 'package:cruise_connect/presentation/utils/legal_link_launcher.dart';
@@ -228,8 +229,14 @@ class _MyAppState extends State<MyApp> {
     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
       (zustand) {
         final ereignis = zustand.event;
+        // 2026-08-31: tokenRefreshed gehoert dazu. Die Anmeldung mit dem
+        // Benutzernamen laeuft ueber setSession, und das SDK meldet dabei
+        // NICHT signedIn, sondern tokenRefreshed. Ohne diesen Zweig loeste
+        // ein gemerkter Einladungslink nach genau dieser Anmeldeart erst
+        // beim naechsten App-Start ein.
         final relevant = ereignis == AuthChangeEvent.signedIn ||
-            ereignis == AuthChangeEvent.initialSession;
+            ereignis == AuthChangeEvent.initialSession ||
+            ereignis == AuthChangeEvent.tokenRefreshed;
         if (!relevant || zustand.session == null) return;
         unawaited(_holeEinladungNach());
       },
@@ -240,6 +247,10 @@ class _MyAppState extends State<MyApp> {
   Future<void> _holeEinladungNach() async {
     await _wartAufNavigator();
     await GruppenEinstieg.holeGemerktenLinkNach();
+    // 2026-08-31: dasselbe fuer einen gemerkten Community-Link. Wer ueber
+    // einen geteilten Link kommt und sich erst anmelden muss, landet danach
+    // in der Vorschau der Community statt auf der Startseite.
+    await CommunityEinstieg.holeGemerktenLinkNach();
   }
 
   /// Kaltstart: `getInitialLink` liefert den Link, bevor der Navigator
@@ -298,6 +309,16 @@ class _MyAppState extends State<MyApp> {
     if (groupId != null) {
       await _wartAufNavigator();
       await GruppenEinstieg.oeffnen(groupId);
+      return;
+    }
+    // 2026-08-31 (vucko: „dass man die community auch auf anderen Seiten
+    // verlinken kann wie Instagram Snapchat"): Ein geteilter Community-Link
+    // fuehrt in dieselbe Vorschau wie ein Tipp auf die Community selbst —
+    // Titel, Beschreibung, Mitgliederzahl und ein Knopf zum Beitreten.
+    final communityCode = CruiseDeepLinks.communityCodeAus(uri);
+    if (communityCode != null) {
+      await _wartAufNavigator();
+      await CommunityEinstieg.oeffnen(communityCode);
       return;
     }
     final postId = _postIdFromDeepLink(uri);
