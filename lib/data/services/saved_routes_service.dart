@@ -66,6 +66,99 @@ class SavedRoutesService {
     return false;
   }
 
+  /// Fragt GEZIELT nach, ob eine gleichwertige Strecke schon in der Sammlung
+  /// liegt — ohne die ganze Bibliothek zu laden.
+  ///
+  /// 2026-08-31 (Serverlast): Die Startseite lud dafuer bei jedem Aufbau die
+  /// vollstaendige Bibliothek: gemessen im Schnitt 1315 kB, im 90. Perzentil
+  /// 4139 kB, im schlimmsten Fall 7060 kB — und las daraus genau zwei Dinge,
+  /// eine Anzahl und diesen einen Wahrheitswert.
+  ///
+  /// WARUM DAS OHNE GEOMETRIE GEHT. [areEquivalentRoutes] vergleicht in vier
+  /// Stufen: Kennung, Fingerprint, Quellverweis und zuletzt die aus der
+  /// Geometrie gerechnete [SavedRoute.routeSignature]. Die letzte Stufe sieht
+  /// so aus, als brauche man die Geometrie aller gespeicherten Strecken — man
+  /// braucht sie aber nicht: [_buildExistingRouteInsert] legt beim Speichern
+  /// in `route_fingerprint` ENTWEDER den echten Fingerprint ODER genau diese
+  /// Signatur ab. Der Wert steht also schon in der Datenbank, und er stammt
+  /// aus demselben Dart-Code, der ihn hier fuer die zu pruefende Strecke
+  /// bildet. Beide Seiten des Vergleichs kommen damit aus derselben
+  /// Berechnung.
+  ///
+  /// Warum das wichtig ist: Ein Nachbau der Signatur in SQL waere NICHT
+  /// gleichwertig. Postgres rundet die Dezimalzahl, Dart den Binaerwert; von
+  /// vierzehn geprueften Faellen liefen zwei auseinander (9.00005 wird zu
+  /// 9.0001 statt 9.0000). Ein einziger abweichender Stuetzpunkt genuegt,
+  /// damit zwei identische Strecken einander nicht mehr erkennen.
+  ///
+  /// GRENZE, bewusst in Kauf genommen: 162 Zeilen tragen ueberhaupt keinen
+  /// Fingerprint. Alle 162 sind aelter als 90 Tage; jede Strecke der letzten
+  /// 90 Tage hat einen. Fuer so eine Altzeile kann diese Abfrage „nein" sagen,
+  /// obwohl die Strecke liegt. Das ist folgenlos: Der Aufrufer zeigt dann
+  /// einen leeren Haken, und tippt der Nutzer auf Speichern, faellt die
+  /// Entscheidung erneut in [saveExistingRoute] — und DIE prueft weiterhin
+  /// vollstaendig gegen die ganze Bibliothek. Eine doppelte Zeile kann also
+  /// nicht entstehen.
+  static Future<bool> liegtGleichwertigeStreckeInDerSammlung(
+    SavedRoute route,
+  ) async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return false;
+
+    // Stufe 2 und 4: Fingerprint oder Signatur. Beides steht bei gespeicherten
+    // Zeilen in derselben Spalte, deshalb genuegt EINE Abfrage fuer beide.
+    final schluessel = <String>{
+      ?route.routeFingerprint?.trim(),
+      route.routeSignature,
+    }..removeWhere((wert) => wert.isEmpty);
+
+    try {
+      if (schluessel.isNotEmpty) {
+        final treffer = await _db
+            .from('routes')
+            .select('id')
+            .eq('user_id', userId)
+            .inFilter('route_fingerprint', schluessel.toList(growable: false))
+            .limit(1)
+            .timeout(const Duration(seconds: 8));
+        if ((treffer as List).isNotEmpty) return true;
+      }
+
+      // Stufe 1 und 3: eigene Kennung oder Quellverweis. Nur fragen, wenn die
+      // Kennung ueberhaupt eine Kennung sein KANN — eine oertlich erzeugte
+      // Strecke traegt etwas wie „local_17…", und ein uuid-Vergleich damit
+      // wuerde serverseitig mit einem Typfehler abbrechen statt „nein" zu
+      // sagen.
+      final kennung = route.sourceRouteId?.trim().isNotEmpty == true
+          ? route.sourceRouteId!.trim()
+          : route.id.trim();
+      if (_siehtWieKennungAus(kennung)) {
+        final treffer = await _db
+            .from('routes')
+            .select('id')
+            .eq('user_id', userId)
+            .or('id.eq.$kennung,source_route_id.eq.$kennung')
+            .limit(1)
+            .timeout(const Duration(seconds: 8));
+        if ((treffer as List).isNotEmpty) return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[SavedRoutes] Gleichwertigkeit nicht pruefbar: $e');
+      // „Weiss nicht" ist hier ein „nein": ein leerer Haken laesst den Nutzer
+      // tippen, und dann entscheidet die vollstaendige Pruefung.
+      return false;
+    }
+  }
+
+  static final RegExp _kennungsMuster = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+    r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  static bool _siehtWieKennungAus(String wert) =>
+      _kennungsMuster.hasMatch(wert);
+
   static List<SavedRoute> dedupeEquivalentRoutes(Iterable<SavedRoute> routes) {
     final unique = <SavedRoute>[];
     for (final route in routes) {
@@ -512,8 +605,23 @@ class SavedRoutesService {
     return dedupeEquivalentRoutes([...results[0], ...results[1]]);
   }
 
+  /// Liegt diese Strecke in der Sammlung des angemeldeten Nutzers?
+  ///
+  /// 2026-08-31 (Serverlast): Diese Frage lud bis heute die GANZE Bibliothek,
+  /// und der Merken-Knopf im Feed stellt sie pro Streckenkarte einmal. Bei
+  /// einem Feed mit zehn geteilten Strecken waren das zehn volle Ladungen —
+  /// gemessen im Schnitt 1315 kB je Ladung.
+  ///
+  /// Jetzt fragt sie gezielt. Zur Genauigkeit und zu der bewusst in Kauf
+  /// genommenen Grenze bei Altzeilen ohne Fingerprint siehe
+  /// [liegtGleichwertigeStreckeInDerSammlung].
+  ///
+  /// Wichtig: Beide Aufrufer benutzen die Antwort nur fuer die ANZEIGE des
+  /// Merken-Symbols und fuer die Richtung des naechsten Tippens. Keiner
+  /// verlaesst sich darauf, um eine doppelte Zeile zu verhindern — das tut
+  /// weiterhin [saveExistingRoute] mit der vollstaendigen Pruefung.
   static Future<bool> isRouteSaved(SavedRoute route) async {
-    return hasEquivalentSavedRoute(route, await getSavedRouteLibrary());
+    return liegtGleichwertigeStreckeInDerSammlung(route);
   }
 
   // ─── Einzelne Route laden ─────────────────────────────────────────────────

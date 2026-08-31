@@ -1976,14 +1976,20 @@ class _HomeContentPageState extends State<HomeContentPage>
                 .catchError((_) => null)
           : Future<Map<String, dynamic>?>.value(null);
       final userPosFuture = _resolveUserPosition();
-      final savedRoutesFuture = SavedRoutesService.getSavedRouteLibrary()
-          .catchError((_) => <SavedRoute>[]);
+      // 2026-08-31 (Serverlast): Hier wurde die VOLLSTAENDIGE
+      // Streckenbibliothek geladen — gemessen im Schnitt 1315 kB, im 90.
+      // Perzentil 4139 kB, im schlimmsten Fall 7060 kB. Gelesen wurden daraus
+      // genau zwei Dinge: eine Anzahl und ein Wahrheitswert fuer den
+      // Speichern-Haken.
+      //
+      // Die Anzahl liefert die Auswertung unten ohnehin schon mit
+      // (result.savedRoutes, aus einer Abfrage ohne Geometrie), und der Haken
+      // wird jetzt gezielt erfragt. Die Ladung entfaellt damit ersatzlos.
 
       final result = await gamificationFuture;
       final driveSessions = await driveSessionsFuture;
       final profile = await profileFuture;
       final userPos = await userPosFuture;
-      final savedRoutes = await savedRoutesFuture;
       // Wöchentliche Daten berechnen
       final now = DateTime.now();
       final todayStart = DateTime(now.year, now.month, now.day);
@@ -2039,10 +2045,10 @@ class _HomeContentPageState extends State<HomeContentPage>
           userLng: userPos.lng,
         );
         if (recommendation != null) {
-          routeSaved = SavedRoutesService.hasEquivalentSavedRoute(
-            recommendation.route,
-            savedRoutes,
-          );
+          routeSaved =
+              await SavedRoutesService.liegtGleichwertigeStreckeInDerSammlung(
+                recommendation.route,
+              );
         }
       } catch (e) {
         debugPrint('[Home] Routepool-Empfehlung laden fehlgeschlagen: $e');
@@ -2086,7 +2092,13 @@ class _HomeContentPageState extends State<HomeContentPage>
           totalDistanceKm = result.totalDistanceKm;
           badgeCount = result.earnedBadgeIds.length;
           _earnedBadgeIds = result.earnedBadgeIds;
-          _savedRouteCount = savedRoutes.length;
+          // 2026-08-31: Diese Zahl kam frueher aus der geladenen Bibliothek.
+          // result.savedRoutes ist DIESELBE Zahl, nur ohne Geometrie geholt —
+          // und es ist genau die, aus der die Freischaltung von badge_09
+          // gerechnet wird. Vorher konnten Fortschrittsbalken und
+          // Freischaltung auseinanderlaufen, weil sie aus zwei verschiedenen
+          // Zaehlungen stammten.
+          _savedRouteCount = result.savedRoutes;
           _profileUserId = userId;
           _profileUsername = (profile?['username'] as String?)?.trim();
           _avatarUrl = profile?['avatar_url'] as String?;
