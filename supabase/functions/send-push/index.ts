@@ -391,6 +391,15 @@ function renderPush(
         title: String(payload.title ?? 'Monitoring: unberechtigter Zugriff'),
         body: String(payload.body ?? 'Jemand hat versucht, das Dashboard zu oeffnen.'),
       };
+    // 2026-08-31 (Vucko, Auftrag 13): Meldet sich jemand ueber die Webseite
+    // fuer den Android-Test an, sollen Vucko und David das sofort erfahren,
+    // um demjenigen zu schreiben. Wie beim Alarm bringt die Meldung ihren
+    // Text selbst mit — sie beschreibt kein soziales Ereignis.
+    case 'webseite_anmeldung':
+      return {
+        title: String(payload.title ?? 'Neue Anmeldung über die Webseite'),
+        body: String(payload.body ?? 'Jemand möchte die App auf Android testen.'),
+      };
     default:
       return { title: 'Benachrichtigung', body: name };
   }

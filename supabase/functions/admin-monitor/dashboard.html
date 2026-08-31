@@ -266,6 +266,25 @@ main{padding:16px 14px 90px;max-width:1240px}
        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pwann{font-size:12px;color:var(--grau2);white-space:nowrap;flex:none;
        font-variant-numeric:tabular-nums}
+/* Webseite: eine Zeile traegt hier drei Zeilen Inhalt, deshalb nicht an der
+   Grundlinie ausrichten wie die schlichte Personenliste. */
+.webzeile{align-items:flex-start}
+.webzeile .pname{white-space:normal;display:flex;flex-direction:column;gap:3px}
+.webzeile.erledigt{opacity:.5}
+.wmail{font-size:12px;color:var(--grau);font-weight:400;
+       overflow:hidden;text-overflow:ellipsis}
+.wmerk{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.pill{font-size:10.5px;font-weight:650;letter-spacing:.2px;padding:2px 7px;
+      border-radius:999px;background:var(--karte);color:var(--grau2);
+      border:1px solid var(--linie);white-space:nowrap}
+.pill.gut{color:#7fd4a0;border-color:rgba(127,212,160,.35);background:rgba(127,212,160,.10)}
+.pill.warn{color:#e8c07a;border-color:rgba(232,192,122,.35);background:rgba(232,192,122,.10)}
+.webzeile .pwann{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.whaken{font:inherit;font-size:11.5px;font-weight:650;cursor:pointer;
+        padding:4px 10px;border-radius:8px;border:1px solid var(--linie);
+        background:var(--karte);color:var(--text)}
+.whaken:hover{border-color:rgba(255,77,36,.5)}
+.whaken:disabled{opacity:.45;cursor:default}
 .zugLinie{stroke:var(--linie2);stroke-width:1;stroke-dasharray:3 3}
 .gitter{stroke:var(--linie);stroke-width:1;opacity:.6}
 .achse{fill:var(--grau2);font-size:10.5px;font-weight:600}
@@ -495,6 +514,7 @@ main{padding:16px 14px 90px;max-width:1240px}
     <a href="#community"><span class="sym">&#9679;</span>Community</a>
     <a href="#routing"><span class="sym">&#9679;</span>Routing</a>
     <a href="#infra"><span class="sym">&#9679;</span>Infrastruktur<span class="marker" id="infraMarker" style="display:none">!</span></a>
+    <a href="#webseite"><span class="sym">&#9679;</span>Webseite<span class="marker" id="webseiteMarker" style="display:none">!</span></a>
     <a href="#zugriffe"><span class="sym">&#9679;</span>Zugriffe</a>
     <div class="navGruppe">Sitzung</div>
     <a href="#" id="abmelden"><span class="sym">&#8629;</span>Abmelden</a>

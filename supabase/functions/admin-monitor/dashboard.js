@@ -40,7 +40,7 @@ var F = { rot:'#FF4D24', rot2:'#FF8B67', blau:'#3B82F6', blau2:'#7DAEFF',
 
 var TITEL = { ueberblick:'Überblick', heute:'Heute', leute:'Leute', nutzer:'Nutzer', fahrten:'Fahrten',
               community:'Community', routing:'Routing', infra:'Infrastruktur',
-              zugriffe:'Zugriffe' };
+              webseite:'Webseite', zugriffe:'Zugriffe' };
 
 /* ── Vergleichsmodus ──────────────────────────────────────────────────────
    2026-08-09 (vucko): „wenn man sieht, dass man sehr viele Nutzer in den
@@ -383,7 +383,7 @@ window.addEventListener('hashchange',function(){
 document.addEventListener('keydown',function(e){
   if(e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   if(e.key==='Escape'){ menue(false); return; }
-  var reihen=['ueberblick','nutzer','fahrten','community','routing','infra','zugriffe'];
+  var reihen=['ueberblick','nutzer','fahrten','community','routing','infra','webseite','zugriffe'];
   var i=parseInt(e.key,10);
   if(i>=1 && i<=reihen.length){ location.hash='#'+reihen[i-1]; }
 });
@@ -1158,6 +1158,7 @@ function zeichne(){
   else if(BEREICH==='community')  out+=bereichCommunity(m);
   else if(BEREICH==='routing')    out+=bereichRouting(m);
   else if(BEREICH==='infra')      out+=bereichInfra();
+  else if(BEREICH==='webseite')   out+=bereichWebseite();
   else if(BEREICH==='zugriffe')   out+=bereichZugriffe();
 
   $('inhalt').innerHTML=out;
@@ -1334,6 +1335,98 @@ function abwanderungBlock(){
       'Von den in dieser Woche Dazugekommenen: wie viele sind je gefahren, wie viele in den letzten 14 Tagen');
   }
   return o;
+}
+
+/* ══ Webseite ═════════════════════════════════════════════════════════════
+   2026-08-31 (vucko, Auftrag 13, ausdruecklich als letztes):
+   "dass ich die Benachrichtigung bekomme, dass sich jemand ueber die Webseite
+    fuer den Android-Test angemeldet hat [...] Mach einen Tab der Webseite
+    heisst im Monitoring-Tool."
+
+   Die Anmeldungen entstehen auf cruiseconnector.at/home/anmeldung und landen
+   in einem ZWEITEN Supabase-Projekt, weil das Formular an den eigenen
+   Webserver sendet. Ein Auftrag holt sie alle fuenf Minuten hierher, gleicht
+   die Adresse gegen auth.users ab und meldet neue per Push.
+
+   Beim Einbau gemessen: 72 Anmeldungen, davon 13 mit Konto in der App und 59
+   ohne. Die 59 sind die eigentliche Arbeitsliste — Leute, die sich gemeldet
+   haben und auf eine Antwort warten. Sie stehen deshalb OBEN, aelteste
+   zuerst: die warten am laengsten. */
+function bereichWebseite(){
+  var W = DATEN.webseite;
+  if(!W || !W.zahlen){
+    return block('Webseite','<div class="leer">Die Anmeldungen sind gerade nicht lesbar. '+
+      'Der Abgleich läuft alle fünf Minuten; beim nächsten Laden steht hier wieder etwas.</div>');
+  }
+  var za=W.zahlen||{}, st=W.stand||{}, liste=W.liste||[];
+
+  var o='<div class="raster">'+
+    karte('Warten auf Antwort', z(za.ohne_app_offen),
+          '<div class="fuss">von '+z(za.gesamt)+' Anmeldungen insgesamt</div>')+
+    karte('Haben die App',      z(za.hat_app),
+          '<div class="fuss">Adresse stimmt mit einem Konto überein</div>')+
+    karte('Letzte 7 Tage',      z(za.letzte_7_tage),
+          '<div class="fuss">'+z(za.letzte_24h)+' in 24 Stunden</div>')+
+    karte('Abgehakt',           z(za.erledigt),
+          '<div class="fuss">'+z(za.offen_bestaetigung)+' ohne bestätigte Adresse</div>')+
+  '</div>';
+
+  /* Der Stand des Abgleichs gehoert sichtbar hierher. Bleibt er stehen, sieht
+     man es sonst nur daran, dass nichts Neues kommt — und das ist von
+     "es meldet sich gerade niemand" nicht zu unterscheiden. */
+  if(st.letzter_fehler){
+    o+='<div class="hinweis schlecht">Der Abgleich meldet: '+esc(st.letzter_fehler)+
+       '. Zuletzt erfolgreich '+(st.letzter_erfolg?vorWie(st.letzter_erfolg):'nie')+'.</div>';
+  } else if(!st.meldungen_aktiv){
+    o+='<div class="hinweis">Meldungen sind ausgeschaltet. Neue Anmeldungen '+
+       'werden übernommen, lösen aber keine Push aus.</div>';
+  } else {
+    o+='<div class="hinweis gut">Abgleich läuft. Zuletzt erfolgreich '+
+       (st.letzter_erfolg?vorWie(st.letzter_erfolg):'nie')+'.</div>';
+  }
+
+  o+=block('Wer sich gemeldet hat', webseiteListe(liste),
+           'Oben wer wartet: ohne App und noch nicht abgehakt, älteste zuerst');
+  return o;
+}
+
+function webseiteListe(liste){
+  if(!liste.length) return '<div class="leer">Noch keine Anmeldung.</div>';
+  var o='<div class="personen">';
+  for(var i=0;i<liste.length;i++){
+    var e=liste[i];
+    var merkmale='';
+    if(e.hat_app){
+      merkmale+='<span class="pill gut">hat die App'+(e.app_name?' als @'+esc(e.app_name):'')+'</span>';
+    } else {
+      merkmale+='<span class="pill">noch keine App</span>';
+    }
+    if(!e.bestaetigt) merkmale+='<span class="pill warn">Adresse nicht bestätigt</span>';
+    if(e.erledigt_am) merkmale+='<span class="pill gut">abgehakt</span>';
+
+    o+='<div class="person webzeile'+(e.erledigt_am?' erledigt':'')+'">'+
+         '<span class="pname">'+esc(e.name||'(ohne Namen)')+
+           '<span class="wmail">'+esc(e.email||'')+'</span>'+
+           '<span class="wmerk">'+merkmale+'</span>'+
+         '</span>'+
+         '<span class="pwann">'+vorWie(e.angemeldet_am)+
+           '<button class="whaken" data-web-id="'+e.id+'" data-web-erledigt="'+(e.erledigt_am?'0':'1')+'">'+
+             (e.erledigt_am?'wieder öffnen':'abhaken')+
+           '</button>'+
+         '</span>'+
+       '</div>';
+  }
+  return o+'</div>';
+}
+
+/** Ausrufezeichen in der Navigation, solange jemand auf Antwort wartet. */
+function webseiteMarker(){
+  var m=$('webseiteMarker');
+  if(!m) return;
+  var za=(DATEN.webseite&&DATEN.webseite.zahlen)||null;
+  var offen=za?za.ohne_app_offen:0;
+  m.style.display = offen>0 ? '' : 'none';
+  m.title = offen>0 ? offen+' warten auf eine Antwort' : '';
 }
 
 function bereichLeute(){
@@ -1972,6 +2065,56 @@ function nachtragen(){
       });
     });
   }
+
+  /* 2026-08-31 (Auftrag 13): Haken je Anmeldung. Die Zeile stellt sich SOFORT
+     um und der Server zieht nach — bleibt die Antwort aus, springt sie zurueck
+     und sagt warum. Ein Haken, der sich nicht setzen laesst, darf nicht so
+     aussehen, als waere er gesetzt. */
+  alle('.whaken').forEach(function(b){
+    b.addEventListener('click',function(){
+      var id=parseInt(b.getAttribute('data-web-id'),10);
+      var erledigt=b.getAttribute('data-web-erledigt')==='1';
+      if(!isFinite(id)) return;
+      var zeile=b.closest('.webzeile');
+      var vorher=b.textContent;
+      b.disabled=true;
+      if(zeile) zeile.classList.toggle('erledigt',erledigt);
+      ruf({aktion:'webseite_erledigt',token:TOKEN,id:id,erledigt:erledigt}).then(function(a){
+        if(a && a.ok){
+          /* Den Datenbestand mitziehen, damit ein Bereichswechsel nicht den
+             alten Stand zurueckholt. */
+          var L=(DATEN.webseite&&DATEN.webseite.liste)||[];
+          for(var i=0;i<L.length;i++){
+            if(L[i].id===id){ L[i].erledigt_am = erledigt ? new Date().toISOString() : null; }
+          }
+          if(DATEN.webseite&&DATEN.webseite.zahlen){
+            var za=DATEN.webseite.zahlen;
+            za.erledigt = (za.erledigt||0) + (erledigt?1:-1);
+            if(!L.length || true){
+              za.ohne_app_offen = 0;
+              for(var k=0;k<L.length;k++){
+                if(!L[k].hat_app && !L[k].erledigt_am) za.ohne_app_offen++;
+              }
+            }
+          }
+          b.setAttribute('data-web-erledigt', erledigt?'0':'1');
+          b.textContent = erledigt ? 'wieder öffnen' : 'abhaken';
+          b.disabled=false;
+          webseiteMarker();
+        } else {
+          if(zeile) zeile.classList.toggle('erledigt',!erledigt);
+          b.disabled=false; b.textContent=vorher;
+          melde('Haken nicht gesetzt.',true);
+        }
+      }).catch(function(){
+        if(zeile) zeile.classList.toggle('erledigt',!erledigt);
+        b.disabled=false; b.textContent=vorher;
+        melde('Haken nicht gesetzt.',true);
+      });
+    });
+  });
+
+  webseiteMarker();
 }
 
 /* ── CSV ─────────────────────────────────────────────────────────────── */

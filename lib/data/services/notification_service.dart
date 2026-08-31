@@ -414,6 +414,34 @@ class AppNotification {
             'Deine Tour mit Stopps pausiert, knack sie heute',
           ]),
         );
+      // 2026-08-31: Der Monitoring-Alarm hatte hier bis heute KEINEN Zweig.
+      // In send-push gibt es ihn seit dem 07.08.; in der App stand deshalb
+      // nur „Benachrichtigung" plus ein Name. Aufgefallen ist das erst, als
+      // test/core/meldungstypen_vertrag_test.dart alle drei Stellen
+      // gegeneinander gehalten hat.
+      case 'monitor_alarm':
+        return (
+          (payload['title'] as String?)?.trim().isNotEmpty == true
+              ? payload['title'] as String
+              : 'Monitoring: unberechtigter Zugriff',
+          (payload['body'] as String?)?.trim().isNotEmpty == true
+              ? payload['body'] as String
+              : 'Jemand hat versucht, das Dashboard zu öffnen.',
+        );
+      // 2026-08-31 (Vucko, Auftrag 13): Anmeldungen ueber die Webseite. Wie
+      // beim Monitoring-Alarm steht der Wortlaut in der Nutzlast — es ist
+      // kein soziales Ereignis, und der Auffangzweig unten wuerde nur
+      // „Benachrichtigung" plus einen Namen zeigen, der hier niemandem hilft.
+      // send-push rendert dieselben beiden Felder.
+      case 'webseite_anmeldung':
+        return (
+          (payload['title'] as String?)?.trim().isNotEmpty == true
+              ? payload['title'] as String
+              : 'Neue Anmeldung über die Webseite',
+          (payload['body'] as String?)?.trim().isNotEmpty == true
+              ? payload['body'] as String
+              : 'Jemand möchte die App auf Android testen.',
+        );
       default:
         return ('Benachrichtigung', name);
     }

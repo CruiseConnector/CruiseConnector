@@ -48,6 +48,7 @@
 //   {aktion:'infra_jetzt', token}                -> Mini-PC-Prüfung von Hand
 //   {aktion:'passwort',    token, alt, neu}      -> Passwortwechsel
 //   {aktion:'logout',      token}                -> Sitzung verwerfen
+//   {aktion:'webseite_erledigt', token, id, erledigt} -> Haken setzen
 //   GET                                          -> Hinweis (Seite liegt auf R2)
 // ─────────────────────────────────────────────────────────────────────────────
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -325,10 +326,29 @@ Deno.serve(async (req) => {
     return json(data ?? { ok: false, grund: 'fehler' });
   }
 
+  // ── Anmeldung ueber die Webseite abhaken ─────────────────────────────────
+  // 2026-08-31 (vucko, Auftrag 13): Die 59 Leute, die sich gemeldet haben und
+  // nie in der App auftauchten, sind eine Arbeitsliste. Wer angeschrieben ist,
+  // bekommt hier den Haken.
+  if (aktion === 'webseite_erledigt') {
+    const id = Number(rumpf?.id);
+    if (!Number.isFinite(id)) return json({ ok: false, grund: 'id_fehlt' }, 400);
+    const { data, error } = await db.rpc('admin_monitor_webseite_erledigt', {
+      p_id: id,
+      p_erledigt: rumpf?.erledigt !== false,
+      p_notiz: typeof rumpf?.notiz === 'string' ? rumpf.notiz : null,
+    });
+    if (error) {
+      return json({ ok: false, grund: 'fehler', meldung: error.message }, 500);
+    }
+    await protokolliere(req, sitzung.name, true, 'webseite_erledigt');
+    return json(data ?? { ok: false });
+  }
+
   if (aktion !== 'daten') return json({ error: 'Unbekannte Aktion.' }, 400);
 
   // ── Drei indizierte SELECTs. Mehr passiert hier nicht. ───────────────────
-  const [schnappschuesse, infra, wuensche, abwanderung] = await Promise.all([
+  const [schnappschuesse, infra, wuensche, abwanderung, webseite] = await Promise.all([
     db.from('admin_metric_snapshots')
       .select('taken_at, slot_key, metrics, history, today, compare, analytics, leute')
       .order('taken_at', { ascending: false })
@@ -344,6 +364,11 @@ Deno.serve(async (req) => {
     // 2026-08-19 (vucko): "wie viele schon abgesprungen sind von der app oder
     // sie deinstalliert haben?"
     abwanderungLesen(),
+    // 2026-08-31 (vucko, Auftrag 13): Anmeldungen ueber die Webseite. Ebenfalls
+    // LIVE und nicht aus dem Schnappschuss: Vucko soll eine neue Anmeldung
+    // sofort sehen, nicht erst beim naechsten Sechs-Stunden-Lauf. Die Funktion
+    // liest 72 Zeilen mit einem Join auf auth.users; das ist billig.
+    webseiteLesen(),
   ]);
 
   const { data: reihen, error } = schnappschuesse;
@@ -382,9 +407,36 @@ Deno.serve(async (req) => {
     },
     abdeckungswuensche: wuensche,
     abwanderung,
+    // 2026-08-31: Zahlen, Bearbeitungsstand und die Liste derer, die sich
+    // ueber die Webseite fuer den Android-Test gemeldet haben.
+    webseite,
     infra,
   });
 });
+
+/// Anmeldungen ueber die Webseite, samt Abgleich "hat die App schon".
+///
+/// 2026-08-31 (vucko): "dass ich die Benachrichtigung bekomme, dass sich
+/// jemand ueber die Webseite fuer den Android-Test angemeldet hat [...] Mach
+/// einen Tab der Webseite heisst im Monitoring-Tool."
+///
+/// Die Daten liegen in einem ZWEITEN Supabase-Projekt (Website_Cruise_
+/// Connector), weil das Formular auf cruiseconnector.at an den eigenen
+/// Webserver sendet. `web_anmeldungen_abgleichen` holt sie alle fuenf Minuten
+/// hierher; diese Funktion liest nur noch den Spiegel.
+async function webseiteLesen(): Promise<unknown> {
+  try {
+    const { data, error } = await db.rpc('admin_monitor_webseite');
+    if (error) {
+      console.error('[admin-monitor] Webseite nicht lesbar:', error.message);
+      return null;
+    }
+    return data ?? null;
+  } catch (e) {
+    console.error('[admin-monitor] Webseite nicht lesbar:', String(e));
+    return null;
+  }
+}
 
 /// Wo wollten Nutzer fahren, wo wir noch nicht abdecken?
 ///
