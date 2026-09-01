@@ -45,9 +45,30 @@ class RouteVerlaufSketch extends StatelessWidget {
     final gezeichnet = kappungMeter > 0
         ? kappeEndstuecke(punkte, kappungMeter, kappungMeter)
         : punkte;
+    // 2026-09-01 (Vucko: „das layout beim teilen ... nicht mit einem schwarzen
+    // hintergrund sondern das es einfach viel ansprechender fuer die leute
+    // aussieht"):
+    //
+    // Der Grund war ein flaches 0xFF10141B — DUNKLER als die Karte darum
+    // herum (0xFF1C1F26). Dadurch wirkte das Feld wie ein Loch im Beitrag.
+    // Die Karte darf trotzdem nicht zurueck: Start und Ziel liegen meist an
+    // der Haustuer des Besitzers, ein Ausschnitt mit Ortsnamen verriete die
+    // Adresse (Fehler 7 vom 28.08.).
+    //
+    // Also: derselbe Schutz, aber Tiefe statt Leere. Ein weicher Verlauf von
+    // oben nach unten, leicht in Richtung Akzentfarbe getoent, plus ein
+    // dezenter Schein hinter der Linie. Es verraet nichts und sieht nach
+    // etwas aus.
+    final oben = Color.lerp(hintergrund, accent, 0.10)!;
+    final unten = Color.lerp(hintergrund, Colors.black, 0.35)!;
     return Container(
       decoration: BoxDecoration(
-        color: hintergrund,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [oben, hintergrund, unten],
+          stops: const [0, 0.55, 1],
+        ),
         borderRadius: borderRadius ?? BorderRadius.circular(14),
       ),
       clipBehavior: borderRadius == BorderRadius.zero
@@ -86,7 +107,13 @@ class RouteVerlaufPainter extends CustomPainter {
       minLat = math.min(minLat, p[1]);
       maxLat = math.max(maxLat, p[1]);
     }
-    const pad = 16.0;
+    // 2026-09-01: Der Rand war fest 16 px je Seite. In der schmalen
+    // Feed-Fassung ist der Kasten nur 84 px hoch — 32 px Rand fressen dort
+    // ueber ein Drittel der Hoehe, und die Strecke schrumpft auf ein
+    // Gebilde von rund 52 px in einem 340 px breiten Band. Genau das sah
+    // Vucko als „klein und nicht mittig". Der Rand richtet sich jetzt nach
+    // der kleineren Seite.
+    final pad = math.max(6.0, math.min(size.width, size.height) * 0.10);
     final lngSpan = math.max(maxLng - minLng, 0.0001);
     final latSpan = math.max(maxLat - minLat, 0.0001);
     // Laengengrade werden zum Pol hin schmaler — ohne Korrektur wirkt die
@@ -105,37 +132,86 @@ class RouteVerlaufPainter extends CustomPainter {
           oy + (maxLat - p[1]) * scale,
         );
 
+    // 2026-09-01: Ein einziger durchgehender Pfad ueber die abgeflachte
+    // Punktliste zog bei einer aufgezeichneten Fahrt mit GPS-Luecke
+    // (MultiLineString) eine gerade Bruecke ueber die Luecke. Die blaeht die
+    // Umgrenzung auf und draengt die echte Strecke in eine Ecke. Der
+    // Export-Composer macht es laengst richtig und zeichnet je Segment.
+    //
+    // Die Segmentgrenzen stecken nicht mehr in der flachen Liste, also
+    // erkennt sie der Abstand: ueber 400 Meter zwischen zwei aufeinander
+    // folgenden Punkten ist keine Strasse, das ist eine Luecke.
+    const lueckeMeter = 400.0;
     final path = Path();
     final start = project(punkte.first);
     path.moveTo(start.dx, start.dy);
-    for (final p in punkte.skip(1)) {
-      final pr = project(p);
-      path.lineTo(pr.dx, pr.dy);
+    for (var i = 1; i < punkte.length; i++) {
+      final vorher = punkte[i - 1];
+      final jetzt = punkte[i];
+      final pr = project(jetzt);
+      if (_grobeDistanzMeter(vorher, jetzt) > lueckeMeter) {
+        path.moveTo(pr.dx, pr.dy);
+      } else {
+        path.lineTo(pr.dx, pr.dy);
+      }
     }
     final ende = project(punkte.last);
 
-    final halo = Paint()
-      ..color = Colors.black.withValues(alpha: 0.4)
+    // Strichstaerke nach der Kastengroesse. In der schmalen Feed-Fassung war
+    // eine 4 px dicke Linie auf einem grossen dunklen Feld schlicht duenn.
+    final dickeBasis = math.min(size.width, size.height);
+    final strich = (dickeBasis * 0.055).clamp(3.5, 7.0);
+
+    // Statt eines schwarzen Schattens ein Schein in der Akzentfarbe. Er hebt
+    // die Linie vom Grund ab, ohne sie stumpf zu machen.
+    final schein = Paint()
+      ..color = accent.withValues(alpha: 0.30)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
+      ..strokeWidth = strich * 2.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, strich * 1.1);
+    final halo = Paint()
+      ..color = Colors.black.withValues(alpha: 0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strich * 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
     final hell = Color.lerp(accent, Colors.white, 0.45)!;
     final linie = Paint()
       ..shader = ui.Gradient.linear(start, ende, [accent, hell])
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
+      ..strokeWidth = strich
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(path, schein);
     canvas.drawPath(path, halo);
     canvas.drawPath(path, linie);
 
     // Dezente Endpunkte OHNE Beschriftung — sie markieren nur den Anfang und
     // das Ende der GEKAPPTEN Linie, nie die echte Adresse.
-    canvas.drawCircle(start, 5, Paint()..color = Colors.white);
-    canvas.drawCircle(start, 2.8, Paint()..color = accent);
-    canvas.drawCircle(ende, 5, Paint()..color = Colors.white);
-    canvas.drawCircle(ende, 2.8, Paint()..color = const Color(0xFFFFD166));
+    final punktR = (strich * 1.25).clamp(4.0, 8.0);
+    canvas.drawCircle(start, punktR, Paint()..color = Colors.white);
+    canvas.drawCircle(start, punktR * 0.56, Paint()..color = accent);
+    canvas.drawCircle(ende, punktR, Paint()..color = Colors.white);
+    canvas.drawCircle(
+      ende,
+      punktR * 0.56,
+      Paint()..color = const Color(0xFFFFD166),
+    );
+  }
+
+  /// Grober Abstand zweier [lng, lat]-Punkte in Metern.
+  ///
+  /// Reicht vollkommen, um eine GPS-Luecke von einem normalen Streckenschritt
+  /// zu unterscheiden; eine echte Haversine-Rechnung waere hier verschwendet.
+  static double _grobeDistanzMeter(List<double> a, List<double> b) {
+    if (a.length < 2 || b.length < 2) return 0;
+    const meterProGrad = 111320.0;
+    final mittlereBreite = (a[1] + b[1]) / 2 * math.pi / 180.0;
+    final dx = (b[0] - a[0]) * meterProGrad * math.cos(mittlereBreite);
+    final dy = (b[1] - a[1]) * meterProGrad;
+    return math.sqrt(dx * dx + dy * dy);
   }
 
   @override

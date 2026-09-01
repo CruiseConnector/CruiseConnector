@@ -322,7 +322,12 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
                   children: [
                     Text(
                       '${route.styleEmoji} ${route.name ?? route.style}',
-                      maxLines: 1,
+                      // 2026-09-01 (Vucko, Bildschirmfoto): Der Titel war nach
+                      // einer Zeile abgeschnitten („Neugieriger Donnerstag…"),
+                      // und die Knopfspalte rechts nimmt zusaetzlich Breite
+                      // weg. Zwei Zeilen kosten wenig und zeigen den ganzen
+                      // Namen.
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Colors.white,
@@ -370,7 +375,13 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
           behavior: HitTestBehavior.opaque,
           onTap: _openDetail,
           child: SizedBox(
-            height: isCompact ? 84 : 128,
+            // 2026-09-01 (Vucko: „das layout beim teilen zentriert"): 84 px
+            // Hoehe bei rund 340 px Breite sind ein Verhaeltnis von 4 zu 1.
+            // Weil die Einpassung beide Achsen beruecksichtigt, begrenzt dort
+            // immer die Hoehe — eine annaehernd quadratische Strecke schrumpft
+            // auf ein kleines Gebilde mitten in einem breiten dunklen Band.
+            // Die Zentrierung war also richtig, der Kasten war das Problem.
+            height: isCompact ? 112 : 148,
             width: double.infinity,
             child: RouteVerlaufSketch(
               punkte: route.flatCoordinates,
