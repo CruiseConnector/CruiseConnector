@@ -109,31 +109,41 @@ class HomeRouteRecommendationService {
     }
 
     try {
-      final rows = await _db
-          .from('route_pool')
-          .select(_routePoolSelect)
-          .eq('verified', true)
-          .eq('is_active', true)
-          .isFilter('deprecated_at', null)
-          .gte('quality_score', 70)
-          // 2026-09-01: Schon der Server wirft die Wende-Strecken weg.
-          //
-          // Ohne diese Zeile holt die Abfrage 120 Kandidaten, von denen der
-          // Filter danach rund 89 wegwirft — bei 73,7 Prozent betroffener
-          // Zeilen im Pool. Es blieben zu wenige uebrig, um daraus noch nach
-          // Entfernung und Rotation auszuwaehlen. Die Bedingung ist DIESELBE
-          // wie in _isSafeHomePoolRoute; der Filter dort bleibt trotzdem
-          // stehen, weil die Empfehlung auch aus dem Cache kommen kann.
-          .eq('kehrtwenden_mitte', 0)
-          .order('weekly_rotation_score', ascending: false)
-          .order('quality_score', ascending: false)
-          .limit(120);
+      // 2026-09-01: ERST die sauberen Strecken. Nur wenn im Umkreis keine
+      // einzige liegt, wird auch eine mit Wende genommen.
+      //
+      // Vucko woertlich: „nur wenn es andere wege gibt dann soll er sie auch
+      // nehmen aber wenn es keine gibt passt es auch die gleiche route
+      // zurueck zu nehmen."
+      //
+      // Der Ausschluss steht deshalb in der ABFRAGE und nicht als harte
+      // Bedingung im Filter: so holt der erste Griff 120 brauchbare
+      // Kandidaten (ohne ihn waeren rund 89 davon Ausschuss), und der zweite
+      // Griff faellt nur dort an, wo es wirklich nichts Sauberes gibt — in
+      // zwei von 53 Gebieten, den Alpentaelern Mariazell und Bludenz.
+      Future<List<RoutePoolEntry>> hole({required bool nurSaubere}) async {
+        var abfrage = _db
+            .from('route_pool')
+            .select(_routePoolSelect)
+            .eq('verified', true)
+            .eq('is_active', true)
+            .isFilter('deprecated_at', null)
+            .gte('quality_score', 70);
+        if (nurSaubere) abfrage = abfrage.eq('kehrtwenden_mitte', 0);
+        final roh = await abfrage
+            .order('weekly_rotation_score', ascending: false)
+            .order('quality_score', ascending: false)
+            .limit(120);
+        return (roh as List)
+            .whereType<Map>()
+            .map(
+              (row) => RoutePoolEntry.fromJson(Map<String, dynamic>.from(row)),
+            )
+            .where((e) => _isSafeHomePoolRoute(e, wendeErlaubt: !nurSaubere))
+            .toList(growable: false);
+      }
 
-      var entries = (rows as List)
-          .whereType<Map>()
-          .map((row) => RoutePoolEntry.fromJson(Map<String, dynamic>.from(row)))
-          .where(_isSafeHomePoolRoute)
-          .toList(growable: false);
+      var entries = await hole(nurSaubere: true);
 
       // 2026-05-24 (vucko): Region-Filter — nur Routen mit Start innerhalb
       // _regionRadiusKm vom User. Verhindert dass User in Wien eine
@@ -150,6 +160,26 @@ class HomeRouteRecommendationService {
               return distKm <= _regionRadiusKm;
             })
             .toList(growable: false);
+      }
+
+      if (entries.isEmpty) {
+        // Zweiter Griff: lieber eine Strecke mit Wende als eine leere Kachel.
+        entries = await hole(nurSaubere: false);
+        if (userLat != null && userLng != null) {
+          entries = entries
+              .where(
+                (e) =>
+                    _haversineKm(userLat, userLng, e.startLat, e.startLng) <=
+                    _regionRadiusKm,
+              )
+              .toList(growable: false);
+        }
+        if (entries.isNotEmpty) {
+          debugPrint(
+            '[HomeRouteRecommendation] Keine wendefreie Strecke im Umkreis — '
+            'zeige die beste mit Wende (${entries.length} Kandidaten).',
+          );
+        }
       }
 
       if (entries.isEmpty) {
@@ -329,10 +359,16 @@ class HomeRouteRecommendationService {
   /// der vollen Geometrie; der Test haelt fest, dass beide Wege zum selben
   /// Urteil kommen.
   @visibleForTesting
-  static bool istSichereStartseitenStrecke(RoutePoolEntry entry) =>
-      _isSafeHomePoolRoute(entry);
+  static bool istSichereStartseitenStrecke(
+    RoutePoolEntry entry, {
+    bool wendeErlaubt = false,
+  }) =>
+      _isSafeHomePoolRoute(entry, wendeErlaubt: wendeErlaubt);
 
-  static bool _isSafeHomePoolRoute(RoutePoolEntry entry) {
+  static bool _isSafeHomePoolRoute(
+    RoutePoolEntry entry, {
+    bool wendeErlaubt = false,
+  }) {
     if (!entry.verified || !entry.isActive || entry.deprecatedAt != null) {
       return false;
     }
@@ -412,7 +448,10 @@ class HomeRouteRecommendationService {
     // null wird wie jede fehlende Kennzahl behandelt: ausgeschlossen. Eine
     // unpruefbare Strecke gehoert nicht auf die Startseite.
     final wenden = entry.kehrtwendenMitte;
-    if (wenden == null || wenden > 0) return false;
+    // Eine NICHT gemessene Strecke bleibt immer draussen — unpruefbar ist
+    // etwas anderes als „geprueft und leider mit Wende".
+    if (wenden == null) return false;
+    if (wenden > 0 && !wendeErlaubt) return false;
 
     return true;
   }

@@ -112,6 +112,10 @@ void main() {
         tsName: 'KEHRTWENDE_DREH_GRAD',
         dartWert: kehrtwendeDrehGrad,
       ),
+      'Drehband': (
+        tsName: 'KEHRTWENDE_DREH_BAND_M',
+        dartWert: kehrtwendeDrehBandM,
+      ),
     };
 
     paare.forEach((bezeichnung, paar) {
@@ -271,6 +275,103 @@ void main() {
         befund.maxLaengeM,
         greaterThan(800),
         reason: 'Der Stich ist rund 1000 m lang.',
+      );
+    });
+
+    test('eine Wende ueber eine Schleife zaehlt trotzdem', () {
+      // 2026-09-01, echter Fehlschlag: Die Notfallroute in Friedrichshafen
+      // hatte 86 Prozent Selbstueberlappung und ihre Wende bei 23 von 47 km,
+      // also mitten drin — und wurde trotzdem als "am Rand" verbucht. Grund
+      // war eine Drehpruefung, die nur 100 m um den geschaetzten Scheitel
+      // schaute. Wer ueber eine Schleife wendet statt auf der Stelle, dreht
+      // ueber mehrere hundert Meter, und das sah dort harmlos aus.
+      //
+      // Hier nachgestellt: hin, am Ende eine weite Schleife, zurueck.
+      final hin = gerade(
+        startLng: 9.7471,
+        startLat: 47.5031,
+        kursGrad: 90,
+        laengeM: 4000,
+      );
+      // Die Schleife: nach Norden, nach Westen, nach Sueden — 250 m je Seite.
+      final n1 = gerade(
+        startLng: hin.last[0],
+        startLat: hin.last[1],
+        kursGrad: 0,
+        laengeM: 250,
+      );
+      final w1 = gerade(
+        startLng: n1.last[0],
+        startLat: n1.last[1],
+        kursGrad: 270,
+        laengeM: 250,
+      );
+      final s1 = gerade(
+        startLng: w1.last[0],
+        startLat: w1.last[1],
+        kursGrad: 180,
+        laengeM: 250,
+      );
+      final zurueck = gerade(
+        startLng: s1.last[0],
+        startLat: s1.last[1],
+        kursGrad: 270,
+        laengeM: 3750,
+      );
+      final strecke = anhaengen(
+        anhaengen(anhaengen(anhaengen(hin, n1), w1), s1),
+        zurueck,
+      );
+
+      final befund = kehrtwendenZaehler(strecke);
+      expect(
+        befund.anzahlMitte,
+        greaterThanOrEqualTo(1),
+        reason:
+            'Vier Kilometer hin, ueber eine Schleife gewendet, vier zurueck. '
+            'Das ist genau die Strecke, ueber die sich Vucko beschwert hat.',
+      );
+    });
+
+    test('ein Rueckweg nach einer grossen Schleife ist keine Wende', () {
+      // Wer auf derselben Strasse zurueckkommt, aber erst nach einer weiten
+      // Runde, hat nicht gewendet — er ist im Kreis gefahren. Die Grenze dafuer
+      // ist kehrtwendeMaxWegM: liegen die beiden Vorbeifahrten mehr als sechs
+      // Kilometer WEGSTRECKE auseinander, gelten sie als Ueberlappung, nicht
+      // als Wende.
+      final hin = gerade(
+        startLng: 9.7471,
+        startLat: 47.5031,
+        kursGrad: 90,
+        laengeM: 3000,
+      );
+      // Eine ausladende Runde von 8 km, weit weg vom Hinweg.
+      final weg = gerade(
+        startLng: hin.last[0],
+        startLat: hin.last[1],
+        kursGrad: 0,
+        laengeM: 4000,
+      );
+      final rueber = gerade(
+        startLng: weg.last[0],
+        startLat: weg.last[1],
+        kursGrad: 270,
+        laengeM: 3000,
+      );
+      final runter = gerade(
+        startLng: rueber.last[0],
+        startLat: rueber.last[1],
+        kursGrad: 180,
+        laengeM: 4000,
+      );
+      final strecke = anhaengen(
+        anhaengen(anhaengen(hin, weg), rueber),
+        runter,
+      );
+      expect(
+        kehrtwendenZaehler(strecke).anzahlMitte,
+        0,
+        reason: 'Eine grosse Runde ist genau das, was wir HABEN wollen.',
       );
     });
 

@@ -1324,6 +1324,7 @@ const KEHRTWENDE_RAND_M = 300;
 // paar Meter versetzt, und die Rasterung glaettet die Spitze etwas ab.
 const KEHRTWENDE_DREH_FENSTER_M = 100;
 const KEHRTWENDE_DREH_GRAD = 140;
+const KEHRTWENDE_DREH_BAND_M = 400;
 
 function kursGrad(dx: number, dy: number): number {
   return (Math.atan2(dx, dy) * 180) / Math.PI;
@@ -1343,12 +1344,30 @@ function drehtDortWirklich(
   scheitel: number,
 ): boolean {
   const fenster = Math.round(KEHRTWENDE_DREH_FENSTER_M / KEHRTWENDE_RASTER_M);
-  const davor = scheitel - fenster;
-  const danach = scheitel + fenster;
-  if (davor < 0 || danach >= n) return false;
-  const kursDavor = kursGrad(xs[scheitel] - xs[davor], ys[scheitel] - ys[davor]);
-  const kursDanach = kursGrad(xs[danach] - xs[scheitel], ys[danach] - ys[scheitel]);
-  return kursDifferenz(kursDavor, kursDanach) >= KEHRTWENDE_DREH_GRAD;
+  const band = Math.round(KEHRTWENDE_DREH_BAND_M / KEHRTWENDE_RASTER_M);
+  // Richtung VOR dem Wendebereich gegen Richtung DANACH. Begruendung siehe
+  // die Dart-Fassung: wer ueber einen Haeuserblock wendet, faehrt drei
+  // Neunzig-Grad-Kurven, keine davon erreicht fuer sich 140 Grad.
+  for (let k = scheitel - band; k <= scheitel + band; k++) {
+    const vonDavor = k - band;
+    const bisDavor = k - fenster;
+    const vonDanach = k + fenster;
+    const bisDanach = k + band;
+    if (vonDavor < 0 || bisDanach >= n) continue;
+    if (bisDavor <= vonDavor || bisDanach <= vonDanach) continue;
+    const kursDavor = kursGrad(
+      xs[bisDavor] - xs[vonDavor],
+      ys[bisDavor] - ys[vonDavor],
+    );
+    const kursDanach = kursGrad(
+      xs[bisDanach] - xs[vonDanach],
+      ys[bisDanach] - ys[vonDanach],
+    );
+    if (kursDifferenz(kursDavor, kursDanach) >= KEHRTWENDE_DREH_GRAD) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Zaehlt Kehrtwenden (raus und auf derselben Fahrbahn zurueck) und liefert
@@ -3592,24 +3611,120 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
         // Hinweg: start->W = Probe-Geometrie bis wIdx (echte Strassen).
         const outCoords = pc.slice(0, wIdx + 1) as [number, number][];
         const outKm = Math.min(acc, wantKm + 1);
-        // Rueckweg: W->start mit seitlichem Detour (anderer Weg zurueck).
-        for (const detSide of [0]) {
-          const back = await callGraphHopper({
-            avoidAreas: sperrflaechen,
-            startLat: W.lat,
-            startLng: W.lng,
-            endLat: sLat,
-            endLng: sLng,
-            profile: 'motorcycle_entdecker',
-            isRoundTrip: false,
-            avoidHighways: req.avoid_highways ?? false,
-            serverUrl: serverChoice.primary,
-          });
-          if ('error' in back) {
-            synthDiag.push(`b${bearing} back det${detSide}: ${(back.error ?? '?').toString().slice(0, 60)}`);
-            continue;
-          }
-          const br = back as RouteResult;
+        // Rueckweg: W->start. MIT seitlichem Umweg, wenn es einen gibt.
+        //
+        // 2026-09-01 (Vucko: „nur wenn es andere wege gibt dann soll er sie
+        // auch nehmen aber wenn es keine gibt passt es auch die gleiche route
+        // zurueck zu nehmen"):
+        //
+        // Hier stand `for (const detSide of [0])` — eine Schleife mit genau
+        // einem Durchlauf, und der ohne Umweg. Der Kommentar darueber
+        // versprach seit jeher „anderer Weg zurueck", geliefert wurde der
+        // kuerzeste Weg, also dieselbe Strasse. Gemessen an vier Orten:
+        // Selbstueberlappung 0,72 bis 0,86 und in ALLEN vier eine Wende
+        // mittendrin. Das war die Strecke, die Vucko gefahren ist.
+        //
+        // Jetzt werden mehrere Rueckwege ausprobiert: der direkte plus vier
+        // mit einem Zwischenpunkt seitlich der Verbindungslinie, auf beiden
+        // Seiten und in zwei Abstaenden. Gewaehlt wird der mit den wenigsten
+        // Wenden, bei Gleichstand der mit der geringsten Ueberlappung.
+        //
+        // PARALLEL, nicht nacheinander. Der Client wartet hier mit einer
+        // Acht-Sekunden-Grenze; fuenf Aufrufe hintereinander waeren aus
+        // „Route mit Wende" ein „keine Route" geworden, und das ist der
+        // schlechtere Ausgang.
+        //
+        // Und genau deshalb bleibt der DIREKTE Rueckweg in der Liste: findet
+        // keine Umwegvariante eine Strasse, ist derselbe Weg zurueck immer
+        // noch besser als gar keine Route.
+        const mProLngHier = 111320 * Math.cos((W.lat * Math.PI) / 180);
+        const zurueckDx = (sLng - W.lng) * mProLngHier;
+        const zurueckDy = (sLat - W.lat) * 110540;
+        const zurueckKurs = (Math.atan2(zurueckDx, zurueckDy) * 180) / Math.PI;
+        const mitteLat = (W.lat + sLat) / 2;
+        const mitteLng = (W.lng + sLng) / 2;
+        // Der Umweg richtet sich nach der Laenge des Rueckwegs: bei einer
+        // kurzen Strecke waeren 12 km Versatz kein Umweg mehr, sondern eine
+        // andere Fahrt.
+        const zurueckKm = Math.sqrt(
+          zurueckDx * zurueckDx + zurueckDy * zurueckDy,
+        ) / 1000;
+        const versatzNah = Math.max(2, Math.min(8, zurueckKm * 0.25));
+        const versatzWeit = Math.max(4, Math.min(16, zurueckKm * 0.5));
+        const rueckwegVarianten: Array<{
+          name: string;
+          via?: Array<{ lat: number; lng: number }>;
+        }> = [
+          { name: 'direkt' },
+          ...[versatzNah, versatzWeit].flatMap((versatz) =>
+            [90, -90].map((seite) => {
+              const via = offsetPoint(
+                mitteLat,
+                mitteLng,
+                versatz,
+                zurueckKurs + seite,
+              );
+              return {
+                name: `umweg${seite > 0 ? 'R' : 'L'}${versatz.toFixed(0)}`,
+                via: [via],
+              };
+            })
+          ),
+        ];
+
+        const rueckwege = await Promise.all(
+          rueckwegVarianten.map(async (variante) => {
+            const antwort = await callGraphHopper({
+              avoidAreas: sperrflaechen,
+              startLat: W.lat,
+              startLng: W.lng,
+              endLat: sLat,
+              endLng: sLng,
+              intermediateWaypoints: variante.via,
+              profile: 'motorcycle_entdecker',
+              isRoundTrip: false,
+              avoidHighways: req.avoid_highways ?? false,
+              serverUrl: serverChoice.primary,
+            });
+            return { variante, antwort };
+          }),
+        );
+
+        // Bewerten: erst wenige Wenden, dann wenig Ueberlappung, dann nah am
+        // Ziel. Ein Rueckweg, der die Zielstrecke sprengt, hilft niemandem.
+        const bewertet = rueckwege
+          .filter((r) => !('error' in r.antwort))
+          .map((r) => {
+            const br = r.antwort as RouteResult;
+            const probe: [number, number][] = [...outCoords];
+            const bc0 = br.geometry.coordinates as [number, number][];
+            for (let j = 1; j < bc0.length; j++) probe.push(bc0[j]);
+            const gesamtKm = outKm + br.distanceKm;
+            return {
+              ...r,
+              br,
+              wenden: kehrtwendenZaehler(probe).anzahlMitte,
+              ueberlappung: selbstUeberlappungAnteil(probe),
+              abweichung: Math.abs(gesamtKm - targetKm) / targetKm,
+            };
+          })
+          .filter((r) => r.abweichung <= 0.35)
+          .sort((a, b) =>
+            a.wenden !== b.wenden
+              ? a.wenden - b.wenden
+              : Math.abs(a.ueberlappung - b.ueberlappung) > 0.05
+              ? a.ueberlappung - b.ueberlappung
+              : a.abweichung - b.abweichung
+          );
+
+        for (const gewaehlt of bewertet.slice(0, 1)) {
+          const detSide = gewaehlt.variante.name;
+          synthDiag.push(
+            `b${bearing} rueckweg=${detSide} wenden=${gewaehlt.wenden} ` +
+              `ueberlapp=${gewaehlt.ueberlappung.toFixed(2)} ` +
+              `(von ${bewertet.length} brauchbaren)`,
+          );
+          const br = gewaehlt.br;
           const coords: [number, number][] = [...outCoords];
           const bc = br.geometry.coordinates as [number, number][];
           for (let j = 1; j < bc.length; j++) coords.push(bc[j] as [number, number]);
@@ -3649,6 +3764,12 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
               // Kandidat gesetzt), die Kennzahl steht hier also nur zum
               // Mitmessen im Monitoring — nicht zur Auswahl.
               self_overlap_fraction: selbstUeberlappungAnteil(coords),
+              // 2026-09-01: Die Wende-Kennzahl fehlte in genau dem Zweig, der
+              // Wenden erzeugt. Damit war ausgerechnet die schlechteste
+              // Routenart die einzige, die nicht gemessen wurde.
+              kehrtwenden_count: kehrtwendenZaehler(coords).anzahl,
+              kehrtwenden_mitte: gewaehlt.wenden,
+              rueckweg_variante: detSide,
             },
           };
           console.log(`[SYNTH-OUTBACK] success: ${dist.toFixed(1)}km (delta ${delta.toFixed(0)}%, ${coords.length} pts)`);

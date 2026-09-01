@@ -37,6 +37,7 @@ export const KEHRTWENDE_RAND_M = 300;
 // paar Meter versetzt, und die Rasterung glaettet die Spitze etwas ab.
 export const KEHRTWENDE_DREH_FENSTER_M = 100;
 export const KEHRTWENDE_DREH_GRAD = 140;
+export const KEHRTWENDE_DREH_BAND_M = 400;
 
 export function kursGrad(dx: number, dy: number): number {
   return (Math.atan2(dx, dy) * 180) / Math.PI;
@@ -56,12 +57,30 @@ export function drehtDortWirklich(
   scheitel: number,
 ): boolean {
   const fenster = Math.round(KEHRTWENDE_DREH_FENSTER_M / KEHRTWENDE_RASTER_M);
-  const davor = scheitel - fenster;
-  const danach = scheitel + fenster;
-  if (davor < 0 || danach >= n) return false;
-  const kursDavor = kursGrad(xs[scheitel] - xs[davor], ys[scheitel] - ys[davor]);
-  const kursDanach = kursGrad(xs[danach] - xs[scheitel], ys[danach] - ys[scheitel]);
-  return kursDifferenz(kursDavor, kursDanach) >= KEHRTWENDE_DREH_GRAD;
+  const band = Math.round(KEHRTWENDE_DREH_BAND_M / KEHRTWENDE_RASTER_M);
+  // Richtung VOR dem Wendebereich gegen Richtung DANACH. Begruendung siehe
+  // die Dart-Fassung: wer ueber einen Haeuserblock wendet, faehrt drei
+  // Neunzig-Grad-Kurven, keine davon erreicht fuer sich 140 Grad.
+  for (let k = scheitel - band; k <= scheitel + band; k++) {
+    const vonDavor = k - band;
+    const bisDavor = k - fenster;
+    const vonDanach = k + fenster;
+    const bisDanach = k + band;
+    if (vonDavor < 0 || bisDanach >= n) continue;
+    if (bisDavor <= vonDavor || bisDanach <= vonDanach) continue;
+    const kursDavor = kursGrad(
+      xs[bisDavor] - xs[vonDavor],
+      ys[bisDavor] - ys[vonDavor],
+    );
+    const kursDanach = kursGrad(
+      xs[bisDanach] - xs[vonDanach],
+      ys[bisDanach] - ys[vonDanach],
+    );
+    if (kursDifferenz(kursDavor, kursDanach) >= KEHRTWENDE_DREH_GRAD) {
+      return true;
+    }
+  }
+  return false;
 }
 export const UEBERLAPP_MAX_PUNKTE = 20000;
 

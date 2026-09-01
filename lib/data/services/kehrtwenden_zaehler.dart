@@ -74,6 +74,13 @@ const double kehrtwendeDrehFensterM = 100;
 /// paar Meter versetzt, und die Rasterung glaettet die Spitze etwas ab.
 const double kehrtwendeDrehGrad = 140;
 
+/// Wie weit um den geschaetzten Scheitel herum nach der Drehung gesucht wird.
+///
+/// Der Scheitel ist nur die Mitte zwischen Stich und Rueckkehr, also eine
+/// Schaetzung. Und eine Wende ueber einen Kreisverkehr oder eine Ortsschleife
+/// zieht sich ueber mehrere hundert Meter.
+const double kehrtwendeDrehBandM = 400;
+
 /// Eine einzelne gefundene Wende.
 ///
 /// Die Meterangaben beziehen sich auf die Strecke ab Start, gemessen im
@@ -213,12 +220,46 @@ bool _drehtDortWirklich(
   int scheitel,
 ) {
   final fenster = (kehrtwendeDrehFensterM / kehrtwendeRasterM).round();
-  final davor = scheitel - fenster;
-  final danach = scheitel + fenster;
-  if (davor < 0 || danach >= n) return false;
-  final kursDavor = _kurs(xs[scheitel] - xs[davor], ys[scheitel] - ys[davor]);
-  final kursDanach = _kurs(xs[danach] - xs[scheitel], ys[danach] - ys[scheitel]);
-  return _kursDifferenz(kursDavor, kursDanach) >= kehrtwendeDrehGrad;
+  final band = (kehrtwendeDrehBandM / kehrtwendeRasterM).round();
+
+  // Verglichen wird die Richtung VOR dem Wendebereich mit der Richtung
+  // DANACH — nicht die Kursaenderung innerhalb.
+  //
+  // 2026-09-01, zwei Anlaeufe gebraucht:
+  //
+  // Erster Versuch war die Kursaenderung auf 100 m am geschaetzten Scheitel.
+  // Der liess die Friedrichshafener Notfallroute durch: 86 Prozent
+  // Ueberlappung, Wende bei 23 von 47 km, trotzdem als "am Rand" verbucht.
+  //
+  // Zweiter Versuch suchte die staerkste Kursaenderung im ganzen Band. Auch
+  // das reicht nicht: wer ueber einen Haeuserblock wendet, faehrt DREI
+  // Neunzig-Grad-Kurven — keine davon erreicht 140 Grad, obwohl er am Ende
+  // genau entgegengesetzt faehrt.
+  //
+  // Deshalb jetzt der Vergleich ueber den ganzen Bereich hinweg. Der
+  // unterscheidet auch sauber vom Fall, den wir NICHT treffen wollen: bei
+  // zwei getrennten Fahrbahnen einer Schnellstrasse laeuft die Route parallel
+  // zu sich selbst, vorher und nachher zeigt sie in dieselbe Richtung.
+  for (var k = scheitel - band; k <= scheitel + band; k++) {
+    final vonDavor = k - band;
+    final bisDavor = k - fenster;
+    final vonDanach = k + fenster;
+    final bisDanach = k + band;
+    if (vonDavor < 0 || bisDanach >= n) continue;
+    if (bisDavor <= vonDavor || bisDanach <= vonDanach) continue;
+    final kursDavor = _kurs(
+      xs[bisDavor] - xs[vonDavor],
+      ys[bisDavor] - ys[vonDavor],
+    );
+    final kursDanach = _kurs(
+      xs[bisDanach] - xs[vonDanach],
+      ys[bisDanach] - ys[vonDanach],
+    );
+    if (_kursDifferenz(kursDavor, kursDanach) >= kehrtwendeDrehGrad) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Zaehlt die Kehrtwenden einer Strecke.

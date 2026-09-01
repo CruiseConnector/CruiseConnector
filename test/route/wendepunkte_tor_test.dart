@@ -118,6 +118,64 @@ void main() {
       );
     });
 
+    test('gibt es NICHTS Sauberes, ist eine Wende-Strecke besser als nichts',
+        () {
+      // 2026-09-01, Vucko woertlich: "nur wenn es andere wege gibt dann soll
+      // er sie auch nehmen aber wenn es keine gibt passt es auch die gleiche
+      // route zurueck zu nehmen."
+      //
+      // Betrifft zwei von 53 Gebieten: Mariazell und Bludenz, zwei
+      // Alpentaeler, in denen hin und zurueck oft die einzige Strasse ist.
+      // Dort waere die Kachel sonst dauerhaft leer.
+      expect(
+        HomeRouteRecommendationService.istSichereStartseitenStrecke(
+          startseitenStrecke(kehrtwendenMitte: 2),
+          wendeErlaubt: true,
+        ),
+        isTrue,
+        reason: 'Im zweiten Griff darf die Wende sein.',
+      );
+      expect(
+        HomeRouteRecommendationService.istSichereStartseitenStrecke(
+          startseitenStrecke(kehrtwendenMitte: 2),
+        ),
+        isFalse,
+        reason:
+            'Im ERSTEN Griff nicht. Sonst waere die Reihenfolge egal und es '
+            'kaeme wieder eine Wende-Strecke, obwohl eine saubere danebenlag.',
+      );
+    });
+
+    test('eine ungemessene Strecke bleibt AUCH im zweiten Griff draussen', () {
+      // Unpruefbar ist etwas anderes als "geprueft und leider mit Wende".
+      expect(
+        HomeRouteRecommendationService.istSichereStartseitenStrecke(
+          startseitenStrecke(kehrtwendenMitte: null),
+          wendeErlaubt: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('der zweite Griff steht wirklich im Code', () {
+      final quelle = File(
+        'lib/data/services/home_route_recommendation_service.dart',
+      ).readAsStringSync();
+      expect(
+        quelle.contains('hole(nurSaubere: false)'),
+        isTrue,
+        reason:
+            'Ohne den zweiten Griff bleibt die Kachel in Mariazell und '
+            'Bludenz dauerhaft leer.',
+      );
+      expect(
+        quelle.indexOf('hole(nurSaubere: true)') <
+            quelle.indexOf('hole(nurSaubere: false)'),
+        isTrue,
+        reason: 'Sauber zuerst. Die Reihenfolge IST die Regel.',
+      );
+    });
+
     test('die Kennzahl wird auch wirklich mitgeladen', () {
       // Ein Filter ueber eine Spalte, die die Abfrage nicht holt, urteilt
       // immer ueber null — und wuerde damit ALLES ablehnen.
