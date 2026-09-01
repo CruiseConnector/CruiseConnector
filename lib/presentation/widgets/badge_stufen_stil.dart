@@ -80,56 +80,103 @@ const BadgeStufenStil _stufe1 = BadgeStufenStil(
   name: 'Bronze',
   ziffer: 'I',
   farbe: Color(0xFFE0562B),
-  farbeTief: Color(0xFF7E2409),
+  farbeTief: Color(0xFF601B05),
   farbeHell: Color(0xFFFF9A63),
   symbol: Icons.local_fire_department_rounded,
   form: BadgeStufenForm.kreis,
 );
 
+// 2026-09-01 (Vucko, neue Badge-Serie aus Figma): Die Leiter heisst jetzt
+// Bronze, Silber, Gold. Vorher war sie Bronze, Tuerkis, Violett — so hatte er
+// es am 19.08. gewuenscht („die niedrigste Stufe Bronze / Rot, die beste lila
+// oder blau"). Mit der neuen Serie hat er sich anders entschieden, und die
+// Embleme tragen die neue Leiter bereits: Bronzekreis, Silberwappen,
+// Goldsechseck. Ein violetter Rahmen um ein goldenes Emblem waere ein
+// sichtbarer Bruch.
+//
+// Violett bleibt der Serie erhalten, aber nur noch fuer die SONDERBADGES —
+// die Aurorasterne. Genau so steht es auf dem Board: „Es gibt KEINE violetten
+// Stufenbadges mehr."
 const BadgeStufenStil _stufe2 = BadgeStufenStil(
   stufe: 2,
-  name: 'Türkis',
+  name: 'Silber',
   ziffer: 'II',
-  farbe: Color(0xFF4FE6D4),
-  farbeTief: Color(0xFF0A6E7C),
-  farbeHell: Color(0xFFA8F7EC),
+  farbe: Color(0xFF9FB0C6),
+  farbeTief: Color(0xFF3E4854),
+  farbeHell: Color(0xFFEDF2F9),
   symbol: Icons.bolt_rounded,
   form: BadgeStufenForm.sechseck,
 );
 
 const BadgeStufenStil _stufe3 = BadgeStufenStil(
   stufe: 3,
-  name: 'Violett',
+  name: 'Gold',
   ziffer: 'III',
-  farbe: Color(0xFFAE93FF),
-  farbeTief: Color(0xFF3B3FA8),
-  farbeHell: Color(0xFFD6C4FF),
+  farbe: Color(0xFFF5CB5C),
+  farbeTief: Color(0xFF7A5408),
+  farbeHell: Color(0xFFFFEDB4),
   symbol: Icons.auto_awesome_rounded,
   form: BadgeStufenForm.zacken,
 );
 
-/// Meilensteine ohne Rangfolge (Gruendungszeit, Startklar, 1.000 km …).
-/// Bewusst neutral, damit sie die Skala nicht verwaessern.
-const BadgeStufenStil _stufeOhne = BadgeStufenStil(
+/// Meilensteine ohne Rangfolge: badge_14 (Pokal), badge_31 und badge_32.
+///
+/// 2026-09-01: Diamantfuenfeck in Cyan, so wie die Embleme. Vorher teilten
+/// sich Meilensteine und Sonderbadges EINEN neutralen Stil; die neue Serie
+/// unterscheidet sie deutlich, also tut die App es jetzt auch.
+const BadgeStufenStil _meilenstein = BadgeStufenStil(
   stufe: 0,
   name: 'Meilenstein',
   ziffer: '',
-  farbe: Color(0xFF9AA7BD),
-  farbeTief: Color(0xFF2A3242),
-  farbeHell: Color(0xFFC8D2E2),
+  farbe: Color(0xFF15AECF),
+  farbeTief: Color(0xFF084D5E),
+  farbeHell: Color(0xFF8AE3F6),
   symbol: Icons.flag_rounded,
   form: BadgeStufenForm.kreis,
 );
 
+/// Sonderbadges ohne Rangfolge: badge_15, badge_16, badge_28, badge_57,
+/// badge_58. Aurorastern in Violett und Magenta.
+const BadgeStufenStil _sonder = BadgeStufenStil(
+  stufe: 0,
+  name: 'Sonder',
+  ziffer: '',
+  farbe: Color(0xFFD264E8),
+  farbeTief: Color(0xFF4A0B57),
+  farbeHell: Color(0xFFF0B8FA),
+  symbol: Icons.auto_awesome_motion_rounded,
+  form: BadgeStufenForm.zacken,
+);
+
+/// Welche Badges Meilensteine sind. Alles andere ohne Stufe ist ein
+/// Sonderbadge.
+///
+/// Bewusst eine Liste statt eines neuen Feldes am Modell: `profiles.badges`
+/// ist append-only, und die Badge-Datei traegt ausdruecklich die Regel, dass
+/// bestehende Eintraege nicht angefasst werden. Eine Liste hier aendert nur
+/// die Darstellung.
+const Set<String> badgeMeilensteinIds = {'badge_14', 'badge_31', 'badge_32'};
+
+const BadgeStufenStil _stufeOhne = _meilenstein;
+
 /// Die drei Stufen in aufsteigender Reihenfolge, fuer Legenden und Tests.
 const List<BadgeStufenStil> badgeStufenSkala = [_stufe1, _stufe2, _stufe3];
 
-BadgeStufenStil badgeStufenStil(int stufe) => switch (stufe) {
-  1 => _stufe1,
-  2 => _stufe2,
-  3 => _stufe3,
-  _ => _stufeOhne,
-};
+/// Der Stil zu einer Stufe.
+///
+/// [badgeId] entscheidet bei Stufe 0 zwischen Meilenstein (Cyan) und
+/// Sonderbadge (Violett und Magenta). Ohne Angabe bleibt es beim Meilenstein,
+/// so wie vor dem 01.09. — kein Aufrufer bricht dadurch.
+BadgeStufenStil badgeStufenStil(int stufe, {String? badgeId}) =>
+    switch (stufe) {
+      1 => _stufe1,
+      2 => _stufe2,
+      3 => _stufe3,
+      _ =>
+        badgeId != null && !badgeMeilensteinIds.contains(badgeId)
+            ? _sonder
+            : _stufeOhne,
+    };
 
 // ---------------------------------------------------------------------------
 // Geometrie
@@ -243,11 +290,17 @@ Path badgeStufenPfad(BadgeStufenForm form, Rect feld) {
 /// Mischung der Fuellung je Stufe. Negativ = zu Schwarz hin, positiv = zur
 /// Leitfarbe hin. `oben` ist der Anfang des Verlaufs (oben links), `unten`
 /// sein Ende (unten rechts).
+// 2026-09-01: Die Anteile waren auf die alte Leiter getunt (Tuerkis und
+// Violett sind dunkler als Silber und Gold). Mit den neuen Leitfarben fiel das
+// Symbol auf der hellen Goldfuellung zusammen und eine gesperrte Goldstufe
+// wirkte gefuellt statt hohl. Die Werte sind so nachgezogen, dass ALLE
+// Lesbarkeitspruefungen in badge_stufen_darstellung_test wieder halten —
+// keine einzige davon wurde gelockert.
 const Map<int, ({double oben, double unten})> _innenMischung = {
   0: (oben: -0.05, unten: -0.20),
-  1: (oben: 0.00, unten: -0.30),
-  2: (oben: 0.10, unten: -0.30),
-  3: (oben: 0.35, unten: -0.15),
+  1: (oben: 0.15, unten: -0.20),
+  2: (oben: 0.15, unten: -0.20),
+  3: (oben: 0.20, unten: -0.20),
 };
 
 Color _innenMischen(BadgeStufenStil stil, double anteil) => anteil >= 0

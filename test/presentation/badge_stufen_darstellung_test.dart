@@ -67,23 +67,50 @@ void main() {
       }
     });
 
-    test('niedrigste Stufe ist rot/bronze, hoechste lila/blau', () {
+    test('die Leiter heisst Bronze, Silber, Gold', () {
+      // 2026-09-01 (Vucko, neue Badge-Serie aus Figma): Hier stand bis heute
+      // „niedrigste Stufe ist rot/bronze, hoechste lila/blau" — genau so hatte
+      // er es am 19.08. gewuenscht. Mit der neuen Serie hat er sich anders
+      // entschieden, und die Embleme tragen die neue Leiter bereits:
+      // Bronzekreis, Silberwappen, Goldsechseck. Auf dem Board steht
+      // ausdruecklich: „Es gibt KEINE violetten Stufenbadges mehr."
+      //
+      // Violett bleibt der Serie erhalten, aber nur fuer die Sonderbadges.
+      expect(badgeStufenSkala.map((s) => s.name).toList(), [
+        'Bronze',
+        'Silber',
+        'Gold',
+      ]);
+
       final unten = badgeStufenSkala.first.farbe;
       expect(
         unten.r > unten.g && unten.r > unten.b,
         isTrue,
-        reason: 'Stufe I muss der warme, rote Pol sein',
+        reason: 'Stufe I bleibt der warme, rote Pol',
       );
 
       final oben = badgeStufenSkala.last.farbe;
       expect(
-        oben.b > oben.r && oben.b > oben.g,
+        oben.r > oben.b && oben.g > oben.b,
         isTrue,
-        reason: 'Stufe III muss der kuehle, lila/blaue Pol sein',
+        reason: 'Stufe III muss golden sein, also warm und nicht blau',
       );
-      // Der Verlauf kippt zusaetzlich ins Blaue.
-      final tief = badgeStufenSkala.last.farbeTief;
-      expect(tief.b > tief.r, isTrue);
+      expect(
+        oben.b < oben.g * 0.7,
+        isTrue,
+        reason:
+            'Bei Gold muss Blau der schwaechste Kanal sein und deutlich unter '
+            'Gruen liegen, sonst kippt der Ton ins Fahle.',
+      );
+
+      // Die Mitte ist neutral: Silber trennt sich von beiden Polen, ohne
+      // selbst einen Farbstich zu haben.
+      final mitte = badgeStufenSkala[1].farbe;
+      expect(
+        (mitte.r - mitte.b).abs() < 0.16,
+        isTrue,
+        reason: 'Silber muss neutral bleiben, nicht tuerkis',
+      );
     });
 
     test('keine Stufe teilt Farbe, Form oder Symbol mit einer anderen', () {
