@@ -769,6 +769,31 @@ class _CruiseModePageState extends State<CruiseModePage>
   // re-konvertiert wird.
   List<LatLng> _fullRouteLatLngsCache = const [];
   List<List<double>>? _fullRouteLatLngsCacheSource;
+  List<LatLng> _fullRouteOhneVersatzCache = const [];
+  List<List<double>>? _fullRouteOhneVersatzCacheSource;
+
+  /// Die volle Route OHNE den Ueberlappungs-Versatz.
+  ///
+  /// 2026-09-01, noch am selben Tag nachgebessert: Der Versatz gehoert
+  /// ausschliesslich in die schwache Hintergrundlinie. Es gibt aber zwei
+  /// Stellen, an denen die volle Route als AKTIVE Linie dient — waehrend
+  /// eines Reroutes und als Rueckfall in der Uebersicht. Dort sitzt der
+  /// Standortpunkt darauf, und eine versetzte Linie liesse ihn sichtbar
+  /// daneben stehen: bei Navigationszoom sind sechs Meter rund zwoelf
+  /// Bildpunkte. Genau diesen Fall hat der Waechtertest zunaechst NICHT
+  /// gesehen, weil er nur die Aufrufe der Versatz-Funktion zaehlte und nicht,
+  /// wer den Getter verbraucht.
+  List<LatLng> get _fullRouteLatLngsOhneVersatz {
+    if (!identical(_fullRouteOhneVersatzCacheSource, _fullRouteCoordinates)) {
+      _fullRouteOhneVersatzCacheSource = _fullRouteCoordinates;
+      _fullRouteOhneVersatzCache = _fullRouteCoordinates.length < 2
+          ? const []
+          : _fullRouteCoordinates
+                .map((c) => LatLng(c[1], c[0]))
+                .toList(growable: false);
+    }
+    return _fullRouteOhneVersatzCache;
+  }
   List<LatLng> get _fullRouteBackgroundLatLngs {
     if (!identical(_fullRouteLatLngsCacheSource, _fullRouteCoordinates)) {
       _fullRouteLatLngsCacheSource = _fullRouteCoordinates;
@@ -2899,6 +2924,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
@@ -3223,6 +3249,8 @@ class _CruiseModePageState extends State<CruiseModePage>
         // null heisst "noch unbekannt" — der naechste Fix im Korridor setzt
         // den Wert an der neuen Route neu, bis dahin gilt die Index-Logik.
         _stetigeRoutenMeter = null;
+        _stetigeMeterZuHochTakte = 0;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
         _lastDrawnRouteIndex = _currentRouteIndex;
         // Konnte kein echter Index gefunden werden, ist die Tangente wertlos —
@@ -8608,9 +8636,13 @@ class _CruiseModePageState extends State<CruiseModePage>
     // faellt alles auf das bisherige Verhalten zurueck.
     final zeichnetGerade =
         _routeDrawAnimationTimer?.isActive == true && !_isRouteConfirmed;
+    // 2026-09-01: Hier stand _fullRouteBackgroundLatLngs — also die Linie MIT
+    // Ueberlappungs-Versatz. Auf ihr sitzt aber der Standortpunkt, und er
+    // haette dann sichtbar daneben gestanden. Beide Stellen unten nehmen
+    // deshalb die unversetzte Fassung.
     final activePts = hideLineForReroute
         ? (_routeLatLngs.length >= 2
-              ? _fullRouteBackgroundLatLngs
+              ? _fullRouteLatLngsOhneVersatz
               : const <LatLng>[])
         : (zeichnetGerade && _routeLatLngs.length >= 2)
         ? _routeLatLngs
@@ -8620,7 +8652,7 @@ class _CruiseModePageState extends State<CruiseModePage>
               : (_isRouteConfirmed
                     ? _activeRouteFallbackPointsForNavigation()
                     : _routeLatLngs))
-        : _fullRouteBackgroundLatLngs;
+        : _fullRouteLatLngsOhneVersatz;
     // 2026-06-25 (vucko native POIs): fehlende Icon-Bilder rastern (self-healing,
     // intern geguarded → idempotent, kein Build-Overhead wenn alles bereit ist).
     _ensurePoiIcons();
@@ -11541,6 +11573,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
@@ -12497,6 +12530,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _activeManeuverIndex = 0;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
@@ -13734,6 +13768,27 @@ class _CruiseModePageState extends State<CruiseModePage>
   /// den Index, und die Anzeige lief daran vorbei.
   static const int _antiUeberlappCapPunkte = 60;
 
+  /// Wie viele Takte die stetige Strecke deutlich zu hoch stehen darf, bevor
+  /// sie ehrlich zurueckgesetzt wird.
+  ///
+  /// 2026-09-01, am selben Tag nachgebessert: Die Monotonie von
+  /// `_stetigeRoutenMeter` hatte KEINEN Weg zurueck, solange der Fahrer im
+  /// Korridor ist. Das Meterbudget in isPlausibleRouteAdvance waechst aber mit
+  /// der Zeit seit dem letzten angenommenen Index — bei einer halben Minute
+  /// Stillstand und Landstrassentempo gelten ueber 1600 m als plausibel. Ein
+  /// einziger solcher Ausreisser haette den Wert dauerhaft zu hoch gesetzt,
+  /// und `stetigPassiert` haette jedes Manoever darunter verschluckt: das
+  /// naechste Abbiegen waere weder angezeigt noch angesagt worden, bis der
+  /// Fahrer die falsch verbuchte Stelle physisch erreicht. Das waere
+  /// schlimmer als das Springen, das die Monotonie behoben hat.
+  static const int _stetigeMeterRueckwegTakte = 5;
+
+  /// Wie weit der Treffer unter der stetigen Strecke liegen muss, damit der
+  /// Takt als "zu hoch" zaehlt. Kleine Abweichungen sind GPS-Rauschen.
+  static const double _stetigeMeterRueckwegSchwelleMeter = 150.0;
+
+  int _stetigeMeterZuHochTakte = 0;
+
   static const double _mindestTempoFuerRichtungMps = 2.0;
 
   static const Duration _rerouteWatchdogTimeout = Duration(seconds: 22);
@@ -14307,6 +14362,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       _lastDimHead = null;
       _currentRouteIndex = 0;
       _stetigeRoutenMeter = null;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
       _lastDrawnRouteIndex = 0;
       _distanceSinceLastRedraw = 0.0;
@@ -14636,6 +14692,7 @@ class _CruiseModePageState extends State<CruiseModePage>
       // alten Strecke Unsinn. null heisst "noch unbekannt": der naechste Fix
       // im Korridor fuellt den Wert neu, bis dahin gilt die Index-Logik.
       _stetigeRoutenMeter = null;
+      _stetigeMeterZuHochTakte = 0;
       _hatJeVerankert = false;
       if (!preserveCurrentProgress) {
         _currentRouteIndex = 0;
@@ -16148,6 +16205,27 @@ class _CruiseModePageState extends State<CruiseModePage>
           nichtZuWeitVoraus &&
           (bisher == null || advanceDecision.matchDist >= bisher)) {
         _stetigeRoutenMeter = advanceDecision.matchDist;
+        _stetigeMeterZuHochTakte = 0;
+      } else if (bisher != null &&
+          advanceDecision.matchDist <
+              bisher - _stetigeMeterRueckwegSchwelleMeter) {
+        // Der Weg ZURUECK. Steht der Wert dauerhaft deutlich ueber dem, was
+        // die Ortung im Korridor misst, war er falsch — und ohne diesen Zweig
+        // bliebe er es fuer den Rest der Fahrt. Fuenf Takte in Folge, damit
+        // ein einzelner Ausreisser ihn nicht zurueckreisst.
+        _stetigeMeterZuHochTakte++;
+        if (_stetigeMeterZuHochTakte >= _stetigeMeterRueckwegTakte) {
+          debugPrint(
+            '[CruiseMode] Stetige Strecke war zu hoch: '
+            '${bisher.toStringAsFixed(0)} m -> '
+            '${advanceDecision.matchDist.toStringAsFixed(0)} m '
+            'nach $_stetigeMeterZuHochTakte Takten im Korridor.',
+          );
+          _stetigeRoutenMeter = advanceDecision.matchDist;
+          _stetigeMeterZuHochTakte = 0;
+        }
+      } else {
+        _stetigeMeterZuHochTakte = 0;
       }
     }
     final stableMatchIndex = advanceDecision.stableIndex;
@@ -22109,6 +22187,13 @@ class _CruiseModePageState extends State<CruiseModePage>
       completedAtEnd: completed,
       routeStyle: _abschlussStil,
       routeType: _abschlussIstRundkurs ? 'ROUND_TRIP' : 'POINT_TO_POINT',
+      // 2026-09-01: Eine AUFZEICHNUNG ist keine Navigation. Vorher lief beides
+      // durch denselben Aufruf ohne source, es griff also der Vorgabewert
+      // 'navigation' — und damit zaehlte die Abzeichen-Familie "Mit Navi ans
+      // Ziel" in Wahrheit alle beendeten Fahrten, also genau dasselbe wie die
+      // Familie "Fahrten". Wer nur aufzeichnet und nie navigiert, bekam ein
+      // Abzeichen, dessen Name nicht stimmt.
+      source: _abschlussIstAufzeichnung ? 'aufzeichnung' : 'navigation',
       routeFingerprint: adjustedResult.edgeMeta['route_fingerprint']
           ?.toString(),
       // 2026-08-19: Keine nachtraegliche Verdopplung mehr — die Bonuswoche

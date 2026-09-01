@@ -84,11 +84,68 @@ void main() {
       expect(s.drivenKm, 42.5, reason: 'Gefahrene Kilometer, nicht geplante.');
     });
 
-    test('sie behaelt die Verbindung zur Fahrt', () {
+    test('sie behaelt die Verbindung zur Fahrt, aber NICHT ueber '
+        'source_route_id', () {
       final f = fahrt();
       final s = f.alsSpeicherbareStrecke()!;
-      expect(s.sourceRouteId, f.id);
-      expect(s.routeMeta['drive_session_id'], f.id);
+
+      // Diese Zusicherung stand hier zuerst genau andersherum und hat den
+      // Fehler festgeschrieben. routes.source_route_id traegt einen
+      // Fremdschluessel auf routes(id). Eine Fahrt-Kennung steht dort nie
+      // drin: am 01.09. an der Produktionsdatenbank gemessen, 190 Fahrten
+      // mit Spur, NULL davon existieren als Route. Der Insert scheiterte
+      // also immer mit 23503 — nachgestellt und bestaetigt, die alte
+      // Fassung warf den Fremdschluesselfehler, die neue lief durch.
+      // saveExistingRoute faengt nur PGRST204 und 23505 ab, 23503 landete
+      // also als "Konnte gerade nicht speichern. Pruefe deine Verbindung."
+      // beim Nutzer. Das Feature war fuer alle Fahrten zu 100 Prozent tot.
+      expect(
+        s.sourceRouteId,
+        isNull,
+        reason:
+            'Eine Fahrt-Kennung in source_route_id laesst jeden Insert am '
+            'Fremdschluessel scheitern.',
+      );
+      expect(
+        s.routeMeta['drive_session_id'],
+        f.id,
+        reason: 'Die Verbindung gehoert in route_meta, nicht in den Schluessel.',
+      );
+    });
+
+    test('eine GPS-Luecke wird nicht als schnurgerade Strasse ausgegeben', () {
+      // Ueber alle 190 aufgezeichneten Spuren gemessen: 15 haben einen
+      // Sprung ueber 1000 m, der groesste 6844 m. Als LineString gespeichert
+      // waere daraus eine Luftlinie quer durch die Landschaft geworden —
+      // sichtbar in der Skizze, teilbar, fahrbar, und die neu gerechnete
+      // Streckenlaenge waere gefaelscht.
+      final mitLuecke = UserDriveSession(
+        id: 'sess-luecke',
+        userId: 'user-1',
+        createdAt: DateTime(2026, 9, 1),
+        distanceKm: 10,
+        durationSeconds: 600,
+        xpAwarded: 40,
+        completedAtEnd: true,
+        trackGeometry: const [
+          [16.3700, 48.2080],
+          [16.3710, 48.2085],
+          // rund 7 km Sprung
+          [16.4650, 48.2085],
+          [16.4660, 48.2090],
+        ],
+      );
+      final s = mitLuecke.alsSpeicherbareStrecke()!;
+      expect(s.geometry['type'], 'MultiLineString');
+      final teile = s.geometry['coordinates'] as List;
+      expect(teile.length, 2, reason: 'Vor und nach der Luecke je ein Stueck.');
+      expect((teile.first as List).length, 2);
+      expect((teile.last as List).length, 2);
+    });
+
+    test('eine lueckenlose Spur bleibt ein einfacher LineString', () {
+      final s = fahrt().alsSpeicherbareStrecke()!;
+      expect(s.geometry['type'], 'LineString');
     });
 
     test('Tempo und Foto gehen nicht verloren', () {

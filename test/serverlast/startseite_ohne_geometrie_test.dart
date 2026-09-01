@@ -280,19 +280,39 @@ void main() {
     );
 
     test(
-      'ohne Kennzahl UND ohne Geometrie wird nicht stillschweigend verworfen',
+      'ohne Kennzahl UND ohne Geometrie wird AUSGESCHLOSSEN',
       () {
-        // Eine fehlende Messung ist kein Beweis fuer eine schlechte Strecke.
-        // Wuerde der Filter hier verwerfen, waere die Startseite leer, sobald
-        // die Kennzahlen einmal fehlen — der gefaehrlichere Fehler.
+        // 2026-09-01 umgedreht. Hier stand das Gegenteil, mit der Begruendung
+        // "eine fehlende Messung ist kein Beweis fuer eine schlechte Strecke,
+        // eine leere Startseite waere der gefaehrlichere Fehler". Beides war
+        // falsch gedacht:
+        //
+        // Seit die Abfrage die Geometrie bewusst nicht mehr mitholt, ist die
+        // Kennzahl die EINZIGE Quelle. Faellt sie aus, laufen alle vier
+        // Sicherheitspruefungen ins Leere und eine voellig ungepruefte Strecke
+        // landet auf der Startseite — ein Sicherheitsfilter, der bei
+        // fehlender Messung durchlaesst, ist keiner. Und leer wird die
+        // Startseite davon nicht: es liegen 2778 Pool-Zeilen bereit, die
+        // naechste rueckt nach.
         expect(
           HomeRouteRecommendationService.istSichereStartseitenStrecke(
             strecke(),
           ),
-          isTrue,
+          isFalse,
+          reason: 'Eine unpruefbare Strecke gehoert nicht auf die Startseite.',
         );
       },
     );
+
+    test('mit Kennzahlen urteilt der Filter wie bisher', () {
+      expect(
+        HomeRouteRecommendationService.istSichereStartseitenStrecke(
+          strecke(punktAnzahl: 500, maxSegmentMeter: 100),
+        ),
+        isTrue,
+        reason: 'Eine gemessene, unauffaellige Strecke bleibt zulaessig.',
+      );
+    });
 
     test('die harten Ausschluesse gelten unveraendert weiter', () {
       expect(

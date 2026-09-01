@@ -3181,25 +3181,31 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
       const phaseNames = ['exact', 'end-offset-150m', 'end-offset-1km', 'start-offset-150m', 'start-offset-1km'];
       const runnablePhases = req.reroute_request === true ? phases.slice(0, 3) : phases;
       let lastResults: Array<{ result: RouteResult | { error: string }; seed: number }> = [];
-      // 2026-09-01 (Vucko: "niemals in keiner situation dazu auffordert
-      // irgendwo auf einer strasse umzudrehen"): Die Schleife lieferte aus,
-      // sobald IRGENDEIN Ergebnis ohne Fehler zurueckkam — Qualitaet spielte
-      // keine Rolle. Bei direktem A nach B erzeugt Phase A genau EINEN
-      // Kandidaten; die Kehrtwenden-Strafe im Best-of-N konnte deshalb nichts
-      // auswaehlen, weil es nichts zu waehlen gab. Genau so kam die Strecke
-      // zustande, auf der Vucko mitten auf der Fahrbahn umdrehen musste.
+      // 2026-09-01, am selben Tag zurueckgenommen. Hier stand kurzzeitig eine
+      // Qualitaets-Eskalation: die Schleife nahm eine Phase nur an, wenn ein
+      // Kandidat OHNE Wende mitten auf der Strecke dabei war, und probierte
+      // sonst die naechste.
       //
-      // Jetzt wird eine Phase nur dann angenommen, wenn mindestens ein
-      // Kandidat OHNE Wende mitten auf der Strecke dabei ist. Wenden am Anfang
-      // oder Ende bleiben erlaubt: liegt das Ziel in einer Sackgasse, muss man
-      // dort umkehren, und ein Tor darauf wuerde aus "musste wenden" ein
-      // "keine Route" machen.
+      // Das war falsch, und zwar gefaehrlich falsch. Die Phasen sind KEINE
+      // Qualitaetsstufen, sondern eine Erreichbarkeits-Rettung: B und C
+      // verschieben das ZIEL um 150 m beziehungsweise 1,1 km, D und E den
+      // START um 150 m beziehungsweise 1,1 km. Der Client lehnt einen
+      // Startversatz ueber 500 m HART ab (maxAcceptedStartOffsetMeters in
+      // route_service.dart) — eine Phase-E-Route waere also als "keine Route"
+      // beim Nutzer angekommen. Genau der Ausgang, den die Aenderung
+      // verhindern sollte. Beim Ziel ist es umgekehrt schlimm: der Client
+      // toleriert 2 km, ein Nutzer waere also stillschweigend 1,1 km neben
+      // sein Ziel navigiert worden. Beim Reroute waeren zusaetzlich bis zu
+      // neun GraphHopper-Aufrufe in drei Wellen gelaufen, gegen ein
+      // Zeitbudget von acht Sekunden mit nur einem Versuch.
       //
-      // Findet KEINE Phase eine wendefreie Strecke, wird die erste brauchbare
-      // ausgeliefert — lieber eine Route mit Wende als gar keine.
-      let ergebnisseMitWende:
-        | Array<{ result: RouteResult | { error: string }; seed: number }>
-        | null = null;
+      // Die Schleife liefert deshalb wieder aus, sobald eine Phase
+      // ueberhaupt eine Route hat. Die Kennzahl kehrtwenden_mitte bleibt in
+      // der Meta — sie ist richtig gemessen und wird gebraucht. Der richtige
+      // Hebel gegen Wenden bei A nach B waeren MEHRERE Kandidaten mit
+      // GLEICHEM Start und GLEICHEM Ziel (GraphHopper kann alternative
+      // Routen), nicht das Verschieben der Endpunkte. Das gehoert eigens
+      // gebaut und geprueft.
       for (let p = 0; p < runnablePhases.length; p++) {
         const results = await Promise.all(
           runnablePhases[p].map((v, idx) =>
@@ -3218,36 +3224,28 @@ async function generateRoute(req: RouteRequest): Promise<Response> {
             }).then(result => ({ result, seed: p * 16 + idx })),
           ),
         );
-        const brauchbar = results.filter(r => !('error' in r.result));
-        if (brauchbar.length > 0) {
-          const wendefrei = brauchbar.filter(r =>
+        if (results.some(r => !('error' in r.result))) {
+          if (p > 0) {
+            console.log(`Direct A→B: exact phase failed, ${phaseNames[p] ?? `phase-${p}`} succeeded`);
+          }
+          // Zur Beobachtung: verlangt die ausgelieferte Strecke eine Wende
+          // mitten drin? Die Zahl steht in der Meta und wird hier nur
+          // protokolliert, damit man sieht, wie oft der Fall real auftritt.
+          const mitWende = results.filter(r =>
+            !('error' in r.result) &&
             (((r.result as RouteResult).meta.kehrtwenden_mitte as
               | number
-              | undefined) ?? 0) === 0
-          );
-          if (wendefrei.length > 0) {
-            if (p > 0) {
-              console.log(
-                `Direct A→B: ${phaseNames[p] ?? `phase-${p}`} liefert ` +
-                  `${wendefrei.length} wendefreie Kandidaten`,
-              );
-            }
-            return results;
+              | undefined) ?? 0) > 0
+          ).length;
+          if (mitWende > 0) {
+            console.log(
+              `Direct A→B: ${mitWende} von ${results.length} Kandidaten ` +
+                `verlangen eine Kehrtwende mitten auf der Strecke`,
+            );
           }
-          if (!ergebnisseMitWende) ergebnisseMitWende = results;
-          console.log(
-            `Direct A→B: ${phaseNames[p] ?? `phase-${p}`} nur mit Kehrtwende ` +
-              `mitten auf der Strecke, versuche die naechste Phase`,
-          );
+          return results;
         }
         lastResults = results;
-      }
-      if (ergebnisseMitWende) {
-        console.log(
-          'Direct A→B: keine wendefreie Strecke gefunden, liefere die beste ' +
-            'mit Wende aus',
-        );
-        return ergebnisseMitWende;
       }
       return lastResults;
     }

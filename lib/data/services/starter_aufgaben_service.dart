@@ -458,19 +458,68 @@ class StarterAufgabenService extends ChangeNotifier {
     }
   }
 
+  /// Holt den alten, GERAETEWEITEN Stand einmalig ans angemeldete Konto und
+  /// raeumt ihn danach weg.
+  ///
+  /// Ohne die Uebernahme saehe der bestehende Nutzer nach dem Update erst
+  /// einmal leere Aufgaben (der Serverabgleich holt sie zwar zurueck, aber
+  /// nicht sofort). Ohne das Wegraeumen bliebe die Falle offen: das naechste
+  /// Konto auf demselben Handy wuerde denselben alten Stand erben.
+  Future<void> _uebernimmAltenGeraeteStand(
+    SharedPreferences p,
+    String kErledigt,
+    String kBonusEnde,
+    String kPaket,
+  ) async {
+    // Nur wenn es ueberhaupt ein Konto gibt — sonst SIND die alten Schluessel
+    // die richtigen.
+    final nutzerId = NutzerPrefsSchluessel.aktuelleNutzerId();
+    if (nutzerId == null || nutzerId.isEmpty) return;
+
+    final altErledigt = p.getString(_kErledigt);
+    final altEnde = p.getString(_kBonusEnde);
+    final altPaket = p.getBool(_kPaketVergeben);
+    if (altErledigt == null && altEnde == null && altPaket == null) return;
+
+    final schonUebernommen = p.getString(kErledigt) != null ||
+        p.getString(kBonusEnde) != null ||
+        p.getBool(kPaket) != null;
+    if (!schonUebernommen) {
+      if (altErledigt != null) await p.setString(kErledigt, altErledigt);
+      if (altEnde != null) await p.setString(kBonusEnde, altEnde);
+      if (altPaket != null) await p.setBool(kPaket, altPaket);
+    }
+
+    await p.remove(_kErledigt);
+    await p.remove(_kBonusEnde);
+    await p.remove(_kPaketVergeben);
+  }
+
   Future<void> _ladeWirklich() async {
     final bremse = ladeBremseFuerTests;
     if (bremse != null) await bremse();
     try {
       final p = await SharedPreferences.getInstance();
-      final roh = p.getString(_kErledigt);
+      // 2026-09-01: Diese drei Schluessel lagen GERAETEWEIT, ohne Kontobezug,
+      // und wurden beim Abmelden nie geleert — nur die Ruecksetz-Generation
+      // benutzte den kontogebundenen Schluessel. Auf einem geteilten Handy
+      // erbte das zweite Konto damit den Stand des ersten: erledigte
+      // Starter-Aufgaben, das vergebene Paket (1000 XP) und die laufende
+      // Doppel-XP-Woche. Der Client schrieb das anschliessend sogar in das
+      // FREMDE Profil hoch.
+      final kErledigt = NutzerPrefsSchluessel.fuer(_kErledigt);
+      final kBonusEnde = NutzerPrefsSchluessel.fuer(_kBonusEnde);
+      final kPaket = NutzerPrefsSchluessel.fuer(_kPaketVergeben);
+      await _uebernimmAltenGeraeteStand(p, kErledigt, kBonusEnde, kPaket);
+
+      final roh = p.getString(kErledigt);
       if (roh != null && roh.isNotEmpty) {
         final json = jsonDecode(roh);
         if (json is List) _erledigt = json.whereType<String>().toSet();
       }
-      final ende = p.getString(_kBonusEnde);
+      final ende = p.getString(kBonusEnde);
       if (ende != null) _bonusEnde = DateTime.tryParse(ende);
-      _paketVergeben = p.getBool(_kPaketVergeben) ?? false;
+      _paketVergeben = p.getBool(kPaket) ?? false;
     } catch (e) {
       debugPrint('[Starter] Laden fehlgeschlagen: $e');
     }
@@ -734,10 +783,19 @@ class StarterAufgabenService extends ChangeNotifier {
   Future<void> _speichereLokal() async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setString(_kErledigt, jsonEncode(_erledigt.toList()));
-      await p.setBool(_kPaketVergeben, _paketVergeben);
+      await p.setString(
+        NutzerPrefsSchluessel.fuer(_kErledigt),
+        jsonEncode(_erledigt.toList()),
+      );
+      await p.setBool(
+        NutzerPrefsSchluessel.fuer(_kPaketVergeben),
+        _paketVergeben,
+      );
       if (_bonusEnde != null) {
-        await p.setString(_kBonusEnde, _bonusEnde!.toIso8601String());
+        await p.setString(
+          NutzerPrefsSchluessel.fuer(_kBonusEnde),
+          _bonusEnde!.toIso8601String(),
+        );
       }
     } catch (e) {
       debugPrint('[Starter] Speichern fehlgeschlagen: $e');

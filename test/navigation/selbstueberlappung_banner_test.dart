@@ -332,5 +332,40 @@ void main() {
         reason: 'Ein ungueltiger Kurs darf die Spur nicht entscheiden.',
       );
     });
+
+    test('die stetige Strecke hat einen Weg zurueck', () {
+      // Ohne diesen Zweig kann ein einziger zu weiter Treffer den Wert fuer
+      // den Rest der Fahrt zu hoch stehen lassen. Dann verschluckt
+      // stetigPassiert jedes Manoever darunter: kein Banner, keine Ansage.
+      expect(
+        quelle.contains('_stetigeMeterRueckwegTakte'),
+        isTrue,
+        reason:
+            'Die Monotonie von _stetigeRoutenMeter braucht einen Rueckweg, '
+            'sonst friert ein Ausreisser die Abbiegehinweise dauerhaft ein.',
+      );
+      expect(
+        quelle.contains('_stetigeMeterRueckwegSchwelleMeter'),
+        isTrue,
+        reason:
+            'Der Rueckweg braucht eine Schwelle, damit GPS-Rauschen den Wert '
+            'nicht staendig zurueckreisst.',
+      );
+      expect(
+        RegExp(r'_stetigeMeterZuHochTakte\s*\+\+').hasMatch(quelle),
+        isTrue,
+        reason: 'Der Zaehler muss ueber mehrere Takte laufen, nicht sofort.',
+      );
+
+      // Und er muss auch wieder auf null gehen, sonst summieren sich
+      // verstreute Einzeltakte ueber die ganze Fahrt zu einem Rueckfall.
+      expect(
+        RegExp(r'_stetigeMeterZuHochTakte\s*=\s*0').allMatches(quelle).length,
+        greaterThanOrEqualTo(3),
+        reason:
+            'Der Zaehler muss bei jedem sauberen Takt und beim Zuruecksetzen '
+            'der stetigen Strecke wieder auf null.',
+      );
+    });
   });
 }

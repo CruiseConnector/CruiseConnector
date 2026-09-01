@@ -48,7 +48,16 @@ class RouteBookmarkProvider extends ChangeNotifier {
       return null;
     }
 
-    final wasSaved = await SavedRoutesService.isRouteSaved(route);
+    // Die gezielte Abfrage entscheidet die ANZEIGE. Bevor tatsaechlich
+    // geloescht wird, muss die vollstaendige Pruefung zustimmen: ein
+    // Falsch-Positiv wuerde sonst aus einem Speichern-Tipp einen Loeschlauf
+    // machen — Merkzeilen und Routen-Veroeffentlichungen weg, gespeichert
+    // nichts. Die teure Ladung faellt nur bei EINEM Tipp an, nicht beim
+    // Aufbau einer Liste.
+    final vermutlichGespeichert = await SavedRoutesService.isRouteSaved(route);
+    final wasSaved = vermutlichGespeichert
+        ? await SavedRoutesService.istSicherInDerSammlung(route)
+        : false;
     _savedByRouteId[routeId] = !wasSaved;
     _markRouteState(route, !wasSaved);
     notifyListeners();

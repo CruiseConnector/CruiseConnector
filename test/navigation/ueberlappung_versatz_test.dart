@@ -153,30 +153,84 @@ void main() {
   });
 
   group('Die aktive Linie wird nicht angefasst', () {
-    test('der Versatz haengt NUR an der Hintergrundlinie', () {
-      // Der Standortpunkt sitzt auf der aktiven Linie. Wuerde die mitversetzt,
-      // saesse er sichtbar daneben — bei Navigationszoom sind sechs Meter rund
-      // zwoelf Bildpunkte.
-      final quelle = File(
+    late String quelle;
+
+    setUpAll(() {
+      quelle = File(
         'lib/presentation/pages/cruise_mode_page.dart',
       ).readAsStringSync();
-      final treffer = RegExp(
-        r'mitUeberlappungsVersatz\(',
-      ).allMatches(quelle).length;
+    });
+
+    test('der Versatz steht an genau EINER Stelle', () {
       expect(
-        treffer,
+        RegExp(r'mitUeberlappungsVersatz\(').allMatches(quelle).length,
         1,
         reason:
-            'Der Versatz darf an genau EINER Stelle stehen: in '
-            '_fullRouteBackgroundLatLngs. Jede weitere Verwendung wuerde die '
-            'aktive Linie oder den Puck verschieben.',
+            'Der Versatz gehoert ausschliesslich in '
+            '_fullRouteBackgroundLatLngs.',
       );
-      final i = quelle.indexOf('mitUeberlappungsVersatz(');
-      final umfeld = quelle.substring(math.max(0, i - 1400), i);
+    });
+
+    test('die versetzte Linie wird NUR als Hintergrund gezeichnet', () {
+      // 2026-09-01, nachgebessert: Die erste Fassung dieses Waechters zaehlte
+      // nur die AUFRUFE der Versatz-Funktion. Sie hat dadurch uebersehen, dass
+      // _fullRouteBackgroundLatLngs an zwei weiteren Stellen als AKTIVE Linie
+      // diente — waehrend eines Reroutes und als Rueckfall in der Uebersicht.
+      // Dort sitzt der Standortpunkt darauf; eine versetzte Linie haette ihn
+      // sichtbar danebenstehen lassen. Nicht der Aufruf zaehlt, sondern wer
+      // den Getter VERBRAUCHT.
+      final verwendungen = <int>[];
+      var ab = 0;
+      while (true) {
+        final i = quelle.indexOf('_fullRouteBackgroundLatLngs', ab);
+        if (i < 0) break;
+        verwendungen.add(i);
+        ab = i + 1;
+      }
+      // Jede Verwendung muss entweder die Definition sein, ein Kommentar, oder
+      // in der Hintergrund-Zeichenschicht stehen.
+      for (final i in verwendungen) {
+        final zeilenanfang = quelle.lastIndexOf('\n', i) + 1;
+        final zeile = quelle.substring(
+          zeilenanfang,
+          quelle.indexOf('\n', i),
+        );
+        final istKommentar = zeile.trimLeft().startsWith('//');
+        final istDefinition = zeile.contains('get _fullRouteBackgroundLatLngs');
+        if (istKommentar || istDefinition) continue;
+        // Sonst muss unmittelbar danach die gedimmte Hintergrundschicht
+        // stehen: eine PolylineLayer mit halbdurchsichtiger Farbe. Genau die
+        // traegt keinen Standortpunkt.
+        final danach = quelle.substring(
+          i,
+          math.min(quelle.length, i + 420),
+        );
+        expect(
+          danach.contains('PolylineLayer') && danach.contains('withValues'),
+          isTrue,
+          reason:
+              'Die versetzte Linie wird ausserhalb der gedimmten '
+              'Hintergrundschicht benutzt (Zeile "$zeile"). Sitzt dort der '
+              'Standortpunkt drauf, steht er sichtbar neben der Linie.',
+        );
+      }
+    });
+
+    test('es gibt eine unversetzte Fassung fuer die aktive Linie', () {
       expect(
-        umfeld.contains('_fullRouteBackgroundLatLngs'),
+        quelle.contains('_fullRouteLatLngsOhneVersatz'),
         isTrue,
-        reason: 'Der Versatz steht nicht in der Hintergrundlinie.',
+        reason:
+            'Ohne sie muesste die aktive Linie die versetzte Fassung nehmen.',
+      );
+      // Sie darf den Versatz NICHT anwenden.
+      final i = quelle.indexOf('get _fullRouteLatLngsOhneVersatz');
+      expect(i, greaterThan(-1));
+      final block = quelle.substring(i, i + 700);
+      expect(
+        block.contains('mitUeberlappungsVersatz'),
+        isFalse,
+        reason: 'Die unversetzte Fassung darf nicht versetzen.',
       );
     });
   });

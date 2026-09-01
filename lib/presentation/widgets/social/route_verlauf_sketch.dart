@@ -22,6 +22,7 @@ class RouteVerlaufSketch extends StatelessWidget {
     super.key,
     required this.punkte,
     required this.accent,
+    this.abschnitte,
     this.kappungMeter = anzeigeKappungMeter,
     this.hintergrund = const Color(0xFF10141B),
     this.borderRadius,
@@ -33,6 +34,13 @@ class RouteVerlaufSketch extends StatelessWidget {
 
   final Color accent;
 
+  /// Die ECHTEN Abschnitte der Geometrie, falls bekannt.
+  ///
+  /// Ist das gesetzt, wird die Linie genau dort und nur dort unterbrochen —
+  /// nichts wird am Abstand erraten. Ein MultiLineString traegt seine Luecken
+  /// selbst; eine geplante Route hat gar keine, sie ist eine gerechnete Linie.
+  final List<List<List<double>>>? abschnitte;
+
   /// Meter, die je Ende vor dem Zeichnen entfernt werden. 0 = Punkte sind
   /// schon gekappt (oder es ist die eigene Route).
   final double kappungMeter;
@@ -40,11 +48,36 @@ class RouteVerlaufSketch extends StatelessWidget {
   final Color hintergrund;
   final BorderRadius? borderRadius;
 
+  List<List<List<double>>>? _gekappteAbschnitte() {
+    final roh = abschnitte?.where((t) => t.length >= 2).toList(growable: false);
+    if (roh == null || roh.isEmpty) return null;
+    if (kappungMeter <= 0) return roh;
+    if (roh.length == 1) {
+      final einzeln = kappeEndstuecke(roh.first, kappungMeter, kappungMeter);
+      return einzeln.length >= 2 ? <List<List<double>>>[einzeln] : null;
+    }
+    final erste = kappeEndstuecke(roh.first, kappungMeter, 0);
+    final letzte = kappeEndstuecke(roh.last, 0, kappungMeter);
+    final ergebnis = <List<List<double>>>[
+      if (erste.length >= 2) erste,
+      ...roh.sublist(1, roh.length - 1),
+      if (letzte.length >= 2) letzte,
+    ];
+    return ergebnis.isEmpty ? null : ergebnis;
+  }
+
   @override
   Widget build(BuildContext context) {
     final gezeichnet = kappungMeter > 0
         ? kappeEndstuecke(punkte, kappungMeter, kappungMeter)
         : punkte;
+    // Die Endstuecke werden gekappt, damit Start und Ziel nicht die Haustuer
+    // des Besitzers verraten. Das muss auch fuer die Abschnitte gelten —
+    // sonst zeichnete die Skizze ueber die Abschnitte genau die Enden, die
+    // die Kappung eben entfernt hat. Gekappt wird nur vorn am ERSTEN und
+    // hinten am LETZTEN Abschnitt; die Grenzen dazwischen sind Luecken, keine
+    // Enden.
+    final gezeichneteAbschnitte = _gekappteAbschnitte();
     // 2026-09-01 (Vucko: „das layout beim teilen ... nicht mit einem schwarzen
     // hintergrund sondern das es einfach viel ansprechender fuer die leute
     // aussieht"):
@@ -80,7 +113,11 @@ class RouteVerlaufSketch extends StatelessWidget {
             )
           : CustomPaint(
               size: Size.infinite,
-              painter: RouteVerlaufPainter(punkte: gezeichnet, accent: accent),
+              painter: RouteVerlaufPainter(
+                punkte: gezeichnet,
+                accent: accent,
+                abschnitte: gezeichneteAbschnitte,
+              ),
             ),
     );
   }
@@ -90,10 +127,15 @@ class RouteVerlaufSketch extends StatelessWidget {
 /// einer helleren Stufe, runde Enden, dezente Punkte an Anfang und Ende —
 /// bewusst ohne jede Beschriftung.
 class RouteVerlaufPainter extends CustomPainter {
-  RouteVerlaufPainter({required this.punkte, required this.accent});
+  RouteVerlaufPainter({
+    required this.punkte,
+    required this.accent,
+    this.abschnitte,
+  });
 
   final List<List<double>> punkte;
   final Color accent;
+  final List<List<List<double>>>? abschnitte;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -138,24 +180,36 @@ class RouteVerlaufPainter extends CustomPainter {
     // Umgrenzung auf und draengt die echte Strecke in eine Ecke. Der
     // Export-Composer macht es laengst richtig und zeichnet je Segment.
     //
-    // Die Segmentgrenzen stecken nicht mehr in der flachen Liste, also
-    // erkennt sie der Abstand: ueber 400 Meter zwischen zwei aufeinander
-    // folgenden Punkten ist keine Strasse, das ist eine Luecke.
-    const lueckeMeter = 400.0;
+    // Am selben Tag nachgebessert: Hier stand danach eine Abstandsregel mit
+    // 400 Metern, die die Segmentgrenzen erraten sollte, nachdem sie
+    // weggeworfen worden waren. An echten Strecken gemessen zerriss sie 9 von
+    // 73 geplanten Routen, groesster echter Schritt 3143 m — durchgehende
+    // Schnellstrassen mit duenner Stuetzpunktfolge, wo gar keine Luecke ist.
+    //
+    // Jetzt wird nichts mehr geraten. Eine GEPLANTE Route ist eine gerechnete
+    // Linie und hat definitionsgemaess keine Luecke; eine AUFZEICHNUNG mit
+    // Luecke ist ein MultiLineString und traegt ihre Grenzen selbst. Wer die
+    // Abschnitte kennt, reicht sie durch — alle anderen bekommen einen
+    // durchgehenden Zug, so wie es fuer eine geplante Route richtig ist.
+    final gefiltert = abschnitte
+        ?.where((teil) => teil.length >= 2)
+        .toList(growable: false);
+    final teile = (gefiltert == null || gefiltert.isEmpty)
+        ? <List<List<double>>>[punkte]
+        : gefiltert;
     final path = Path();
-    final start = project(punkte.first);
-    path.moveTo(start.dx, start.dy);
-    for (var i = 1; i < punkte.length; i++) {
-      final vorher = punkte[i - 1];
-      final jetzt = punkte[i];
-      final pr = project(jetzt);
-      if (_grobeDistanzMeter(vorher, jetzt) > lueckeMeter) {
-        path.moveTo(pr.dx, pr.dy);
-      } else {
+    for (final teil in teile) {
+      final anfang = project(teil.first);
+      path.moveTo(anfang.dx, anfang.dy);
+      for (var i = 1; i < teil.length; i++) {
+        final pr = project(teil[i]);
         path.lineTo(pr.dx, pr.dy);
       }
     }
-    final ende = project(punkte.last);
+    // Anfang und Ende der GESAMTEN Skizze — fuer den Farbverlauf und die
+    // beiden Endpunkte.
+    final start = project(teile.first.first);
+    final ende = project(teile.last.last);
 
     // Strichstaerke nach der Kastengroesse. In der schmalen Feed-Fassung war
     // eine 4 px dicke Linie auf einem grossen dunklen Feld schlicht duenn.
@@ -205,16 +259,10 @@ class RouteVerlaufPainter extends CustomPainter {
   ///
   /// Reicht vollkommen, um eine GPS-Luecke von einem normalen Streckenschritt
   /// zu unterscheiden; eine echte Haversine-Rechnung waere hier verschwendet.
-  static double _grobeDistanzMeter(List<double> a, List<double> b) {
-    if (a.length < 2 || b.length < 2) return 0;
-    const meterProGrad = 111320.0;
-    final mittlereBreite = (a[1] + b[1]) / 2 * math.pi / 180.0;
-    final dx = (b[0] - a[0]) * meterProGrad * math.cos(mittlereBreite);
-    final dy = (b[1] - a[1]) * meterProGrad;
-    return math.sqrt(dx * dx + dy * dy);
-  }
 
   @override
   bool shouldRepaint(RouteVerlaufPainter old) =>
-      old.punkte != punkte || old.accent != accent;
+      old.punkte != punkte ||
+      old.accent != accent ||
+      old.abschnitte != abschnitte;
 }

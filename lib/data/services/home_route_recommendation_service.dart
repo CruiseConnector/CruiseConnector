@@ -337,13 +337,20 @@ class HomeRouteRecommendationService {
     // Der Rueckfall auf die Live-Berechnung bleibt bewusst stehen: Eine
     // Abfrage, die die Kennzahlen nicht mitholt, oder eine Zeile, die vor der
     // Nachfuellung geschrieben wurde, wird dann eben wie frueher geprueft.
-    // Fehlt BEIDES — Kennzahl und Geometrie — laesst der Filter die Strecke
-    // durch, statt sie stillschweigend zu verwerfen: Eine fehlende Messung ist
-    // kein Beweis fuer eine schlechte Strecke, und ein stiller Ausschluss
-    // waere hier der gefaehrlichere Fehler (leere Startseite statt einer
-    // Empfehlung).
+    // Fehlt BEIDES — Kennzahl und Geometrie — wird die Strecke AUSGESCHLOSSEN.
+    //
+    // 2026-09-01 nachgebessert: Hier stand zuerst das Gegenteil, mit der
+    // Begruendung, eine leere Startseite sei der schlimmere Fehler. Das war
+    // falsch gedacht. Seit die Abfrage die Geometrie bewusst nicht mehr
+    // mitholt, ist die Kennzahl die EINZIGE Quelle — faellt sie aus, laufen
+    // alle vier Sicherheitspruefungen ins Leere und eine ungepruefte Strecke
+    // landet auf der Startseite. Und leer wird sie davon nicht: es liegen
+    // 2778 Pool-Zeilen bereit, die naechste rueckt einfach nach. Eine
+    // unpruefbare Strecke ist der gefaehrlichere Fehler, nicht die
+    // ausgelassene.
     final punkte = entry.punktAnzahl ?? _punkteAusGeometrie(entry);
-    if (punkte != null && punkte < _minCoordinateCount(entry.distanceBucket)) {
+    if (punkte == null) return false;
+    if (punkte < _minCoordinateCount(entry.distanceBucket)) {
       return false;
     }
 
@@ -365,8 +372,8 @@ class HomeRouteRecommendationService {
     if (unsafeSources.any(source.contains)) return false;
 
     final maxSegment = entry.maxSegmentMeter ?? _maxSegmentAusGeometrie(entry);
-    if (maxSegment != null &&
-        maxSegment > _maxSegmentThreshold(entry.distanceBucket)) {
+    if (maxSegment == null) return false;
+    if (maxSegment > _maxSegmentThreshold(entry.distanceBucket)) {
       return false;
     }
 

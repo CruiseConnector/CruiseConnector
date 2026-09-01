@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -325,28 +327,69 @@ class CommunityProvider extends ChangeNotifier {
 
   /// Für Posts, bei denen der Server-Wert `is_liked_by_me` nicht mitgeliefert
   /// wurde — einmalig per Request nachladen.
+  // 2026-09-01 (Serverlast): Diese beiden Methoden stellten je eine Anfrage
+  // PRO KNOPF. Solange die Knoepfe nur im Feed sassen, fiel das nicht auf;
+  // seit sie auch auf fremden Profilen und auf der Beitragsseite stehen,
+  // loeste ein Profil mit zwanzig Beitraegen bis zu vierzig zusaetzliche
+  // Rundreisen aus — alle im selben Moment, weil alle Knoepfe gleichzeitig
+  // aufgebaut werden.
+  //
+  // Jetzt sammeln sie erst. Alles, was im selben Aufbau-Takt anfaellt, geht
+  // als EINE Abfrage mit in-Filter raus. Aus vierzig Rundreisen werden zwei.
+  final Set<String> _offeneLikePruefungen = {};
+  final Set<String> _offeneRepostPruefungen = {};
+  bool _likeSammlungGeplant = false;
+  bool _repostSammlungGeplant = false;
+
   Future<void> ensureLikedChecked(String postId) async {
     if (_checkedLike.contains(postId)) return;
     _checkedLike.add(postId);
-    try {
-      final liked = await SocialService.hasLiked(postId);
-      _likedPosts[postId] = liked;
-      notifyListeners();
-    } catch (_) {
-      _checkedLike.remove(postId);
-    }
+    _offeneLikePruefungen.add(postId);
+    if (_likeSammlungGeplant) return;
+    _likeSammlungGeplant = true;
+    // Ein Takt warten, damit alle Knoepfe desselben Aufbaus mitkommen.
+    scheduleMicrotask(() async {
+      await Future<void>.delayed(Duration.zero);
+      _likeSammlungGeplant = false;
+      final stapel = _offeneLikePruefungen.toSet();
+      _offeneLikePruefungen.clear();
+      if (stapel.isEmpty) return;
+      try {
+        final geliked = await SocialService.likedAmong(stapel);
+        for (final id in stapel) {
+          _likedPosts[id] = geliked.contains(id);
+        }
+        notifyListeners();
+      } catch (_) {
+        // Nicht als geprueft merken, sonst bleibt der Knopf fuer den Rest der
+        // Sitzung auf dem falschen Stand.
+        _checkedLike.removeAll(stapel);
+      }
+    });
   }
 
   Future<void> ensureRepostedChecked(String postId) async {
     if (_checkedRepost.contains(postId)) return;
     _checkedRepost.add(postId);
-    try {
-      final reposted = await SocialService.hasReposted(postId);
-      _repostedPosts[postId] = reposted;
-      notifyListeners();
-    } catch (_) {
-      _checkedRepost.remove(postId);
-    }
+    _offeneRepostPruefungen.add(postId);
+    if (_repostSammlungGeplant) return;
+    _repostSammlungGeplant = true;
+    scheduleMicrotask(() async {
+      await Future<void>.delayed(Duration.zero);
+      _repostSammlungGeplant = false;
+      final stapel = _offeneRepostPruefungen.toSet();
+      _offeneRepostPruefungen.clear();
+      if (stapel.isEmpty) return;
+      try {
+        final geteilt = await SocialService.repostedAmong(stapel);
+        for (final id in stapel) {
+          _repostedPosts[id] = geteilt.contains(id);
+        }
+        notifyListeners();
+      } catch (_) {
+        _checkedRepost.removeAll(stapel);
+      }
+    });
   }
 
   /// Lädt Feed, Discover und Following-IDs in einem Rutsch.

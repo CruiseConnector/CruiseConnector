@@ -198,12 +198,14 @@ class ProfileBadgeShowcase extends StatelessWidget {
     String id = '';
     double? x;
     double? y;
+    double? scale;
     int? spot;
 
     if (raw is Map) {
       id = raw['id']?.toString().trim() ?? '';
       x = _readDouble(raw['x']);
       y = _readDouble(raw['y']);
+      scale = _readDouble(raw['scale']);
       spot = _readInt(raw['spot']);
     } else if (raw != null) {
       id = raw.toString().trim();
@@ -212,7 +214,26 @@ class ProfileBadgeShowcase extends StatelessWidget {
     if (id.isEmpty || !earned.contains(id) || !used.add(id)) return null;
     final resolvedSpot = _resolveSpot(spot, x, y, slot, usedSpots);
     usedSpots.add(resolvedSpot);
-    return ProfileBadgeSticker.defaultForSpot(id, resolvedSpot);
+
+    // Eine SELBST gewaehlte Position gewinnt gegen die Platztabelle.
+    //
+    // 2026-09-01 nachgebessert: Hier stand vorher immer defaultForSpot, die
+    // gespeicherten x/y/scale wurden also verworfen und jeder Aufkleber aus
+    // der Tabelle neu gebaut. Weil dieselbe Aenderung die Tabelle verschoben
+    // hat (Platz 6 lag bei 0.48|0.50 und liegt jetzt bei 0.93|0.56), waeren
+    // alle 20 in der Produktion gespeicherten Aufkleber gesprungen — und beim
+    // naechsten Speichern im Bearbeiten-Blatt waeren die alten Koordinaten
+    // endgueltig weg gewesen. Die neue Anordnung gilt nur fuer Profile, die
+    // noch nie selbst verschoben haben.
+    final standard = ProfileBadgeSticker.defaultForSpot(id, resolvedSpot);
+    if (x == null || y == null) return standard;
+    return ProfileBadgeSticker(
+      id: id,
+      spot: resolvedSpot,
+      x: x.clamp(0.0, 1.0),
+      y: y.clamp(0.0, 1.0),
+      scale: scale ?? standard.scale,
+    );
   }
 
   static double? _readDouble(Object? value) {

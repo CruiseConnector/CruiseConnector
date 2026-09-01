@@ -108,21 +108,52 @@ void main() {
   });
 
   group('Bestehende Profile werden nicht verschoben', () {
-    test('ein Aufkleber speichert seine Position selbst', () {
-      // Wer seine Abzeichen bewusst verteilt hat, behaelt die Anordnung: x, y
-      // und scale stehen in profiles.badge_showcase. Die Platztabelle liefert
-      // nur die Vorgabe fuer alle, die nie etwas verschoben haben.
-      const s = ProfileBadgeSticker(
-        id: 'badge_01',
-        spot: 6,
-        x: 0.48,
-        y: 0.50,
-        scale: 0.64,
+    // Hier stand zuerst ein Test, der ein ProfileBadgeSticker-Objekt von Hand
+    // baute und dessen toJson gegen die eigenen Felder prueft. Der lief nie
+    // durch stickerSlotsFromProfile und konnte den Fehler prinzipiell nicht
+    // sehen: der Lesepfad verwarf die gespeicherten x/y/scale und baute jeden
+    // Aufkleber aus der GEAENDERTEN Platztabelle neu. Jetzt geht der Test
+    // durch den echten Weg, mit einer Roh-Map wie sie in der Datenbank steht.
+
+    test('eine selbst gewaehlte Position ueberlebt die neue Platztabelle', () {
+      final slots = ProfileBadgeShowcase.stickerSlotsFromProfile(
+        <String, dynamic>{
+          'badges': <String>['badge_01'],
+          'badge_showcase': <Map<String, dynamic>>[
+            {'id': 'badge_01', 'spot': 6, 'x': 0.48, 'y': 0.50, 'scale': 0.64},
+          ],
+        },
       );
-      final json = s.toJson();
-      expect(json['x'], 0.48);
-      expect(json['y'], 0.5);
-      expect(json['scale'], 0.64);
+      final s = slots.nonNulls.firstWhere((e) => e.id == 'badge_01');
+      expect(s.x, closeTo(0.48, 0.001), reason: 'Gespeichertes x gewinnt.');
+      expect(s.y, closeTo(0.50, 0.001), reason: 'Gespeichertes y gewinnt.');
+      expect(s.scale, closeTo(0.64, 0.001));
+    });
+
+    test('ohne gespeicherte Position gilt die neue Anordnung', () {
+      final slots = ProfileBadgeShowcase.stickerSlotsFromProfile(
+        <String, dynamic>{
+          'badges': <String>['badge_01'],
+          'badge_showcase': <Map<String, dynamic>>[
+            {'id': 'badge_01', 'spot': 0},
+          ],
+        },
+      );
+      final s = slots.nonNulls.firstWhere((e) => e.id == 'badge_01');
+      final vorgabe = ProfileBadgeSticker.defaultForSpot('badge_01', 0);
+      expect(s.x, vorgabe.x);
+      expect(s.y, vorgabe.y);
+      expect(s.scale, vorgabe.scale);
+    });
+
+    test('auch die blosse Abzeichen-Kennung ohne Map wird angenommen', () {
+      final slots = ProfileBadgeShowcase.stickerSlotsFromProfile(
+        <String, dynamic>{
+          'badges': <String>['badge_01'],
+          'badge_showcase': <String>['badge_01'],
+        },
+      );
+      expect(slots.nonNulls.length, 1);
     });
   });
 }

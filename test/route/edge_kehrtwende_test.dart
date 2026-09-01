@@ -86,39 +86,38 @@ void main() {
       );
     });
 
-    test('die A-nach-B-Phasen bevorzugen eine wendefreie Strecke', () {
-      final i = quelle.indexOf('let ergebnisseMitWende');
+    test('die A-nach-B-Phasen eskalieren NICHT auf gute Glueck weiter', () {
+      // 2026-09-01 umgedreht, nachdem der Kritiker die Eskalation als
+      // kritisch eingestuft hat und ich sie zurueckgenommen habe.
+      //
+      // Hier stand: die Phasenschleife soll weitersuchen, bis eine wendefreie
+      // Strecke kommt. Das klingt richtig und war gefaehrlich. Die spaeten
+      // Phasen verschieben Start und Ziel um bis zu 1,1 km: Phase E den
+      // START — und der Client weist alles ueber 500 m Abstand hart ab, der
+      // Nutzer liest "keine Route". Phase C verschiebt das ZIEL, ebenfalls um
+      // 1,1 km, und das faellt gar nicht auf: der Nutzer wird woanders
+      // hingeschickt als er wollte. Dazu kaeme beim Neuberechnen unterwegs
+      // bis zu neun GraphHopper-Aufrufe in drei Wellen gegen eine
+      // Acht-Sekunden-Grenze mit einem einzigen Versuch.
+      //
+      // Also: die erste brauchbare Phase liefert aus, wie vorher. Die Wende
+      // mittendrin wird GEMESSEN und protokolliert, damit wir wissen, wie oft
+      // sie auftritt — sie steuert aber nicht die Auswahl. Die echte Loesung
+      // sind Alternativrouten mit identischen Endpunkten, nicht verschobene.
       expect(
-        i,
-        greaterThanOrEqualTo(0),
+        quelle.contains('let ergebnisseMitWende'),
+        isFalse,
         reason:
-            'Die Phasenschleife lieferte aus, sobald irgendein Ergebnis ohne '
-            'Fehler zurueckkam. Qualitaet spielte keine Rolle — genau so kam '
-            'die Strecke mit der Wende zustande.',
+            'Die Eskalation ueber die Phasen ist bewusst zurueckgenommen. '
+            'Wer sie wieder einbaut, verschiebt dem Nutzer Start oder Ziel '
+            'um ueber einen Kilometer.',
       );
-      final block = quelle.substring(i, i + 2200);
       expect(
-        block.contains('kehrtwenden_mitte'),
+        quelle.contains('kehrtwenden_mitte'),
         isTrue,
-        reason: 'Die Schleife muss auf die Wende mittendrin schauen.',
-      );
-      expect(
-        block.contains('wendefrei'),
-        isTrue,
-        reason: 'Eine Phase wird nur angenommen, wenn sie wendefrei liefert.',
-      );
-    });
-
-    test('ohne wendefreie Strecke wird trotzdem geliefert', () {
-      // Lieber eine Route mit Wende als gar keine. Ein Tor, das „keine Route"
-      // liefert, waere schlimmer als das Problem.
-      final i = quelle.indexOf('if (ergebnisseMitWende)');
-      expect(
-        i,
-        greaterThanOrEqualTo(0),
         reason:
-            'Findet KEINE Phase eine wendefreie Strecke, muss die erste '
-            'brauchbare ausgeliefert werden.',
+            'Gemessen wird weiter: ohne die Zahl wissen wir nicht, wie oft '
+            'das Problem ueberhaupt auftritt.',
       );
     });
 

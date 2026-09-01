@@ -1,3 +1,4 @@
+import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/domain/models/saved_route.dart';
 
 class UserDriveSession {
@@ -71,16 +72,17 @@ class UserDriveSession {
       createdAt: createdAt,
       style: routeStyle ?? 'Standard',
       distanceKm: distanceKm,
-      geometry: <String, dynamic>{
-        'type': 'LineString',
-        'coordinates': spur,
-      },
+      geometry: _spurAlsGeometrie(spur),
       userId: userId,
       name: name,
       durationSeconds: durationSeconds.toDouble(),
       routeType: routeType ?? 'ROUND_TRIP',
       drivenKm: distanceKm,
-      sourceRouteId: id,
+      // KEINE sourceRouteId. routes.source_route_id zeigt per Fremdschluessel
+      // auf routes(id); eine Fahrt-Kennung steht dort nie drin, der Insert
+      // waere mit 23503 gescheitert — geprueft: 190 Fahrten mit Spur, null
+      // davon existieren als Route. Die Verbindung zur Fahrt fuehrt
+      // route_meta['drive_session_id'] weiter unten.
       groupId: groupId,
       routeSource: 'driven_track',
       completedAtEnd: completedAtEnd,
@@ -96,6 +98,54 @@ class UserDriveSession {
           'planned_route_fingerprint': routeFingerprint,
       },
     );
+  }
+
+  /// Wie weit zwei aufeinanderfolgende Ortungen auseinanderliegen duerfen,
+  /// bevor die Luecke als Luecke gilt und nicht als Strasse.
+  ///
+  /// Gemessen ueber alle 190 aufgezeichneten Spuren: 15 enthalten einen
+  /// Sprung ueber 1000 m, der groesste 6844 m. Als LineString gespeichert
+  /// wuerde daraus eine schnurgerade Linie quer durch die Landschaft — und
+  /// die Streckenlaenge, die aus der Linie neu gerechnet wird, waere
+  /// gefaelscht. Ein MultiLineString sagt stattdessen ehrlich: hier fehlt
+  /// ein Stueck.
+  static const double _spurLueckeMeter = 1800.0;
+
+  /// Baut aus der rohen Spur eine Geometrie und bricht sie an GPS-Luecken
+  /// auf. Ohne Luecke bleibt es ein LineString wie bisher.
+  static Map<String, dynamic> _spurAlsGeometrie(List<List<double>> spur) {
+    final abschnitte = <List<List<double>>>[];
+    var laufend = <List<double>>[spur.first];
+
+    for (var i = 1; i < spur.length; i++) {
+      final vorher = spur[i - 1];
+      final jetzt = spur[i];
+      // Koordinaten sind [longitude, latitude].
+      final meter = GeoDistance.haversineMeters(
+        fromLat: vorher[1],
+        fromLng: vorher[0],
+        toLat: jetzt[1],
+        toLng: jetzt[0],
+      );
+      if (meter > _spurLueckeMeter) {
+        if (laufend.length >= 2) abschnitte.add(laufend);
+        laufend = <List<double>>[jetzt];
+      } else {
+        laufend.add(jetzt);
+      }
+    }
+    if (laufend.length >= 2) abschnitte.add(laufend);
+
+    if (abschnitte.length <= 1) {
+      return <String, dynamic>{
+        'type': 'LineString',
+        'coordinates': abschnitte.isEmpty ? spur : abschnitte.first,
+      };
+    }
+    return <String, dynamic>{
+      'type': 'MultiLineString',
+      'coordinates': abschnitte,
+    };
   }
 
   static List<List<double>>? _parseTrack(dynamic raw) {

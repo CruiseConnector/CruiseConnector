@@ -1183,6 +1183,45 @@ class SocialService {
     return existing != null;
   }
 
+  /// Fragt fuer MEHRERE Beitraege auf einmal, welche der angemeldete Nutzer
+  /// geliket hat.
+  ///
+  /// 2026-09-01: [hasLiked] stellt eine Anfrage je Knopf. Solange die Knoepfe
+  /// nur im Feed sassen, fiel das nicht auf; seit sie auch auf fremden
+  /// Profilen und auf der Beitragsseite stehen, loest ein Profil mit zwanzig
+  /// Beitraegen bis zu vierzig zusaetzliche Rundreisen aus. Dieselbe Klasse
+  /// von Serverlast, die am 31.08. beim Merken-Knopf beseitigt wurde.
+  static Future<Set<String>> likedAmong(Iterable<String> postIds) async {
+    final uid = _userId;
+    final ids = postIds.toSet()..removeWhere((e) => e.trim().isEmpty);
+    if (uid == null || ids.isEmpty) return <String>{};
+    final rows = await _db
+        .from('post_likes')
+        .select('post_id')
+        .eq('user_id', uid)
+        .inFilter('post_id', ids.toList(growable: false));
+    return (rows as List)
+        .map((r) => (r as Map)['post_id']?.toString() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toSet();
+  }
+
+  /// Dasselbe fuer Reposts. Siehe [likedAmong].
+  static Future<Set<String>> repostedAmong(Iterable<String> postIds) async {
+    final uid = _userId;
+    final ids = postIds.toSet()..removeWhere((e) => e.trim().isEmpty);
+    if (uid == null || ids.isEmpty) return <String>{};
+    final rows = await _db
+        .from('reposts')
+        .select('post_id')
+        .eq('user_id', uid)
+        .inFilter('post_id', ids.toList(growable: false));
+    return (rows as List)
+        .map((r) => (r as Map)['post_id']?.toString() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toSet();
+  }
+
   /// Alle Posts, die ein User geliket hat (für "Gefällt mir" im Profil-Menü).
   ///
   /// 2026-08-24 (vucko): Derselbe Umweg wie beim Repost — die Liste traegt
@@ -3729,10 +3768,41 @@ class SocialService {
       imageUrl: primary?['image_url'] as String?,
     );
 
+    // 2026-09-01 (Datenverlust-Falle): Hier stand erst DELETE, dann INSERT.
+    // Ohne Transaktion. Schlug das Einfuegen fehl — ein Wert ausserhalb der
+    // Plausibilitaets-Checks auf profile_vehicles, eine Regeleinschraenkung,
+    // ein Verbindungsabbruch —, war die Garage weg. Schlimmer noch: der
+    // Fang-Zweig unten prueft `e.message.contains('profile_vehicles')`, und
+    // Postgres schreibt den Tabellennamen in praktisch jede Constraint- und
+    // Regelmeldung. Der Fehler wurde also verschluckt, die Seite meldete
+    // Erfolg, und der Nutzer stand vor einer leeren Garage.
+    //
+    // Jetzt in der sicheren Reihenfolge: erst das Neue schreiben, dann das
+    // Alte gezielt entfernen. Scheitert das Schreiben, ist NICHTS geloescht.
+    List<String> alteKennungen = const [];
     try {
-      await _db.from('profile_vehicles').delete().eq('user_id', uid);
+      final vorher = await _db
+          .from('profile_vehicles')
+          .select('id')
+          .eq('user_id', uid);
+      alteKennungen = (vorher as List)
+          .map((r) => (r as Map)['id']?.toString() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[Social] Alte Fahrzeuge nicht lesbar: $e');
+    }
+
+    try {
       if (cleaned.isNotEmpty) {
         await _db.from('profile_vehicles').insert(cleaned);
+      }
+      if (alteKennungen.isNotEmpty) {
+        await _db
+            .from('profile_vehicles')
+            .delete()
+            .eq('user_id', uid)
+            .inFilter('id', alteKennungen);
       }
     } on PostgrestException catch (e) {
       if ((e.code == 'PGRST204' || e.code == '42703') &&
@@ -3747,18 +3817,26 @@ class SocialService {
                 ..remove('tuning_details'),
             )
             .toList();
-        await _db.from('profile_vehicles').delete().eq('user_id', uid);
         if (compatible.isNotEmpty) {
           await _db.from('profile_vehicles').insert(compatible);
+        }
+        if (alteKennungen.isNotEmpty) {
+          await _db
+              .from('profile_vehicles')
+              .delete()
+              .eq('user_id', uid)
+              .inFilter('id', alteKennungen);
         }
         debugPrint(
           '[Social] saveUserVehicles: optionale Fahrzeug-Spalten fehlen, kompatibel gespeichert. Migration ausführen!',
         );
         return;
       }
-      if (e.code == 'PGRST205' ||
-          e.code == 'PGRST204' ||
-          e.message.contains('profile_vehicles')) {
+      // NUR die wirklich fehlende Tabelle darf still durchgehen. Der frueher
+      // hier stehende Namensvergleich fing zusaetzlich jede Check-Verletzung
+      // (23514), jede Regelabweisung (42501) und jeden Typfehler ab — also
+      // genau die Faelle, in denen der Nutzer eine Fehlermeldung sehen muss.
+      if (e.code == 'PGRST205' || e.code == '42P01') {
         debugPrint(
           '[Social] saveUserVehicles: profile_vehicles fehlt, nur Legacy-Fahrzeug gespeichert.',
         );

@@ -995,9 +995,13 @@ class _UserProfilePageState extends State<UserProfilePage>
     final content = post['content'] ?? '';
     final postId = post['id'] as String;
     final time = _formatTimeAgo(post['created_at']);
-    final likes = post['likes_count'] ?? 0;
-    final comments = post['comments_count'] ?? 0;
-    final reposts = post['reposts_count'] ?? 0;
+    // Als num lesen, nicht als dynamic. Ein Zaehler, der irgendwann als
+    // bigint oder String zurueckkommt, haette beim impliziten Downcast auf
+    // int nicht nur den Knopf, sondern den Aufbau des ganzen Beitrags
+    // umgeworfen.
+    final likes = (post['likes_count'] as num?)?.toInt() ?? 0;
+    final comments = (post['comments_count'] as num?)?.toInt() ?? 0;
+    final reposts = (post['reposts_count'] as num?)?.toInt() ?? 0;
     final profile = post['profiles'] as Map<String, dynamic>?;
     final authorName = SocialService.publicDisplayName(
       profile ?? _stats,
@@ -1011,8 +1015,8 @@ class _UserProfilePageState extends State<UserProfilePage>
     return InkWell(
       onTap: () => _openPostDetail(
         postId: postId,
-        likesCount: likes is int ? likes : 0,
-        repostsCount: reposts is int ? reposts : 0,
+        likesCount: likes,
+        repostsCount: reposts,
         name: authorName,
         handle: authorHandle,
         content: content.toString(),

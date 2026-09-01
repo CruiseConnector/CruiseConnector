@@ -107,9 +107,16 @@ class SavedRoutesService {
 
     // Stufe 2 und 4: Fingerprint oder Signatur. Beides steht bei gespeicherten
     // Zeilen in derselben Spalte, deshalb genuegt EINE Abfrage fuer beide.
+    // Eine Signatur OHNE Koordinatenteil ist mehrdeutig: Typ, Stil und
+    // gerundete Distanz teilen sich beliebig viele verschiedene Strecken. Als
+    // Suchschluessel wuerde sie eine fremde Strecke als „schon gespeichert"
+    // melden — und ueber den Loesch-Zweig des Umschalters echten Schaden
+    // anrichten. Heute traegt keine Zeile so eine Signatur; die Tuer bleibt
+    // trotzdem zu.
+    final signatur = route.routeSignature;
     final schluessel = <String>{
       ?route.routeFingerprint?.trim(),
-      route.routeSignature,
+      if (route.hatVerwertbareGeometrie) signatur,
     }..removeWhere((wert) => wert.isEmpty);
 
     try {
@@ -526,6 +533,13 @@ class SavedRoutesService {
     if (!_isUuid(rawSourceRouteId)) return false;
 
     final routeSource = route.routeSource?.trim().toLowerCase();
+    // Eine gefahrene Spur ist keine Route. routes.source_route_id zeigt per
+    // Fremdschluessel auf routes(id) — eine Fahrt-Kennung dort haette jeden
+    // Insert mit 23503 abgewiesen. Zweiter Riegel neben
+    // UserDriveSession.alsSpeicherbareStrecke, die gar keine mehr setzt.
+    if (routeSource == 'driven_track' || routeSource == 'recorded_track') {
+      return false;
+    }
     if (routeSource == 'route_pool' ||
         routeSource == 'route_pool_candidate' ||
         routeSource == 'candidate_reserve') {
@@ -654,12 +668,35 @@ class SavedRoutesService {
   /// genommenen Grenze bei Altzeilen ohne Fingerprint siehe
   /// [liegtGleichwertigeStreckeInDerSammlung].
   ///
-  /// Wichtig: Beide Aufrufer benutzen die Antwort nur fuer die ANZEIGE des
-  /// Merken-Symbols und fuer die Richtung des naechsten Tippens. Keiner
-  /// verlaesst sich darauf, um eine doppelte Zeile zu verhindern — das tut
-  /// weiterhin [saveExistingRoute] mit der vollstaendigen Pruefung.
+  /// Wichtig: Diese Antwort ist fuer die ANZEIGE des Merken-Symbols gedacht.
+  /// Gegen eine doppelte Zeile schuetzt weiterhin [saveExistingRoute] mit der
+  /// vollstaendigen Pruefung.
+  ///
+  /// Was sie NICHT entscheiden darf, ist die LOESCH-Richtung. Hier stand
+  /// zuerst, beide Aufrufer benutzten sie nur zur Anzeige — das stimmte nicht:
+  /// RouteBookmarkProvider.toggle leitete daraus ab, ob getippt gespeichert
+  /// oder geloescht wird, und ein Falsch-Positiv haette aus einem
+  /// Speichern-Tipp einen Loeschlauf gemacht (Merkzeilen und
+  /// Routen-Veroeffentlichungen weg, gespeichert nichts). Deshalb prueft der
+  /// Loesch-Zweig dort jetzt zusaetzlich vollstaendig ueber
+  /// [istSicherInDerSammlung]. Eine Ladung bei einem Tipp ist tragbar; zehn
+  /// Ladungen beim Aufbau einer Liste waren es nicht.
   static Future<bool> isRouteSaved(SavedRoute route) async {
     return liegtGleichwertigeStreckeInDerSammlung(route);
+  }
+
+  /// Die VOLLSTAENDIGE Gegenpruefung ueber die ganze Bibliothek.
+  ///
+  /// Nur fuer Wege, an denen etwas geloescht wird. Teuer, aber sicher.
+  static Future<bool> istSicherInDerSammlung(SavedRoute route) async {
+    try {
+      final bibliothek = await getSavedRouteLibrary();
+      return hasEquivalentSavedRoute(route, bibliothek);
+    } catch (e) {
+      debugPrint('[SavedRoutes] Vollpruefung fehlgeschlagen: $e');
+      // Im Zweifel NICHT loeschen.
+      return false;
+    }
   }
 
   // ─── Einzelne Route laden ─────────────────────────────────────────────────

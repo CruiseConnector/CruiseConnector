@@ -1168,23 +1168,61 @@ class GamificationService {
   /// Rueckwirkend: Sie rechnet ueber ALLE vorhandenen Spuren, nicht nur ueber
   /// neue. Beim ersten Abgleich nach dem Update zaehlen also auch die Fahrten
   /// von frueher.
-  static Future<int> _ladeLaenderAnzahl() async {
+  /// Zuletzt ermittelte Laenderzahl, zusammen mit dem Fahrtenstand, zu dem
+  /// sie gehoert. Schluessel ist die Nutzerkennung.
+  static final Map<String, ({int fahrten, int laender})> _laenderMerker = {};
+
+  /// Wie viele Laender der Nutzer befahren hat.
+  ///
+  /// Die Edge-Funktion liest dafuer die Spuren des Nutzers — beim schwersten
+  /// Nutzer heute 51 Fahrten, 356 kB, und das waechst mit jeder Fahrt. Dieser
+  /// Aufruf haengt im Aufbau der Startseite, und calculateAndSync wird an 13
+  /// Stellen gerufen. Ohne Merker zoege JEDER Startseiten-Aufbau die komplette
+  /// Fahrtenhistorie durch den Server, fuer eine Zahl, die sich nur aendert,
+  /// wenn eine Fahrt DAZUKOMMT. Genau das Muster, das an diesem Tag zweimal
+  /// abgeschafft wurde.
+  ///
+  /// Deshalb: neu fragen nur, wenn sich der Fahrtenstand geaendert hat.
+  static Future<int> _ladeLaenderAnzahl(int abgeschlosseneFahrten) async {
+    final userId = _db.auth.currentUser?.id;
+    final gemerkt = userId == null ? null : _laenderMerker[userId];
+    if (gemerkt != null && gemerkt.fahrten == abgeschlosseneFahrten) {
+      return gemerkt.laender;
+    }
     try {
       final antwort = await _db.functions
           .invoke('badge-kennzahlen')
           .timeout(const Duration(seconds: 12));
       final daten = antwort.data;
       if (daten is Map && daten['laender'] is num) {
-        return (daten['laender'] as num).toInt();
+        final laender = (daten['laender'] as num).toInt();
+        if (userId != null) {
+          _laenderMerker[userId] = (
+            fahrten: abgeschlosseneFahrten,
+            laender: laender,
+          );
+        }
+        return laender;
       }
-      return 0;
+      return gemerkt?.laender ?? 0;
     } catch (e) {
       debugPrint('[Gamification] Laenderzahl nicht ladbar: $e');
-      return 0;
+      // Den letzten bekannten Stand behalten. Auf 0 zurueckzufallen wuerde den
+      // Fortschrittsbalken der Laender-Familie bei jedem Netzhaenger auf null
+      // setzen, obwohl das Abzeichen laengst vergeben ist.
+      return gemerkt?.laender ?? 0;
     }
   }
 
-  static Future<void> pruneRecentRidePhotos({int keep = 50}) async {
+  /// Raeumt alte Fahrtfotos ab.
+  ///
+  /// Die Grenze steht bewusst DEUTLICH ueber der hoechsten Foto-Schwelle
+  /// (badge_82 verlangt 50). Lagen beide auf 50, konnte der Zaehler die
+  /// Schwelle strukturell nie ueberschreiten — die Aufraeumung haette das
+  /// fuenfzigste Foto genau dann weggenommen, wenn es gezaehlt werden soll.
+  /// Gemessen am 01.09.: drei Fahrten mit Foto insgesamt, 4,9 MB. Es gibt
+  /// keinen Grund, hier eng zu sein.
+  static Future<void> pruneRecentRidePhotos({int keep = 200}) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
     try {
@@ -1243,6 +1281,22 @@ class GamificationService {
     }
   }
 
+  /// Wie [getDriveSessions], aber sie WIRFT statt still eine leere Liste zu
+  /// liefern. Fuer jeden Weg, der aus dem Ergebnis etwas ableitet, das
+  /// gespeichert wird.
+  static Future<List<UserDriveSession>> _ladeFahrtenOderWirf() async {
+    final userId = _db.auth.currentUser?.id;
+    if (userId == null) return const [];
+    final data = await _db
+        .from('user_drive_sessions')
+        .select()
+        .eq('user_id', userId)
+        .order('created_at', ascending: false);
+    return (data as List)
+        .map((row) => UserDriveSession.fromJson(row as Map<String, dynamic>))
+        .toList();
+  }
+
   static Future<List<UserDriveSession>> getDriveSessions({int? limit}) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return const [];
@@ -1285,9 +1339,17 @@ class GamificationService {
     }
 
     // 1. Alle Drive-Sessions laden. Gespeicherte Routen sind nicht XP-Quelle.
+    //
+    // 2026-09-01: Hier stand getDriveSessions() — und die verschluckt ihren
+    // Fehler und liefert eine LEERE Liste. Der Fang-Zweig darunter griff also
+    // nie, der Sync rechnete mit null Fahrten weiter und schrieb anschliessend
+    // total_xp, total_km, total_routes und level als Nullen ins Profil. Die
+    // Abzeichen schuetzt ein Ausloeser auf `profiles`, diese vier Spalten
+    // nicht. Ein Netzhaenger haette also Level und Erfahrung eines Nutzers
+    // ausgeloescht. Deshalb die Fassung, die den Fehler WIRFT.
     List<UserDriveSession> sessions;
     try {
-      sessions = await getDriveSessions();
+      sessions = await _ladeFahrtenOderWirf();
     } catch (e) {
       debugPrint('[Gamification] Drive-Session-Abfrage fehlgeschlagen: $e');
       return GamificationResult(
@@ -1358,7 +1420,7 @@ class GamificationService {
     // Client nicht ehrlich bilden. Beide laufen neben den anderen, kosten also
     // keinen zusaetzlichen Wartetakt.
     final communityFahrtenZaehler = _ladeCommunityFahrten();
-    final laenderZaehler = _ladeLaenderAnzahl();
+    final laenderZaehler = _ladeLaenderAnzahl(completedSessions.length);
     final createdGroupCount = await gruppenZaehler;
     final postZahlen = await postZaehler;
     final savedRouteReferenceCount = await gespeicherteZaehler;
@@ -1552,6 +1614,20 @@ class GamificationService {
 
     // 5. Bisherige Badges laden und neue bestimmen
     List<String> previousBadges = [];
+    // Ob der bisherige Stand ueberhaupt gelesen werden konnte.
+    //
+    // 2026-09-01: Das war vorher nicht unterschieden. Scheiterte die Abfrage,
+    // blieb previousBadges eine LEERE Liste — und weiter unten schreibt das
+    // UPDATE die Abzeichen als VOLLSTAENDIGE Liste. Lieferte im selben Takt
+    // eine Kennzahl-Abfrage wegen eines Netzfehlers 0, waere die geschriebene
+    // Liste kuerzer als die vorhandene gewesen. Dass dabei bis heute nichts
+    // verloren ging, verdankt sich allein dem Ausloeser
+    // trg_preserve_profile_badges auf `profiles`, der alt und neu vereinigt —
+    // einem Ausloeser, den dieser Code nicht kennt. Verschwindet er bei einer
+    // kuenftigen Migration, loescht der naechste Sync mit Netzfehler still
+    // Abzeichen. Deshalb: bei einem Lesefehler die Spalte gar nicht
+    // mitschreiben.
+    var standGelesen = false;
     try {
       final profile = await _db
           .from('profiles')
@@ -1563,6 +1639,7 @@ class GamificationService {
       if (rawBadges is Iterable) {
         previousBadges = normalizeBadgeIds(rawBadges);
       }
+      standGelesen = true;
     } catch (e) {
       debugPrint('[Gamification] Badges-Abfrage fehlgeschlagen: $e');
     }
@@ -1594,7 +1671,8 @@ class GamificationService {
             'total_km': totalKm,
             'total_xp': totalXp,
             'total_routes': totalRoutes,
-            'badges': unlockedBadges,
+            // Nur wenn wir wissen, was vorher drinstand.
+            if (standGelesen) 'badges': unlockedBadges,
           })
           .eq('id', userId);
 

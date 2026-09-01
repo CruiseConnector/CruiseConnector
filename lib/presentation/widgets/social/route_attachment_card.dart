@@ -385,6 +385,9 @@ class _RouteAttachmentCardState extends State<RouteAttachmentCard> {
             width: double.infinity,
             child: RouteVerlaufSketch(
               punkte: route.flatCoordinates,
+              // Die echten Abschnitte mitgeben, statt sie hinterher am
+              // Abstand zu erraten.
+              abschnitte: route.geometrieAbschnitte,
               accent: AppAccentColors.accent,
             ),
           ),

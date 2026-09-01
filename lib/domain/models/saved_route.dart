@@ -182,7 +182,15 @@ class SavedRoute {
   /// beide schon da, und eine dritte gespeicherte Zahl koennte von ihnen
   /// abweichen.
   double? get durchschnittKmh {
-    final km = drivenKm ?? (routeSource == 'driven_track' ? distanceKm : null);
+    // NUR aus den eigenen gefahrenen Kilometern. Der frueher hier stehende
+    // Rueckfall auf distanceKm bei routeSource == 'driven_track' war ein Leck:
+    // Kopiert jemand eine geteilte Aufzeichnung, wandert driven_km bewusst
+    // NICHT mit (das waeren die Kilometer des anderen), route_source,
+    // distance_actual und duration_seconds aber schon. Der Rueckfall haette
+    // daraus "Schnitt 88 km/h" gerechnet — die Durchschnittsgeschwindigkeit
+    // einer fremden Person, ausgegeben als eigene Zahl. Genau das, was beim
+    // Hoechsttempo bereits verboten ist.
+    final km = drivenKm;
     final sekunden = durationSeconds;
     if (km == null || km <= 0) return null;
     if (sekunden == null || sekunden <= 0) return null;
@@ -192,6 +200,15 @@ class SavedRoute {
     if (!kmh.isFinite || kmh < 3 || kmh > 300) return null;
     return kmh;
   }
+
+  /// Ob die Signatur ueberhaupt auf Koordinaten beruht.
+  ///
+  /// Ohne Geometrie faellt [routeSignature] auf Typ, Stil und gerundete
+  /// Distanz zurueck — ein Wert, den beliebig viele verschiedene Strecken
+  /// teilen. Wer damit sucht oder ihn als Fingerprint speichert, baut sich
+  /// Verwechslungen ein.
+  bool get hatVerwertbareGeometrie =>
+      flattenGeometryCoordinates(geometry).isNotEmpty;
 
   String get routeSignature {
     final coordinates = flattenGeometryCoordinates(geometry);
@@ -233,6 +250,25 @@ class SavedRoute {
           .toList(growable: false);
     }
     return _parseCoordinateSegment(raw);
+  }
+
+  /// Die Geometrie in ihren ECHTEN Abschnitten, ohne sie zu plaetten.
+  ///
+  /// Ein MultiLineString traegt seine Luecken selbst; wer die Liste erst
+  /// flachklopft und die Grenzen danach am Abstand errraet, liegt bei duenn
+  /// gestuetzten Schnellstrassen daneben.
+  List<List<List<double>>> get geometrieAbschnitte {
+    final raw = geometry['coordinates'];
+    if (raw is! List) return const [];
+    if (geometry['type'] == 'MultiLineString') {
+      return raw
+          .whereType<List>()
+          .map(_parseCoordinateSegment)
+          .where((teil) => teil.length >= 2)
+          .toList(growable: false);
+    }
+    final flach = _parseCoordinateSegment(raw);
+    return flach.length >= 2 ? <List<List<double>>>[flach] : const [];
   }
 
   static List<List<double>> _parseCoordinateSegment(List raw) {
