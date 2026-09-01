@@ -2610,6 +2610,62 @@ class RouteService {
         }
       }
 
+      // 2026-09-01 (Vucko, Sprachaufnahme: "wenn ich Umwege suche ... meistens
+      // findet es gar keine Route"):
+      //
+      // DER NOTAUSGANG, ganz am Ende. Alles davor ist unveraendert: die
+      // Live-Versuche, der aggressive Rettungskorridor, der Pool, die
+      // Herabstufungs-Kaskade mit ihrer ehrlichen Markierung. Erst wenn ALLES
+      // davon nichts geliefert hat, greift diese Stelle — statt dem Nutzer
+      // "Keine passende Route gefunden" hinzuwerfen, obwohl die Suche sehr
+      // wohl Geometrien in der Hand hatte.
+      //
+      // Gemessen am 01.09.: die Edge liefert zuverlaessig (27 Live-Antworten,
+      // keine einzige fehlgeschlagen, 0,9 bis 5,4 s). In fuenf von neun
+      // gemessenen Kombinationen aus Streckenpaar und Umwegsstufe verwarf der
+      // Client danach ALLES. Haerteste Ursache ist die Kehrtwenden-Pruefung:
+      // eine einzige Wende lehnt hart ab, ohne Ausweg.
+      //
+      // Die Regel ist Vuckos eigene, vom selben Tag: "nur wenn es andere wege
+      // gibt dann soll er sie auch nehmen aber wenn es keine gibt passt es
+      // auch die gleiche route zurueck zu nehmen." Die Tore bleiben also in
+      // voller Schaerfe und entscheiden weiterhin, WELCHER Kandidat gewinnt.
+      // Sie entscheiden nur nicht mehr, ob der Nutzer ueberhaupt etwas bekommt.
+      //
+      // ABSICHTLICH ENG: nur A nach B, nur wenn das Ziel erreicht wurde und
+      // der Start nicht zu weit weg lag. Eine Strecke, die woanders endet,
+      // kommt hier NICHT durch. Und die Herabstufungs-Kaskade laeuft vorher
+      // komplett durch, damit die beiden Waechter aus dem 18.08. weiter
+      // greifen (a2b_umwegsstufen_test, route_generation_mock_test): eine
+      // Route, die sich selbst als direkt meldet, wird nach wie vor nicht als
+      // Umweg verkauft.
+      final notausgang = bestRejectedCandidate;
+      if (notausgang != null &&
+          scenario.isPointToPoint &&
+          !notausgang.startOffsetRejected &&
+          !notausgang.countryRejected &&
+          notausgang.route.coordinates.length >= 2) {
+        debugPrint(
+          '[RouteService] Notausgang A nach B: nach allen Rueckfaellen war '
+          'nichts uebrig. Liefere den besten verworfenen Kandidaten '
+          '(${notausgang.route.distanceKm?.toStringAsFixed(1)} km, '
+          'tier=${notausgang.tier.name}) statt einer Fehlermeldung.',
+        );
+        notausgang.route.edgeMeta['client_letzter_ausweg'] = true;
+        notausgang.route.edgeMeta['client_letzter_ausweg_grund'] =
+            'alle_rueckfaelle_leer';
+        notausgang.route.edgeMeta['requested_detour_level'] =
+            scenario.detourLevel;
+        lastRouteGenerationSource = _liveRouteSource;
+        return _finalizeAndRemember(
+          scenario: scenario,
+          route: notausgang.route,
+          sampledCoordinates: notausgang.sampledCoordinates,
+          fingerprint: notausgang.fingerprint,
+          rememberInRegistry: true,
+        );
+      }
+
       throw lastError ??
           const RouteServiceException(
             type: RouteErrorType.noRoute,
