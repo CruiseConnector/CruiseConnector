@@ -4619,6 +4619,26 @@ async function handler(req: Request): Promise<Response> {
       debug_message: 'Edge v2: neither start_location nor startLocation in request body',
     }, 400);
   }
+  // 2026-09-01 (A4, Nebenbefund aus der Ursachensuche): Dasselbe fuer den
+  // ZIELPUNKT. Fuer den Start gab es diese Pruefung seit jeher, fuer das Ziel
+  // nicht — eine A-nach-B-Anfrage ohne target_location lief bis in
+  // tryServerWithProfile und stuerzte dort ab:
+  //   TypeError: Cannot read properties of undefined (reading 'latitude')
+  // Belegt im Protokoll function_logs vom 01.09., HTTP 500.
+  //
+  // Laut CLAUDE.md darf ein fachlicher Fehler NIE als 5xx ausgeliefert werden:
+  // der Client fordert bei 5xx zum Wiederholen auf, und das ist hier sinnlos —
+  // die Anfrage wird ohne Ziel auch beim zehnten Mal nicht besser. Zusaetzlich
+  // kostete jeder Absturz einen vollen Funktionsstart.
+  const zielFehlt = body.route_type === 'POINT_TO_POINT' &&
+    (!body.target_location?.latitude || !body.target_location?.longitude);
+  if (zielFehlt) {
+    return jsonResponse({
+      error: 'target_location_required',
+      user_message: 'Kein Ziel angegeben — bitte waehle einen Zielpunkt.',
+      debug_message: 'Edge v2: POINT_TO_POINT ohne target_location/targetLocation',
+    }, 400);
+  }
   // ── Rate-Limit-Gate (fail-open) ── direkt vor der teuren GraphHopper-Arbeit,
   // nach OPTIONS/health/method/JSON/start_location (die werden nie limitiert).
   const rl = rlExtractKey(req);
