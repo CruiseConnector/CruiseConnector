@@ -36,6 +36,7 @@ class RoutePoolEntry {
     this.maxSegmentMeter,
     this.geometrieQuelle,
     this.autobahnVerstoss,
+    this.kehrtwendenMitte,
   });
 
   final String id;
@@ -97,6 +98,25 @@ class RoutePoolEntry {
   final String? geometrieQuelle;
   final bool? autobahnVerstoss;
 
+  /// Wie viele VERMEIDBARE Kehrtwenden die Strecke enthaelt.
+  ///
+  /// 2026-09-01 (Vucko: „keine wendepunkte mitten auf den strassen erlauben"):
+  /// Gerechnet von der Edge-Funktion `route-pool-wenden`, mit demselben
+  /// Verfahren wie die Routen-Erzeugung. Gezaehlt werden nur Wenden, vor UND
+  /// nach denen noch echte Strecke liegt und an deren Scheitel die Route auch
+  /// wirklich umdreht — eine Sackgasse an der Haustuer zaehlt nicht mit.
+  ///
+  /// `null` heisst „noch nicht gemessen", nicht „keine Wende". Am 01.09. sind
+  /// alle 2778 Pool-Zeilen gemessen; 2047 davon tragen mindestens eine.
+  final int? kehrtwendenMitte;
+
+  /// Ob diese Strecke den Fahrer mitten auf der Strasse wenden liesse.
+  ///
+  /// Bei fehlender Messung `null` — der Aufrufer entscheidet dann selbst, ob
+  /// „unbekannt" wie „ja" behandelt wird.
+  bool? get laesstWenden =>
+      kehrtwendenMitte == null ? null : kehrtwendenMitte! > 0;
+
   factory RoutePoolEntry.fromJson(Map<String, dynamic> json) {
     final payload = json['route_payload'] is Map
         ? Map<String, dynamic>.from(json['route_payload'] as Map)
@@ -149,6 +169,7 @@ class RoutePoolEntry {
       maxSegmentMeter: (json['max_segment_meter'] as num?)?.toDouble(),
       geometrieQuelle: json['geometrie_quelle'] as String?,
       autobahnVerstoss: json['autobahn_verstoss'] as bool?,
+      kehrtwendenMitte: (json['kehrtwenden_mitte'] as num?)?.toInt(),
     );
   }
 
@@ -199,6 +220,7 @@ class RoutePoolEntry {
       maxSegmentMeter: maxSegmentMeter,
       geometrieQuelle: geometrieQuelle,
       autobahnVerstoss: autobahnVerstoss,
+      kehrtwendenMitte: kehrtwendenMitte,
     );
   }
 
@@ -235,6 +257,17 @@ class RoutePoolEntry {
       'usage_count': usageCount,
       'source': source,
       'route_payload': routePayload,
+      // 2026-09-01: Diese fuenf Kennzahlen fehlten hier. Eine Empfehlung, die
+      // durch den Startseiten-Cache gegangen ist, war danach nicht mehr
+      // pruefbar — und der Filter urteilt inzwischen AUSSCHLIESSLICH ueber
+      // Kennzahlen, weil die Geometrie bewusst nicht mehr mitgeladen wird.
+      // Aus dem Cache kam also eine Strecke zurueck, die kein Tor mehr
+      // passieren konnte.
+      'punkt_anzahl': punktAnzahl,
+      'max_segment_meter': maxSegmentMeter,
+      'geometrie_quelle': geometrieQuelle,
+      'autobahn_verstoss': autobahnVerstoss,
+      'kehrtwenden_mitte': kehrtwendenMitte,
     };
   }
 }

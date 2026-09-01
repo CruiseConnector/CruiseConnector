@@ -76,6 +76,42 @@ class AppChangelog {
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
     ChangelogEintrag(
+      version: '1.5.31',
+      anzeigeName: '1.3.2',
+      titel: 'Keine Wendemanöver mehr',
+      schrittTitel: <String>[
+        'Nie wieder mitten auf der Straße wenden',
+        'Fahrten nachträglich speichern geht wirklich',
+        'Lücken in der Aufzeichnung bleiben Lücken',
+        'Deine Abzeichen bleiben, wo du sie hingelegt hast',
+        'Höchsttempo und Schnitt stimmen',
+        'Fremde Profile laden schneller',
+        'Deine Garage geht nicht mehr verloren',
+        'Erfahrung und Level bleiben stehen',
+        'Ein Handy, zwei Konten, getrennte Aufgaben',
+      ],
+      punkte: <String>[
+        'Vorgeschlagene Strecken schicken dich nicht mehr in eine Straße '
+            'hinein, aus der du sofort wieder herausdrehen musst.',
+        'Eine gefahrene Strecke ließ sich nicht speichern. Jetzt geht es, '
+            'und Fotos lassen sich nachträglich hinzufügen.',
+        'Verliert das Handy unterwegs die Ortung, zieht die gespeicherte '
+            'Strecke keine schnurgerade Linie mehr über die Lücke.',
+        'Hast du deine Abzeichen selbst auf dem Profil verteilt, bleiben sie '
+            'genau dort liegen.',
+        'Kopierst du eine Strecke aus einer Community, zeigt sie nicht mehr '
+            'die Werte der anderen Person.',
+        'Beim Öffnen eines fremden Profils fragte die App für jeden Beitrag '
+            'einzeln nach. Jetzt fragt sie einmal für alle.',
+        'Beim Speichern konnte die Garage leer zurückbleiben, und die App '
+            'meldete trotzdem Erfolg. Das kann nicht mehr passieren.',
+        'Ein Aussetzer der Verbindung konnte Erfahrung, Kilometer und Level '
+            'auf null setzen. Das kann nicht mehr passieren.',
+        'Melden sich zwei Leute auf demselben Handy an, erbt die zweite '
+            'Person die Startaufgaben der ersten nicht mehr.',
+      ],
+    ),
+    ChangelogEintrag(
       version: '1.5.30',
       anzeigeName: '1.3.1',
       titel: 'Genauer, privater und ganz Deutschland',

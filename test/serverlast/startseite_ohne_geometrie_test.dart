@@ -33,6 +33,9 @@ RoutePoolEntry strecke({
   double? maxSegmentMeter,
   String? geometrieQuelle,
   bool? autobahnVerstoss,
+  // Standard: gemessen und sauber. Sonst haengt jeder Test dieser Datei an
+  // dem Wende-Tor statt an dem, was er eigentlich prueft.
+  int? kehrtwendenMitte = 0,
   Map<String, dynamic> geometry = const {},
   Map<String, dynamic> routePayload = const {},
   int distanceBucket = 50,
@@ -56,6 +59,7 @@ RoutePoolEntry strecke({
     verified: true,
     geometry: geometry,
     routePayload: routePayload,
+    kehrtwendenMitte: kehrtwendenMitte,
     punktAnzahl: punktAnzahl,
     maxSegmentMeter: maxSegmentMeter,
     geometrieQuelle: geometrieQuelle,

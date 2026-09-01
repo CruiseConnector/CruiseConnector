@@ -1310,6 +1310,47 @@ const KEHRTWENDE_BUENDEL_TOLERANZ = 12;
 // machen. Dreihundert Meter decken eine typische Stichstrasse ab.
 const KEHRTWENDE_RAND_M = 300;
 
+// Wie weit vor und hinter dem Scheitel der Kurs gemessen wird, und ab wie viel
+// Grad dort wirklich gedreht wird.
+//
+// 2026-09-01 an 40 echten Pool-Strecken nachgemessen: Ohne diese Pruefung
+// meldete die Zaehlung 66 Wenden — an 21 davon dreht die Strecke am Scheitel
+// gar nicht (teils nur 22 Grad). Das sind Stellen, an denen die Route nur nah
+// an sich selbst zurueckläuft, ohne dass jemand wenden muesste. Ein Tor auf
+// der ungepruefeten Zahl haette jede dritte Strecke aus einem Grund
+// abgelehnt, den es nicht gibt.
+//
+// 140 Grad und nicht 180: an einer echten Wende liegt die Gegenfahrbahn ein
+// paar Meter versetzt, und die Rasterung glaettet die Spitze etwas ab.
+const KEHRTWENDE_DREH_FENSTER_M = 100;
+const KEHRTWENDE_DREH_GRAD = 140;
+
+function kursGrad(dx: number, dy: number): number {
+  return (Math.atan2(dx, dy) * 180) / Math.PI;
+}
+
+function kursDifferenz(a: number, b: number): number {
+  let d = Math.abs(a - b) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/// Dreht die Strecke am Rasterpunkt `scheitel` wirklich um?
+function drehtDortWirklich(
+  xs: Float64Array,
+  ys: Float64Array,
+  n: number,
+  scheitel: number,
+): boolean {
+  const fenster = Math.round(KEHRTWENDE_DREH_FENSTER_M / KEHRTWENDE_RASTER_M);
+  const davor = scheitel - fenster;
+  const danach = scheitel + fenster;
+  if (davor < 0 || danach >= n) return false;
+  const kursDavor = kursGrad(xs[scheitel] - xs[davor], ys[scheitel] - ys[davor]);
+  const kursDanach = kursGrad(xs[danach] - xs[scheitel], ys[danach] - ys[scheitel]);
+  return kursDifferenz(kursDavor, kursDanach) >= KEHRTWENDE_DREH_GRAD;
+}
+
 /// Zaehlt Kehrtwenden (raus und auf derselben Fahrbahn zurueck) und liefert
 /// die laengste davon in Metern. Koordinaten sind [longitude, latitude].
 function kehrtwendenZaehler(
@@ -1408,9 +1449,14 @@ function kehrtwendenZaehler(
     // Vucko gefahren ist.
     const vorDemStichM = start * KEHRTWENDE_RASTER_M;
     const nachDerRueckkehrM = gesamtM - partner[start] * KEHRTWENDE_RASTER_M;
+    // Mittendrin heisst: vor UND nach der Wende liegt echte Strecke, UND an
+    // ihrem Scheitel dreht die Route auch wirklich um. Die zweite Bedingung
+    // ist kein Beiwerk — ohne sie ist jede dritte Meldung falsch.
+    const scheitel = Math.round((start + partner[start]) / 2);
     if (
       vorDemStichM > KEHRTWENDE_RAND_M &&
-      nachDerRueckkehrM > KEHRTWENDE_RAND_M
+      nachDerRueckkehrM > KEHRTWENDE_RAND_M &&
+      drehtDortWirklich(xs, ys, n, scheitel)
     ) {
       anzahlMitte++;
     }

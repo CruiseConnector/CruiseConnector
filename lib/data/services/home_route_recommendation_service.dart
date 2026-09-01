@@ -116,6 +116,15 @@ class HomeRouteRecommendationService {
           .eq('is_active', true)
           .isFilter('deprecated_at', null)
           .gte('quality_score', 70)
+          // 2026-09-01: Schon der Server wirft die Wende-Strecken weg.
+          //
+          // Ohne diese Zeile holt die Abfrage 120 Kandidaten, von denen der
+          // Filter danach rund 89 wegwirft — bei 73,7 Prozent betroffener
+          // Zeilen im Pool. Es blieben zu wenige uebrig, um daraus noch nach
+          // Entfernung und Rotation auszuwaehlen. Die Bedingung ist DIESELBE
+          // wie in _isSafeHomePoolRoute; der Filter dort bleibt trotzdem
+          // stehen, weil die Empfehlung auch aus dem Cache kommen kann.
+          .eq('kehrtwenden_mitte', 0)
           .order('weekly_rotation_score', ascending: false)
           .order('quality_score', ascending: false)
           .limit(120);
@@ -266,7 +275,8 @@ class HomeRouteRecommendationService {
       'verified,is_active,shape_score,user_rating,average_rating,'
       'rating_count,completion_rate,weekly_rotation_score,deprecated_at,'
       'usage_count,source,'
-      'punkt_anzahl,max_segment_meter,geometrie_quelle,autobahn_verstoss';
+      'punkt_anzahl,max_segment_meter,geometrie_quelle,autobahn_verstoss,'
+      'kehrtwenden_mitte';
 
   /// Was fuer die EINE ausgewaehlte Strecke nachgeholt wird.
   static const String _routePoolGeometrieSelect = 'geometry,route_payload';
@@ -381,6 +391,29 @@ class HomeRouteRecommendationService {
         entry.autobahnVerstoss ??
         (entry.routePayload['motorway_violation'] == true);
     if (autobahn) return false;
+
+    // 2026-09-01 (Vucko: „die routen die jetzt im routenpool gespeichert sind
+    // und genehmigt werden von der app keine wendepunkte mitten auf den
+    // strassen erlauben"):
+    //
+    // Eine Wende MITTENDRIN heisst: der Fahrer muss auf offener Strasse
+    // umdrehen oder in eine Gasse fahren, nur um sofort wieder zurueck zu
+    // muessen. Genau das hat Vucko auf seiner Testfahrt erlebt.
+    //
+    // Am 01.09. den ganzen Pool gemessen: 2047 von 2778 Zeilen (73,7 Prozent)
+    // enthalten so eine Wende. Der Ausschluss ist also kein Randfall, er
+    // nimmt drei Viertel der Bibliothek von der Startseite. Er ist trotzdem
+    // richtig: 51 der 53 Gebiete behalten saubere Strecken, und die
+    // Startseite laedt 120 Kandidaten im Umkreis von 100 km — es rueckt
+    // praktisch immer eine nach. Leer bleibt die Kachel hoechstens in
+    // Mariazell und Bludenz, zwei Alpentaelern, in denen hin und zurueck oft
+    // die einzige Strasse ist.
+    //
+    // null wird wie jede fehlende Kennzahl behandelt: ausgeschlossen. Eine
+    // unpruefbare Strecke gehoert nicht auf die Startseite.
+    final wenden = entry.kehrtwendenMitte;
+    if (wenden == null || wenden > 0) return false;
+
     return true;
   }
 

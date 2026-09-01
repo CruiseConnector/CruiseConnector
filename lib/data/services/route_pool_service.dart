@@ -1928,6 +1928,13 @@ class RoutePoolService {
         .toList(growable: false);
   }
 
+  /// 0 fuer eine Strecke ohne Wende mittendrin (oder ohne Messung), 1 fuer
+  /// eine mit. Kleiner gewinnt.
+  static int _wendeRang(RoutePoolEntry route) {
+    final wenden = route.kehrtwendenMitte;
+    return (wenden != null && wenden > 0) ? 1 : 0;
+  }
+
   static List<RoutePoolMatch> findMatches({
     required RoutePoolQuery query,
     required Iterable<RoutePoolEntry> candidates,
@@ -1977,6 +1984,24 @@ class RoutePoolService {
     }
 
     matches.sort((a, b) {
+      // 2026-09-01 (Vucko: „keine wendepunkte mitten auf den strassen
+      // erlauben"): DAS ERSTE Kriterium. Eine Strecke, die den Fahrer mitten
+      // auf der Strasse umdrehen laesst, kommt hinter jede, die das nicht tut.
+      //
+      // Bewusst SORTIEREN und nicht ausschliessen. Dieser Weg ist selbst schon
+      // der Rueckfall — er laeuft, wenn die Live-Erzeugung nichts geliefert
+      // hat. Ein harter Ausschluss haette hier aus „Route mit Wende" ein
+      // „keine Route" gemacht, und das ist der schlechtere Ausgang. Solange
+      // irgendeine saubere Strecke passt, gewinnt sie; gibt es keine, faehrt
+      // der Nutzer lieber mit einer Wende als gar nicht.
+      //
+      // Eine ungemessene Strecke (null) gilt hier als sauber, nicht als
+      // schlecht: sie stammt aus `route_pool_candidates`, wo die Kennzahl gar
+      // nicht gefuehrt wird. Sie hier hinten anzustellen wuerde die Reserve
+      // entwerten, ohne etwas ueber ihre Qualitaet zu wissen.
+      final byWende = _wendeRang(a.route).compareTo(_wendeRang(b.route));
+      if (byWende != 0) return byWende;
+
       // 2026-07-27 (vucko „wir haben sehr oft die gleiche Route bekommen"):
       // Hier stand `a.startDistanceKm.compareTo(b.startDistanceKm)` auf dem
       // ROHEN Double. Zwei Startentfernungen sind praktisch nie exakt gleich,

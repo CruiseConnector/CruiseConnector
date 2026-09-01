@@ -13,6 +13,10 @@ import {
   calculateDistance,
   normalizeBearingDegrees,
 } from "../generate-cruise-route/routing_utils.ts";
+import {
+  abschnitteAus,
+  kehrtwendenZaehler,
+} from "../_gemeinsam/kehrtwenden.ts";
 
 type JsonMap = Record<string, unknown>;
 const maxSessionCandidateQueueLength = 10;
@@ -1020,6 +1024,19 @@ async function upsertVerifiedRoute(args: {
   const first = coords[0];
   const last = coords[coords.length - 1];
   const hasHighway = routeHasMotorway(args.route);
+  // Abschnittsweise rechnen, NICHT auf einer flachgeklopften Liste. Zwischen
+  // zwei Abschnitten liegt eine Luecke, keine Strasse — ueber sie hinweg
+  // faende die Partnersuche Gegenstuecke, die es in Wirklichkeit nicht gibt.
+  const wenden = abschnitteAus(args.route.geometry).reduce(
+    (summe, teil) => {
+      const b = kehrtwendenZaehler(teil);
+      return {
+        anzahl: summe.anzahl + b.anzahl,
+        anzahlMitte: summe.anzahlMitte + b.anzahlMitte,
+      };
+    },
+    { anzahl: 0, anzahlMitte: 0 },
+  );
   const row = {
     route_fingerprint: args.fingerprint,
     title: `${args.region.city_cluster} ${args.job.distance_bucket} ${
@@ -1046,6 +1063,16 @@ async function upsertVerifiedRoute(args: {
     verified: true,
     is_active: true,
     geometry: args.route.geometry,
+    // 2026-09-01 (Vucko: "keine wendepunkte mitten auf den strassen
+    // erlauben"): Die Kennzahl wird BEIM SCHREIBEN gerechnet.
+    //
+    // Der Client filtert danach, und er behandelt eine fehlende Messung wie
+    // jede andere fehlende Kennzahl: als Ausschluss. Ohne diese Zeilen waere
+    // jede neu eingespeiste Strecke also unsichtbar — sie stuende im Pool und
+    // erschiene nie. Die Nachmess-Funktion route-pool-wenden holt nur ab, was
+    // vor dem 01.09. entstanden ist; laufend gilt das hier.
+    kehrtwenden_count: wenden.anzahl,
+    kehrtwenden_mitte: wenden.anzahlMitte,
     route_payload: {
       source: "route_pool_healing_worker",
       quality_tier: args.decision.qualityTier,
