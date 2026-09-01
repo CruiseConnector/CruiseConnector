@@ -313,10 +313,26 @@ void main() {
         'lib/presentation/widgets/starter_paket_karte.dart',
       ).readAsStringSync();
       expect(karte, contains('Future<void> _verleihKette'));
-      expect(karte, contains('_verleihKette.then('));
+      // 2026-09-01 (A18): Der Aufruf steht jetzt ueber drei Zeilen, weil ein
+      // catchError dazugekommen ist. Deshalb nicht mehr auf den
+      // zusammenhaengenden Text pruefen, sondern auf beide Teile.
+      expect(karte, contains('_verleihKette = _verleihKette'));
+      expect(karte, contains('.then((_) => _verleiheAbzeichen(badgeId))'));
       // Beide Melder gehen ueber die Kette, keiner ruft direkt.
       final direkt = RegExp(r'await _verleiheAbzeichen\(').allMatches(karte);
       expect(direkt, isEmpty);
+      // 2026-09-01 (A18, Vucko: "Manchmal haengt es nach der
+      // Badge-Animation"): Ohne Faenger stand die Kette nach dem ERSTEN
+      // Fehlschlag dauerhaft auf einem abgelehnten Future. Jede weitere
+      // Verleihung haengte sich daran und lief nie — lautlos, fuer den Rest
+      // der Sitzung.
+      expect(
+        karte,
+        contains('.catchError('),
+        reason:
+            'Ein einziger Netzhaenger darf nicht alle folgenden Abzeichen '
+            'stilllegen.',
+      );
     });
   });
 

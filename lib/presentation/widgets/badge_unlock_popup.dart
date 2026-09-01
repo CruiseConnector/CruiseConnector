@@ -36,14 +36,48 @@ Future<void> zeigeOffeneAuszeichnungen(BuildContext context) async {
   await OffeneAuszeichnungen.quittieren(offen);
 }
 
+/// Sorgt dafuer, dass immer nur EINE Feier gleichzeitig laeuft.
+///
+/// 2026-09-01 (A18): `zeigeOffeneAuszeichnungen` hatte keinerlei Sperre, und
+/// `OffeneAuszeichnungen.offene()` ist ein reiner Lesezugriff — quittiert wird
+/// erst NACH der Feier. Zwei Aufrufer, die kurz hintereinander kommen (die
+/// Funktion wird an sieben Stellen gerufen), bekamen also dieselbe Liste und
+/// legten zwei Feiern uebereinander. Die untere wartete dann auf einen
+/// Navigator-Zustand, den es nicht mehr gab.
+Future<void> _laufendeFeier = Future<void>.value();
+
 Future<void> showBadgeUnlockPopup({
   required BuildContext context,
   required List<app.Badge> badges,
 }) {
   if (badges.isEmpty) return Future<void>.value();
 
+  // Anstellen statt uebereinanderlegen. Ein Fehlschlag darf die Schlange
+  // nicht abreissen lassen, deshalb der Faenger.
+  //
+  // Der Navigator wird JETZT gemerkt, nicht nach dem Warten: bis die Schlange
+  // an uns kommt, kann das aufrufende Widget laengst weg sein, und ein
+  // BuildContext ueber eine Wartepause hinweg ist genau die Falle, die
+  // anderswo in dieser Datei schon zugeschnappt ist.
+  final navigator = Navigator.maybeOf(context, rootNavigator: true);
+  if (navigator == null) return Future<void>.value();
+  final naechste = _laufendeFeier.then(
+    (_) => _zeigeEineFeier(navigator: navigator, badges: badges),
+  );
+  _laufendeFeier = naechste.catchError((Object e) {
+    debugPrint('[Badge] Feier fehlgeschlagen: $e');
+  });
+  return _laufendeFeier;
+}
+
+Future<void> _zeigeEineFeier({
+  required NavigatorState navigator,
+  required List<app.Badge> badges,
+}) {
+  if (!navigator.mounted) return Future<void>.value();
+
   return showGeneralDialog<void>(
-    context: context,
+    context: navigator.context,
     barrierDismissible: false,
     barrierLabel: 'Badge freigeschaltet',
     barrierColor: Colors.black.withValues(alpha: 0.48),
@@ -87,7 +121,27 @@ class _BadgeUnlockPopupState extends State<_BadgeUnlockPopup>
 
   Future<void> _closeAfterAnimation() async {
     await Future<void>.delayed(const Duration(milliseconds: 3650));
-    if (mounted) Navigator.of(context).maybePop();
+    if (!mounted) return;
+    // 2026-09-01 (A18, Vucko: "Manchmal haengt es nach der Badge-Animation"):
+    //
+    // Hier stand `Navigator.of(context).maybePop()`. Das schliesst die
+    // OBERSTE Route — nicht die eigene. Liegt inzwischen etwas darueber (das
+    // Neuerungen-Blatt und die Sterne-Frage oeffnen sich beim Home-Reiter,
+    // home_page.dart:390), schliesst die Feier das FREMDE Blatt und bleibt
+    // selbst stehen. Genau das ist das "manchmal": es haengt nur dann, wenn
+    // sich in den 3,65 Sekunden etwas daruebergeschoben hat.
+    //
+    // Jetzt wird die eigene Route gemerkt und gezielt geschlossen. Liegt sie
+    // oben, mit der normalen Ausblende; liegt sie darunter, wird sie aus dem
+    // Stapel entfernt, ohne das Blatt darueber anzufassen.
+    final eigene = ModalRoute.of(context);
+    if (eigene == null) return;
+    final navigator = Navigator.of(context);
+    if (eigene.isCurrent) {
+      navigator.pop();
+    } else if (eigene.isActive) {
+      navigator.removeRoute(eigene);
+    }
   }
 
   @override

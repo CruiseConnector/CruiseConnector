@@ -162,8 +162,19 @@ class _StarterPaketKarteState extends State<StarterPaketKarte> {
   }
 
   /// Haengt eine Verleihung hinten an die Kette.
+  ///
+  /// 2026-09-01 (A18, Vucko: "Manchmal haengt es nach der Badge-Animation"):
+  /// Der Faenger ist der Punkt. Ohne ihn blieb die Kette nach dem ERSTEN
+  /// Fehlschlag dauerhaft auf einem abgelehnten Future stehen — jede weitere
+  /// Verleihung haengte sich daran an und lief nie. Ein einziger Netzhaenger
+  /// beim Freischalten legte damit alle folgenden Abzeichen fuer den Rest der
+  /// Sitzung still, und zwar lautlos.
   Future<void> _reiheEin(String badgeId) {
-    _verleihKette = _verleihKette.then((_) => _verleiheAbzeichen(badgeId));
+    _verleihKette = _verleihKette
+        .then((_) => _verleiheAbzeichen(badgeId))
+        .catchError((Object e) {
+          debugPrint('[Starter] Verleihung von $badgeId fehlgeschlagen: $e');
+        });
     return _verleihKette;
   }
 
