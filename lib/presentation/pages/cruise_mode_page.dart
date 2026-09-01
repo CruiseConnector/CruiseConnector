@@ -23,6 +23,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/data/services/web_position_smoother.dart';
+import 'package:cruise_connect/data/services/ueberlappung_versatz.dart';
 import 'package:cruise_connect/data/services/compass_heading_service.dart';
 import 'package:cruise_connect/data/services/native_position_smoother.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -771,11 +772,27 @@ class _CruiseModePageState extends State<CruiseModePage>
   List<LatLng> get _fullRouteBackgroundLatLngs {
     if (!identical(_fullRouteLatLngsCacheSource, _fullRouteCoordinates)) {
       _fullRouteLatLngsCacheSource = _fullRouteCoordinates;
-      _fullRouteLatLngsCache = _fullRouteCoordinates.length < 2
+      // 2026-09-01 (Vucko: „wenn sich der hinweg mit dem rueckweg
+      // ueberschneidet ... sieht es sehr verbuggt aus"):
+      //
+      // Faehrt die Route eine Strasse hinauf und auf derselben zurueck, liegen
+      // beide Spuren uebereinander. Die Karte zeichnet dann EINE Linie, wo
+      // zwei sind, und es sieht aus, als ende die Strecke oben einfach.
+      //
+      // Die zweite Vorbeifahrt rueckt hier sechs Meter zur Seite. NUR in
+      // dieser Hintergrundlinie: die kraeftige aktive Linie darueber traegt
+      // den Standortpunkt und bleibt deshalb genau auf der Strasse. Wuerde man
+      // sie mitversetzen, saesse der Punkt sichtbar daneben — bei
+      // Navigationszoom sind sechs Meter rund zwoelf Bildpunkte.
+      //
+      // Die Berechnung laeuft nur beim Wechsel der Route, nicht bei jedem
+      // GPS-Takt: der Zwischenspeicher haengt an der Identitaet der Liste.
+      final versetzt = _fullRouteCoordinates.length < 2
+          ? _fullRouteCoordinates
+          : mitUeberlappungsVersatz(_fullRouteCoordinates);
+      _fullRouteLatLngsCache = versetzt.length < 2
           ? const []
-          : _fullRouteCoordinates
-                .map((c) => LatLng(c[1], c[0]))
-                .toList(growable: false);
+          : versetzt.map((c) => LatLng(c[1], c[0])).toList(growable: false);
     }
     return _fullRouteLatLngsCache;
   }
