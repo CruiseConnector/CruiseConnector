@@ -511,7 +511,7 @@ class Badge {
       emoji: '\u{1F4CF}',
       category: 'distance',
       familie: 'distanz',
-      assetPath: 'lib/images/badges/badge_31_1000km_gold.png',
+      assetPath: 'lib/images/badges/badge_31_meilenstein_1000km_diamant.png',
     ),
     Badge(
       id: 'badge_32',
@@ -530,7 +530,7 @@ class Badge {
       category: 'distance',
       familie: 'stunden',
       stufe: 3,
-      assetPath: 'lib/images/badges/badge_33_100h_bronze.png',
+      assetPath: 'lib/images/badges/badge_33_uhr_gold.png',
     ),
     Badge(
       id: 'badge_34',
@@ -786,10 +786,10 @@ class Badge {
     // liefert null, weil sie in keiner Familie stehen); das Detail-Blatt zeigt
     // dann Name und Beschreibung, und mehr braucht es nicht.
     //
-    // Emblem: badge_35_founder_ruby.png, dasselbe Gruender-Motiv wie beim
-    // Gruppengruender. Ein eigenes Bild waere schoener, kostet aber 0,6 bis
-    // 1,4 MB im Installationspaket; Austausch spaeter = nur den assetPath
-    // ersetzen.
+    // 2026-09-01: Erledigt. Mit der neuen Figma-Serie hat dieses Abzeichen
+    // ein EIGENES Emblem (badge_57_community_aurora.png). Der alte Hinweis auf
+    // das geteilte Gruender-Motiv und die 0,6 bis 1,4 MB gilt nicht mehr: die
+    // ganze neue Serie wiegt 1,6 MB, das einzelne Bild rund 25 KB.
     Badge(
       id: communityGruenderBadgeId,
       name: 'Community',
@@ -970,6 +970,133 @@ class Badge {
       category: 'routes',
       assetPath: 'lib/images/badges/badge_70_warndreieck_gold.png',
       familie: 'meldungen',
+      stufe: 3,
+    ),
+    // ── 2026-09-01: vier neue Familien aus der Figma-Serie ────────────────
+    //
+    // Die Namen stehen so auf dem Board. `badge.dart` ist von der
+    // Strich-Pruefung ausgenommen (siehe dateiAusnahmen in
+    // keine_striche_in_nutzertexten_test), deshalb bleiben zusammengesetzte
+    // Namen wie "Community-Legende" unveraendert — genau wie die schon
+    // vorhandenen "Konvoi-Legende" und "Wochenend-Stammgast".
+    Badge(
+      id: 'badge_71',
+      name: 'Kurs gesetzt',
+      description: 'Fünf Fahrten mit Navigation zu Ende gefahren.',
+      emoji: '\u{1F6F0}️',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_71_gps_bronze.png',
+      familie: 'navi',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_72',
+      name: 'Navigator',
+      description: 'Fünfundzwanzig Fahrten mit Navigation beendet.',
+      emoji: '\u{1F4E1}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_72_gps_silber.png',
+      familie: 'navi',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_73',
+      name: 'Immer auf Kurs',
+      description: 'Hundert Fahrten mit Navigation beendet. Du kennst den Weg.',
+      emoji: '\u{1F9F2}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_73_gps_gold.png',
+      familie: 'navi',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_74',
+      name: 'Gemeinsam unterwegs',
+      description: 'Drei Gruppenfahrten mit Leuten aus deinen Communities.',
+      emoji: '\u{1F46B}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_74_communityfahrt_bronze.png',
+      familie: 'communityfahrt',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_75',
+      name: 'Stammcrew',
+      description: 'Zehn Fahrten mit deiner Community. Man kennt sich.',
+      emoji: '\u{1F46C}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_75_communityfahrt_silber.png',
+      familie: 'communityfahrt',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_76',
+      name: 'Community-Legende',
+      description: 'Dreißig Fahrten mit deiner Community. Ohne dich fährt keiner los.',
+      emoji: '\u{1F396}️',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_76_communityfahrt_gold.png',
+      familie: 'communityfahrt',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_77',
+      name: 'Zwei Länder',
+      description: 'In zwei verschiedenen Ländern gefahren.',
+      emoji: '\u{1F6C2}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_77_laender_bronze.png',
+      familie: 'laender',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_78',
+      name: 'Länder-Sammler',
+      description: 'In fünf verschiedenen Ländern gefahren.',
+      emoji: '\u{1F30E}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_78_laender_silber.png',
+      familie: 'laender',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_79',
+      name: 'Europa-Tourer',
+      description: 'In zehn verschiedenen Ländern gefahren. Grenzen sind für dich Linien.',
+      emoji: '\u{1F30F}',
+      category: 'routes',
+      assetPath: 'lib/images/badges/badge_79_laender_gold.png',
+      familie: 'laender',
+      stufe: 3,
+    ),
+    Badge(
+      id: 'badge_80',
+      name: 'Erstes Fahrtfoto',
+      description: 'Eine Fahrt mit einem Foto festgehalten.',
+      emoji: '\u{1F4F7}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_80_kamera_bronze.png',
+      familie: 'fotos',
+      stufe: 1,
+    ),
+    Badge(
+      id: 'badge_81',
+      name: 'Fahrt-Fotograf',
+      description: 'Zehn Fahrten mit Foto. Du hältst fest, wo du warst.',
+      emoji: '\u{1F4F8}',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_81_kamera_silber.png',
+      familie: 'fotos',
+      stufe: 2,
+    ),
+    Badge(
+      id: 'badge_82',
+      name: 'Chronist',
+      description: 'Fünfzig Fahrten mit Foto. Ein ganzes Album voller Strecken.',
+      emoji: '\u{1F5BC}️',
+      category: 'social',
+      assetPath: 'lib/images/badges/badge_82_kamera_gold.png',
+      familie: 'fotos',
       stufe: 3,
     ),
   ];
@@ -1167,6 +1294,13 @@ enum BadgeMetrik {
   beitraege,
   hashtagBeitraege,
   meldungen,
+  // 2026-09-01 (neue Badge-Serie aus Figma, Board-Vermerk "NEU · muss in der
+  // App neu umgesetzt werden"): vier Familien, die es bisher nur als Emblem
+  // gab. Die Werte liefert `GamificationService.calculateAndSync`.
+  naviFahrten,
+  communityFahrten,
+  laender,
+  fotoFahrten,
 }
 
 /// Eine Schwelle und das Badge, das sie freischaltet.
@@ -1760,6 +1894,99 @@ const List<BadgeFamilie> badgeFamilien = [
       ),
     ],
   ),
+  // ── 2026-09-01: die vier neuen Familien aus der Figma-Serie ─────────────
+  BadgeFamilie(
+    schluessel: 'navi',
+    titel: 'Mit Navi ans Ziel',
+    metrik: BadgeMetrik.naviFahrten,
+    einheit: 'Fahrten',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_71',
+        schwelle: 5,
+        anleitung: 'Beende fünf Fahrten mit eingeschalteter Navigation.',
+      ),
+      BadgeStufe(
+        id: 'badge_72',
+        schwelle: 25,
+        anleitung: 'Beende fünfundzwanzig Fahrten mit Navigation.',
+      ),
+      BadgeStufe(
+        id: 'badge_73',
+        schwelle: 100,
+        anleitung: 'Beende hundert Fahrten mit Navigation.',
+      ),
+    ],
+  ),
+  BadgeFamilie(
+    schluessel: 'communityfahrt',
+    titel: 'Fahrten mit der Community',
+    metrik: BadgeMetrik.communityFahrten,
+    einheit: 'Fahrten',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_74',
+        schwelle: 3,
+        anleitung: 'Fahre drei Gruppenfahrten mit Leuten aus deinen Communities.',
+      ),
+      BadgeStufe(
+        id: 'badge_75',
+        schwelle: 10,
+        anleitung: 'Fahre zehn Gruppenfahrten mit deiner Community.',
+      ),
+      BadgeStufe(
+        id: 'badge_76',
+        schwelle: 30,
+        anleitung: 'Fahre dreißig Gruppenfahrten mit deiner Community.',
+      ),
+    ],
+  ),
+  BadgeFamilie(
+    schluessel: 'laender',
+    titel: 'Länder',
+    metrik: BadgeMetrik.laender,
+    einheit: 'Länder',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_77',
+        schwelle: 2,
+        anleitung: 'Fahre in zwei verschiedenen Ländern.',
+      ),
+      BadgeStufe(
+        id: 'badge_78',
+        schwelle: 5,
+        anleitung: 'Fahre in fünf verschiedenen Ländern.',
+      ),
+      BadgeStufe(
+        id: 'badge_79',
+        schwelle: 10,
+        anleitung: 'Fahre in zehn verschiedenen Ländern.',
+      ),
+    ],
+  ),
+  BadgeFamilie(
+    schluessel: 'fotos',
+    titel: 'Fotos',
+    metrik: BadgeMetrik.fotoFahrten,
+    einheit: 'Fahrten',
+    stufen: [
+      BadgeStufe(
+        id: 'badge_80',
+        schwelle: 1,
+        anleitung: 'Halte eine Fahrt mit einem Foto fest.',
+      ),
+      BadgeStufe(
+        id: 'badge_81',
+        schwelle: 10,
+        anleitung: 'Halte zehn Fahrten mit einem Foto fest.',
+      ),
+      BadgeStufe(
+        id: 'badge_82',
+        schwelle: 50,
+        anleitung: 'Halte fünfzig Fahrten mit einem Foto fest.',
+      ),
+    ],
+  ),
 ];
 
 /// Die Kennzahlen eines Nutzers in der Form, die [badgeFamilien] versteht.
@@ -1788,6 +2015,10 @@ Map<BadgeMetrik, double> badgeMetriken({
   int beitraege = 0,
   int hashtagBeitraege = 0,
   int meldungen = 0,
+  int naviFahrten = 0,
+  int communityFahrten = 0,
+  int laender = 0,
+  int fotoFahrten = 0,
 }) {
   return {
     BadgeMetrik.level: level.toDouble(),
@@ -1811,6 +2042,10 @@ Map<BadgeMetrik, double> badgeMetriken({
     BadgeMetrik.beitraege: beitraege.toDouble(),
     BadgeMetrik.hashtagBeitraege: hashtagBeitraege.toDouble(),
     BadgeMetrik.meldungen: meldungen.toDouble(),
+    BadgeMetrik.naviFahrten: naviFahrten.toDouble(),
+    BadgeMetrik.communityFahrten: communityFahrten.toDouble(),
+    BadgeMetrik.laender: laender.toDouble(),
+    BadgeMetrik.fotoFahrten: fotoFahrten.toDouble(),
   };
 }
 
@@ -1922,6 +2157,10 @@ BadgeFortschritt? badgeFortschrittFuer({
   int beitraege = 0,
   int hashtagBeitraege = 0,
   int meldungen = 0,
+  int naviFahrten = 0,
+  int communityFahrten = 0,
+  int laender = 0,
+  int fotoFahrten = 0,
 }) {
   return badgeFortschrittAus(
     badgeId,

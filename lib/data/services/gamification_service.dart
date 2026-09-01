@@ -814,6 +814,35 @@ class GamificationService {
   }
 
   @visibleForTesting
+  /// Beendete Fahrten mit eingeschalteter Navigation. Grundlage fuer
+  /// badge_71 bis badge_73.
+  ///
+  /// 2026-09-01: `source` traegt die Herkunft der Fahrt. Gemessen an der
+  /// Produktionsdatenbank kommen drei Werte vor: `navigation` (239 Zeilen),
+  /// `tutorial` (14) und `navigation_unterbrochen` (5). Nur die erste Gruppe
+  /// ist eine echte, zu Ende gefahrene Navigation — eine Tutorial-Fahrt zaehlt
+  /// nicht, und eine unterbrochene ist eben nicht beendet.
+  static int naviFahrtenCount(Iterable<UserDriveSession> sessions) {
+    return sessions
+        .where(
+          (session) =>
+              session.completedAtEnd &&
+              (session.source?.trim().toLowerCase() ?? '') == 'navigation',
+        )
+        .length;
+  }
+
+  /// Fahrten mit einem gespeicherten Foto. Grundlage fuer badge_80 bis
+  /// badge_82.
+  ///
+  /// Bewusst OHNE `completedAtEnd`: Ein Foto haelt fest, wo man war. Ob die
+  /// Route zu Ende gefahren wurde, hat damit nichts zu tun.
+  static int fotoFahrtenCount(Iterable<UserDriveSession> sessions) {
+    return sessions
+        .where((session) => (session.photoUrl?.trim().isNotEmpty ?? false))
+        .length;
+  }
+
   static int completedGroupRideCount(Iterable<UserDriveSession> sessions) {
     return sessions
         .where(
@@ -1102,6 +1131,59 @@ class GamificationService {
   /// Bilderspeicher spaeter wirklich wachsen, gehoert hier keine kleinere Zahl
   /// hin, sondern ein ehrlicher Weg — den Nutzer fragen, statt ihm still seine
   /// Erinnerung zu loeschen.
+  /// Beendete Gruppenfahrten mit mindestens einem Mitfahrer aus einer eigenen
+  /// Community. Grundlage fuer badge_74 bis badge_76.
+  ///
+  /// 2026-09-01: Serverseitig, weil der Client die Mitgliederlisten fremder
+  /// Communities nicht kennt und auch nicht kennen darf. Er koennte die Zahl
+  /// also gar nicht ehrlich bilden.
+  ///
+  /// Faellt der Aufruf aus, wird 0 geliefert. Eine fehlende Zahl darf nie ein
+  /// bereits vergebenes Abzeichen wieder wegnehmen — `profiles.badges` ist
+  /// append-only, ein 0 blockiert also hoechstens die naechste Stufe bis zum
+  /// naechsten Abgleich.
+  static Future<int> _ladeCommunityFahrten() async {
+    try {
+      final wert = await _db
+          .rpc<dynamic>('badge_community_fahrten')
+          .timeout(const Duration(seconds: 8));
+      if (wert is num) return wert.toInt();
+      return 0;
+    } catch (e) {
+      debugPrint('[Gamification] Community-Fahrten nicht ladbar: $e');
+      return 0;
+    }
+  }
+
+  /// In wie vielen verschiedenen Laendern der Nutzer gefahren ist. Grundlage
+  /// fuer badge_77 bis badge_79.
+  ///
+  /// 2026-09-01 (Vuckos Vorgabe woertlich): "serverseitige
+  /// Laender-Klassifikation verwenden, NICHT den Client entscheiden lassen".
+  /// Der Grund steht in CLAUDE.md: alte App-Fassungen bleiben installiert und
+  /// senden falsche Werte. Die Edge-Funktion `badge-kennzahlen` liest die
+  /// aufgezeichneten Spuren und zaehlt selbst; sie nimmt die Nutzerkennung
+  /// ausschliesslich aus dem Anmelde-Token.
+  ///
+  /// Rueckwirkend: Sie rechnet ueber ALLE vorhandenen Spuren, nicht nur ueber
+  /// neue. Beim ersten Abgleich nach dem Update zaehlen also auch die Fahrten
+  /// von frueher.
+  static Future<int> _ladeLaenderAnzahl() async {
+    try {
+      final antwort = await _db.functions
+          .invoke('badge-kennzahlen')
+          .timeout(const Duration(seconds: 12));
+      final daten = antwort.data;
+      if (daten is Map && daten['laender'] is num) {
+        return (daten['laender'] as num).toInt();
+      }
+      return 0;
+    } catch (e) {
+      debugPrint('[Gamification] Laenderzahl nicht ladbar: $e');
+      return 0;
+    }
+  }
+
   static Future<void> pruneRecentRidePhotos({int keep = 50}) async {
     final userId = _db.auth.currentUser?.id;
     if (userId == null) return;
@@ -1272,12 +1354,19 @@ class GamificationService {
     // und Beitraege mit Raute sind `count(distinct post_id)`, nicht die Anzahl
     // der Rauten.
     final kennzahlenZaehler = _ladeBadgeKennzahlen();
+    // 2026-09-01 (neue Familien aus der Figma-Serie): Zwei Zahlen kann der
+    // Client nicht ehrlich bilden. Beide laufen neben den anderen, kosten also
+    // keinen zusaetzlichen Wartetakt.
+    final communityFahrtenZaehler = _ladeCommunityFahrten();
+    final laenderZaehler = _ladeLaenderAnzahl();
     final createdGroupCount = await gruppenZaehler;
     final postZahlen = await postZaehler;
     final savedRouteReferenceCount = await gespeicherteZaehler;
     final fahrzeugAnzahl = await fahrzeugZaehler;
     final communityGegruendet = await gruendungZaehler;
     final badgeKennzahlen = await kennzahlenZaehler;
+    final communityFahrtenAnzahl = await communityFahrtenZaehler;
+    final laenderAnzahl = await laenderZaehler;
     final hashtagBeitragsAnzahl = badgeKennzahlen.hashtagBeitraege;
     final meldungsAnzahl = badgeKennzahlen.meldungen;
     final hashtagBenutzt = hashtagBeitragsAnzahl > 0;
@@ -1325,6 +1414,11 @@ class GamificationService {
       beitraege: postZahlen.gesamt,
       hashtagBeitraege: hashtagBeitragsAnzahl,
       meldungen: meldungsAnzahl,
+      // 2026-09-01: die vier neuen Familien aus der Figma-Serie.
+      naviFahrten: naviFahrtenCount(sessions),
+      communityFahrten: communityFahrtenAnzahl,
+      laender: laenderAnzahl,
+      fotoFahrten: fotoFahrtenCount(sessions),
     );
     final currentlyQualifiedBadges = erfuellteBadgeIds(metriken);
 

@@ -236,6 +236,12 @@ void main() {
   });
 
   group('Badge-Konfiguration', () {
+    // 2026-09-01: Um zwoelf erweitert. Die neue Figma-Serie bringt vier
+    // Familien mit, die es bisher nur als Emblem gab: Navigation (badge_71
+    // bis 73), Fahrten mit der Community (74 bis 76), Laender (77 bis 79) und
+    // Fotos (80 bis 82). Die Liste ist bewusst vollstaendig aufgeschrieben —
+    // sie faellt, sobald jemand ein Abzeichen entfernt oder umbenennt, und
+    // `profiles.badges` ist append-only.
     test('enthaelt nur die aktive Badge-Auswahl', () {
       final ids = app.Badge.all.map((badge) => badge.id).toList();
 
@@ -287,7 +293,19 @@ void main() {
           // ohne jedes Abzeichen — Garage (59-61), Beitraege (62-64),
           // Hashtags (65-67), Meldungen (68-70). Angehaengt, nie eingeschoben:
           // bestehende IDs und ihre Reihenfolge bleiben unberuehrt.
-          for (var i = 59; i <= 70; i++) 'badge_$i',
+          for (var i = 59; i <= 70; i++) 'badge_$i',          'badge_71',
+          'badge_72',
+          'badge_73',
+          'badge_74',
+          'badge_75',
+          'badge_76',
+          'badge_77',
+          'badge_78',
+          'badge_79',
+          'badge_80',
+          'badge_81',
+          'badge_82',
+
         ]),
       );
       expect(app.Badge.getById('route_1'), isNull);
