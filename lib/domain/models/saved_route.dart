@@ -252,12 +252,13 @@ class SavedRoute {
     return _parseCoordinateSegment(raw);
   }
 
-  /// Die Geometrie in ihren ECHTEN Abschnitten, ohne sie zu plaetten.
+  /// Wie [geometrieAbschnitte], aber fuer eine lose Geometrie-Map.
   ///
-  /// Ein MultiLineString traegt seine Luecken selbst; wer die Liste erst
-  /// flachklopft und die Grenzen danach am Abstand errraet, liegt bei duenn
-  /// gestuetzten Schnellstrassen daneben.
-  List<List<List<double>>> get geometrieAbschnitte {
+  /// Damit koennen auch Wege, die keine [SavedRoute] in der Hand haben (etwa
+  /// der Routenpool), dieselbe Zerlegung benutzen, statt sie nachzubauen.
+  static List<List<List<double>>> abschnitteAusGeometrie(
+    Map<String, dynamic> geometry,
+  ) {
     final raw = geometry['coordinates'];
     if (raw is! List) return const [];
     if (geometry['type'] == 'MultiLineString') {
@@ -270,6 +271,14 @@ class SavedRoute {
     final flach = _parseCoordinateSegment(raw);
     return flach.length >= 2 ? <List<List<double>>>[flach] : const [];
   }
+
+  /// Die Geometrie in ihren ECHTEN Abschnitten, ohne sie zu plaetten.
+  ///
+  /// Ein MultiLineString traegt seine Luecken selbst; wer die Liste erst
+  /// flachklopft und die Grenzen danach am Abstand errraet, liegt bei duenn
+  /// gestuetzten Schnellstrassen daneben.
+  List<List<List<double>>> get geometrieAbschnitte =>
+      abschnitteAusGeometrie(geometry);
 
   static List<List<double>> _parseCoordinateSegment(List raw) {
     return raw

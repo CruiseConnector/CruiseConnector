@@ -2335,7 +2335,12 @@ void main() {
         geometry: {'type': 'LineString', 'coordinates': []},
       ).toJson();
 
+      // kehrtwenden_mitte ist seit dem 01.09. eine echte Spalte auf
+      // route_pool_candidates. Die App rechnet sie beim Anlegen selbst, damit
+      // der Kandidat spaeter befoerdert werden KANN — die woechentliche
+      // Beforderung lehnt Ungemessenes ab.
       const allowed = {
+        'kehrtwenden_mitte',
         'id',
         'route_region_id',
         'route_fingerprint',

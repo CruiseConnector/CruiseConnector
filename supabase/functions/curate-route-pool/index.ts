@@ -622,6 +622,9 @@ function toCandidate(row: JsonMap): CurationCandidate {
     promotedToPoolAt: stringOption(row.promoted_to_pool_at),
     demotedAt: stringOption(row.demoted_at),
     routePayload: routePayload(row),
+    // Ohne diese Zeile bekaeme shouldPromoteCandidate immer undefined und
+    // wuerde JEDEN Kandidaten ablehnen — die Beförderung stuende still.
+    kehrtwendenMitte: nullableNumber(row.kehrtwenden_mitte),
   };
 }
 

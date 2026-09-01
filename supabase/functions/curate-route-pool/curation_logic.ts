@@ -41,6 +41,8 @@ export interface CurationCandidate extends CurationRouteCell {
   promotedToPoolAt?: string | null;
   demotedAt?: string | null;
   routePayload?: Record<string, unknown> | null;
+  /// Vermeidbare Kehrtwenden. NULL heisst "noch nicht gemessen".
+  kehrtwendenMitte?: number | null;
 }
 
 export interface CurationPoolRoute extends CurationRouteCell {
@@ -181,6 +183,19 @@ export function shouldPromoteCandidate(
   }
   if (hasHardRouteWarning(candidate.routePayload)) {
     return reject("hard_route_warning");
+  }
+  // 2026-09-01 (Vucko: "keine wendepunkte mitten auf den strassen erlauben"):
+  //
+  // Diese Funktion hebt jede Woche Kandidaten IN den Pool. Ohne diese Pruefung
+  // waere sie der Weg, auf dem die heute gefilterten Wende-Strecken
+  // zurueckkaemen — gemessen liegen in der Reserve 734 von 917 Strecken mit
+  // einer Wende mittendrin.
+  //
+  // Eine NICHT gemessene Strecke wird ebenfalls abgelehnt: befoerdert wird
+  // nur, was nachweislich sauber ist. Der Pool ist die aufgeraeumte
+  // Bibliothek, in ihn kommt nichts Ungeprueftes.
+  if (candidate.kehrtwendenMitte == null || candidate.kehrtwendenMitte > 0) {
+    return reject("kehrtwende_mittendrin");
   }
 
   const tier = qualityTierFor(candidate);

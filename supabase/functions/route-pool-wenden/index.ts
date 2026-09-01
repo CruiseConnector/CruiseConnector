@@ -76,12 +76,28 @@ Deno.serve(async (req: Request) => {
 
   let stapel = 200;
   let nurMessen = false;
+  // Welche Tabelle nachgemessen wird. Die Reserve erreicht den Fahrer ueber
+  // denselben Weg wie der Pool (candidate_reserve) und wird ausserdem woechentlich
+  // IN den Pool befoerdert — sie braucht dieselbe Messung.
+  let tabelle: 'route_pool' | 'route_pool_candidates' = 'route_pool';
   try {
     const koerper = await req.json();
     if (typeof koerper?.stapel === 'number') {
       stapel = Math.max(1, Math.min(500, Math.round(koerper.stapel)));
     }
     if (koerper?.nur_messen === true) nurMessen = true;
+    if (koerper?.tabelle === 'route_pool_candidates') {
+      tabelle = 'route_pool_candidates';
+    } else if (
+      koerper?.tabelle !== undefined && koerper?.tabelle !== 'route_pool'
+    ) {
+      // Nur diese beiden. Ein freier Tabellenname waere ein Schreibzugriff auf
+      // alles, was der Dienstschluessel erreicht.
+      return new Response(
+        JSON.stringify({ error: 'unbekannte_tabelle' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
   } catch (_) {
     // Kein Koerper ist in Ordnung — dann gelten die Vorgaben.
   }
@@ -93,7 +109,7 @@ Deno.serve(async (req: Request) => {
   );
 
   const { data, error } = await db
-    .from('route_pool')
+    .from(tabelle)
     .select('id, geometry')
     .is('kehrtwenden_mitte', null)
     .not('geometry', 'is', null)
@@ -120,7 +136,7 @@ Deno.serve(async (req: Request) => {
       // naechsten Durchlauf wieder und kommt nie ans Ende.
       if (!nurMessen) {
         const { error: e } = await db
-          .from('route_pool')
+          .from(tabelle)
           .update({ kehrtwenden_count: 0, kehrtwenden_mitte: 0 })
           .eq('id', zeile.id);
         if (!e) geschrieben++;
@@ -147,7 +163,7 @@ Deno.serve(async (req: Request) => {
 
     if (!nurMessen) {
       const { error: e } = await db
-        .from('route_pool')
+        .from(tabelle)
         .update({ kehrtwenden_count: anzahl, kehrtwenden_mitte: mitte })
         .eq('id', zeile.id);
       if (!e) geschrieben++;
@@ -155,12 +171,13 @@ Deno.serve(async (req: Request) => {
   }
 
   const { count: offen } = await db
-    .from('route_pool')
+    .from(tabelle)
     .select('id', { count: 'exact', head: true })
     .is('kehrtwenden_mitte', null);
 
   return new Response(
     JSON.stringify({
+      tabelle,
       geprueft: zeilen.length,
       mit_wende_mittendrin: mitWendeMittendrin,
       ohne_geometrie: ohneGeometrie,

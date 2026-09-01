@@ -6,10 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/geo_distance.dart';
+import 'package:cruise_connect/data/services/kehrtwenden_zaehler.dart';
 import 'package:cruise_connect/data/services/route_pool_coverage_policy.dart';
 import 'package:cruise_connect/data/services/route_semantics.dart';
 import 'package:cruise_connect/data/services/route_style_config.dart';
 import 'package:cruise_connect/domain/models/route_pool_candidate.dart';
+import 'package:cruise_connect/domain/models/saved_route.dart';
 import 'package:cruise_connect/domain/models/route_pool_coverage.dart';
 import 'package:cruise_connect/domain/models/route_pool_entry.dart';
 import 'package:cruise_connect/domain/models/route_region.dart';
@@ -1055,6 +1057,12 @@ class RoutePoolService {
         distanceToCenterKm: assignment.distanceToCenterKm,
       ),
       repeatedSuccessCount: 1,
+      // 2026-09-01: Die App rechnet die Wende-Kennzahl gleich mit.
+      //
+      // Sie hat die Geometrie ohnehin in der Hand, und ohne die Zahl waere der
+      // Kandidat ungemessen — die woechentliche Beforderung in den Pool lehnt
+      // Ungemessenes bewusst ab, er laege also fuer immer in der Reserve.
+      kehrtwendenMitte: _wendenMittendrin(geometry),
       averageRating: averageRating,
       ratingCount: ratingCount,
       completionRate: completionRate,
@@ -1928,6 +1936,19 @@ class RoutePoolService {
         .toList(growable: false);
   }
 
+  /// Zaehlt die vermeidbaren Kehrtwenden einer Geometrie.
+  ///
+  /// Abschnittsweise, damit eine Luecke in einem MultiLineString nicht als
+  /// Strasse gilt — ueber sie hinweg faende die Partnersuche Gegenstuecke, die
+  /// es nicht gibt.
+  static int _wendenMittendrin(Map<String, dynamic> geometry) {
+    var summe = 0;
+    for (final teil in SavedRoute.abschnitteAusGeometrie(geometry)) {
+      summe += kehrtwendenZaehler(teil).anzahlMitte;
+    }
+    return summe;
+  }
+
   /// 0 fuer eine Strecke ohne Wende mittendrin (oder ohne Messung), 1 fuer
   /// eine mit. Kleiner gewinnt.
   static int _wendeRang(RoutePoolEntry route) {
@@ -2151,6 +2172,10 @@ class RoutePoolService {
       avoidsHighway: candidate.avoidHighways,
       hasHighway: candidate.hasHighway,
       qualityScore: candidate.qualityScore,
+      // Die Wende-Kennzahl MUSS mitwandern. Ohne sie gilt die Reserve als
+      // ungemessen und damit in der Sortierung als unbedenklich — dabei
+      // haben 734 der 917 Reserve-Strecken eine Wende mittendrin.
+      kehrtwendenMitte: candidate.kehrtwendenMitte,
       verified: false,
       isActive: true,
       geometry: candidate.geometry,

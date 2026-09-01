@@ -18,6 +18,28 @@ import {
   kehrtwendenZaehler,
 } from "../_gemeinsam/kehrtwenden.ts";
 
+/// Zaehlt die Kehrtwenden einer Route.
+///
+/// 2026-09-01 (Vucko: „keine wendepunkte mitten auf den strassen erlauben"):
+///
+/// Abschnittsweise rechnen, NICHT auf einer flachgeklopften Liste. Zwischen
+/// zwei Abschnitten liegt eine Luecke, keine Strasse — ueber sie hinweg faende
+/// die Partnersuche Gegenstuecke, die es in Wirklichkeit nicht gibt.
+function zaehleWenden(
+  geometry: unknown,
+): { anzahl: number; anzahlMitte: number } {
+  return abschnitteAus(geometry).reduce(
+    (summe, teil) => {
+      const b = kehrtwendenZaehler(teil);
+      return {
+        anzahl: summe.anzahl + b.anzahl,
+        anzahlMitte: summe.anzahlMitte + b.anzahlMitte,
+      };
+    },
+    { anzahl: 0, anzahlMitte: 0 },
+  );
+}
+
 type JsonMap = Record<string, unknown>;
 const maxSessionCandidateQueueLength = 10;
 
@@ -986,6 +1008,23 @@ function evaluateGeneratedRoute(
   if (rejectVorarlbergRhineBorderIntrusion(job, route)) {
     return rejectDecision("border_intrusion");
   }
+  // 2026-09-01 (Vucko: "den nutzer niemals in keiner situation dazu
+  // auffordert irgendwo auf einer strasse umzudrehen"):
+  //
+  // DAS TOR, ohne das der Nachschub sinnlos waere. Der Pool wurde heute
+  // gefiltert, weil 2047 von 2778 Strecken den Fahrer mitten auf der Strasse
+  // wenden lassen. Wuerde der Worker die Luecken nachfuellen, ohne darauf zu
+  // achten, kaemen genau dieselben Strecken zurueck — die vorhandenen
+  // Qualitaetstore sehen die Wende nicht, sonst waeren die 2047 nie
+  // entstanden.
+  //
+  // Abgelehnt heisst hier WIRKLICH abgelehnt, nicht "in die Reserve": eine
+  // Wende-Route in route_pool_candidates erreicht den Fahrer ueber
+  // candidate_reserve genauso und wird ausserdem woechentlich in den Pool
+  // befoerdert.
+  if (zaehleWenden(route.geometry).anzahlMitte > 0) {
+    return rejectDecision("kehrtwende_mittendrin");
+  }
 
   const verified = quality.tier === "ideal" || quality.tier === "good";
   return {
@@ -1024,19 +1063,7 @@ async function upsertVerifiedRoute(args: {
   const first = coords[0];
   const last = coords[coords.length - 1];
   const hasHighway = routeHasMotorway(args.route);
-  // Abschnittsweise rechnen, NICHT auf einer flachgeklopften Liste. Zwischen
-  // zwei Abschnitten liegt eine Luecke, keine Strasse — ueber sie hinweg
-  // faende die Partnersuche Gegenstuecke, die es in Wirklichkeit nicht gibt.
-  const wenden = abschnitteAus(args.route.geometry).reduce(
-    (summe, teil) => {
-      const b = kehrtwendenZaehler(teil);
-      return {
-        anzahl: summe.anzahl + b.anzahl,
-        anzahlMitte: summe.anzahlMitte + b.anzahlMitte,
-      };
-    },
-    { anzahl: 0, anzahlMitte: 0 },
-  );
+  const wenden = zaehleWenden(args.route.geometry);
   const row = {
     route_fingerprint: args.fingerprint,
     title: `${args.region.city_cluster} ${args.job.distance_bucket} ${
@@ -1100,6 +1127,7 @@ async function upsertCandidateRoute(args: {
   const coords = args.route.geometry.coordinates as number[][];
   const first = coords[0];
   const hasHighway = routeHasMotorway(args.route);
+  const kandidatWenden = zaehleWenden(args.route.geometry);
   const row = {
     route_region_id: args.region.id ?? args.job.route_region_id,
     route_fingerprint: args.fingerprint,
@@ -1125,6 +1153,12 @@ async function upsertCandidateRoute(args: {
     is_candidate: true,
     is_verified_pool: false,
     candidate_score: args.decision.qualityScore,
+    // Auch die Reserve traegt die Kennzahl. Sie wird ueber candidate_reserve
+    // in dieselbe Trefferliste gemischt wie der Pool UND woechentlich von
+    // curate-route-pool in den Pool befoerdert. Ungemessen waere sie der
+    // offene Seiteneingang, durch den die Wende-Strecken zurueckkaemen.
+    kehrtwenden_count: kandidatWenden.anzahl,
+    kehrtwenden_mitte: kandidatWenden.anzahlMitte,
     geometry: args.route.geometry,
     route_payload: {
       source: "route_pool_healing_worker",
@@ -1812,9 +1846,27 @@ async function loadClaimableJobs(): Promise<SeedJob[]> {
     limit: String(maxJobsToFetch),
   });
   query.append("status", "in.(queued,cooldown,paused_budget,running)");
-  query.append("route_type", "eq.ROUND_TRIP");
   const rows = await rest<SeedJob[]>("route_seed_jobs", { query });
-  return rows.filter(isJobRunnable);
+
+  // A-nach-B-Auftraege kann dieser Arbeiter nicht bedienen — processJob lehnt
+  // sie in seiner ersten Zeile ab. Vorher filterte die ABFRAGE sie heraus,
+  // also erreichten sie processJob nie und blieben ewig liegen: neun Zeilen
+  // standen seit dem 03.05. auf "queued", zuletzt angefasst am 09.06. Sie
+  // belegten dabei ihre Zelle im eindeutigen Index, sodass die App fuer
+  // dieselbe Zelle auch keinen neuen Auftrag anlegen konnte.
+  //
+  // Jetzt kommen sie mit und werden sauber als "nicht zustaendig" abgeschlossen.
+  // Der Arbeiter verliert dadurch keinen Platz: sie kosten keinen einzigen
+  // Routing-Aufruf.
+  for (const row of rows) {
+    if (row.route_type !== "ROUND_TRIP" && row.status !== "cancelled") {
+      await failJob(row, "unsupported_route_type_for_region_healing", false);
+    }
+  }
+
+  return rows
+    .filter((row) => row.route_type === "ROUND_TRIP")
+    .filter(isJobRunnable);
 }
 
 async function claimJob(job: SeedJob): Promise<SeedJob | null> {
@@ -1834,11 +1886,30 @@ async function claimJob(job: SeedJob): Promise<SeedJob | null> {
     return null;
   }
 
+  // 2026-09-01 (Vucko: "der cron worker ... das sie dort stueck fuer stueck
+  // wieder aufgebaut werden"):
+  //
+  // `mapbox_calls_used` und `attempt_count` waren LEBENSZEIT-Zaehler, die
+  // nirgends zurueckgesetzt wurden. Wirkung, gemessen: alle 24 offenen
+  // Auftraege standen bei mapbox_calls_used = 60 von 60. Damit war
+  // maxCallsForJob = 0, der Auftrag ging in einen Cooldown von fuenf Minuten
+  // und kam eine Minute spaeter wieder — endlos. Hoechster attempt_count:
+  // 12157 bei max_attempts 3, verified_inserted_count ueber alle 24
+  // Auftraege: NULL. Der Nachschub stand seit dem 19.08. still, und die App
+  // konnte auch keine neuen Auftraege mehr anlegen, weil ihr Tor
+  // _shouldCreateSeedJob genau auf attempt_count >= max_attempts prueft.
+  //
+  // Beide Zaehler bekommen jetzt dasselbe TAGESFENSTER wie die uebrigen
+  // Budgets. Ein Auftrag darf also jeden Tag wieder bis zu seiner Grenze
+  // arbeiten. Genau das ist "Stueck fuer Stueck": begrenzt pro Tag, aber
+  // nicht fuer immer gesperrt.
+  const neuerTag = job.budget_window_date !== today;
   const payload = {
     status: "running",
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    attempt_count: (job.attempt_count ?? 0) + 1,
+    attempt_count: neuerTag ? 1 : (job.attempt_count ?? 0) + 1,
+    mapbox_calls_used: neuerTag ? 0 : (job.mapbox_calls_used ?? 0),
     daily_attempt_count: dailyCount,
     monthly_attempt_count: monthlyCount,
     budget_window_date: today,
@@ -1999,7 +2070,21 @@ async function pauseJobForBudget(job: SeedJob, reason: string): Promise<void> {
 }
 
 async function deferJobForRunCap(job: SeedJob, reason: string): Promise<void> {
-  const retryAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  // Ist das TAGESBUDGET des Auftrags aufgebraucht, hat es keinen Sinn, ihn in
+  // fuenf Minuten erneut anzufassen — bis Mitternacht aendert sich nichts.
+  //
+  // Vorher stand hier immer 5 Minuten. Das hat den Auftrag jede Minute erneut
+  // beansprucht und dabei attempt_count hochgezaehlt, bis zu 12157 bei einer
+  // Grenze von 3. Genau dieser Zaehler sperrt in der App das Anlegen neuer
+  // Auftraege. Der Leerlauf hat also nicht nur nichts gebracht, er hat den
+  // Nachschub aktiv zugemauert.
+  const tagesbudgetLeer = reason.includes("call_cap") &&
+    Math.max(0, job.mapbox_calls_used ?? 0) >= maxMapboxCallsForJob(job);
+  const morgen = new Date();
+  morgen.setUTCHours(24, 5, 0, 0);
+  const retryAt = tagesbudgetLeer
+    ? morgen.toISOString()
+    : new Date(Date.now() + 5 * 60_000).toISOString();
   if (!dryRun) {
     await rest("route_seed_jobs", {
       method: "PATCH",
@@ -2048,12 +2133,26 @@ async function markCuratedNeeded(
   stats.failed += 1;
 }
 
-async function refreshCoverage(job: SeedJob, region: RouteRegion) {
-  if (dryRun) return;
-  const verifiedRows = await rest<JsonMap[]>("route_pool", {
+/// Laedt die verifizierten Pool-Zeilen einer Zelle.
+///
+/// EINE Quelle fuer die Abdeckungspflege UND fuer die Frage, wie viele Plaetze
+/// noch frei sind. Frueher las die Kapazitaetspruefung den gespeicherten
+/// Zaehler `current_verified_count`, und der wurde nur aktualisiert, wenn ein
+/// Auftrag die Zelle anfasste. Daraus wurde am 01.09. eine Sackgasse: die
+/// veraltete Zahl sagte "voll", also lief kein Auftrag, also blieb die Zahl
+/// veraltet. Der Worker beanspruchte jede Minute vier Auftraege und machte
+/// null Routing-Aufrufe.
+async function ladeVerifizierteZellenZeilen(
+  job: SeedJob,
+  region: RouteRegion,
+): Promise<JsonMap[]> {
+  return await rest<JsonMap[]>("route_pool", {
     query: new URLSearchParams({
+      // kehrtwenden_mitte MUSS mit: summarizeVerifiedRows entscheidet damit,
+      // ob eine Zeile einen Platz belegt. Fehlt die Spalte, kaeme sie als
+      // undefined zurueck und jede Wende-Route zaehlte weiter mit.
       select:
-        "id,route_fingerprint,style_tags,admin2_name,avoids_highway,has_highway,quality_score,route_payload",
+        "id,route_fingerprint,style_tags,admin2_name,avoids_highway,has_highway,quality_score,route_payload,kehrtwenden_mitte",
       verified: "eq.true",
       is_active: "eq.true",
       country_code: `eq.${region.country_code}`,
@@ -2063,6 +2162,11 @@ async function refreshCoverage(job: SeedJob, region: RouteRegion) {
       distance_bucket: `eq.${job.distance_bucket}`,
     }),
   });
+}
+
+async function refreshCoverage(job: SeedJob, region: RouteRegion) {
+  if (dryRun) return;
+  const verifiedRows = await ladeVerifizierteZellenZeilen(job, region);
   const verifiedSummary = summarizeVerifiedRows(verifiedRows, job, region);
   const candidateRows = await rest<JsonMap[]>("route_pool_candidates", {
     query: new URLSearchParams({
@@ -2111,10 +2215,17 @@ async function verifiedCapacityRemainingForCell(
       coverage?.max_pool_size ?? region.default_max_pool_size ?? 32,
     ),
   );
-  const currentVerifiedCount = Math.max(
-    0,
-    Number(coverage?.current_verified_count ?? 0),
-  );
+  // LIVE zaehlen, nicht den gespeicherten Zaehler lesen. Siehe die
+  // Begruendung an ladeVerifizierteZellenZeilen: der gespeicherte Wert
+  // konnte sich selbst am Leben halten und den Nachschub dauerhaft sperren.
+  // Eine Abfrage je Auftrag ist dafuer ein guenstiger Preis — es laufen
+  // hoechstens vier Auftraege je Minute.
+  const zeilen = await ladeVerifizierteZellenZeilen(job, region);
+  const currentVerifiedCount = summarizeVerifiedRows(
+    zeilen,
+    job,
+    region,
+  ).verifiedCount;
   return Math.max(0, maxPoolSize - currentVerifiedCount);
 }
 
@@ -2641,6 +2752,25 @@ function summarizeVerifiedRows(
       continue;
     }
     if (!highwayMatches(row, job.avoid_highways)) continue;
+    // 2026-09-01 (Vucko: "der cron worker bei den regionen wo die strecken
+    // jetzt weg sind wegen dem filter das sie dort stueck fuer stueck wieder
+    // aufgebaut werden"):
+    //
+    // EINE WENDE-ROUTE BELEGT KEINEN PLATZ MEHR.
+    //
+    // Das war der Grund, warum der Nachschub stillstand. Die Zaehlung fuellte
+    // `current_verified_count`, daraus rechnet
+    // verifiedCapacityRemainingForCell die freien Plaetze, und daraus
+    // entsteht der Status "target_met". Gemessen an Bregenz/Kurvenjagd/50:
+    // 31 von 32 Plaetzen galten als belegt — von Strecken, die der Client
+    // seit heute alle aussortiert. Der Worker sah volle Regale und hat jede
+    // Minute vier Auftraege beansprucht und null Routing-Aufrufe gemacht.
+    //
+    // Eine noch NICHT gemessene Zeile zaehlt weiterhin mit. Sonst saehe eine
+    // frisch eingespielte Region schlagartig leer aus und der Worker liefe
+    // gegen sein Budget, obwohl die Strecken vielleicht in Ordnung sind.
+    const wenden = row.kehrtwenden_mitte;
+    if (typeof wenden === "number" && wenden > 0) continue;
 
     summary.verifiedCount += 1;
     const fingerprint = String(

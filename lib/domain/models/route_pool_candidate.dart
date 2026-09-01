@@ -17,6 +17,7 @@ class RoutePoolCandidate {
     required this.avoidHighways,
     required this.hasHighway,
     required this.qualityScore,
+    this.kehrtwendenMitte,
     required this.shapeScore,
     required this.candidateSource,
     this.difficultyLevel = 'normal',
@@ -54,6 +55,14 @@ class RoutePoolCandidate {
   final bool avoidHighways;
   final bool hasHighway;
   final double qualityScore;
+
+  /// Vermeidbare Kehrtwenden, gerechnet wie im Pool.
+  ///
+  /// 2026-09-01: Die Reserve wird ueber `candidate_reserve` in dieselbe
+  /// Trefferliste gemischt wie der Pool und erreicht den Fahrer auf demselben
+  /// Weg. Ohne diese Zahl waere sie der offene Seiteneingang. Gemessen: 917
+  /// Reserve-Strecken, davon nur 183 ohne Wende.
+  final int? kehrtwendenMitte;
   final double shapeScore;
   final String candidateSource;
   final String difficultyLevel;
@@ -92,6 +101,7 @@ class RoutePoolCandidate {
       avoidHighways: (json['avoid_highways'] as bool?) ?? false,
       hasHighway: (json['has_highway'] as bool?) ?? false,
       qualityScore: (json['quality_score'] as num?)?.toDouble() ?? 0.0,
+      kehrtwendenMitte: (json['kehrtwenden_mitte'] as num?)?.toInt(),
       shapeScore: (json['shape_score'] as num?)?.toDouble() ?? 0.0,
       candidateSource: (json['candidate_source'] as String?) ?? 'basic_live',
       difficultyLevel:
@@ -144,6 +154,7 @@ class RoutePoolCandidate {
       'avoid_highways': avoidHighways,
       'has_highway': hasHighway,
       'quality_score': qualityScore,
+      'kehrtwenden_mitte': kehrtwendenMitte,
       'shape_score': shapeScore,
       'candidate_source': candidateSource,
       'candidate_region_difficulty': difficultyLevel,
