@@ -45,12 +45,28 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="cruiseconnect"/>
             </intent-filter>
-            <!-- Android App Link: https://cruiseconnector.at?post=<id> -->
+            <!-- Android App Link: https://cruiseconnector.at?post=<id>
+                 und https://cruiseconnector.at/c/<CODE>
+
+                 2026-09-01 (A5/A6): Hier stand nur host ohne jeden Pfad. Damit
+                 beansprucht die App die GANZE Domain. Solange assetlinks.json
+                 fehlte, war das folgenlos — die Pruefung schlug ohnehin fehl.
+                 Mit der Datei wird die Verknuepfung scharf, und dann haette
+                 die App auch AGB, Datenschutz, Impressum und die Meldeseite
+                 verschluckt. Genau die oeffnet die App SELBST im Browser
+                 (lib/core/legal_documents.dart), der Nutzer waere also im
+                 Kreis geschickt worden.
+
+                 Deshalb jetzt zwei ausdrueckliche Pfade statt der ganzen
+                 Domain: die Wurzel fuer die bestehenden Links mit ?post= und
+                 ?group=, und /c/ fuer die Community-Einladung. Alles andere
+                 bleibt im Browser, wo es hingehoert. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="https" android:host="cruiseconnector.at"/>
+                <data android:scheme="https" android:host="cruiseconnector.at" android:path="/"/>
+                <data android:scheme="https" android:host="cruiseconnector.at" android:pathPrefix="/c/"/>
             </intent-filter>
         </activity>
         <activity
