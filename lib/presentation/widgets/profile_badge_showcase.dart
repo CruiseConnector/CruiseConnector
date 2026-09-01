@@ -87,18 +87,41 @@ class ProfileBadgeShowcase extends StatelessWidget {
 
   static const int slotCount = 5;
   static const int spotCount = 10;
-  static const List<int> _defaultActiveSpots = [0, 1, 2, 6, 8];
+
+  /// 2026-09-01 (Vucko: „ganz wichtig moechte ich das die badges bei einem
+  /// Profil besser angezeigt werden"):
+  ///
+  /// Auf seinem Bildschirmfoto lagen fuenf Abzeichen verstreut ueber dem
+  /// Titelbild — drei oben, eines MITTEN AUF DEM AUTO und eines unten rechts,
+  /// jedes zusaetzlich schraeg gestellt. Sie verdeckten genau das, was der
+  /// Nutzer zeigen will, und wirkten hingeworfen statt gewaehlt.
+  ///
+  /// Die Vorgabe ist jetzt eine ruhige Reihe entlang der oberen Kante:
+  /// gleiche Groesse, gleicher Abstand, keine Schraeglage. Sie liest sich als
+  /// Sammlung und laesst das Bild frei. Die Plaetze 5 bis 9 bleiben als freie
+  /// Positionen erhalten — wer seine Abzeichen bewusst verteilen will, kann
+  /// das im Bearbeiten-Blatt weiterhin tun. Die Mitte des Bildes ist dabei
+  /// bewusst nicht mehr dabei.
+  ///
+  /// Bestehende Profile sind NICHT betroffen: Ein Aufkleber speichert seine
+  /// Position selbst (x, y, scale in profiles.badge_showcase). Diese Liste
+  /// liefert nur die Vorgabe fuer alle, die nie etwas verschoben haben.
+  static const List<int> _defaultActiveSpots = [0, 1, 2, 3, 4];
   static const List<BadgeSpotPlacement> placements = [
-    BadgeSpotPlacement(Offset(0.36, 0.14), 0.72, -0.08),
-    BadgeSpotPlacement(Offset(0.50, 0.10), 0.70, 0.06),
-    BadgeSpotPlacement(Offset(0.64, 0.15), 0.72, -0.05),
-    BadgeSpotPlacement(Offset(0.80, 0.13), 0.70, 0.07),
-    BadgeSpotPlacement(Offset(0.93, 0.22), 0.66, -0.06),
-    BadgeSpotPlacement(Offset(0.36, 0.36), 0.66, 0.05),
-    BadgeSpotPlacement(Offset(0.48, 0.50), 0.64, -0.04),
-    BadgeSpotPlacement(Offset(0.92, 0.42), 0.64, 0.05),
-    BadgeSpotPlacement(Offset(0.76, 0.78), 0.66, 0.06),
-    BadgeSpotPlacement(Offset(0.93, 0.78), 0.64, -0.08),
+    // Die ruhige Reihe oben — die Vorgabe.
+    BadgeSpotPlacement(Offset(0.32, 0.17), 0.62, 0),
+    BadgeSpotPlacement(Offset(0.45, 0.17), 0.62, 0),
+    BadgeSpotPlacement(Offset(0.58, 0.17), 0.62, 0),
+    BadgeSpotPlacement(Offset(0.71, 0.17), 0.62, 0),
+    BadgeSpotPlacement(Offset(0.84, 0.17), 0.62, 0),
+    // Freie Plaetze fuer alle, die es lieber verteilt moegen. Rand und untere
+    // Haelfte rechts; die Bildmitte und die untere LINKE Ecke bleiben frei —
+    // dort sitzt das Profilbild.
+    BadgeSpotPlacement(Offset(0.93, 0.34), 0.60, 0.04),
+    BadgeSpotPlacement(Offset(0.93, 0.56), 0.60, -0.04),
+    BadgeSpotPlacement(Offset(0.80, 0.74), 0.60, 0.05),
+    BadgeSpotPlacement(Offset(0.93, 0.78), 0.58, -0.05),
+    BadgeSpotPlacement(Offset(0.62, 0.76), 0.58, 0.03),
   ];
 
   static int defaultSpotForSlot(int slot) {

@@ -11,6 +11,7 @@ import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/application/providers/route_bookmark_provider.dart';
 import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_alle_blatt.dart';
 import 'package:cruise_connect/core/input_limits.dart';
 import 'package:cruise_connect/presentation/pages/ride_detail_page.dart';
 import 'package:cruise_connect/presentation/pages/route_share_page.dart';
@@ -719,14 +720,26 @@ class _ProfilePageState extends State<ProfilePage>
                         ),
                       ],
                     ),
+                    // 2026-09-01 (Vucko): Auf dem Titelbild liegen hoechstens
+                    // FUENF Aufkleber. Wer mehr Abzeichen hat, sah den Rest
+                    // hier gar nicht. Ein Tippen neben die Aufkleber oeffnet
+                    // jetzt die vollstaendige Sammlung.
                     Positioned(
                       left: 0,
                       right: 0,
                       top: 0,
                       height: 210,
-                      child: ProfileBadgeShowcase(
-                        profile: liveProfile,
-                        baseSize: 36,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onLongPress: () => zeigeAlleAbzeichen(
+                          context,
+                          profile: liveProfile,
+                          name: 'dir',
+                        ),
+                        child: ProfileBadgeShowcase(
+                          profile: liveProfile,
+                          baseSize: 36,
+                        ),
                       ),
                     ),
                   ],

@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:cruise_connect/application/providers/app_accent_provider.dart';
 import 'package:cruise_connect/presentation/widgets/social/post_reaction_buttons.dart';
+import 'package:cruise_connect/presentation/widgets/profile_badge_alle_blatt.dart';
 import 'package:cruise_connect/application/providers/community_provider.dart';
 import 'package:cruise_connect/data/services/favorite_routes_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
@@ -584,10 +585,23 @@ class _UserProfilePageState extends State<UserProfilePage>
                 bottom: 8,
                 child: _buildProfileAvatar(name: name, avatarUrl: avatarUrl),
               ),
+              // 2026-09-01 (Vucko): Auf einem fremden Profil sah man
+              // hoechstens fuenf Abzeichen und kam an die uebrigen NIE heran —
+              // die vollstaendige Uebersicht liegt im Auswertungs-Reiter, und
+              // den gibt es nur fuer das eigene Konto. Langes Druecken oeffnet
+              // jetzt die ganze Sammlung.
               Positioned.fill(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: ProfileBadgeShowcase(profile: stats, baseSize: 38),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onLongPress: () => zeigeAlleAbzeichen(
+                      context,
+                      profile: stats,
+                      name: name,
+                    ),
+                    child: ProfileBadgeShowcase(profile: stats, baseSize: 38),
+                  ),
                 ),
               ),
               if (!_isOwnProfile)
