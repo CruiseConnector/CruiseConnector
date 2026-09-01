@@ -11398,10 +11398,41 @@ class _CruiseModePageState extends State<CruiseModePage>
       _searchAgainAutoRetryWindowStart = now;
       _searchAgainAutoRetryCount = 0;
     }
+    // 2026-09-01 (A1, Wartezeit): Nicht wiederholen, wenn dieselbe Route
+    // ERWARTBAR wieder kommt.
+    //
+    // Der Gedanke hinter der Wiederholung ist richtig: kommt zweimal
+    // hintereinander dieselbe Strecke, soll die App von sich aus eine neue
+    // suchen. Er stimmt aber nur, solange das ein Zufall ist.
+    //
+    // Gemessen am 01.09.: Reisst die Umweg-Suche alle Tore, liefert am Ende
+    // der Direkt-Rueckfall — und der ist deterministisch. Dieselbe Verbindung
+    // ergibt dreimal exakt dieselbe Geometrie (Dornbirn nach Bludenz, 3 von 3
+    // Mal 45,21 km), also dreimal denselben Fingerabdruck. Die Wiederholung
+    // feuerte damit garantiert, verdreifachte die komplette Kaskade von 7 auf
+    // 21 Serveraufrufe und aus 10 bis 25 Sekunden wurden 30 bis 75 — und am
+    // Ende stand exakt die Route, die schon nach dem ersten Lauf da war.
+    //
+    // Deshalb: kam das Ergebnis aus dem Direkt-Rueckfall oder aus dem
+    // Notausgang, ist eine Wiederholung sinnlos. Bei einer echten Suche bleibt
+    // sie unveraendert.
+    final ergebnisWarErzwungen =
+        prepared.edgeMeta['client_letzter_ausweg'] == true ||
+        prepared.edgeMeta['detour_fallback_stage']
+                ?.toString()
+                .startsWith('client_') ==
+            true;
     final canAutoRetry =
         isRepeatedRoute &&
+        !ergebnisWarErzwungen &&
         _lastDisplayedRouteFingerprint != null &&
         _searchAgainAutoRetryCount < _maxSearchAgainAutoRetries;
+    if (isRepeatedRoute && ergebnisWarErzwungen) {
+      debugPrint(
+        '[CruiseMode] Gleiche Route, aber sie kam aus dem Rueckfall — eine '
+        'Wiederholung wuerde dieselbe liefern. Kein Auto-Retry.',
+      );
+    }
 
     if (canAutoRetry && mounted) {
       _searchAgainAutoRetryCount += 1;

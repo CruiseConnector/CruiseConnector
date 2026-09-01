@@ -2177,8 +2177,40 @@ class RouteService {
       var worstStartOffsetMeters = 0.0;
       RouteServiceException? lastError;
 
+      // 2026-09-01 (A1, Wartezeit): DIE FRIST.
+      //
+      // Vucko: "das problem war dass ich sehr lange gebraucht habe bis ich
+      // eine Route von A nach B gefunden habe."
+      //
+      // Gemessen und abgezaehlt: eine einzige Suche mit mittlerem Umweg konnte
+      // SIEBEN Serveraufrufe nacheinander ausloesen — zwei Live-Versuche, ein
+      // aggressiver Rettungskorridor, drei Herabstufungen, ein Direktrueckfall
+      // — dazu vier bis sechs Datenbankrunden. Nirgends im ganzen Block gab es
+      // eine Restzeitpruefung: kein Future.wait, keine Deadline, kein Abbruch.
+      // Rechnerisch sieben Aufrufe mal zwei Versuche mal 31 Sekunden Timeout =
+      // 434 Sekunden fuer EINEN Tipp.
+      //
+      // Diese Frist wirft NICHT. Sie ueberspringt nur weitere Versuche, und der
+      // Notausgang am Ende liefert dann den besten Kandidaten, der bis dahin da
+      // war. Der Nutzer bekommt also frueher etwas statt spaeter dasselbe.
+      //
+      // 20 Sekunden, weil die Edge gemessen in 0,9 bis 5,4 Sekunden antwortet:
+      // drei volle Aufrufe passen bequem hinein. Beim Neuberechnen waehrend der
+      // Fahrt gilt die Haelfte — dort wartet niemand.
+      final gesamtfrist = Duration(seconds: navigationReroute ? 10 : 20);
+      final fristBeginn = DateTime.now();
+      bool fristAbgelaufen() =>
+          DateTime.now().difference(fristBeginn) >= gesamtfrist;
+
       for (var attempt = 0; attempt < maxAttempts; attempt++) {
         if (_isInWorkerLimitCooldown()) break;
+        if (attempt > 0 && fristAbgelaufen()) {
+          debugPrint(
+            '[RouteService] Frist von ${gesamtfrist.inSeconds}s abgelaufen — '
+            'kein weiterer Live-Versuch.',
+          );
+          break;
+        }
         final variant = _nextPointToPointVariant(
           scenario,
           normalizedVariant: normalizedVariant,
@@ -2393,12 +2425,15 @@ class RouteService {
           lastRouteEmergencyFallbackUsed = true;
           acceptedCandidate.route.edgeMeta['diversity_exhausted'] = true;
         }
-        if (_needsStrongerPointToPointDetour(
-          scenario: scenario,
-          styleConfig: styleConfig,
-          candidate: acceptedCandidate,
-          directDistanceKm: directDistanceKm,
-        )) {
+        // Die Frist gilt auch hier: liegt schon eine brauchbare Route vor,
+        // ist eine SCHOENERE nach 20 Sekunden nichts mehr wert.
+        if (!fristAbgelaufen() &&
+            _needsStrongerPointToPointDetour(
+              scenario: scenario,
+              styleConfig: styleConfig,
+              candidate: acceptedCandidate,
+              directDistanceKm: directDistanceKm,
+            )) {
           final deliveredDetourLevel = _effectivePointToPointDetourLevel(
             scenario,
             acceptedCandidate.route,
@@ -2522,7 +2557,10 @@ class RouteService {
         );
       }
 
-      if (!navigationReroute) {
+      // Die Rueckfall-Kaskade nur noch, solange Geduld da ist. Ohne diese
+      // Pruefung liefen hier drei bis fuenf weitere Serveraufrufe nacheinander,
+      // auch wenn der Nutzer schon eine halbe Minute wartet.
+      if (!navigationReroute && !fristAbgelaufen()) {
         final poolFallback = await _tryRoutePoolFallback(
           scenario: scenario,
           styleConfig: styleConfig,
@@ -3514,8 +3552,20 @@ class RouteService {
       if (navigationReroute) 'avoid_maneuver_radius_m': 80,
       if (previousFingerprints.isNotEmpty)
         'previous_route_fingerprints': previousFingerprints.take(8).toList(),
-      if (maxSearchMsOverride == null && (scenic || normalizedVariant > 0))
-        'max_search_ms': 25000,
+      // 2026-09-01 (A1, Wartezeit): Hier wurden fuer jede Umweg-Anfrage
+      // 25 Sekunden Suchdauer mitgeschickt. Das Feld ist serverseitig TOT — `grep max_search_ms`
+      // ueber generate-cruise-route-v2/index.ts findet null Treffer, und
+      // Messungen mit und ohne das Feld waren gleich schnell (rund 1,3 s).
+      //
+      // Es hatte trotzdem eine Wirkung, nur die falsche: requestTimeoutSecondsFor
+      // (:552) rechnet daraus max(26, min(40, 25+6)) = 31 Sekunden CLIENT-Timeout
+      // statt der vorgesehenen 26. Der Nutzer wartete also je haengendem Versuch
+      // fuenf Sekunden laenger auf eine Grenze, die der Server nie gesehen hat —
+      // bei zwei Versuchen je Aufruf und bis zu sieben Aufrufen je Suche.
+      //
+      // Die Angabe ist damit ersatzlos weg. `maxSearchMsOverride` bleibt: den
+      // setzt die Fahransicht bewusst (8 s fuer "Direkt", 10 s beim Neuberechnen),
+      // und dort ist die kuerzere Geduld gewollt.
       if (scenic || normalizedVariant > 0) ...styleConfig.toRequestHints(),
       // 2026-05-22 (Task #41): detour_level IMMER an Edge v2 schicken
       // (vorher nur bei scenic/variant>0). v2 nutzt das für Sub-Waypoint-
