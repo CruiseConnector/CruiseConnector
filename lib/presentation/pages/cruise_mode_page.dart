@@ -30,6 +30,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cruise_connect/data/services/country_region.dart';
 import 'package:cruise_connect/data/services/geocoding_service.dart';
 import 'package:cruise_connect/data/services/kamera_tangente.dart';
+import 'package:cruise_connect/data/services/fahrt_knoepfe_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/tts_service.dart';
 import 'package:cruise_connect/data/services/tutorial_ziel_registry.dart';
@@ -18088,7 +18089,14 @@ class _CruiseModePageState extends State<CruiseModePage>
   Future<void> _openPoiFilter() async {
     if (!mounted || _disposed) return;
     HapticFeedback.selectionClick();
-    await PoiFilterSheet.show(context);
+    // 2026-09-02: Der Schalter fuer fremde Meldungen liegt jetzt hier drin
+    // (Vucko: "kann weg oder in die poi liste rein"). Der Zustand bleibt in
+    // dieser Seite, das Blatt bekommt ihn nur durchgereicht.
+    await PoiFilterSheet.show(
+      context,
+      meldungenAn: _meldungenAnzeigen,
+      onMeldungenUmschalten: _meldungenSchalterUmschalten,
+    );
     if (!mounted || _disposed) return;
     final anyEnabled = PoiSettingsService.instance.anyEnabled;
     if (!anyEnabled) {
@@ -18263,16 +18271,21 @@ class _CruiseModePageState extends State<CruiseModePage>
       configCollapsed: _configCollapsed,
     );
     final bottomInset = hasRoute ? 260.0 : 240.0;
-    // 2026-07-25 (Review-Fund): Mit dem neuen Melde-FAB sind es bis zu 5
-    // Bubbles (Debug: 6) à 60pt = 300-360pt. Bei bottom:260 ragte die Spalte
-    // auf kleinen Geräten (iPhone SE, 667pt) ins Manöver-Banner. Die Spalte
-    // wird deshalb auf den real verfügbaren Platz gedeckelt und scrollt bei
-    // Bedarf — `reverse: true` hält dabei die UNTEREN (wichtigsten, inkl. "+")
-    // Buttons immer sichtbar, oben wird abgeschnitten statt zu überlappen.
-    final media = MediaQuery.of(context);
-    final maxColumnHeight =
-        (media.size.height - bottomInset - media.padding.top - 168.0)
-            .clamp(120.0, double.infinity);
+
+    // 2026-09-02 (Vucko, Sprachnachricht): "es sollen maximal 4 buttons da
+    // sein im moment ist das zu viel" und "die buttons rechts waehrend der
+    // fahrt minimieren".
+    //
+    // HIER STAND VORHER eine fest verdrahtete Liste von bis zu SECHS Knoepfen
+    // in einem SingleChildScrollView mit `reverse: true`. Der Kommentar dazu
+    // beschrieb das Problem selbst: "Bei bottom:260 ragte die Spalte auf
+    // kleinen Geraeten ins Manoever-Banner", also wurde sie scrollbar gemacht
+    // und oben abgeschnitten. Eine Leiste, an deren Knoepfe man waehrend der
+    // Fahrt erst heranscrollen muss, ist keine Bedienung.
+    //
+    // Jetzt kommt die Liste aus dem [FahrtKnoepfeService] und ist auf vier
+    // gedeckelt. Vier mal 60 plus der Griff passen auf jedes Geraet, das wir
+    // unterstuetzen; der Scrollbereich und seine Notbremse fallen damit weg.
     return Positioned(
       right: 16,
       bottom: bottomInset,
@@ -18285,133 +18298,227 @@ class _CruiseModePageState extends State<CruiseModePage>
           child: AnimatedOpacity(
             opacity: hidden ? 0 : 1,
             duration: const Duration(milliseconds: 180),
-            // 2026-05-28 (vucko Task #79.1): center-alignment damit alle
-            // FABs perfekt auf derselben vertikalen Achse stehen — auch
-            // wenn intern verschiedene Bubble-Größen verwendet würden.
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxColumnHeight),
-              child: SingleChildScrollView(
-                reverse: true,
-                physics: const ClampingScrollPhysics(),
-                child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Route-Übersicht — nur wenn Route da
-                if (hasRoute)
-                  _FabBubble(
-                    heroTag: 'overview_fab',
-                    icon: Icons.map_outlined,
-                    color: const Color(0xFF2D3138),
-                    onPressed: _showRouteOverview,
-                  ),
-                // POI-Filter — IMMER sichtbar (auch Pre-Route)
-                AnimatedBuilder(
-                  animation: PoiSettingsService.instance,
-                  builder: (context, _) {
-                    final active = PoiSettingsService.instance.anyEnabled;
-                    return _FabBubble(
-                      heroTag: 'pois_fab',
-                      icon: Icons.tune_rounded,
-                      color: active
-                          ? AppAccentColors.accent
-                          : const Color(0xFF2D3138),
-                      onPressed: _openPoiFilter,
-                      loading: _poisLoading,
-                    );
-                  },
-                ),
-                // Voice-Mode-Cycle — IMMER sichtbar
-                AnimatedBuilder(
-                  animation: VoiceSettingsService.instance,
-                  builder: (context, _) {
-                    final mode = VoiceSettingsService.instance.mode;
-                    final (icon, color) = switch (mode) {
-                      VoiceMode.off => (
-                        Icons.volume_off_rounded,
-                        const Color(0xFF2D3138),
-                      ),
-                      VoiceMode.important => (
-                        Icons.volume_down_rounded,
-                        const Color(0xFFFBBF24),
-                      ),
-                      VoiceMode.all => (
-                        Icons.volume_up_rounded,
-                        AppAccentColors.accent,
-                      ),
-                    };
-                    return _FabBubble(
-                      heroTag: 'voice_toggle_fab',
-                      icon: icon,
-                      color: color,
-                      onPressed: () => _handleVoiceModeCycle(context),
-                    );
-                  },
-                ),
-                // 2026-08-28 (Fehler 10): Meldungen ein und aus — IMMER
-                // sichtbar, auf der Cruise-Seite wie im POV. Orange = an,
-                // grau = aus. Schaltet Marker, Ansage und Nachfragen zugleich.
-                _FabBubble(
-                  heroTag: 'incidents_toggle_fab',
-                  icon: _meldungenAnzeigen
-                      ? Icons.warning_amber_rounded
-                      : Icons.report_off_outlined,
-                  color: _meldungenAnzeigen
-                      ? const Color(0xFFFF9500)
-                      : const Color(0xFF2D3138),
-                  onPressed: _meldungenSchalterUmschalten,
-                ),
-                // Camera-Lock / Recenter — IMMER sichtbar
-                _FabBubble(
-                  heroTag: 'recenter_map_fab',
-                  icon: _isCameraLocked ? Icons.explore : Icons.explore_off,
-                  color: _isCameraLocked
-                      ? AppAccentColors.accent
-                      : const Color(0xFF2D3138),
-                  onPressed: _toggleCameraLock,
-                  big: true,
-                ),
-                // 2026-06-19 (vucko Kreisverkehr-Sim): Debug-only Play/Stop-FAB
-                // für den Fahrsimulator (Live-Navigation ohne echtes GPS testen).
-                if (kDebugMode && _isRouteConfirmed)
-                  _FabBubble(
-                    heroTag: 'sim_drive_fab',
-                    icon: _isSimulationRunning
-                        ? Icons.stop_rounded
-                        : Icons.play_arrow_rounded,
-                    color: _isSimulationRunning
-                        ? const Color(0xFFD64545)
-                        : const Color(0xFF2BA84A),
-                    onPressed: () {
-                      if (_isSimulationRunning) {
-                        _stopSimulation();
-                      } else {
-                        unawaited(_startSimulation());
-                      }
-                    },
-                    big: true,
-                  ),
-                // 2026-07-24 (vucko "+-Button"): Unfall/Baustelle/Stau melden —
-                // unterstes Element der Spalte, direkt über dem Info-Panel
-                // (per User-Screenshot markierte Stelle). Nur während einer
-                // bestätigten Route sichtbar — Melden ergibt nur im
-                // Fahr-Kontext Sinn.
-                if (hasRoute && _isRouteConfirmed)
-                  _FabBubble(
-                    heroTag: 'report_incident_fab',
-                    icon: Icons.add_rounded,
-                    color: const Color(0xFFE53935),
-                    onPressed: () => unawaited(_openIncidentReportSheet()),
-                    big: true,
-                  ),
-                  ],
-                ),
-              ),
+            child: AnimatedBuilder(
+              animation: FahrtKnoepfeService.instance,
+              builder: (context, _) => _buildFabColumnInhalt(hasRoute: hasRoute),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// Die eigentliche Spalte. Getrennt gehalten, damit der [AnimatedBuilder]
+  /// oben nur diesen Teil neu baut und nicht die ganze Positionierung.
+  Widget _buildFabColumnInhalt({required bool hasRoute}) {
+    final dienst = FahrtKnoepfeService.instance;
+    final eingeklappt = dienst.eingeklappt;
+
+    // Ein gewaehlter Knopf, der gerade nichts tun kann, wird NICHT gezeigt.
+    // Ein Melde-Knopf ohne Fahrt haette nichts zu melden, und ein grauer
+    // Knopf, der auf nichts reagiert, ist schlimmer als kein Knopf.
+    final sichtbar = dienst.auswahl.where((k) {
+      final info = FahrtKnoepfeService.infoZu(k);
+      if (!info.brauchtRoute) return true;
+      if (k == FahrKnopf.melden) return hasRoute && _isRouteConfirmed;
+      return hasRoute;
+    }).toList();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _buildEinklappGriff(eingeklappt: eingeklappt, anzahl: sichtbar.length),
+        // Der Simulator-Knopf haengt NICHT an der Auswahl des Nutzers. Er
+        // existiert nur in der Entwicklerfassung und wuerde sonst einen der
+        // vier Plaetze belegen, die dem Fahrer gehoeren.
+        if (!eingeklappt && kDebugMode && _isRouteConfirmed)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _FabBubble(
+              heroTag: 'sim_drive_fab',
+              icon: _isSimulationRunning
+                  ? Icons.stop_rounded
+                  : Icons.play_arrow_rounded,
+              color: _isSimulationRunning
+                  ? const Color(0xFFD64545)
+                  : const Color(0xFF2BA84A),
+              onPressed: () {
+                if (_isSimulationRunning) {
+                  _stopSimulation();
+                } else {
+                  unawaited(_startSimulation());
+                }
+              },
+              big: true,
+            ),
+          ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: eingeklappt
+              ? const SizedBox(width: 60, height: 0)
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    for (final k in sichtbar) _buildFahrKnopf(k),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Der Griff zum Ein- und Ausklappen.
+  ///
+  /// Bewusst schmaler und flacher als ein Knopf: er soll nicht wie ein
+  /// fuenfter Knopf aussehen. Eingeklappt traegt er die Anzahl der
+  /// verborgenen Knoepfe, damit erkennbar bleibt, dass dort etwas ist.
+  Widget _buildEinklappGriff({
+    required bool eingeklappt,
+    required int anzahl,
+  }) {
+    return Semantics(
+      button: true,
+      label: eingeklappt
+          ? 'Knöpfe einblenden, $anzahl versteckt'
+          : 'Knöpfe ausblenden',
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          unawaited(FahrtKnoepfeService.instance.einklappenUmschalten());
+        },
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: 60,
+          height: 30,
+          margin: const EdgeInsets.only(bottom: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2D3138).withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedRotation(
+                turns: eingeklappt ? 0.5 : 0.0,
+                duration: const Duration(milliseconds: 220),
+                child: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 20,
+                  color: Colors.white70,
+                ),
+              ),
+              if (eingeklappt && anzahl > 0) ...[
+                const SizedBox(width: 2),
+                Text(
+                  '$anzahl',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Zeichnet genau EINEN gewaehlten Knopf.
+  Widget _buildFahrKnopf(FahrKnopf k) {
+    switch (k) {
+      case FahrKnopf.uebersicht:
+        return _FabBubble(
+          heroTag: 'overview_fab',
+          icon: Icons.map_outlined,
+          color: const Color(0xFF2D3138),
+          onPressed: _showRouteOverview,
+        );
+
+      case FahrKnopf.poi:
+        return AnimatedBuilder(
+          animation: PoiSettingsService.instance,
+          builder: (context, _) {
+            final active = PoiSettingsService.instance.anyEnabled;
+            return _FabBubble(
+              heroTag: 'pois_fab',
+              icon: Icons.tune_rounded,
+              color: active
+                  ? AppAccentColors.accent
+                  : const Color(0xFF2D3138),
+              onPressed: _openPoiFilter,
+              loading: _poisLoading,
+            );
+          },
+        );
+
+      case FahrKnopf.stimme:
+        return AnimatedBuilder(
+          animation: VoiceSettingsService.instance,
+          builder: (context, _) {
+            final mode = VoiceSettingsService.instance.mode;
+            final (icon, color) = switch (mode) {
+              VoiceMode.off => (
+                Icons.volume_off_rounded,
+                const Color(0xFF2D3138),
+              ),
+              VoiceMode.important => (
+                Icons.volume_down_rounded,
+                const Color(0xFFFBBF24),
+              ),
+              VoiceMode.all => (
+                Icons.volume_up_rounded,
+                AppAccentColors.accent,
+              ),
+            };
+            return _FabBubble(
+              heroTag: 'voice_toggle_fab',
+              icon: icon,
+              color: color,
+              onPressed: () => _handleVoiceModeCycle(context),
+            );
+          },
+        );
+
+      case FahrKnopf.meldungen:
+        return _FabBubble(
+          heroTag: 'incidents_toggle_fab',
+          icon: _meldungenAnzeigen
+              ? Icons.warning_amber_rounded
+              : Icons.report_off_outlined,
+          color: _meldungenAnzeigen
+              ? const Color(0xFFFF9500)
+              : const Color(0xFF2D3138),
+          onPressed: _meldungenSchalterUmschalten,
+        );
+
+      case FahrKnopf.zentrieren:
+        return _FabBubble(
+          heroTag: 'recenter_map_fab',
+          icon: _isCameraLocked ? Icons.explore : Icons.explore_off,
+          color: _isCameraLocked
+              ? AppAccentColors.accent
+              : const Color(0xFF2D3138),
+          onPressed: _toggleCameraLock,
+          big: true,
+        );
+
+      case FahrKnopf.melden:
+        return _FabBubble(
+          heroTag: 'report_incident_fab',
+          icon: Icons.add_rounded,
+          color: const Color(0xFFE53935),
+          onPressed: () => unawaited(_openIncidentReportSheet()),
+          big: true,
+        );
+    }
   }
 
   // 2026-05-28 (vucko Task #75): _togglePois bleibt für Backwards-

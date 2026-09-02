@@ -24,6 +24,8 @@ import 'package:cruise_connect/presentation/widgets/language_picker.dart';
 import 'package:cruise_connect/presentation/widgets/location_always_notice_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/login_options_section.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/routing_onboarding_sheet.dart';
+import 'package:cruise_connect/data/services/fahrt_knoepfe_service.dart';
+import 'package:cruise_connect/presentation/widgets/cruise/fahrt_knoepfe_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/cruise/voice_volume_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/map_download_preference_sheet.dart';
 import 'package:cruise_connect/presentation/widgets/top_toast.dart';
@@ -546,6 +548,21 @@ class _SettingsPageState extends State<SettingsPage> {
                         // das Lautstärke-Sheet mit Test-Stimme zeigen.
                         if (val) unawaited(showVoiceVolumeSheet(context));
                       },
+                    ),
+                  ),
+                  const Divider(color: Colors.white10, height: 1),
+                  // 2026-09-02 (Vucko): "in den einstellungen kann man alle
+                  // hinzufuegen falls man eins nicht braucht oder eins anders
+                  // haben moechte aber maximal das man 4 anzeigen kann".
+                  AnimatedBuilder(
+                    animation: FahrtKnoepfeService.instance,
+                    builder: (context, _) => _buildNavTile(
+                      'Knöpfe während der Fahrt',
+                      Icons.apps_rounded,
+                      subtitle:
+                          '${FahrtKnoepfeService.instance.auswahl.length} von '
+                          '${FahrtKnoepfeService.hoechstens} gewählt',
+                      onTap: () => showFahrtKnoepfeSheet(context),
                     ),
                   ),
                   const Divider(color: Colors.white10, height: 1),

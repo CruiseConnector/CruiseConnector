@@ -18,15 +18,43 @@ import 'package:cruise_connect/data/services/route_poi_service.dart';
 /// - Schließt automatisch nach 1.5s ohne Interaktion (optional)
 /// - Haptic-Feedback bei jedem Toggle
 class PoiFilterSheet extends StatefulWidget {
-  const PoiFilterSheet({super.key});
+  const PoiFilterSheet({
+    super.key,
+    this.meldungenAn,
+    this.onMeldungenUmschalten,
+  });
 
-  static Future<void> show(BuildContext context) {
+  /// 2026-09-02 (Vucko, Sprachnachricht): "die meldung bzw das man baustellen
+  /// ein oder ausschalten soll kann weg oder in die poi liste rein".
+  ///
+  /// Der Schalter fuer fremde Meldungen hatte einen eigenen Knopf in der
+  /// rechten Spalte und belegte damit einen der vier Plaetze. Er gehoert
+  /// inhaltlich hierher: es geht um das, was auf der Karte zu sehen ist.
+  ///
+  /// Der Zustand bleibt in der Fahransicht und wird nur durchgereicht. Ihn
+  /// hierher zu verschieben haette bedeutet, ihn aus einem Seitenzustand in
+  /// einen Dienst umzubauen und elf Aufrufstellen mitzuziehen — viel
+  /// Bewegung fuer einen Schalter.
+  ///
+  /// Ohne diese beiden Angaben zeigt das Blatt den Schalter gar nicht. So
+  /// bleibt es an Stellen benutzbar, die den Schalter nicht kennen.
+  final bool? meldungenAn;
+  final VoidCallback? onMeldungenUmschalten;
+
+  static Future<void> show(
+    BuildContext context, {
+    bool? meldungenAn,
+    VoidCallback? onMeldungenUmschalten,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.45),
-      builder: (_) => const PoiFilterSheet(),
+      builder: (_) => PoiFilterSheet(
+        meldungenAn: meldungenAn,
+        onMeldungenUmschalten: onMeldungenUmschalten,
+      ),
     );
   }
 
@@ -35,6 +63,12 @@ class PoiFilterSheet extends StatefulWidget {
 }
 
 class _PoiFilterSheetState extends State<PoiFilterSheet> {
+  /// Spiegel des durchgereichten Zustands. Ohne ihn bliebe der Schalter im
+  /// offenen Blatt stehen, bis man es schliesst und neu oeffnet: die
+  /// Fahransicht baut sich zwar neu auf, dieses Blatt liegt aber in einer
+  /// eigenen Route darueber und bekommt davon nichts mit.
+  bool? _meldungenAn;
+
   static const List<_PoiFilterItem> _items = [
     _PoiFilterItem(
       type: PoiType.fuel,
@@ -247,6 +281,29 @@ class _PoiFilterSheetState extends State<PoiFilterSheet> {
                       ),
                   ],
                 ),
+                // 2026-09-02: der Schalter fuer fremde Meldungen. Steht
+                // bewusst UNTER dem Raster und optisch abgesetzt: es sind
+                // nicht meine Punkte auf der Karte, sondern die Warnungen
+                // anderer Fahrer.
+                if (widget.meldungenAn != null &&
+                    widget.onMeldungenUmschalten != null) ...[
+                  const SizedBox(height: 18),
+                  Divider(
+                    height: 1,
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                  const SizedBox(height: 14),
+                  _MeldungenZeile(
+                    an: _meldungenAn ?? widget.meldungenAn!,
+                    onUmschalten: () {
+                      setState(
+                        () => _meldungenAn =
+                            !(_meldungenAn ?? widget.meldungenAn!),
+                      );
+                      widget.onMeldungenUmschalten!();
+                    },
+                  ),
+                ],
                 const SizedBox(height: 16),
                 if (noneEnabled)
                   Center(
@@ -272,6 +329,77 @@ class _PoiFilterSheetState extends State<PoiFilterSheet> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Die Zeile fuer fremde Meldungen im POI-Blatt.
+class _MeldungenZeile extends StatelessWidget {
+  const _MeldungenZeile({required this.an, required this.onUmschalten});
+
+  final bool an;
+  final VoidCallback onUmschalten;
+
+  @override
+  Widget build(BuildContext context) {
+    const orange = Color(0xFFFF9500);
+    return InkWell(
+      onTap: onUmschalten,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: (an ? orange : Colors.white).withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                an ? Icons.warning_amber_rounded : Icons.report_off_outlined,
+                size: 20,
+                color: an ? orange : Colors.white.withValues(alpha: 0.55),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Meldungen anderer',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    an
+                        ? 'Baustellen und Unfälle werden angezeigt und angesagt.'
+                        : 'Baustellen und Unfälle bleiben aus.',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 11.5,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: an,
+              onChanged: (_) => onUmschalten(),
+              activeThumbColor: Colors.white,
+              activeTrackColor: orange,
+            ),
+          ],
         ),
       ),
     );

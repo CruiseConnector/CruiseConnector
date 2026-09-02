@@ -28,6 +28,7 @@ import 'package:cruise_connect/core/legal_documents.dart';
 import 'package:cruise_connect/data/services/analytics_service.dart';
 import 'package:cruise_connect/data/services/social_service.dart';
 import 'package:cruise_connect/data/services/map_style_service.dart';
+import 'package:cruise_connect/data/services/fahrt_knoepfe_service.dart';
 import 'package:cruise_connect/data/services/voice_settings_service.dart';
 import 'package:cruise_connect/data/services/notification_service.dart';
 import 'package:cruise_connect/data/services/notification_settings_service.dart';
@@ -99,6 +100,10 @@ void main() {
       unawaited(VoiceSettingsService.instance.load());
       unawaited(NotificationSettingsService.instance.load());
       unawaited(PoiSettingsService.instance.load());
+      // 2026-09-02 (Vucko): welche vier Knoepfe waehrend der Fahrt rechts
+      // stehen. Frueh laden, damit die Fahransicht beim ersten Zeichnen
+      // schon die Auswahl kennt und nicht kurz die Voreinstellung zeigt.
+      unawaited(FahrtKnoepfeService.instance.laden());
       unawaited(CameraSettingsService.instance.load());
       // 2026-08-12: Gibt im Hintergrund den Bildspeicher frei, damit Android
       // die App nicht wegen Speichermangel abschiesst (auf Vuckos Samsung

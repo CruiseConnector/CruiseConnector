@@ -223,7 +223,15 @@ class _VoiceVolumeSheetState extends State<_VoiceVolumeSheet> {
                       // zwischen leise/mittel/laut deutlich fühlbar.
                       min: _kMinVolume,
                       max: 1.0,
-                      divisions: 6,
+                      // 2026-09-02 (Vucko: "die lautstaerke passt das man es
+                      // einstellen kann wenns geht noch etwas praeziser"):
+                      // hier standen 6 Stufen. Der Regler laeuft von 65 auf
+                      // 100 Prozent, das waren also Spruenge von rund sechs
+                      // Prozentpunkten und nur sieben erreichbare Werte.
+                      // 35 Stufen heisst genau ein Prozentpunkt je Raste. Die
+                      // drei Schnellstufen darunter bleiben, wer es einfach
+                      // will, fasst den Regler gar nicht an.
+                      divisions: 35,
                       onChanged: _onChanged,
                       onChangeEnd: _onChangeEnd,
                     ),
