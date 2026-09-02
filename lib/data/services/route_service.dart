@@ -12,6 +12,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/core/constants.dart';
+import 'package:cruise_connect/core/routen_kappung.dart';
+import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/geo_bearing.dart';
 import 'package:cruise_connect/data/services/geladene_route_manoever.dart';
 import 'package:cruise_connect/data/services/navigation_guidance_utils.dart';
@@ -2714,6 +2716,83 @@ class RouteService {
     });
   }
 
+  /// Rueckt das ZIEL einer Sitzungsroute vom Andockpunkt weg.
+  ///
+  /// 2026-09-01 (A15/A16). Greift nur, wenn das Ziel naeher als
+  /// [zielGleichAndockMeter] am Andockpunkt liegt — ein Ziel, das ohnehin
+  /// woanders ist, bleibt unveraendert. Bleibt nach dem Versatz zu wenig
+  /// Strecke uebrig, bleibt die Route ebenfalls unveraendert: eine Fahrt zu
+  /// zerstoeren waere schlimmer als ein Endpunkt an der Haustuer.
+  RouteResult _zielVomAndockpunktWegruecken(
+    RouteResult route,
+    List<double>? andockpunkt,
+  ) {
+    if (andockpunkt == null || andockpunkt.length < 2) return route;
+    final punkte = route.coordinates;
+    if (punkte.length < 2) return route;
+
+    final ende = punkte.last;
+    final abstand = GeoDistance.haversineMeters(
+      fromLat: ende[1],
+      fromLng: ende[0],
+      toLat: andockpunkt[1],
+      toLng: andockpunkt[0],
+    );
+    if (abstand > zielGleichAndockMeter) return route;
+
+    final gekappt = kappeEndstuecke(punkte, 0, zielVersatzMeter);
+    if (gekappt.length < 2) {
+      debugPrint(
+        '[RouteService] Zielversatz uebersprungen: nach dem Kappen blieben '
+        'zu wenige Punkte. Lieber ein Ziel an der Haustuer als keine Fahrt.',
+      );
+      return route;
+    }
+    debugPrint(
+      '[RouteService] Ziel lag ${abstand.toStringAsFixed(0)} m am '
+      'Andockpunkt — um ${zielVersatzMeter.toStringAsFixed(0)} m '
+      'zurueckgenommen.',
+    );
+    // Geometrie und Laenge muessen zur gekappten Linie passen, sonst zeigt
+    // die Fahransicht eine Restdistanz, die es nicht mehr gibt.
+    var laengeMeter = 0.0;
+    for (var i = 1; i < gekappt.length; i++) {
+      laengeMeter += GeoDistance.haversineMeters(
+        fromLat: gekappt[i - 1][1],
+        fromLng: gekappt[i - 1][0],
+        toLat: gekappt[i][1],
+        toLng: gekappt[i][0],
+      );
+    }
+    final alteLaenge = route.distanceMeters ?? 0;
+    final anteil = alteLaenge > 0 ? laengeMeter / alteLaenge : 1.0;
+    final geometrie = <String, dynamic>{
+      'type': 'LineString',
+      'coordinates': gekappt,
+    };
+    return _routeWithEdgeMeta(
+      RouteResult(
+        geoJson: json.encode(geometrie),
+        geometry: geometrie,
+        coordinates: gekappt,
+        maneuvers: route.maneuvers,
+        distanceMeters: laengeMeter,
+        durationSeconds: route.durationSeconds == null
+            ? null
+            : route.durationSeconds! * anteil,
+        distanceKm: laengeMeter / 1000.0,
+        speedLimits: route.speedLimits,
+        edgeMeta: route.edgeMeta,
+      ),
+      // ERGAENZEN, nicht ersetzen: _routeWithEdgeMeta setzt die Karte neu,
+      // und die Sitzungsroute traegt hier schon access_leg_used,
+      // join_point_type und die Startentfernung. Ohne das Zusammenfuehren
+      // waeren die weg — beim ersten Anlauf sind daran sofort zwei Tests
+      // angeschlagen.
+      {...route.edgeMeta, 'ziel_vom_andockpunkt_versetzt': true},
+    );
+  }
+
   /// Baut einen direkten Zugang zu einer bestehenden Route, ohne deren
   /// logischen Ursprung oder Endpunkt umzudefinieren.
   ///
@@ -2809,12 +2888,38 @@ class RouteService {
           avoidHighways: avoidHighways,
           enabled: returnToSessionOrigin,
         );
-        final sessionRoute = returnLeg == null
+        final sessionRouteRoh = returnLeg == null
             ? followOnRouteWithMeta
             : _routeWithEdgeMeta(
                 _mergeRouteSegments([followOnRoute, returnLeg]),
                 {...metaBase, 'return_leg_used': true},
               );
+        // 2026-09-01 (A15/A16, Vucko: "dass das Zielpunkt dann nicht gleich
+        // ist wie der neue Anfangspunkt, wo der Nutzer an die Route andockt
+        // ... weil sonst ist der Endpunkt auch ein Haus"):
+        //
+        // Der Andockpunkt ist da, wo der Fahrer gerade steht — meistens vor
+        // der eigenen Haustuer. Endete die Runde exakt wieder dort, stand die
+        // Adresse ZWEIMAL in der Geometrie, als Anfang und als Ende. Wird die
+        // Fahrt danach geteilt oder gespeichert, faellt beides mit.
+        //
+        // Die ANDOCK-Logik bleibt unangetastet (A17: "die Andock-Punkte, wenn
+        // man eine Fahrt startet, sind anders, das gefaellt mir"). Angefasst
+        // wird ausschliesslich das ZIEL, und auch das nur, wenn es wirklich
+        // auf dem Andockpunkt liegt.
+        //
+        // NUR wenn WIR das Ende auf den Nutzer gelegt haben: entweder durch
+        // einen angebauten Rueckweg, oder weil die geschlossene Runde auf
+        // seine Position umgehaengt wurde. Faehrt jemand eine fremde Runde
+        // unveraendert ab, ist ihr Ende die Entscheidung des Erstellers und
+        // nicht unsere — daran wird nichts geschnitten. Beim ersten Anlauf
+        // habe ich zu breit gegriffen, worauf die Zusage
+        // "ohne Zubringer ist die aktive Route die Folgeroute" gebrochen ist
+        // (route_access_plan_test).
+        final wirHabenDasEndeGesetzt = returnLeg != null || routeRebasedToUser;
+        final sessionRoute = wirHabenDasEndeGesetzt
+            ? _zielVomAndockpunktWegruecken(sessionRouteRoh, sessionOrigin)
+            : sessionRouteRoh;
         return RouteAccessPlan(
           originalRoute: existingRoute,
           activeRoute: sessionRoute,

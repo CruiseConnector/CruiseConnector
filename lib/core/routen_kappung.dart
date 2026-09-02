@@ -50,6 +50,31 @@ double linienLaengeKm(List<List<double>> punkte) {
 ///    Schleife genau um die Wohngegend. Das ist gewollt.
 ///  * Weniger als zwei Punkte ergeben ebenfalls eine leere Liste, nie eine
 ///    Ausnahme.
+/// Wie weit das ZIEL einer Fahrt vom Andockpunkt wegruecken muss.
+///
+/// 2026-09-01 (Vucko, Sprachaufnahme A15/A16):
+///   "was ich auch moechte ist, dass das Zielpunkt dann nicht ... gleich ist
+///    wie der neue Anfangspunkt, wo der Nutzer an die Route andockt, das ist
+///    ganz wichtig, weil sonst ist der Endpunkt auch ein Haus und dann geht es
+///    wieder um die Sicherheit und so weiter"
+///
+/// Wer an eine Strecke andockt, tut das dort, wo er gerade steht — meistens
+/// vor der eigenen Haustuer. Endete die Runde exakt wieder dort, stand die
+/// Adresse zweimal in der Geometrie: als Anfang UND als Ende. Wird die Fahrt
+/// danach geteilt oder gespeichert, faellt beides mit.
+///
+/// 300 Meter, dieselbe Weite wie [anzeigeKappungMeter]. Das ist weit genug,
+/// dass der Endpunkt in einem anderen Strassenzug liegt, und nah genug, dass
+/// die Ankunft nicht gefuehlt zu frueh kommt.
+const double zielVersatzMeter = 300.0;
+
+/// Ab welchem Abstand Ziel und Andockpunkt als "derselbe Ort" gelten.
+///
+/// Darunter greift der Versatz, darueber nicht. Ein Ziel, das ohnehin schon
+/// woanders liegt, wird NICHT angefasst — der Versatz ist eine Korrektur fuer
+/// genau einen Fall, kein genereller Beschnitt.
+const double zielGleichAndockMeter = 120.0;
+
 List<List<double>> kappeEndstuecke(
   List<List<double>> punkte,
   double startMeter,
