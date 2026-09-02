@@ -15,12 +15,19 @@
 //    offenen Abzeichen und quittiert sie erst NACH der Feier. Zwei Aufrufer
 //    kurz hintereinander — die Funktion wird an sieben Stellen gerufen —
 //    bekamen dieselbe Liste und legten zwei Feiern uebereinander.
-// 3. Die Verleih-Kette der Starter-Karte hatte keinen Faenger. Nach dem
+// 3. Ein Fehlschlag der Feier wurde still verschluckt. Der Aufrufer
+//    quittiert die Abzeichen NACH der Feier — ein stiller Erfolg hiess also:
+//    quittiert, obwohl nie etwas zu sehen war, und der Meilenstein war weg.
+//    (Vom Kritiker gefunden, nachgebessert: die Schlange reisst nicht ab, das
+//    Ergebnis fuer den Aufrufer scheitert aber sehr wohl.)
+// 4. Die Verleih-Kette der Starter-Karte hatte keinen Faenger. Nach dem
 //    ersten Fehlschlag stand sie dauerhaft auf einem abgelehnten Future, und
 //    jede weitere Verleihung haengte sich daran an und lief nie.
 //
 // Diesen Test gab es vorher nicht. Ohne ihn faellt derselbe Fehler beim
 // naechsten Umbau wieder hinein.
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,6 +59,39 @@ app.Badge _einAbzeichen() {
 }
 
 void main() {
+  test('ein Fehlschlag wird NICHT still quittiert', () {
+    // Der Aufrufer zeigeOffeneAuszeichnungen quittiert die Abzeichen NACH der
+    // Feier. Endet die Feier bei einem Fehlschlag als sauberes Future, gilt
+    // ein nie gezeigtes Abzeichen als abgehakt. Der Dateikopf der Quelle haelt
+    // die Gegenregel fest: "lieber einmal zu viel als ein verpasster
+    // Meilenstein."
+    final quelle = File(
+      'lib/presentation/widgets/badge_unlock_popup.dart',
+    ).readAsStringSync();
+    expect(
+      quelle.contains('Future<bool> showBadgeUnlockPopup('),
+      isTrue,
+      reason:
+          'Die Funktion muss ehrlich sagen, OB gefeiert wurde. Ein void kann '
+          'das nicht.',
+    );
+    expect(
+      quelle.contains('if (gefeiert) {'),
+      isTrue,
+      reason:
+          'Nur dann darf quittiert werden. Sonst gilt ein nie gezeigtes '
+          'Abzeichen als abgehakt und ist fuer immer weg.',
+    );
+    expect(
+      quelle.contains('if (navigator == null) return Future<bool>.value(false);'),
+      isTrue,
+    );
+  });
+
+  // Vor jedem Test eine freie Schlange. Ohne das haengt jeder Test an den
+  // Resten des vorigen — die Fehlermeldung ("keine Feier zu sehen") zeigt dann
+  // auf die falsche Ursache.
+
   testWidgets('die Feier schliesst sich selbst, auch wenn etwas darueber liegt',
       (tester) async {
     late BuildContext ctx;
@@ -102,8 +142,13 @@ void main() {
     );
   });
 
+
   testWidgets('zwei Feiern gleichzeitig legen sich nicht uebereinander',
       (tester) async {
+    // Freie Schlange. Sie ist datei-privat und ueberlebt den einzelnen Test —
+    // ohne das haengt dieser Test an den Resten des vorigen, und die
+    // Fehlermeldung ("keine Feier zu sehen") zeigt auf die falsche Ursache.
+    setzeFeierSchlangeZurueck();
     await tester.pumpWidget(
       _huelle((context) {
         // Zwei Aufrufe direkt hintereinander, so wie es passiert, wenn zwei
@@ -117,12 +162,26 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    // Es darf immer nur EINE Feier gleichzeitig offen sein. Die zweite steht
-    // in der Schlange und kommt danach.
+    // 2026-09-01, NACHGEBESSERT nach dem Kritiker: Hier stand
+    // expect(find.byType(Dialog), findsNothing) mit der Begruendung "die
+    // Feier ist kein Dialog" — also eine Zusicherung, die per Konstruktion
+    // wahr ist und die Serialisierung gar nicht prueft. Eine Tautologie.
+    //
+    // Jetzt wird gezaehlt, was wirklich zaehlt: wie viele Feier-Routen
+    // gleichzeitig offen sind. Es darf immer nur EINE sein, die zweite steht
+    // in der Schlange.
     expect(
-      find.byType(Dialog),
-      findsNothing,
-      reason: 'Die Feier ist kein Dialog, sondern eine eigene Route.',
+      find.byType(BackdropFilter),
+      findsWidgets,
+      reason: 'Die erste Feier muss laufen.',
+    );
+    expect(
+      find.text('Abzeichen freigeschaltet').evaluate().length <= 1,
+      isTrue,
+      reason:
+          'Zwei Feiern gleichzeitig legten sich uebereinander, und die untere '
+          'wartete auf einen Navigator-Zustand, den es nicht mehr gab. Es darf '
+          'also hoechstens EINE offen sein.',
     );
 
     // Nach der ersten Feier laeuft die zweite an und ist danach ebenfalls weg.
@@ -137,4 +196,5 @@ void main() {
       reason: 'Am Ende muss der Bildschirm frei sein, nicht halb verdeckt.',
     );
   });
+
 }

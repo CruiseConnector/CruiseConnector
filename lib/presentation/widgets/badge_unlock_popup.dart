@@ -32,8 +32,16 @@ Future<void> zeigeOffeneAuszeichnungen(BuildContext context) async {
     await OffeneAuszeichnungen.quittieren(offen);
     return;
   }
-  await showBadgeUnlockPopup(context: context, badges: badges);
-  await OffeneAuszeichnungen.quittieren(offen);
+  // Nur quittieren, wenn wirklich gefeiert wurde. Sonst waere der Meilenstein
+  // weg, ohne dass ihn jemand gesehen hat — siehe den Kopf dieser Datei.
+  final gefeiert = await showBadgeUnlockPopup(context: context, badges: badges);
+  if (gefeiert) {
+    await OffeneAuszeichnungen.quittieren(offen);
+  } else {
+    debugPrint(
+      '[Badge] Feier kam nicht zustande — NICHT quittiert, kommt wieder.',
+    );
+  }
 }
 
 /// Sorgt dafuer, dass immer nur EINE Feier gleichzeitig laeuft.
@@ -46,11 +54,22 @@ Future<void> zeigeOffeneAuszeichnungen(BuildContext context) async {
 /// Navigator-Zustand, den es nicht mehr gab.
 Future<void> _laufendeFeier = Future<void>.value();
 
-Future<void> showBadgeUnlockPopup({
+/// Leert die Warteschlange. NUR fuer Tests.
+///
+/// Die Schlange ist datei-privat und ueberlebt den einzelnen Test. Ohne dieses
+/// Zuruecksetzen haengt jeder Test an den Resten des vorigen — genau das ist
+/// beim Schreiben von badge_haenger_test.dart passiert, und die Fehlermeldung
+/// ("keine Feier zu sehen") zeigte auf die falsche Ursache.
+@visibleForTesting
+void setzeFeierSchlangeZurueck() {
+  _laufendeFeier = Future<void>.value();
+}
+
+Future<bool> showBadgeUnlockPopup({
   required BuildContext context,
   required List<app.Badge> badges,
 }) {
-  if (badges.isEmpty) return Future<void>.value();
+  if (badges.isEmpty) return Future<bool>.value(false);
 
   // Anstellen statt uebereinanderlegen. Ein Fehlschlag darf die Schlange
   // nicht abreissen lassen, deshalb der Faenger.
@@ -60,23 +79,43 @@ Future<void> showBadgeUnlockPopup({
   // BuildContext ueber eine Wartepause hinweg ist genau die Falle, die
   // anderswo in dieser Datei schon zugeschnappt ist.
   final navigator = Navigator.maybeOf(context, rootNavigator: true);
-  if (navigator == null) return Future<void>.value();
+  // 2026-09-01, NACHGEBESSERT nach dem Kritiker: Hier wurde ein sauber
+  // abgeschlossenes Future zurueckgegeben. Der Aufrufer
+  // zeigeOffeneAuszeichnungen quittiert die Abzeichen NACH der Feier — ein
+  // stiller Erfolg hiess also: quittiert, obwohl nie etwas zu sehen war. Der
+  // Meilenstein waere weg gewesen. Der Dateikopf haelt genau die Gegenregel
+  // fest: "lieber einmal zu viel als ein verpasster Meilenstein."
+  //
+  // Statt einer Ausnahme (die unbehandelte Fehler an sieben Aufrufstellen
+  // erzeugt haette) sagt die Funktion jetzt ehrlich, OB gefeiert wurde.
+  if (navigator == null) return Future<bool>.value(false);
   final naechste = _laufendeFeier.then(
     (_) => _zeigeEineFeier(navigator: navigator, badges: badges),
   );
-  _laufendeFeier = naechste.catchError((Object e) {
+  // Die SCHLANGE darf nicht abreissen, deshalb der Faenger. Der AUFRUFER
+  // bekommt trotzdem die ehrliche Antwort.
+  _laufendeFeier = naechste
+      .then((_) {})
+      .catchError((Object e) {
+        debugPrint('[Badge] Feier fehlgeschlagen: $e');
+      });
+  return naechste.catchError((Object e) {
     debugPrint('[Badge] Feier fehlgeschlagen: $e');
+    return false;
   });
-  return _laufendeFeier;
 }
 
-Future<void> _zeigeEineFeier({
+Future<bool> _zeigeEineFeier({
   required NavigatorState navigator,
   required List<app.Badge> badges,
-}) {
-  if (!navigator.mounted) return Future<void>.value();
+}) async {
+  if (!navigator.mounted) {
+    // Auch hier: nicht still erfolgreich sein. Sonst quittiert der Aufrufer
+    // ein Abzeichen, das niemand gesehen hat.
+    return false;
+  }
 
-  return showGeneralDialog<void>(
+  await showGeneralDialog<void>(
     context: navigator.context,
     barrierDismissible: false,
     barrierLabel: 'Badge freigeschaltet',
@@ -89,6 +128,7 @@ Future<void> _zeigeEineFeier({
       return FadeTransition(opacity: animation, child: child);
     },
   );
+  return true;
 }
 
 class _BadgeUnlockPopup extends StatefulWidget {

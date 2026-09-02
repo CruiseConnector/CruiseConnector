@@ -129,6 +129,37 @@ Map<String, dynamic> _antwortMitWende({required double distanzMeter}) {
   };
 }
 
+/// Eine Geometrie, die WEIT am angefragten Ziel vorbeifuehrt.
+///
+/// Feldkirch Richtung Osten statt nach Bregenz im Norden — das Ende liegt
+/// rund 95 km vom Ziel entfernt.
+Map<String, dynamic> _antwortWoanders({required double distanzMeter}) {
+  final coords = <List<double>>[];
+  for (var i = 0; i <= 300; i++) {
+    final t = i / 300;
+    coords.add([_feldkirchLng + 1.8 * t, _feldkirchLat + 0.03 * t]);
+  }
+  return {
+    'meta': <String, dynamic>{'engine': 'graphhopper-8', 'detour_level': 2},
+    'route': {
+      'geometry': {'type': 'LineString', 'coordinates': coords},
+      'distance': distanzMeter,
+      'duration': distanzMeter / 1000.0 * 60.0,
+      'legs': [
+        {
+          'steps': [
+            {
+              'maneuver': {'type': 'arrive', 'location': coords.last},
+              'distance': 0.0,
+              'name': '',
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -198,26 +229,56 @@ void main() {
       );
     });
 
-    test('der Notausgang gilt NUR fuer Umwege, nicht als Generalschluessel',
-        () {
+    test('eine Route, die WOANDERS endet, kommt NICHT durch', () async {
+      // 2026-09-01, vom Kritiker gefunden und nachgestellt.
+      //
+      // Hier standen zuerst drei Bedingungen, von denen ZWEI toter Code waren:
+      // startOffsetRejected-Kandidaten landen nie in bestRejectedCandidate,
+      // und countryRejected ist fuer A nach B immer false. Wirksam blieb nur
+      // "ist A nach B" und "hat zwei Punkte" — und mein Kommentar behauptete
+      // trotzdem, eine Strecke die woanders endet komme nicht durch.
+      //
+      // Der Kritiker hat das Gegenteil gemessen: Bregenz angefragt, eine
+      // Strecke nach Innsbruck geliefert, Ende 95 km vom Ziel entfernt, ohne
+      // jede Fehlermeldung. Das ist SCHLIMMER als die Fehlermeldung, die der
+      // Notausgang ersetzen sollte.
+      //
+      // Dieser Test stellt genau das nach. Die Edge liefert eine Geometrie,
+      // die weit am Ziel vorbeifuehrt.
+      when(mockInvoker.invoke(any)).thenAnswer(
+        (_) async => _antwortWoanders(distanzMeter: 102000),
+      );
+
+      final ergebnis = await _versuche(service);
+      expect(
+        ergebnis.route,
+        isNull,
+        reason:
+            'Eine Fahrt, die 95 km vom angefragten Ziel entfernt endet, darf '
+            'NIEMALS als Ergebnis durchgehen. Lieber eine ehrliche '
+            'Fehlermeldung. Geliefert wurde aber: '
+            '${ergebnis.route?.distanceKm?.toStringAsFixed(1)} km',
+      );
+      expect(ergebnis.fehler, isNotNull);
+    });
+
+    test('der Notausgang verlangt das ERREICHTE ZIEL, nicht toten Code', () {
       final quelle = _quelltext();
-      // Die Bedingungen stehen im Code und muessen eng bleiben. Wer sie
-      // aufweicht, macht aus dem Notausgang eine offene Tuer und alle
-      // Qualitaetstore wirkungslos.
-      for (final bedingung in <String>[
-        'scenario.isPointToPoint',
-        '!notausgang.startOffsetRejected',
-        '!notausgang.countryRejected',
-        'notausgang.route.coordinates.length >= 2',
-      ]) {
-        expect(
-          quelle.contains(bedingung),
-          isTrue,
-          reason:
-              'Die Bedingung "$bedingung" fehlt im Notausgang. Ohne sie '
-              'wuerde er auch dort greifen, wo eine Ablehnung richtig ist.',
-        );
-      }
+      expect(
+        quelle.contains('notausgang.destinationReached'),
+        isTrue,
+        reason:
+            'Das ist die einzige Bedingung, auf die es ankommt. Die frueheren '
+            'zwei waren wirkungslos.',
+      );
+      expect(
+        quelle.contains('!notausgang.countryRejected'),
+        isFalse,
+        reason:
+            'countryRejected ist als scenario.isRoundTrip && ... definiert und '
+            'fuer A nach B IMMER false. Als Schutz gelesen zu werden, war '
+            'schlimmer als gar keine Bedingung.',
+      );
     });
 
     test('der Notausgang steht NACH allen Rueckfaellen, nicht davor', () {

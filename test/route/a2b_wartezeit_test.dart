@@ -72,13 +72,50 @@ void main() {
     });
 
     test('sie bremst die Rueckfall-Kaskade', () {
+      // 2026-09-01, NACHGEBESSERT nach dem Kritiker: Die Frist hing zuerst an
+      // derselben Bedingung wie die Verzweigung. Nach Fristablauf fiel
+      // eine normale Suche damit in den ELSE-Zweig, der ausschliesslich fuer
+      // die Neuberechnung waehrend der Fahrt gedacht ist und mit
+      // avoidHighways: false ruft. Die Einstellung "Autobahn aus" wurde still
+      // verworfen. Gespart wurde ausserdem nichts.
       expect(
         routeService.contains('if (!navigationReroute && !fristAbgelaufen())'),
-        isTrue,
+        isFalse,
         reason:
-            'Hier lagen drei bis fuenf weitere Serveraufrufe. Genau die '
-            'liefen bisher auch dann noch, wenn der Nutzer schon eine halbe '
-            'Minute wartet.',
+            'Die Frist darf NICHT an der Verzweigung zwischen Suche und '
+            'Neuberechnung haengen — sonst landet die Suche im Reroute-Zweig '
+            'und verliert die Autobahn-Einstellung des Nutzers.',
+      );
+      expect(
+        routeService.contains('final poolFallback = fristAbgelaufen()'),
+        isTrue,
+        reason: 'Sie gehoert an die teuren Netzaufrufe selbst.',
+      );
+      expect(
+        routeService.contains(
+          'if (!fristAbgelaufen() && _canUseStructuredFallback(lastError))',
+        ),
+        isTrue,
+      );
+    });
+
+    test('die Autobahn-Einstellung ueberlebt den Fristablauf', () {
+      // Der else-Zweig ruft bewusst mit avoidHighways: false — er ist fuer die
+      // Neuberechnung gedacht, wo eine kurze Autobahn-Anfahrt besser ist als
+      // gar nichts. Eine normale Suche darf dort NIE landen.
+      final elseAb = routeService.indexOf(
+        'final rerouteFallback = await _tryPointToPointFallback(',
+      );
+      expect(elseAb, greaterThan(0));
+      final davor = routeService.substring(
+        routeService.lastIndexOf('} else {', elseAb),
+        elseAb,
+      );
+      expect(
+        davor.contains('fristAbgelaufen'),
+        isFalse,
+        reason:
+            'In den Reroute-Zweig darf keine Frist-Bedingung fuehren.',
       );
     });
 

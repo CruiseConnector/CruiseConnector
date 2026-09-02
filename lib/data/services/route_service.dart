@@ -2559,11 +2559,33 @@ class RouteService {
         );
       }
 
-      // Die Rueckfall-Kaskade nur noch, solange Geduld da ist. Ohne diese
-      // Pruefung liefen hier drei bis fuenf weitere Serveraufrufe nacheinander,
-      // auch wenn der Nutzer schon eine halbe Minute wartet.
-      if (!navigationReroute && !fristAbgelaufen()) {
-        final poolFallback = await _tryRoutePoolFallback(
+      // 2026-09-01, NACHGEBESSERT nach dem Kritiker.
+      //
+      // Hier hing die Frist an derselben Bedingung wie die Verzweigung
+      // zwischen Suche und Neuberechnung. Das sah harmlos aus und hatte drei
+      // Nebenwirkungen auf einmal: nach
+      // Fristablauf fiel eine ganz normale Suche in den ELSE-Zweig — und der
+      // ist ausschliesslich fuer die Neuberechnung waehrend der Fahrt
+      // geschrieben. Er ruft mit `avoidHighways: false` und
+      // `navigationReroute: true`. Ergebnis, vom Kritiker nachgestellt: die
+      // Einstellung "Autobahn aus" wurde still verworfen und der Fahrer bekam
+      // eine Autobahnroute. Dazu lief die Anfrage in den Reroute-Topf des
+      // Ratenlimits, und gespart wurde nichts — der Reroute-Rueckfall macht
+      // selbst bis zu vier Aufrufe.
+      //
+      // Die Frist gehoert also NACH INNEN, an die teuren Netzaufrufe, nicht
+      // an die Verzweigung zwischen Suche und Neuberechnung.
+      if (!navigationReroute) {
+        if (fristAbgelaufen()) {
+          debugPrint(
+            '[RouteService] Frist abgelaufen — ueberspringe Pool und '
+            'Herabstufungs-Kaskade. Der Notausgang unten liefert den besten '
+            'Kandidaten, der bis hierher da war.',
+          );
+        }
+        final poolFallback = fristAbgelaufen()
+            ? null
+            : await _tryRoutePoolFallback(
           scenario: scenario,
           styleConfig: styleConfig,
           userLat: startPosition.latitude,
@@ -2575,7 +2597,7 @@ class RouteService {
           return poolFallback;
         }
 
-        if (_canUseStructuredFallback(lastError)) {
+        if (!fristAbgelaufen() && _canUseStructuredFallback(lastError)) {
           final fallback = await _tryPointToPointFallback(
             scenario: scenario,
             startPosition: startPosition,
@@ -2679,11 +2701,28 @@ class RouteService {
       // greifen (a2b_umwegsstufen_test, route_generation_mock_test): eine
       // Route, die sich selbst als direkt meldet, wird nach wie vor nicht als
       // Umweg verkauft.
+      // 2026-09-01, NACHGEBESSERT nach dem Kritiker.
+      //
+      // Hier standen zuerst drei Bedingungen, von denen ZWEI toter Code waren:
+      //   * startOffsetRejected: solche Kandidaten landen nie in
+      //     bestRejectedCandidate, sie werden vorher in einem eigenen Zweig
+      //     abgefangen.
+      //   * countryRejected: ist als `scenario.isRoundTrip && ...` definiert
+      //     und fuer A nach B damit IMMER false.
+      // Wirksam blieben also nur "ist A nach B" und "hat zwei Punkte". Der
+      // Kommentar behauptete trotzdem, eine Strecke die woanders endet komme
+      // nicht durch. Der Kritiker hat das Gegenteil nachgestellt: Bregenz
+      // angefragt, eine Strecke nach Innsbruck geliefert, Ende 95 km vom Ziel
+      // entfernt, ohne jede Fehlermeldung. Das ist schlimmer als die
+      // Fehlermeldung, die der Notausgang ersetzen sollte.
+      //
+      // Jetzt zaehlt die Bedingung, auf die es wirklich ankommt:
+      // destinationReached. Sie wird in _evaluateCandidate ohnehin berechnet
+      // und wurde bisher nur weggeworfen.
       final notausgang = bestRejectedCandidate;
       if (notausgang != null &&
           scenario.isPointToPoint &&
-          !notausgang.startOffsetRejected &&
-          !notausgang.countryRejected &&
+          notausgang.destinationReached &&
           notausgang.route.coordinates.length >= 2) {
         debugPrint(
           '[RouteService] Notausgang A nach B: nach allen Rueckfaellen war '
@@ -2951,12 +2990,27 @@ class RouteService {
         avoidHighways: avoidHighways,
         enabled: returnToSessionOrigin,
       );
-      final sessionRoute = returnLeg == null
+      final sessionRouteRoh = returnLeg == null
           ? followOnRouteWithMeta
           : _routeWithEdgeMeta(
               _mergeRouteSegments([followOnRoute, returnLeg]),
               {...metaBase, 'return_leg_used': true},
             );
+      // 2026-09-01, NACHGEBESSERT nach dem Kritiker.
+      //
+      // Der Zielversatz stand zuerst NUR im Direkt-Andock-Zweig weiter oben.
+      // Dieser Zweig hier baut aber mit _buildReturnLegIfNeeded exakt denselben
+      // Rueckweg auf denselben sessionOrigin — und sessionOrigin ist die
+      // aktuelle Position des Fahrers.
+      //
+      // Es ist ausserdem der HAEUFIGERE Fall: der Direktzweig verlangt, dass
+      // man ohnehin schon fast auf der Strecke steht. Wer weiter weg ist und
+      // einen Zubringer bekommt, hatte weiterhin Start UND Ziel auf der
+      // eigenen Position — also zweimal die Hausadresse in der Geometrie.
+      // Genau der Fall, den Vucko beschrieben hat, blieb also offen.
+      final sessionRoute = returnLeg != null
+          ? _zielVomAndockpunktWegruecken(sessionRouteRoh, sessionOrigin)
+          : sessionRouteRoh;
       final accessLegDistanceKm =
           (accessLeg.distanceMeters ??
               _distanceAlongCoordinates(accessLeg.coordinates)) /
@@ -6351,6 +6405,7 @@ class RouteService {
       foreignFraction: foreignFraction,
       countryRejected: countryRejected,
       startOffsetRejected: startOffsetRejected,
+      destinationReached: destinationReached,
       startOffsetMeters: startOffsetMeters,
     );
   }
@@ -11790,6 +11845,7 @@ class _RouteCandidate {
     this.countryRejected = false,
     this.startOffsetRejected = false,
     this.startOffsetMeters,
+    this.destinationReached = false,
   });
 
   final RouteResult route;
@@ -11816,6 +11872,16 @@ class _RouteCandidate {
   // Notnagel-Fallback.
   final bool startOffsetRejected;
   final double? startOffsetMeters;
+
+  /// Ob die Route ueberhaupt am angefragten Ziel endet.
+  ///
+  /// 2026-09-01, vom Kritiker gefunden: Der Notausgang in
+  /// generatePointToPoint lieferte den besten VERWORFENEN Kandidaten aus, ohne
+  /// das zu pruefen. Nachgestellt: Bregenz angefragt, eine Strecke nach
+  /// Innsbruck geliefert, Ende 95 km vom Ziel entfernt, keine Fehlermeldung.
+  /// Ohne dieses Feld war die Pruefung gar nicht moeglich — der Wert wurde in
+  /// _evaluateCandidate berechnet und dann weggeworfen.
+  final bool destinationReached;
 }
 
 class _ScoredPoolAccessRoute {

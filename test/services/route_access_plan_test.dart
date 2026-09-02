@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:cruise_connect/data/services/route_access_plan.dart';
+import 'package:cruise_connect/data/services/geo_distance.dart';
 import 'package:cruise_connect/data/services/route_service.dart';
 import 'package:cruise_connect/domain/models/route_result.dart';
 
@@ -156,12 +157,55 @@ void main() {
           orderedEquals(existingRoute.coordinates.first),
         );
         expect(plan.logicalEnd, orderedEquals(existingRoute.coordinates.last));
+        // Der ANDOCKPUNKT bleibt exakt die Position des Fahrers. Das ist
+        // Vuckos Sperre A17: "die Andock-Punkte, wenn man eine Fahrt startet,
+        // sind anders, das gefaellt mir."
         expect(plan.sessionOrigin, orderedEquals([9.611, 47.312]));
-        expect(plan.sessionEnd, orderedEquals([9.611, 47.312]));
+
+        // 2026-09-01 (A15/A16): Das ZIEL ist bewusst NICHT mehr derselbe
+        // Punkt. Hier stand orderedEquals([9.611, 47.312]) — also die
+        // Zusage vom 29.07., dass eine fortgesetzte Runde wieder zuhause
+        // endet. Vucko hat sie am 01.09. ausdruecklich ueberschrieben:
+        //
+        //   "dass das Zielpunkt dann nicht ... gleich ist wie der neue
+        //    Anfangspunkt, wo der Nutzer an die Route andockt ... weil sonst
+        //    ist der Endpunkt auch ein Haus und dann geht es wieder um die
+        //    Sicherheit."
+        //
+        // Stand Anfang UND Ende auf derselben Koordinate, stand die Adresse
+        // zweimal in der Geometrie. Das Ende liegt jetzt rund 300 m davor.
+        final ende = plan.sessionEnd;
+        expect(ende, isNotNull);
         expect(
-          plan.activeRoute.coordinates.last,
-          orderedEquals(plan.sessionOrigin),
+          ende,
+          isNot(orderedEquals([9.611, 47.312])),
+          reason: 'Das Ziel darf nicht mehr auf dem Andockpunkt liegen.',
         );
+        final versatzMeter = GeoDistance.haversineMeters(
+          fromLat: 47.312,
+          fromLng: 9.611,
+          toLat: ende![1],
+          toLng: ende[0],
+        );
+        expect(
+          versatzMeter,
+          greaterThan(150),
+          reason:
+              'Zu nah waere kein Schutz — der Endpunkt laege noch im selben '
+              'Strassenzug. Gemessen: ${versatzMeter.toStringAsFixed(0)} m.',
+        );
+        expect(
+          versatzMeter,
+          lessThan(700),
+          reason:
+              'Zu weit waere aergerlich: die Navigation endete dann gefuehlt '
+              'zu frueh.',
+        );
+        // Auch hier stand vorher der Andockpunkt. Der bleibende Wert dieser
+        // Zusicherung ist ein anderer: die aktive Strecke muss dort enden, wo
+        // die Fahrt laut Plan endet. Sonst zeigt die Fahransicht ein Ziel an,
+        // das die Linie gar nicht erreicht.
+        expect(plan.activeRoute.coordinates.last, orderedEquals(ende));
         expect(
           plan.activeRoute.distanceMeters!,
           greaterThan(plan.sessionRoute.distanceMeters!),
