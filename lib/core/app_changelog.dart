@@ -75,6 +75,59 @@ class AppChangelog {
   // nicht nur der Strich ersetzt. Auch zusammengesetzte Wörter kommen ohne
   // Bindestrich aus, soweit die Rechtschreibung das hergibt.
   static const List<ChangelogEintrag> eintraege = <ChangelogEintrag>[
+    // 2026-09-02 (Vucko): "die meldung nach der installation soll 1.3.1 oben
+    // sein was alles neu ist".
+    //
+    // WARUM WIEDER 1.3.1, OBWOHL DIE NUMMER SCHON WEITER UNTEN STEHT:
+    // Am 02.09. im App Store nachgesehen, nicht vermutet. Dort liegt
+    // Version 1.3 vom 26.08., technisch 1.5.28. Die Ausgaben 1.5.29, 1.5.30
+    // und 1.5.31 wurden gebaut, haben den Store aber nie erreicht. Kein
+    // Nutzer hat je ein Blatt mit 1.3.1 oder 1.3.2 gesehen. Fuer die Leute
+    // draussen ist DIESE Ausgabe die erste nach 1.3, und genau so zaehlt
+    // Vucko sie.
+    //
+    // Deshalb sammelt dieser Eintrag alles seit 1.3, nicht nur die Arbeit
+    // vom 02.09. Wer aus dem Store aktualisiert, springt von 1.3 hierher und
+    // wuerde sonst nie erfahren, was dazwischen passiert ist.
+    ChangelogEintrag(
+      version: '1.5.32',
+      anzeigeName: '1.3.1',
+      titel: 'Aufgeräumt beim Fahren, schneller beim Suchen',
+      schrittTitel: <String>[
+        'Höchstens vier Knöpfe, und du wählst welche',
+        'Die Knöpfe lassen sich wegklappen',
+        'Die Lautstärke geht jetzt fein',
+        'Routen von A nach B kommen schneller',
+        'Umwege finden wieder etwas',
+        'Nie wieder mitten auf der Straße wenden',
+        'Dein Ziel liegt nicht mehr vor deiner Haustür',
+        'Die Abzeichen bleiben nicht mehr hängen',
+        'Geteilte Communities öffnen die App',
+        'Fahrten, Abzeichen und Garage bleiben, wo sie sind',
+      ],
+      punkte: <String>[
+        'Rechts neben der Karte standen bis zu sechs Knöpfe. Jetzt sind es '
+            'höchstens vier, und in den Einstellungen legst du fest, welche.',
+        'Über den Knöpfen sitzt ein Griff. Einmal tippen und die Karte ist '
+            'frei, noch einmal tippen und sie sind wieder da.',
+        'Der Regler für die Ansage sprang vorher in großen Schritten. Jetzt '
+            'stellst du ihn auf den Prozentpunkt genau ein.',
+        'Die Suche hat jetzt eine Frist und hört auf, im Hintergrund immer '
+            'weiter zu probieren. Es geht spürbar schneller.',
+        'Kleiner, mittlerer und großer Umweg lieferten oft gar nichts. Jetzt '
+            'kommt am Ende eine Strecke, notfalls eine schlichtere.',
+        'Vorgeschlagene Strecken schicken dich nicht mehr in eine Straße '
+            'hinein, aus der du sofort wieder herausdrehen musst.',
+        'Startest du vor deiner Wohnung, endet die Strecke nicht mehr genau '
+            'dort. Das Ziel liegt jetzt ein Stück davor.',
+        'Nach dem Freischalten eines Abzeichens blieb die App manchmal '
+            'stehen. Und ein Abzeichen geht nicht mehr verloren.',
+        'Teilst du eine Community, öffnet der Link jetzt die App. Vorher '
+            'führte er ins Leere. Ohne App kommt eine Seite mit allen Angaben.',
+        'Ein Aussetzer der Verbindung konnte Erfahrung, Kilometer, Level '
+            'oder die Garage leeren. Das kann nicht mehr passieren.',
+      ],
+    ),
     ChangelogEintrag(
       version: '1.5.31',
       anzeigeName: '1.3.2',
